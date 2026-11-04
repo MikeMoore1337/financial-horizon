@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f5f7fc" id="theme-color">
+<meta name="description" content="Бесплатная домашняя бухгалтерия без регистрации. Данные остаются на вашем устройстве.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Горизонт">
+<meta name="color-scheme" content="light dark">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./assets/icon-192.png">
+<link rel="icon" type="image/png" href="./assets/icon-192.png">
+<link rel="stylesheet" href="./styles.css">
+<title>Финансовый горизонт</title>
+</head>
+<body data-theme="light">
+<svg aria-hidden="true" class="svgdefs" xmlns="http://www.w3.org/2000/svg">
+ <symbol id="ico-home" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1zM9 21v-8h6v8"/></symbol>
+ <symbol id="ico-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18"/></symbol>
+ <symbol id="ico-list" viewBox="0 0 24 24"><path d="M9 6h12M9 12h12M9 18h12M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></symbol>
+ <symbol id="ico-credit" viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="3"/><path d="M3 10h18M7 15h4"/></symbol>
+ <symbol id="ico-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></symbol>
+ <symbol id="ico-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+ <symbol id="ico-moon" viewBox="0 0 24 24"><path d="M20 16.5A8.5 8.5 0 0 1 7.5 4a8.5 8.5 0 1 0 12.5 12.5z"/></symbol>
+ <symbol id="ico-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></symbol>
+ <symbol id="ico-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+ <symbol id="ico-check" viewBox="0 0 24 24"><path d="m4 12 5 5L20 6"/></symbol>
+ <symbol id="ico-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 17v3h16v-3"/></symbol>
+ <symbol id="ico-upload" viewBox="0 0 24 24"><path d="M12 17V5m-5 5 5-5 5 5M4 17v3h16v-3"/></symbol>
+ <symbol id="ico-edit" viewBox="0 0 24 24"><path d="m4 20 4-.9L20 7.1 16.9 4 5 16zM14.8 6.2l3 3"/></symbol>
+ <symbol id="ico-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6m4-6v6"/></symbol>
+ <symbol id="ico-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+ <symbol id="ico-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+</svg>
+<div class="app-shell">
+  <aside class="sidebar" id="sidebar" aria-label="Навигация">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M5 20.5h7l3.5-10 4 13 3.2-8H27" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></span><div><strong>Финансовый<br>горизонт</strong><span class="brand-sub">Личная бухгалтерия</span></div></div>
+    <nav class="sidebar-nav" aria-label="Разделы">
+      <button class="nav-item active" data-view="overview"><svg><use href="#ico-home"/></svg><span>Обзор</span></button>
+      <button class="nav-item" data-view="calendar"><svg><use href="#ico-calendar"/></svg><span>Календарь</span></button>
+      <button class="nav-item" data-view="obligations"><svg><use href="#ico-list"/></svg><span>Обязательства</span></button>
+      <button class="nav-item" data-view="loans"><svg><use href="#ico-credit"/></svg><span>Кредиты</span></button>
+      <button class="nav-item" data-view="settings"><svg><use href="#ico-settings"/></svg><span>Настройки</span></button>
+    </nav>
+    <div class="side-bottom"><div class="privacy-dot"></div><div><strong>Хранится на устройстве</strong><span>Без регистрации и банковских API</span></div></div>
+  </aside>
+  <div class="work-area">
+    <header class="toolbar">
+      <div class="toolbar-leading"><button class="tool-icon hamburger" id="menu-toggle" aria-label="Открыть меню"><svg><use href="#ico-menu"/></svg></button><span class="crumb">Личные финансы</span><span class="crumb-slash">/</span><span id="toolbar-title">Обзор</span></div>
+      <div class="toolbar-actions"><span class="local-chip"><span class="privacy-dot"></span> Локально</span><button class="tool-icon" id="theme-toggle" aria-label="Переключить тему" title="Переключить тему"><svg><use href="#ico-moon"/></svg></button><button class="button-primary toolbar-add" id="top-add"><svg><use href="#ico-plus"/></svg><span>Добавить</span></button></div>
+    </header>
+    <main class="page" id="main"><div class="loading">Открываем локальную бухгалтерию…</div></main>
+    <footer class="footer"><span>Данные остаются в этом браузере. Делайте резервные копии.</span><span id="save-indicator" role="status" aria-live="polite">Локальная база</span></footer>
+  </div>
+</div>
+<nav class="bottom-nav" aria-label="Основные разделы">
+  <button data-view="overview" class="active"><svg><use href="#ico-home"/></svg><span>Обзор</span></button>
+  <button data-view="calendar"><svg><use href="#ico-calendar"/></svg><span>Календарь</span></button>
+  <button data-view="obligations"><svg><use href="#ico-list"/></svg><span>Платежи</span></button>
+  <button data-view="loans"><svg><use href="#ico-credit"/></svg><span>Кредиты</span></button>
+  <button data-view="settings"><svg><use href="#ico-settings"/></svg><span>Ещё</span></button>
+</nav>
+<dialog class="dialog" id="entry-dialog" aria-labelledby="entry-heading"><form method="dialog" id="entry-form" class="dialog-body" novalidate>
+  <div class="dialog-head"><div><span class="eyebrow">Доход или расход</span><h2 id="entry-heading">Новая запись</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть">✕</button></div>
+  <input type="hidden" name="id"><label class="field"><span>Название</span><input name="title" maxlength="100" required placeholder="Например, интернет"></label>
+  <div class="form-two"><label class="field"><span>Тип</span><select name="kind"><option value="expense">Расход</option><option value="income">Доход</option></select></label><label class="field"><span>Сумма, ₽</span><input name="amount" inputmode="decimal" placeholder="0,00" required></label></div>
+  <div class="form-two"><label class="field"><span>Дата первого платежа</span><input name="date" type="date" required></label><label class="field"><span>Повторять</span><select name="recurrence"><option value="monthly">Ежемесячно</option><option value="once">Однократно</option><option value="yearly">Ежегодно</option></select></label></div>
+  <label class="field"><span>Категория</span><select name="category" id="entry-category"></select></label>
+  <div class="dialog-actions"><button class="button-secondary" value="cancel">Отмена</button><button type="submit" class="button-primary" value="save">Сохранить запись</button></div>
+ </form></dialog>
+<dialog class="dialog" id="loan-dialog" aria-labelledby="loan-heading"><form method="dialog" id="loan-form" class="dialog-body" novalidate>
+  <div class="dialog-head"><div><span class="eyebrow">Кредитные обязательства</span><h2 id="loan-heading">Добавить кредит</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть">✕</button></div>
+  <input type="hidden" name="id"><label class="field"><span>Название</span><input name="title" required maxlength="100" placeholder="Например, ипотека"></label>
+  <div class="form-two"><label class="field"><span>Остаток долга, ₽</span><input name="opening" inputmode="decimal" required placeholder="2100000"></label><label class="field"><span>Годовая ставка, %</span><input name="apr" inputmode="decimal" required placeholder="9,5"></label></div>
+  <div class="form-two"><label class="field"><span>Ежемесячный платёж, ₽</span><input name="payment" inputmode="decimal" required placeholder="30200"></label><label class="field"><span>Осталось месяцев по графику</span><input name="term" type="number" min="1" max="1200" required placeholder="240"></label></div>
+  <div class="form-two"><label class="field"><span>Дата актуального остатка</span><input name="asOfDate" type="date" required></label><label class="field"><span>День ежемесячного платежа</span><input name="dueDay" type="number" min="1" max="31" required></label></div>
+  <p class="form-note">Изменение исходных условий пересчитает прогноз всех сохранённых платежей. История операций останется.</p>
+  <div class="dialog-actions"><button class="button-secondary" value="cancel">Отмена</button><button type="submit" class="button-primary" value="save">Сохранить кредит</button></div>
+</form></dialog>
+<dialog class="dialog" id="payment-dialog" aria-labelledby="payment-heading"><form method="dialog" id="payment-form" class="dialog-body" novalidate>
+  <div class="dialog-head"><div><span class="eyebrow">Фактическая оплата</span><h2 id="payment-heading">Внести платёж</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть">✕</button></div>
+  <label class="field"><span>Кредит</span><select name="loanId" id="payment-loan" required></select></label>
+  <div class="form-two"><label class="field"><span>Внесённая сумма, ₽</span><input name="amount" inputmode="decimal" required placeholder="30200"></label><label class="field"><span>Дата оплаты</span><input name="date" type="date" required></label></div>
+  <fieldset class="segmented-field"><legend>Вариант перерасчёта досрочной части</legend><label><input type="radio" name="strategy" value="term" checked><span>Уменьшить срок</span></label><label><input type="radio" name="strategy" value="amount"><span>Уменьшить платёж</span></label></fieldset>
+  <div class="forecast-box" id="payment-preview" aria-live="polite">Введите сумму для расчёта.</div>
+  <p class="form-note">Это приблизительный аннуитетный прогноз, а не официальный график банка. Проценты начисляются помесячно; особые условия банка и штрафы не учтены.</p>
+  <div class="dialog-actions"><button class="button-secondary" value="cancel">Отмена</button><button type="submit" class="button-primary" value="save">Подтвердить оплату</button></div>
+</form></dialog>
+<dialog class="dialog" id="settlement-dialog" aria-labelledby="settlement-heading"><form method="dialog" id="settlement-form" class="dialog-body" novalidate>
+  <div class="dialog-head"><div><span class="eyebrow">План и факт</span><h2 id="settlement-heading">Отметить сумму</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть">✕</button></div>
+  <input type="hidden" name="entryId"><input type="hidden" name="occurrence"><p id="settlement-description" class="form-note"></p>
+  <div class="form-two"><label class="field"><span>Фактически внесено, ₽</span><input name="amount" inputmode="decimal" required></label><label class="field"><span>Дата операции</span><input name="date" type="date" required></label></div>
+  <div class="dialog-actions"><button class="button-secondary" value="cancel">Отмена</button><button type="submit" class="button-primary" value="save">Записать факт</button></div>
+</form></dialog>
+<dialog class="dialog" id="confirmation-dialog" aria-labelledby="confirmation-title"><div class="dialog-body"><div class="dialog-head"><h2 id="confirmation-title">Подтвердить действие</h2></div><p class="form-note" id="confirmation-text"></p><div class="dialog-actions"><button class="button-secondary" id="confirm-cancel">Отмена</button><button class="button-primary danger-button" id="confirm-yes">Подтвердить</button></div></div></dialog>
+<dialog class="dialog" id="password-dialog" aria-labelledby="password-heading"><form method="dialog" id="password-form" class="dialog-body" novalidate>
+<div class="dialog-head"><div><span class="eyebrow">Шифрованная резервная копия</span><h2 id="password-heading">Сохранить данные</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть">✕</button></div>
+<label class="field"><span>Пароль резервной копии</span><input type="password" name="password" autocomplete="new-password" minlength="12" required placeholder="Не меньше 12 символов"></label><p class="form-note">Пароль нигде не хранится и не передаётся. Если забыть его, восстановить копию будет невозможно.</p>
+<div class="dialog-actions"><button class="button-secondary" value="cancel">Отмена</button><button type="submit" class="button-primary" value="save">Продолжить</button></div></form></dialog>
+<input type="file" id="restore-file" accept=".json,application/json" hidden>
+<input type="file" id="schedule-file" accept=".csv,text/csv" hidden>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script type="module" src="./app.js"></script>
+</body></html>
