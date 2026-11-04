@@ -1,0 +1,28 @@
+# Личные финансовые данные
+Расходы.xlsx
+private-data/
+personal-data/
+backups/
+*.local.csv
+*.local.xlsx
+*.local.json
+*.sqlite
+*.sqlite3
+*.db
+*.bak
+
+# Секреты и локальная конфигурация
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Артефакты разработки
+node_modules/
+dist/
+coverage/
+.DS_Store
+Thumbs.db
+__pycache__/
+.pytest_cache/
