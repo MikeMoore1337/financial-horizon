@@ -1,0 +1,34 @@
+[
+  {
+    "kind": "desktop",
+    "viewport": [
+      1440,
+      900
+    ],
+    "pageErrors": [],
+    "externalRequests": [],
+    "metrics": {
+      "scroll": 1440,
+      "inner": 1440,
+      "theme": "dark",
+      "records": 6
+    },
+    "pass": true
+  },
+  {
+    "kind": "mobile",
+    "viewport": [
+      390,
+      844
+    ],
+    "pageErrors": [],
+    "externalRequests": [],
+    "metrics": {
+      "scroll": 390,
+      "inner": 390,
+      "theme": "dark",
+      "records": 6
+    },
+    "pass": true
+  }
+]

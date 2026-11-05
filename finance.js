@@ -1,0 +1,128 @@
+// Денежные суммы хранятся целыми копейками. Допущения кредитной модели изложены в README.
+export function cents(input) {
+  const normalized = String(input ?? '').trim().replace(/[\s\u00a0\u202f]/g, '').replace(',', '.');
+  if (!/^(?:\d+)(?:\.\d{1,2})?$/.test(normalized)) throw new Error('Введите неотрицательную сумму, максимум две цифры после запятой');
+  const [rub, kop=''] = normalized.split('.');
+  const result = Number(rub) * 100 + Number(kop.padEnd(2, '0'));
+  if (!Number.isSafeInteger(result) || result > 1_000_000_000_000) throw new Error('Сумма слишком велика');
+  return result;
+}
+export function rubles(value) { return new Intl.NumberFormat('ru-RU', {style:'currency',currency:'RUB',maximumFractionDigits:2,minimumFractionDigits:0}).format(value / 100); }
+export function numberInput(value) { return ((value||0) / 100).toFixed(2); }
+export function monthKey(date) { return String(date).slice(0,7); }
+export function monthIndex(month) { const [y,m]=month.split('-').map(Number); return y*12 + m-1; }
+export function shiftMonth(month, change=0) { const [y,m]=month.split('-').map(Number); const d=new Date(y,m-1+change,1,12); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; }
+export function monthLabel(month) { const [y,m]=month.split('-').map(Number); return new Intl.DateTimeFormat('ru-RU',{month:'long',year:'numeric'}).format(new Date(y,m-1,1,12)); }
+export function dayInMonth(month,day) { const [y,m]=month.split('-').map(Number); const end = new Date(y,m,0).getDate(); return `${month}-${String(Math.min(end,Math.max(1,Number(day)))).padStart(2,'0')}`; }
+export function isActive(record) { return !record.deletedAt; }
+export function entryDueDate(entry, month) {
+  if (!isActive(entry)) return null;
+  if (entry.recurrence==='once') return monthKey(entry.date) === month ? entry.date : null;
+  if (entry.recurrence==='monthly' && monthIndex(month)>=monthIndex(monthKey(entry.date))) return dayInMonth(month, Number(entry.date.slice(-2)));
+  if (entry.recurrence==='yearly' && monthIndex(month)>=monthIndex(monthKey(entry.date)) && month.slice(-2)===entry.date.slice(5,7)) return dayInMonth(month, Number(entry.date.slice(-2)));
+  return null;
+}
+export function loanRate(loan) { return Number(loan.apr || 0) / 1200; }
+export function annuityMonthly(balance, annualRate, months) {
+  if (balance<=0) return 0;
+  if (!Number.isInteger(months) || months<1 || months>1200) return null;
+  const r = annualRate / 1200;
+  return r===0 ? Math.ceil(balance/months) : Math.ceil(balance*r / (1 - Math.pow(1+r,-months)));
+}
+export function payoffMonths(balance, monthly, annualRate) {
+  if(balance<=0)return 0;
+  if(monthly<=0)return null;
+  const r=annualRate/1200;
+  if(monthly<=Math.round(balance*r) && r>0) return null;
+  let rest=balance;
+  for(let i=1;i<=1200;i++) {const interest=Math.round(rest*r);rest=Math.max(0,rest+interest-monthly);if(rest===0)return i;}
+  return null;
+}
+export function addMonthsDate(date,count) { const m=shiftMonth(monthKey(date),count);return dayInMonth(m, Number(date.slice(-2))); }
+export function loanLedger(loan, payments) {
+  let outstanding=Number(loan.openingCents), scheduled=Number(loan.paymentCents), interestRemaining=0;
+  let lastPeriod=shiftMonth(monthKey(loan.asOfDate),-1);
+  const history=[];
+  const active=[...payments].filter(p=>p.loanId===loan.id&&!p.voidedAt).sort((a,b)=>a.date.localeCompare(b.date)||a.createdAt.localeCompare(b.createdAt));
+  for(const p of active){
+    if(monthKey(p.date)<monthKey(loan.asOfDate)) continue;
+    const month=monthKey(p.date);
+    const monthsBetween=Math.max(0, monthIndex(month)-monthIndex(lastPeriod));
+    if(monthsBetween){
+      // Модель начисляет месячные проценты один раз на расчётный месяц;
+      // просрочка/штрафы/дневная капитализация здесь намеренно не моделируются.
+      interestRemaining += monthsBetween*Math.round(outstanding*loanRate(loan));
+      lastPeriod=month;
+    }
+    const before=outstanding;
+    const provided=Math.min(p.amountCents, outstanding+interestRemaining);
+    const interestPaid=Math.min(interestRemaining,provided);
+    interestRemaining-=interestPaid;
+    const principalPaid=Math.min(outstanding,Math.max(0, provided-interestPaid));
+    outstanding=Math.max(0,outstanding-principalPaid);
+    if(p.strategy==='amount' && outstanding>0){
+      const elapsed=Math.max(0,monthIndex(month)-monthIndex(monthKey(loan.asOfDate))+1);
+      const remaining=Math.max(1,loan.termMonths-elapsed);
+      scheduled=annuityMonthly(outstanding,loan.apr,remaining) ?? scheduled;
+    }
+    history.push({id:p.id,date:p.date,amountCents:p.amountCents,beforeCents:before,interestPaidCents:interestPaid,principalPaidCents:principalPaid,afterCents:outstanding,unpaidInterestCents:interestRemaining,strategy:p.strategy});
+  }
+  const months=payoffMonths(outstanding,scheduled,loan.apr);
+  const lastDate=history.length?history[history.length-1].date:loan.asOfDate;
+  return {outstandingCents:outstanding,monthlyCents:scheduled,unpaidInterestCents:interestRemaining,months, projectedEnd:months===null?null:addMonthsDate(lastDate,months),history};
+}
+export function previewLoanPayment(loan,payments,inputCents,date,strategy='term') {
+  if (!loan || inputCents<=0 || !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Укажите положительную сумму и дату');
+  if (monthIndex(monthKey(date))<monthIndex(monthKey(loan.asOfDate))) throw new Error('Дата раньше расчётного остатка кредита');
+  const previous=loanLedger(loan,payments);
+  const incoming={id:'preview',loanId:loan.id,amountCents:inputCents,date,strategy,createdAt:new Date().toISOString()};
+  const projected=loanLedger(loan,[...payments,incoming]);
+  const row=projected.history.find(r=>r.id==='preview');
+  const existingThisMonth=payments.filter(p=>p.loanId===loan.id&&!p.voidedAt&&monthKey(p.date)===monthKey(date)).reduce((sum,p)=>sum+p.amountCents,0);
+  return {...projected, interestPaidCents:row?.interestPaidCents||0, principalPaidCents:row?.principalPaidCents||0,
+    extraCents:Math.max(0,inputCents+existingThisMonth-previous.monthlyCents),
+    baselineMonths:previous.months, savedMonths:previous.months===null||projected.months===null?null:Math.max(0,previous.months-projected.months),
+    canApply:inputCents <= previous.outstandingCents+Math.round(previous.outstandingCents*loanRate(loan))+previous.unpaidInterestCents};
+}
+export function getMonthEvents(state,month){
+ const entries=(state.entries||[]).filter(isActive).map(entry=>{const date=entryDueDate(entry,month); if(!date)return null;
+   const paid=(state.settlements||[]).filter(s=>s.entryId===entry.id&&!s.voidedAt&&s.occurrence===month).reduce((a,s)=>a+s.amountCents,0);
+   return {key:`entry:${entry.id}`,id:entry.id,source:'entry',title:entry.title,date,kind:entry.kind,plannedCents:entry.amountCents,paidCents:paid,category:entry.category||'',recurrence:entry.recurrence};
+ }).filter(Boolean);
+ const loans=(state.loans||[]).filter(isActive).filter(l=>monthIndex(month)>=monthIndex(monthKey(l.asOfDate))).map(l=>{
+   const past=(state.loanPayments||[]).filter(p=>p.loanId===l.id&&!p.voidedAt&&monthKey(p.date)<month);
+   const loan=loanLedger(l,past);
+   if(loan.outstandingCents<=0)return null;
+   const paid=(state.loanPayments||[]).filter(p=>p.loanId===l.id&&!p.voidedAt&&monthKey(p.date)===month).reduce((a,p)=>a+p.amountCents,0);
+   return {key:`loan:${l.id}`,id:l.id,source:'loan',title:l.title,date:dayInMonth(month,l.dueDay),kind:'expense',plannedCents:loan.monthlyCents,paidCents:paid,category:'Кредиты'};
+ }).filter(Boolean);
+ return [...entries,...loans].sort((a,b)=>a.date.localeCompare(b.date)||a.title.localeCompare(b.title,'ru'));
+}
+export function monthTotals(events){const incomes=events.filter(x=>x.kind==='income'),expenses=events.filter(x=>x.kind!=='income');return {
+  incomeCents:incomes.reduce((a,x)=>a+x.plannedCents,0),expenseCents:expenses.reduce((a,x)=>a+x.plannedCents,0),
+  incomePaidCents:incomes.reduce((a,x)=>a+x.paidCents,0),expensePaidCents:expenses.reduce((a,x)=>a+x.paidCents,0),
+  netPlanCents:incomes.reduce((a,x)=>a+x.plannedCents,0)-expenses.reduce((a,x)=>a+x.plannedCents,0),
+  netFactCents:incomes.reduce((a,x)=>a+x.paidCents,0)-expenses.reduce((a,x)=>a+x.paidCents,0)
+};}
+export function createSampleState() {
+ const asOf='2026-11-01'; return {
+  version:1,entries:[
+   {id:'s-income-1',title:'Зарплата',kind:'income',amountCents:9000000,date:'2026-11-15',recurrence:'monthly',category:'Работа'},
+   {id:'s-income-2',title:'Аванс',kind:'income',amountCents:9000000,date:'2026-11-30',recurrence:'monthly',category:'Работа'},
+   {id:'s-utilities',title:'ЖКХ',kind:'expense',amountCents:1250000,date:'2026-11-10',recurrence:'monthly',category:'Жильё'},
+   {id:'s-internet',title:'Интернет и связь',kind:'expense',amountCents:280000,date:'2026-11-20',recurrence:'monthly',category:'Связь'},
+   {id:'s-groceries',title:'Продукты и бытовое',kind:'expense',amountCents:3000000,date:'2026-11-22',recurrence:'monthly',category:'Покупки'}
+  ],loans:[{id:'s-mortgage',title:'Ипотека',openingCents:210000000,apr:9.5,paymentCents:3020000,termMonths:102,dueDay:16,asOfDate:asOf,schedule:[]}],
+  settlements:[],loanPayments:[],categories:['Жильё','Кредиты','Работа','Связь','Покупки','Подписки','Здоровье','Другое'],audit:[],settings:{currency:'RUB'}
+ };
+}
+export function emptyState() {return {version:1,entries:[],loans:[],settlements:[],loanPayments:[],categories:['Жильё','Кредиты','Работа','Связь','Покупки','Подписки','Здоровье','Другое'],audit:[],settings:{currency:'RUB'}};}
+export function validateState(s){
+ if(!s || s.version!==1 || !Array.isArray(s.entries)||!Array.isArray(s.loans)||!Array.isArray(s.settlements)||!Array.isArray(s.loanPayments)||!Array.isArray(s.categories)||!Array.isArray(s.audit))throw Error('Неподдерживаемый или повреждённый формат резервной копии');
+ if(s.entries.length>50000||s.loans.length>1000||s.loanPayments.length>100000||s.audit.length>150000)throw Error('Превышен безопасный объём данных');
+ for(const x of [...s.entries,...s.loans,...s.settlements,...s.loanPayments]){
+  if(!x || typeof x.id!=='string'||x.id.length>128)throw Error('Ошибка идентификаторов данных');
+  if(x.amountCents!==undefined && (!Number.isSafeInteger(x.amountCents)||x.amountCents<0))throw Error('Неверные суммы в резервной копии');
+ }
+ return s;
+}

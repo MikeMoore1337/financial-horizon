@@ -1,0 +1,37 @@
+{
+  "project": "Финансовый горизонт",
+  "variant": "A - Чистый баланс",
+  "release": "0.2.0 prototype",
+  "generated_at": "2026-11-04",
+  "qa": {
+    "node_unit_tests": 11,
+    "unit_status": "PASS",
+    "browser_viewports": [
+      "1440x900",
+      "390x844"
+    ],
+    "browser_ui_status": "PASS_MOCKED_STORAGE",
+    "browser_errors": 0,
+    "browser_external_requests": 0,
+    "native_indexeddb": "NOT_VERIFIED_BROWSER_ORIGIN_RESTRICTION",
+    "real_ios_safari": "NOT_RUN",
+    "real_mac_safari": "NOT_RUN",
+    "pwa_installation": "NOT_RUN",
+    "banking_calculator_exactness": "NOT_VERIFIED",
+    "production_deploy": "NOT_RUN"
+  },
+  "privacy": {
+    "bank_api": false,
+    "server_finance_data": false,
+    "user_registration": false,
+    "local_indexeddb": true,
+    "encrypted_backup": true,
+    "cross_device_sync": false
+  },
+  "limitations": [
+    "Native Chromium navigation to local/test URL blocked by environment; UI was tested with inline storage double",
+    "No production backend and no domain yet",
+    "CSV schedule reference import only; XLSX bank import not implemented",
+    "Approximate annuity model only"
+  ]
+}

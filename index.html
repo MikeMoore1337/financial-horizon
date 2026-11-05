@@ -81,7 +81,7 @@
 </form></dialog>
 <dialog class="dialog" id="payment-dialog" aria-labelledby="payment-heading"><form method="dialog" id="payment-form" class="dialog-body" novalidate>
   <div class="dialog-head"><div><span class="eyebrow">Фактическая оплата</span><h2 id="payment-heading">Внести платёж</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть">✕</button></div>
-  <label class="field"><span>Кредит</span><select name="loanId" id="payment-loan" required></select></label>
+  <input name="paymentId" type="hidden"><label class="field"><span>Кредит</span><select name="loanId" id="payment-loan" required></select></label>
   <div class="form-two"><label class="field"><span>Внесённая сумма, ₽</span><input name="amount" inputmode="decimal" required placeholder="30200"></label><label class="field"><span>Дата оплаты</span><input name="date" type="date" required></label></div>
   <fieldset class="segmented-field"><legend>Вариант перерасчёта досрочной части</legend><label><input type="radio" name="strategy" value="term" checked><span>Уменьшить срок</span></label><label><input type="radio" name="strategy" value="amount"><span>Уменьшить платёж</span></label></fieldset>
   <div class="forecast-box" id="payment-preview" aria-live="polite">Введите сумму для расчёта.</div>
@@ -93,6 +93,11 @@
   <input type="hidden" name="entryId"><input type="hidden" name="occurrence"><p id="settlement-description" class="form-note"></p>
   <div class="form-two"><label class="field"><span>Фактически внесено, ₽</span><input name="amount" inputmode="decimal" required></label><label class="field"><span>Дата операции</span><input name="date" type="date" required></label></div>
   <div class="dialog-actions"><button class="button-secondary" value="cancel">Отмена</button><button type="submit" class="button-primary" value="save">Записать факт</button></div>
+</form></dialog>
+<dialog class="dialog" id="category-dialog" aria-labelledby="category-heading"><form method="dialog" id="rename-category-form" class="dialog-body" novalidate>
+ <div class="dialog-head"><h2 id="category-heading">Переименовать категорию</h2><button class="tool-icon" value="cancel" aria-label="Закрыть">✕</button></div>
+ <input type="hidden" name="old"><label class="field"><span>Новое название</span><input name="newName" maxlength="40" required></label>
+ <div class="dialog-actions"><button class="button-secondary" value="cancel">Отмена</button><button class="button-primary" type="submit">Сохранить</button></div>
 </form></dialog>
 <dialog class="dialog" id="confirmation-dialog" aria-labelledby="confirmation-title"><div class="dialog-body"><div class="dialog-head"><h2 id="confirmation-title">Подтвердить действие</h2></div><p class="form-note" id="confirmation-text"></p><div class="dialog-actions"><button class="button-secondary" id="confirm-cancel">Отмена</button><button class="button-primary danger-button" id="confirm-yes">Подтвердить</button></div></div></dialog>
 <dialog class="dialog" id="password-dialog" aria-labelledby="password-heading"><form method="dialog" id="password-form" class="dialog-body" novalidate>

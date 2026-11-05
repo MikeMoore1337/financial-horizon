@@ -1,0 +1,19 @@
+{
+  "id":"./",
+  "name":"Финансовый горизонт",
+  "short_name":"Горизонт",
+  "description":"Домашняя бухгалтерия без регистрации. Финансовые данные остаются на устройстве.",
+  "start_url":"./",
+  "scope":"./",
+  "display":"standalone",
+  "display_override":["standalone","minimal-ui"],
+  "orientation":"any",
+  "lang":"ru",
+  "dir":"ltr",
+  "background_color":"#f5f7fc",
+  "theme_color":"#f5f7fc",
+  "icons":[
+    {"src":"./assets/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},
+    {"src":"./assets/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}
+  ]
+}
