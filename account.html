@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#f5f7fc">
+<title>Аккаунт - Финансовый горизонт</title>
+<link rel="icon" type="image/svg+xml" href="./assets/brand/favicon.svg">
+<link rel="stylesheet" href="./styles.css">
+<link rel="stylesheet" href="./account.css">
+<script type="module" src="./account.js"></script>
+</head>
+<body data-theme="light">
+<main class="auth-layout">
+  <section class="auth-intro" aria-labelledby="app-heading">
+    <div class="auth-lockup"><img src="./assets/brand/symbol.svg" alt="" width="56" height="56"><div><strong>Финансовый горизонт</strong><small>Личная бухгалтерия</small></div></div>
+    <h1 id="app-heading">Личные финансы под контролем</h1>
+    <p>Работайте без регистрации. Подключение аккаунта предназначено для будущей синхронизации устройств.</p>
+    <a class="button-secondary" href="./">Продолжить без регистрации</a>
+  </section>
+  <section class="auth-card surface" aria-labelledby="form-heading">
+    <span class="eyebrow">Защищённый доступ</span>
+    <h2 id="form-heading">Войти по email</h2>
+    <p id="form-description" class="small-hint">Для доступа к аккаунту нужен подтверждённый email.</p>
+    <nav class="auth-modes" aria-label="Действия с аккаунтом">
+      <button type="button" data-mode="login" aria-current="page">Войти</button>
+      <button type="button" data-mode="register">Регистрация</button>
+      <button type="button" data-mode="reset">Забыли пароль?</button>
+    </nav>
+    <form id="auth-form" autocomplete="on">
+      <label class="auth-label" id="email-label">Email
+        <input type="email" id="email" name="email" autocomplete="email" placeholder="you@example.com" maxlength="254" required>
+      </label>
+      <label class="auth-label" id="password-label">Пароль
+        <input type="password" id="password" name="password" minlength="12" maxlength="128" autocomplete="current-password">
+      </label>
+      <div id="turnstile-container" aria-label="Защитная проверка" hidden></div>
+      <button type="submit" id="auth-submit" class="button-primary" disabled>Войти</button>
+    </form>
+    <p class="auth-feedback" id="auth-feedback" role="status" aria-live="polite"></p>
+    <section id="session-panel" hidden aria-label="Аккаунт"><p id="session-email"></p><button type="button" class="button-secondary" id="auth-logout">Выйти из аккаунта</button></section>
+    <div class="auth-actions">
+      <button type="button" data-mode="resend">Не пришло письмо? Отправить повторно</button>
+      <a href="./">Вернуться к бухгалтерии</a>
+    </div>
+    <p class="small-hint">Без аккаунта все записи сохраняются локально. До включения синхронизации вход не переносит бюджет между устройствами.</p>
+  </section>
+</main>
+</body>
+</html>
