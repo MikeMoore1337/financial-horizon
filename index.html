@@ -11,7 +11,8 @@
 <meta name="color-scheme" content="light dark">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./assets/icon-192.png">
-<link rel="icon" type="image/png" href="./assets/icon-192.png">
+<link rel="icon" type="image/svg+xml" href="./assets/app-icon.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="./assets/icon-192.png">
 <link rel="stylesheet" href="./styles.css">
 <title>Финансовый горизонт</title>
 </head>
@@ -33,6 +34,7 @@
  <symbol id="ico-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6m4-6v6"/></symbol>
  <symbol id="ico-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
  <symbol id="ico-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+ <symbol id="ico-close" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
 </svg>
 <div class="app-shell">
   <aside class="sidebar" id="sidebar" aria-label="Навигация">
@@ -63,7 +65,7 @@
   <button data-view="settings"><svg><use href="#ico-settings"/></svg><span>Ещё</span></button>
 </nav>
 <dialog class="dialog" id="entry-dialog" aria-labelledby="entry-heading"><form method="dialog" id="entry-form" class="dialog-body" novalidate>
-  <div class="dialog-head"><div><span class="eyebrow">Доход или расход</span><h2 id="entry-heading">Новая запись</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть">✕</button></div>
+  <div class="dialog-head"><div><span class="eyebrow">Доход или расход</span><h2 id="entry-heading">Новая запись</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-close"/></svg></button></div>
   <input type="hidden" name="id"><label class="field"><span>Название</span><input name="title" maxlength="100" required placeholder="Например, интернет"></label>
   <div class="form-two"><label class="field"><span>Тип</span><select name="kind"><option value="expense">Расход</option><option value="income">Доход</option></select></label><label class="field"><span>Сумма, ₽</span><input name="amount" inputmode="decimal" placeholder="0,00" required></label></div>
   <div class="form-two"><label class="field"><span>Дата первого платежа</span><input name="date" type="date" required></label><label class="field"><span>Повторять</span><select name="recurrence"><option value="monthly">Ежемесячно</option><option value="once">Однократно</option><option value="yearly">Ежегодно</option></select></label></div>
@@ -71,7 +73,7 @@
   <div class="dialog-actions"><button class="button-secondary" value="cancel">Отмена</button><button type="submit" class="button-primary" value="save">Сохранить запись</button></div>
  </form></dialog>
 <dialog class="dialog" id="loan-dialog" aria-labelledby="loan-heading"><form method="dialog" id="loan-form" class="dialog-body" novalidate>
-  <div class="dialog-head"><div><span class="eyebrow">Кредитные обязательства</span><h2 id="loan-heading">Добавить кредит</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть">✕</button></div>
+  <div class="dialog-head"><div><span class="eyebrow">Кредитные обязательства</span><h2 id="loan-heading">Добавить кредит</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-close"/></svg></button></div>
   <input type="hidden" name="id"><label class="field"><span>Название</span><input name="title" required maxlength="100" placeholder="Например, ипотека"></label>
   <div class="form-two"><label class="field"><span>Остаток долга, ₽</span><input name="opening" inputmode="decimal" required placeholder="2100000"></label><label class="field"><span>Годовая ставка, %</span><input name="apr" inputmode="decimal" required placeholder="9,5"></label></div>
   <div class="form-two"><label class="field"><span>Ежемесячный платёж, ₽</span><input name="payment" inputmode="decimal" required placeholder="30200"></label><label class="field"><span>Осталось месяцев по графику</span><input name="term" type="number" min="1" max="1200" required placeholder="240"></label></div>
@@ -80,7 +82,7 @@
   <div class="dialog-actions"><button class="button-secondary" value="cancel">Отмена</button><button type="submit" class="button-primary" value="save">Сохранить кредит</button></div>
 </form></dialog>
 <dialog class="dialog" id="payment-dialog" aria-labelledby="payment-heading"><form method="dialog" id="payment-form" class="dialog-body" novalidate>
-  <div class="dialog-head"><div><span class="eyebrow">Фактическая оплата</span><h2 id="payment-heading">Внести платёж</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть">✕</button></div>
+  <div class="dialog-head"><div><span class="eyebrow">Фактическая оплата</span><h2 id="payment-heading">Внести платёж</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-close"/></svg></button></div>
   <input name="paymentId" type="hidden"><label class="field"><span>Кредит</span><select name="loanId" id="payment-loan" required></select></label>
   <div class="form-two"><label class="field"><span>Внесённая сумма, ₽</span><input name="amount" inputmode="decimal" required placeholder="30200"></label><label class="field"><span>Дата оплаты</span><input name="date" type="date" required></label></div>
   <fieldset class="segmented-field"><legend>Вариант перерасчёта досрочной части</legend><label><input type="radio" name="strategy" value="term" checked><span>Уменьшить срок</span></label><label><input type="radio" name="strategy" value="amount"><span>Уменьшить платёж</span></label></fieldset>
@@ -89,19 +91,19 @@
   <div class="dialog-actions"><button class="button-secondary" value="cancel">Отмена</button><button type="submit" class="button-primary" value="save">Подтвердить оплату</button></div>
 </form></dialog>
 <dialog class="dialog" id="settlement-dialog" aria-labelledby="settlement-heading"><form method="dialog" id="settlement-form" class="dialog-body" novalidate>
-  <div class="dialog-head"><div><span class="eyebrow">План и факт</span><h2 id="settlement-heading">Отметить сумму</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть">✕</button></div>
+  <div class="dialog-head"><div><span class="eyebrow">План и факт</span><h2 id="settlement-heading">Отметить сумму</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-close"/></svg></button></div>
   <input type="hidden" name="entryId"><input type="hidden" name="occurrence"><p id="settlement-description" class="form-note"></p>
   <div class="form-two"><label class="field"><span>Фактически внесено, ₽</span><input name="amount" inputmode="decimal" required></label><label class="field"><span>Дата операции</span><input name="date" type="date" required></label></div>
   <div class="dialog-actions"><button class="button-secondary" value="cancel">Отмена</button><button type="submit" class="button-primary" value="save">Записать факт</button></div>
 </form></dialog>
 <dialog class="dialog" id="category-dialog" aria-labelledby="category-heading"><form method="dialog" id="rename-category-form" class="dialog-body" novalidate>
- <div class="dialog-head"><h2 id="category-heading">Переименовать категорию</h2><button class="tool-icon" value="cancel" aria-label="Закрыть">✕</button></div>
+ <div class="dialog-head"><h2 id="category-heading">Переименовать категорию</h2><button class="tool-icon" value="cancel" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-close"/></svg></button></div>
  <input type="hidden" name="old"><label class="field"><span>Новое название</span><input name="newName" maxlength="40" required></label>
  <div class="dialog-actions"><button class="button-secondary" value="cancel">Отмена</button><button class="button-primary" type="submit">Сохранить</button></div>
 </form></dialog>
 <dialog class="dialog" id="confirmation-dialog" aria-labelledby="confirmation-title"><div class="dialog-body"><div class="dialog-head"><h2 id="confirmation-title">Подтвердить действие</h2></div><p class="form-note" id="confirmation-text"></p><div class="dialog-actions"><button class="button-secondary" id="confirm-cancel">Отмена</button><button class="button-primary danger-button" id="confirm-yes">Подтвердить</button></div></div></dialog>
 <dialog class="dialog" id="password-dialog" aria-labelledby="password-heading"><form method="dialog" id="password-form" class="dialog-body" novalidate>
-<div class="dialog-head"><div><span class="eyebrow">Шифрованная резервная копия</span><h2 id="password-heading">Сохранить данные</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть">✕</button></div>
+<div class="dialog-head"><div><span class="eyebrow">Шифрованная резервная копия</span><h2 id="password-heading">Сохранить данные</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-close"/></svg></button></div>
 <label class="field"><span>Пароль резервной копии</span><input type="password" name="password" autocomplete="new-password" minlength="12" required placeholder="Не меньше 12 символов"></label><p class="form-note">Пароль нигде не хранится и не передаётся. Если забыть его, восстановить копию будет невозможно.</p>
 <div class="dialog-actions"><button class="button-secondary" value="cancel">Отмена</button><button type="submit" class="button-primary" value="save">Продолжить</button></div></form></dialog>
 <input type="file" id="restore-file" accept=".json,application/json" hidden>
