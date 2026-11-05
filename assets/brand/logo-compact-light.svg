@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 650 150" width="650" height="150" role="img" aria-label="Финансовый горизонт - Личная бухгалтерия"><svg x="7" y="14" width="121" height="121" viewBox="0 0 512 512"><defs>
+  <linearGradient id="base" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#59BDFF"/><stop offset=".27" stop-color="#328DF8"/>
+    <stop offset=".60" stop-color="#266BE4"/><stop offset="1" stop-color="#163E9A"/>
+  </linearGradient>
+  <radialGradient id="lit" cx=".1" cy=".04" r=".93">
+    <stop offset="0" stop-color="#B5F1FF" stop-opacity=".31"/>
+    <stop offset=".48" stop-color="#57BBFF" stop-opacity=".06"/>
+    <stop offset="1" stop-color="#1B3CBA" stop-opacity="0"/>
+  </radialGradient>
+  <linearGradient id="bars" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#FFFFFF"/>
+    <stop offset=".62" stop-color="#F2F9FF"/>
+    <stop offset="1" stop-color="#ACFFF0"/>
+  </linearGradient>
+  <linearGradient id="land" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#35E4C0" stop-opacity=".95"/>
+    <stop offset=".65" stop-color="#0AADD0" stop-opacity=".82"/>
+    <stop offset="1" stop-color="#174BBD" stop-opacity=".27"/>
+  </linearGradient>
+  <linearGradient id="rim" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#FFFFFF" stop-opacity=".52"/>
+    <stop offset=".38" stop-color="#FFFFFF" stop-opacity=".09"/>
+    <stop offset="1" stop-color="#5DABFF" stop-opacity=".28"/>
+  </linearGradient>
+  <clipPath id="clip"><rect x="0" y="0" width="512" height="512" rx="112"/></clipPath>
+</defs><g clip-path="url(#clip)"><rect width="512" height="512" fill="url(#base)"/><rect width="512" height="512" fill="url(#lit)"/><rect x="128" y="255" width="62" height="111" rx="21" fill="url(#bars)"/>
+<rect x="225" y="207" width="62" height="159" rx="21" fill="url(#bars)"/>
+<rect x="322" y="150" width="62" height="216" rx="21" fill="url(#bars)"/>
+<path d="M56 423 C 155 342 307 342 456 414 L456 512 H56 Z" fill="url(#land)"/>
+<path d="M64 412 C155 342 309 340 448 407" fill="none" stroke="#81FFE0" stroke-width="15" stroke-linecap="round"/>
+<path d="M70 432 C164 369 298 360 439 423" fill="none" stroke="#D3FFF3" opacity=".27" stroke-width="6" stroke-linecap="round"/></g></svg><text x="152" y="65" font-family="Inter, Arial, sans-serif" font-size="42" font-weight="750" fill="#162439">Финансовый</text>
+<text x="152" y="111" font-family="Inter, Arial, sans-serif" font-size="42" font-weight="750" fill="#162439">горизонт</text>
+<text x="153" y="139" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="460" fill="#5C6C83">Личная бухгалтерия</text></svg>
