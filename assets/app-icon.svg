@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Финансовый горизонт</title>
+  <desc id="desc">Светлая квадратная иконка с синей плиткой и белой линией финансового прогноза.</desc>
+  <rect width="512" height="512" fill="#f4f7ff"/>
+  <rect x="46" y="46" width="420" height="420" rx="104" fill="#3078fa"/>
+  <path d="M112 305h88l43-121 62 150 54-90h47" fill="none" stroke="#ffffff" stroke-width="25" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
