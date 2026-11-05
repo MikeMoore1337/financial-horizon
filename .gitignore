@@ -26,3 +26,10 @@ coverage/
 Thumbs.db
 __pycache__/
 .pytest_cache/
+
+# Prevent publishing local auth SQLite journals and venvs
+*.db-wal
+*.db-shm
+*.sqlite3-wal
+*.sqlite3-shm
+.venv/
