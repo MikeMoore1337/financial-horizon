@@ -31,5 +31,22 @@ test('SVG PWA icon and compatible PNG fallback are local', () => {
   assert.match(html,/rel="apple-touch-icon"[^>]*icon-192\.png/);
   assert.match(html,/rel="icon" type="image\/svg\+xml"[^>]*app-icon\.svg/);
   assert.match(sw,/assets\/app-icon\.svg/);
-  assert.match(sw,/financial-horizon-shell-v2-svg-icons/);
+  assert.match(sw,/financial-horizon-shell-v3-settings-theme-icons/);
+});
+
+test('settings is a gear and dark-theme action has a crescent with a star', () => {
+  const html = read('index.html');
+  const app = read('app.js');
+  const symbol = name => html.match(new RegExp('<symbol id="ico-' + name + '"[^>]*>([\\s\\S]*?)<\\/symbol>'))?.[1];
+  const settings = symbol('settings');
+  const moon = symbol('moon');
+  assert.ok(settings, 'Settings symbol is missing');
+  assert.ok(moon, 'Moon symbol is missing');
+  assert.match(settings, /<circle\b/);
+  assert.match(settings, /<path\b/);
+  assert.doesNotMatch(settings, /M12 2v2/, 'Settings must not look like a sun');
+  assert.equal((moon.match(/<path\b/g) || []).length, 2, 'Moon should include a separate sparkle');
+  assert.equal((html.match(/href="#ico-settings"/g) || []).length, 2, 'Desktop and mobile navigation must share the symbol');
+  assert.match(app, /mode==='dark'\?'sun':'moon'/, 'Theme toggle behavior must stay unchanged');
+  assert.match(app, /Включить тёмную тему/);
 });

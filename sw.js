@@ -1,5 +1,5 @@
 /* Кэшируем только неизменяемую оболочку приложения. Финансовые записи не попадают в CacheStorage. */
-const CACHE='financial-horizon-shell-v2-svg-icons';
+const CACHE='financial-horizon-shell-v3-settings-theme-icons';
 const ASSETS=['./','./index.html','./styles.css','./app.js','./finance.js','./storage.js','./backup.js','./schedule.js','./manifest.webmanifest','./assets/app-icon.svg','./assets/icon-192.png','./assets/icon-512.png'];
 self.addEventListener('install',event=>{
  event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting()));
