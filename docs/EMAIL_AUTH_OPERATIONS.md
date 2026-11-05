@@ -29,6 +29,8 @@ Create a production widget restricted to \`fin-horizon.mikemoore.top\`. Store **
 
 Server-side Siteverify is mandatory for registration, email resend and password-reset request; action and hostname must match. Cloudflare tokens expire after five minutes and can be redeemed only once.
 
+Global and peer-IP request budgets are checked before Siteverify. **Per-email quotas apply only after successful verification**, preventing unauthenticated attackers with invalid CAPTCHA tokens from exhausting another address's quota. In production, the real client IP behind Cloudflare/Caddy must be validated without accepting spoofed forwarding headers. The API also rejects unexpected `Host` headers.
+
 **Never use Cloudflare's dummy always-pass sitekey/secret on production.** This backend rejects known dummy test keys in production. Use separate keys for isolated staging tests.
 
 Required Caddy **account-page only** CSP adjustment when enabling Turnstile:

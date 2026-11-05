@@ -9,6 +9,8 @@ import logging
 from typing import Callable
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from urllib.parse import urlsplit
 from pydantic import BaseModel, Field
 
 from .config import Settings
@@ -54,6 +56,7 @@ def create_app(
     config=config or Settings.from_env()
     app=FastAPI(title="Financial Horizon Email Auth", docs_url=None, redoc_url=None,
                 openapi_url=None)
+    app.add_middleware(TrustedHostMiddleware,allowed_hosts=[urlsplit(config.public_origin).hostname]+(["testserver"] if config.test_mode else []))
     if config.enabled:
         store=store or AuthStore(config.database_path)
     captcha=captcha or validate_token
@@ -84,8 +87,8 @@ def create_app(
         if site and site not in ("same-origin","none"):
             raise HTTPException(status_code=403,detail="Запрос с другого сайта")
 
-    def throttle(request:Request,action:str,email:str|None=None):
-        assert store is not None
+    def throttle(request:Request,action:str,email:str|None=None,*,only_email:bool=False):
+        if store is None:raise RuntimeError("Email AuthStore was not initialized")
         addr=request.client.host if request.client else "unknown"
         # Trust only ASGI peer IP; forwarding headers are not user-controlled identities.
         policy={
@@ -100,10 +103,12 @@ def create_app(
         ip_policy,email_policy=policy[action]
         # Global quota must be consumed first, so distributed abusive IPs cannot
         # grow an unbounded number of individual counter rows.
-        parts=[
+        parts=[] if only_email else [
             (limit_key(config.rate_secret,action+"-global","all"),300,3600),
             (limit_key(config.rate_secret,action+"-ip",addr),*ip_policy)
         ]
+        if only_email and (not email or not email_policy):
+            raise RuntimeError("Email quota policy not configured")
         if email and email_policy:
             parts.append((limit_key(config.rate_secret,action+"-email",email),*email_policy))
         try:
@@ -112,7 +117,7 @@ def create_app(
             raise HTTPException(status_code=429,detail="Слишком много попыток. Попробуйте позже.")
 
     def challenge(token:str,action:str):
-        assert config.enabled
+        if not config.enabled:raise RuntimeError("Email registration not configured")
         if not captcha(config.turnstile_secret,token,config.public_origin,action):
             raise HTTPException(status_code=400,detail="Не удалось подтвердить защитную проверку")
 
@@ -126,7 +131,7 @@ def create_app(
         # Stay below the external free relay's daily send allowance even under
         # distributed CAPTCHA abuse. No user identifiers enter the global key.
         try:
-            assert store is not None
+            if store is None:raise RuntimeError("Email AuthStore was not initialized")
             store.reserve_transactional_email(max_per_24h=80)
             result=mailer.send(email,purpose,raw)
             if result is False:raise RuntimeError("delivery failed")
@@ -152,8 +157,8 @@ def create_app(
             email=normalize_email(payload.email)
         except ValueError as exc:
             raise HTTPException(status_code=422,detail=str(exc)) from None
-        throttle(request,"register",email);challenge(payload.challenge,"register")
-        assert store is not None
+        throttle(request,"register");challenge(payload.challenge,"register");throttle(request,"register",email,only_email=True)
+        if store is None:raise RuntimeError("Email AuthStore was not initialized")
         try:
             raw=store.create_account(email)
         except ValueError as exc:
@@ -166,8 +171,8 @@ def create_app(
         require_enabled();guard_origin(request)
         try:email=normalize_email(payload.email)
         except ValueError:raise HTTPException(status_code=422,detail="Некорректный email") from None
-        throttle(request,"resend",email);challenge(payload.challenge,"resend")
-        assert store is not None
+        throttle(request,"resend");challenge(payload.challenge,"resend");throttle(request,"resend",email,only_email=True)
+        if store is None:raise RuntimeError("Email AuthStore was not initialized")
         raw=store.email_action(email,"verify")
         if raw:background.add_task(deliver,email,"verify",raw)
         return {"message":GENERIC_MESSAGE}
@@ -175,7 +180,7 @@ def create_app(
     @app.post("/api/auth/email/verify")
     def verify(request:Request,payload:VerifyRequest,response:Response):
         require_enabled();guard_origin(request);throttle(request,"verify")
-        assert store is not None
+        if store is None:raise RuntimeError("Email AuthStore was not initialized")
         try:session=store.confirm_email(payload.token,payload.password)
         except (AuthFailure,ValueError):raise HTTPException(status_code=400,detail="Ссылка недействительна или пароль не подходит") from None
         cookie(response,session)
@@ -187,7 +192,7 @@ def create_app(
         try:email=normalize_email(payload.email)
         except ValueError:raise HTTPException(status_code=401,detail="Неверный email или пароль") from None
         throttle(request,"login",email)
-        assert store is not None
+        if store is None:raise RuntimeError("Email AuthStore was not initialized")
         try:session=store.login(email,payload.password)
         except AuthFailure:raise HTTPException(status_code=401,detail="Неверный email или пароль") from None
         cookie(response,session)
@@ -198,8 +203,8 @@ def create_app(
         require_enabled();guard_origin(request)
         try:email=normalize_email(payload.email)
         except ValueError:raise HTTPException(status_code=422,detail="Некорректный email") from None
-        throttle(request,"reset",email);challenge(payload.challenge,"reset")
-        assert store is not None
+        throttle(request,"reset");challenge(payload.challenge,"reset");throttle(request,"reset",email,only_email=True)
+        if store is None:raise RuntimeError("Email AuthStore was not initialized")
         raw=store.email_action(email,"reset")
         if raw:background.add_task(deliver,email,"reset",raw)
         return {"message":GENERIC_MESSAGE}
@@ -207,7 +212,7 @@ def create_app(
     @app.post("/api/auth/email/reset/confirm")
     def confirm_reset(request:Request,payload:PasswordChange):
         require_enabled();guard_origin(request);throttle(request,"confirm")
-        assert store is not None
+        if store is None:raise RuntimeError("Email AuthStore was not initialized")
         try:
             store.reset_password(payload.token,payload.password)
         except (AuthFailure,ValueError):
@@ -217,14 +222,14 @@ def create_app(
     @app.get("/api/auth/email/me")
     def current(request:Request):
         if not config.enabled:return {"authenticated":False}
-        assert store is not None
+        if store is None:raise RuntimeError("Email AuthStore was not initialized")
         user=store.current(request.cookies.get(SESSION_COOKIE))
         return {"authenticated":bool(user),"user":user if user else None}
 
     @app.post("/api/auth/email/logout")
     def logout(request:Request,response:Response):
         require_enabled();guard_origin(request);throttle(request,"logout")
-        assert store is not None
+        if store is None:raise RuntimeError("Email AuthStore was not initialized")
         store.logout(request.cookies.get(SESSION_COOKIE))
         response.delete_cookie(SESSION_COOKIE,path="/api/auth",
                                secure=not config.test_mode,httponly=True,samesite="strict")

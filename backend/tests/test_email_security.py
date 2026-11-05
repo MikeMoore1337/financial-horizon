@@ -70,9 +70,10 @@ def test_replay_unicode_and_session_timeouts(tmp_path):
  assert store.current(session) is None
 
 
-def test_per_email_and_ip_rate_limit_before_captcha(tmp_path):
+def test_per_email_and_ip_rate_limit_only_after_captcha(tmp_path):
  store,mail,c=fixture(tmp_path)
  assert register(c,challenge="bad").status_code==400
+ assert register(c).status_code==202
  assert register(c).status_code==202
  assert register(c).status_code==429
  assert len(mail.sent)==1
@@ -99,6 +100,7 @@ def test_reset_requires_turnstile_and_cannot_spam(tmp_path):
  missing=post(c,"reset/request",{"email":"missing@example.invalid","challenge":"valid-reset"})
  assert missing.status_code==202
  assert post(c,"reset/request",{"email":"one@example.invalid","challenge":"bad"}).status_code==400
+ assert post(c,"reset/request",{"email":"one@example.invalid","challenge":"valid-reset"}).status_code==202
  assert post(c,"reset/request",{"email":"one@example.invalid","challenge":"valid-reset"}).status_code==202
  assert post(c,"reset/request",{"email":"one@example.invalid","challenge":"valid-reset"}).status_code==202
  assert post(c,"reset/request",{"email":"one@example.invalid","challenge":"valid-reset"}).status_code==429
@@ -161,3 +163,40 @@ def test_daily_email_budget_is_rolling_not_reset_at_utc_midnight(tmp_path):
         store.reserve_transactional_email()
     clock[0]+=86401  # All 80 prior reservations have expired
     store.reserve_transactional_email()
+
+
+def test_bad_captcha_cannot_exhaust_victim_email_quota(tmp_path):
+    from fh_email_auth.security import limit_key
+    import sqlite3
+    store,mail,c=fixture(tmp_path)
+    email="target@example.invalid"
+    target_key=limit_key("h"*48,"register-email",email)
+    for _ in range(3):
+        assert register(c,email=email,challenge="invalid") .status_code==400
+    with sqlite3.connect(store.path) as db:
+        stolen=db.execute("SELECT count(*) FROM counters WHERE key=?",(target_key,)).fetchone()
+        assert stolen == (0,), "Attacker exhausted victim quota without passing Turnstile"
+    assert register(c,email=email).status_code==202
+    with sqlite3.connect(store.path) as db:
+        used=db.execute("SELECT count FROM counters WHERE key=?",(target_key,)).fetchone()
+        assert used and used[0]==1
+    assert len(mail.sent)==1
+
+
+def test_host_header_rejected_even_with_spoofed_origin(tmp_path):
+    store,mail,c=fixture(tmp_path)
+    response=c.post("/api/auth/email/register",
+        json={"email":"target@example.invalid","challenge":"valid-register"},
+        headers={"Host":"evil.invalid","Origin":ORIGIN})
+    assert response.status_code==400
+    assert mail.sent==[]
+
+
+def test_invalid_unicode_or_short_session_cannot_trigger_server_error(tmp_path):
+    store,mail,client=fixture(tmp_path)
+    for malformed in ["🚀"*40,"a"*14,"*".join(["λ"]*30),None,123]:
+        assert store.current(malformed) is None
+        store.logout(malformed)
+    response=client.get("/api/auth/email/me",headers={"Cookie":"fh_email_session=invalid"})
+    assert response.status_code==200
+    assert response.json()["authenticated"] is False

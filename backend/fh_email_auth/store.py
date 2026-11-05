@@ -283,7 +283,7 @@ class AuthStore:
                 raise
 
     def current(self,session: str|None):
-        if not session or len(session)>256:return None
+        if not isinstance(session,str) or not 32<=len(session)<=256 or not session.isascii():return None
         with self._db() as db:
             row=db.execute(
                 """SELECT s.user_id, u.email FROM sessions s JOIN users u ON u.id=s.user_id
@@ -293,7 +293,7 @@ class AuthStore:
         return {"id":row[0],"email":row[1]} if row else None
 
     def logout(self,session: str|None):
-        if not session or len(session)>256:return
+        if not isinstance(session,str) or not 32<=len(session)<=256 or not session.isascii():return
         with self._db() as db:
             db.execute(
                 "UPDATE sessions SET revoked_at=? WHERE hash=? AND revoked_at IS NULL",
