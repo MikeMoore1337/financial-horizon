@@ -21,3 +21,7 @@ button,input,select{font:inherit}button{cursor:pointer}svg{width:20px;height:20p
 /* Vector-only controls keep native text alignment across themes. */
 .header-tools [data-action="prev-month"] svg{transform:rotate(180deg)}
 .category-chip button svg{width:17px;height:17px;flex-shrink:0}
+
+/* Approved mark with readable text in the compact desktop sidebar. */
+.brand-mark{background:transparent;border-radius:0}
+.brand-mark img{display:block;width:40px;height:40px}

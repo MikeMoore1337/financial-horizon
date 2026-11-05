@@ -20,18 +20,18 @@ test('all interface SVG icon references exist in sprite', () => {
 
 test('SVG PWA icon and compatible PNG fallback are local', () => {
   const html = read('index.html');
-  const icon = read('assets/app-icon.svg');
+  const icon = read('assets/brand/symbol.svg');
   const sw = read('sw.js');
   const manifest = JSON.parse(read('manifest.webmanifest'));
   assert.match(icon, /^<svg\s/);
   assert.match(icon, /viewBox="0 0 512 512"/);
   assert.doesNotMatch(icon, /<script|<foreignObject|xlink:href|<image\b|<use[^>]+href="https?:|on[a-z]+\s*=/i);
-  assert.ok(manifest.icons.some(i => i.type==='image/svg+xml' && i.src==='./assets/app-icon.svg' && i.sizes==='any'));
-  assert.ok(manifest.icons.some(i => i.type==='image/png' && i.purpose.includes('maskable')));
-  assert.match(html,/rel="apple-touch-icon"[^>]*icon-192\.png/);
-  assert.match(html,/rel="icon" type="image\/svg\+xml"[^>]*app-icon\.svg/);
-  assert.match(sw,/assets\/app-icon\.svg/);
-  assert.match(sw,/financial-horizon-shell-v3-settings-theme-icons/);
+  assert.ok(manifest.icons.some(i => i.type==='image/svg+xml' && i.src==='./assets/brand/symbol.svg' && i.sizes==='any'));
+  assert.ok(manifest.icons.some(i => i.type==='image/png' && i.src==='./assets/brand/pwa-maskable-512.png' && i.purpose.includes('maskable')));
+  assert.match(html,/rel="apple-touch-icon"[^>]*apple-touch-icon-180\.png/);
+  assert.match(html,/rel="icon" type="image\/svg\+xml"[^>]*brand\/favicon\.svg/);
+  assert.match(sw,/assets\/brand\/favicon\.svg/);
+  assert.match(sw,/financial-horizon-shell-v4-approved-brand-20261105/);
 });
 
 test('settings is a gear and dark-theme action has a crescent with a star', () => {
