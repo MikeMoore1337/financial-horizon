@@ -28,3 +28,20 @@ test('tablet and mobile still collapse into a single column',()=>{
  assert.match(css,/@media\(max-width:1100px\)\{\.overview-grid,\.cal-layout,\.loan-grid\{grid-template-columns:minmax\(0,1fr\)/);
  assert.match(css,/@media\(max-width:760px\)\{\.sidebar\{display:none\}/);
 });
+
+test('mobile floating navigation stays compact above the iPhone safe area',()=>{
+ const mobile=css.slice(css.indexOf('@media(max-width:760px)'));
+ const mobileRule=selector=>{
+  const marker=selector+'{';
+  const start=mobile.indexOf(marker);
+  assert.ok(start>=0,'Missing mobile '+selector);
+  return mobile.slice(start+marker.length,mobile.indexOf('}',start));
+ };
+ const dock=mobileRule('.bottom-nav');
+ assert.match(dock,/bottom:calc\(9px \+ env\(safe-area-inset-bottom,0px\)\)/);
+ assert.match(dock,/padding:8px 6px(?:;|$)/);
+ assert.doesNotMatch(dock,/padding:[^;]*safe-area-inset-bottom/,'Safe area must stay outside the floating panel');
+ assert.match(mobileRule('.bottom-nav button'),/min-height:49px/);
+ assert.match(mobileRule('.page'),/padding:23px 16px calc\(90px \+ env\(safe-area-inset-bottom,0px\)\)/);
+ assert.match(mobileRule('.toast'),/bottom:calc\(84px \+ env\(safe-area-inset-bottom,0px\)\)/);
+});
