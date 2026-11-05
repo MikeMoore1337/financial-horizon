@@ -25,3 +25,15 @@ button,input,select{font:inherit}button{cursor:pointer}svg{width:20px;height:20p
 /* Approved mark with readable text in the compact desktop sidebar. */
 .brand-mark{background:transparent;border-radius:0}
 .brand-mark img{display:block;width:40px;height:40px}
+
+/* XLSX: accessible, scrollable import preview without changing design A. */
+#excel-import-dialog{width:min(calc(100% - 24px),720px);max-height:min(90dvh,870px)}
+#excel-import-dialog .dialog-body{overflow-y:auto;max-height:88dvh}
+.excel-import-summary{background:var(--soft);border-radius:14px;padding:13px 16px;margin:13px 0;color:var(--ink);font-size:13px;line-height:1.55}
+.excel-import-summary p{margin:0 0 7px}.excel-import-summary p:last-child{margin-bottom:0}
+.excel-import-list{border:1px solid var(--line);border-radius:12px;padding:12px 15px;margin:14px 0}
+.excel-import-list h3{font-size:14px;margin:0 0 10px}
+.excel-import-list div{max-height:175px;overflow-y:auto}
+.excel-import-list ul{list-style:none;padding:0;margin:0}
+.excel-import-list li{border-bottom:1px solid var(--line);padding:7px 0;font-size:12px;line-height:1.45;overflow-wrap:anywhere}
+.excel-import-list li:last-child{border-bottom:0}
