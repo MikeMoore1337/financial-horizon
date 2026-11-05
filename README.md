@@ -17,10 +17,13 @@
 ## Запуск
 
 ```bash
-cd financial-horizon-v1
+git clone https://github.com/MikeMoore1337/financial-horizon.git
+cd financial-horizon
 python3 -m http.server 8765 --bind 127.0.0.1
 # открыть http://127.0.0.1:8765/ в обычном браузере
 ```
+
+При использовании ZIP-архива вместо клонирования перейдите в распакованный каталог `financial-horizon-v1`.
 
 Из-за ограничений модулей ES и IndexedDB не открывайте `index.html` через `file://`. Для PWA в интернете необходим HTTPS. Установка: Safari iPhone → Поделиться → На экран «Домой» → Открывать как веб-приложение. Safari на macOS 27 → «Добавить в Dock». Данные могут храниться отдельно между Safari и установленным PWA, не предполагайте общую базу.
 
@@ -29,6 +32,13 @@ python3 -m http.server 8765 --bind 127.0.0.1
 ```bash
 node --test tests/*.test.mjs
 ```
+
+## Скриншоты демонстрационного интерфейса
+
+- [Обзор, светлая тема](docs/screenshots/overview_desktop_light.png)
+- [Обзор, тёмная тема](docs/screenshots/overview_desktop_dark.png)
+- [Календарь, мобильная тёмная тема](docs/screenshots/calendar_mobile_dark.png)
+- [Обязательства, мобильная тёмная тема](docs/screenshots/obligations_mobile_dark.png)
 
 ## Локальное хранение: критические ограничения
 
