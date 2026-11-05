@@ -2,6 +2,7 @@ import {cents,rubles,numberInput,monthKey,monthIndex,shiftMonth,monthLabel,dayIn
 import {readState,updateState,replaceState,askPersistentStorage,storageStatus} from './storage.js';
 import {encryptBackup,decryptBackup} from './backup.js';
 import {parseSchedule} from './schedule.js';
+import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.js';
 
 const $=sel=>document.querySelector(sel);
 const svg=name=>`<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-${name}"></use></svg>`;
@@ -10,7 +11,7 @@ const formatDate=date=>new Intl.DateTimeFormat('ru-RU',{day:'numeric',month:'sho
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
 const uuid=()=>crypto.randomUUID();
 const titles={overview:'Обзор',calendar:'Календарь',obligations:'Обязательства',loans:'Кредиты',settings:'Настройки'};
-let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null},passwordMode='export',restoreFile=null,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null;
+let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null},passwordMode='export',restoreFile=null,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
 const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
 const monthEvents=()=>getMonthEvents(state,ui.month);
 function toast(message,kind='success'){$('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('visible'),3800);$('#save-indicator').textContent=kind==='error'?'Ошибка':'Сохранено на устройстве';}
@@ -99,6 +100,7 @@ function renderSettings(){const deleted=[...state.entries.filter(x=>x.deletedAt)
  <section class="surface"><h2>Оформление</h2><p>Вариант А: единая палитра для всех разделов. На Mac - боковая навигация и компактная панель инструментов; на iPhone - нижняя панель.</p><div class="setting-row"><strong>Цветовая тема</strong><div class="segment"><button data-action="theme" data-theme="light" class="${document.body.dataset.theme==='light'?'selected':''}" aria-pressed="${document.body.dataset.theme==='light'}">Светлая</button><button data-action="theme" data-theme="dark" class="${document.body.dataset.theme==='dark'?'selected':''}" aria-pressed="${document.body.dataset.theme==='dark'}">Тёмная</button></div></div></section>
  <section class="surface"><h2>Локальная безопасность</h2><p>Финансовая база хранится в IndexedDB этого браузера. Не отправляется на Hermes VPS и не синхронизируется с другими устройствами. В приватном режиме данные могут исчезнуть после закрытия.</p><div class="setting-actions">${action('persist',`${svg('lock')} Запросить постоянное хранение`,'button-secondary')}</div><div id="storage-status" class="small-hint" style="margin-top:12px">Браузер может удалить данные при очистке хранилища. Делайте резервные копии.</div></section>
  <section class="surface"><h2>Зашифрованная копия</h2><p>Сохраните все записи в один файл с шифрованием AES-256-GCM. Пароль известен только вам. Используйте копию для переноса на другое устройство или восстановления.</p><div class="setting-actions">${action('backup',`${svg('download')} Скачать копию`,'button-primary')}${action('restore',`${svg('upload')} Восстановить`,'button-secondary')}</div></section>
+ <section class="surface"><h2>Импорт из Excel</h2><p>Перенесите таблицу XLSX. Файл обрабатывается только в браузере, без передачи на сервер. Сначала появится предварительный просмотр. Существующие записи не заменяются.</p><div class="setting-actions">${action('excel-import',svg('upload')+' Выбрать XLSX','button-secondary')}</div><p class="small-hint" style="margin:13px 0 0">Поддерживается формат с блоками «Кредитная нагрузка», «Зарплата» и «Аванс». Платежи из комментариев и остатки кредитов потребуется проверить.</p></section>
  <section class="surface"><h2>Категории</h2><p>Категории доходов и расходов можно добавлять и удалять. Используемую категорию сначала нужно заменить в записях.</p><div class="category-items">${state.categories.map(x=>`<span class="category-chip">${escapeHtml(x)}<button data-action="edit-category" data-category="${escapeHtml(x)}" aria-label="Переименовать категорию ${escapeHtml(x)}">${svg('edit')}</button><button data-action="delete-category" data-category="${escapeHtml(x)}" aria-label="Удалить категорию ${escapeHtml(x)}">${svg('trash')}</button></span>`).join('')}</div><form id="category-form" class="category-add"><input name="name" maxlength="40" required aria-label="Новая категория" placeholder="Название категории"><button class="button-secondary" type="submit">Добавить</button></form></section>
  <section class="surface"><h2>Архив записей</h2><p>Удаление записей переносит их в архив, чтобы их можно было восстановить без потери истории платежей.</p><div class="archive-list">${deleted.length?deleted.map(x=>`<div class="archive-row"><span>${escapeHtml(x.title)}</span>${action('restore-item','Восстановить','button-text',`data-id="${escapeHtml(x.id)}" data-entity="${x.entity}"`)}</div>`).join(''):'<div class="small-hint">Архив пуст.</div>'}</div></section>
  <section class="surface"><h2>Пример и история</h2><p>Можно включить отдельные вымышленные данные для знакомства с интерфейсом. Они не имеют отношения к личным финансовым данным.</p><div class="setting-actions">${action('sample','Загрузить пример','button-secondary')}${action('clear','Очистить бухгалтерию','button-secondary danger-zone')}</div><div class="section-title"><h2>Последние изменения</h2></div><div class="archive-list">${state.audit.slice(-8).reverse().map(x=>`<div class="archive-row"><span>${escapeHtml(x.description)}</span><span class="muted">${formatDate(x.date.slice(0,10))}</span></div>`).join('')||'<div class="small-hint">Пока изменений нет.</div>'}</div></section>
@@ -177,6 +179,21 @@ async function handleAction(button){
  if(type==='persist'){const ok=await askPersistentStorage();toast(ok?'Браузер подтвердил постоянное хранение':'Браузер не предоставил постоянное хранение. Экспортируйте копии.',ok?'success':'error');renderStorageStatus();return;}
  if(type==='backup'){passwordMode='export';$('#password-heading').textContent='Создать резервную копию';$('#password-form').reset();openDialog('#password-dialog');return;}
  if(type==='restore'){$('#restore-file').value='';$('#restore-file').click();return;}
+ if(type==='excel-import'){$('#excel-file').value='';$('#excel-file').click();return;}
+ if(type==='cancel-excel-import'){pendingExcelImport=null;$('#excel-import-dialog').close();return;}
+ if(type==='confirm-excel-import'){
+  if(!pendingExcelImport||busy)return;
+  const data=pendingExcelImport;
+  await mutate(s=>{
+   const diff=previewImportChanges(data.parsed,s);
+   if(!diff.entries.length&&!diff.loans.length)throw Error('Все подходящие записи уже есть в бухгалтерии');
+   for(const cat of diff.categories)if(!s.categories.includes(cat))s.categories.push(cat);
+   for(const row of diff.entries){const {source,...value}=row;s.entries.push({...value,id:uuid()});}
+   for(const row of diff.loans){const {source,...value}=row;s.loans.push({...value,id:uuid()});}
+   audit(s,'excel-import','Добавлены записи из Excel: '+diff.entries.length+' платежей, '+diff.loans.length+' кредитов');
+  },'Данные из Excel добавлены локально');
+  $('#excel-import-dialog').close();pendingExcelImport=null;ui.view='overview';render();return;
+ }
  if(type==='install'){if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;}else toast('iPhone: Safari → Поделиться → На экран «Домой». Mac: Safari → Добавить в Dock.');return;}
  if(type==='sample'){
   const ok=await requireConfirm('Загрузить вымышленные данные?',hasData()?'Это заменит вашу текущую бухгалтерию демонстрационными записями. Сначала сохраните резервную копию.':'Будет создана отдельная вымышленная бухгалтерия, которую можно удалить.');
@@ -214,6 +231,37 @@ async function renderStorageStatus(){
  if(ui.view!=='settings')return;
  const info=await storageStatus();const el=$('#storage-status');if(!el)return;
  el.textContent=info.persistent===true?'Постоянное хранение браузером разрешено. Экспорт копий всё равно обязателен для надёжности.':'Постоянное хранение не подтверждено. Очистка данных сайта может уничтожить бухгалтерию.';
+}
+async function previewExcelImport(file){
+ if(!file)return;
+ if(!/\.xlsx$/i.test(file.name))throw Error('Выберите файл XLSX. Старый формат XLS не поддерживается.');
+ if(file.size>4000000)throw Error('Размер XLSX не должен превышать 4 МБ');
+ const data=await readXlsxRows(await file.arrayBuffer());
+ const parsed=parseBudgetRows(data.rows,today());
+ const diff=previewImportChanges(parsed,state);
+ pendingExcelImport={parsed,name:file.name.slice(0,120)};
+ const summary=$('#excel-import-summary'),items=$('#excel-import-items'),warnings=$('#excel-import-warnings');
+ summary.replaceChildren();items.replaceChildren();warnings.replaceChildren();
+ const paragraph=document.createElement('p');
+ paragraph.textContent='Лист «'+data.sheetName+'». Добавятся: '+diff.entries.length+' доходов и расходов, '+diff.loans.length+' кредитов. Пропущено повторов: '+diff.duplicates+'.';
+ summary.append(paragraph);
+ const totals=document.createElement('p');
+ totals.textContent='Плановые доходы: '+rubles(diff.incomeCents)+'. Плановые расходы: '+rubles(diff.expenseCents)+' (без обязательных платежей по кредитам).';
+ summary.append(totals);
+ const itemsList=document.createElement('ul');
+ for(const record of [...diff.entries,...diff.loans].slice(0,50)){
+  const li=document.createElement('li');
+  li.textContent=(record.source||'')+' · '+record.title+' · '+rubles(record.amountCents??record.openingCents)+' · '+(record.kind?((record.kind==='income'?'доход':'расход')+' · '+record.date+' · '+(record.recurrence==='once'?'однократно':'ежемесячно')+' · '+record.category):('кредит · платёж '+record.dueDay+'-го числа · приблизительно '+record.termMonths+' мес.'));
+  itemsList.append(li);
+ }
+ if(!itemsList.childElementCount){const li=document.createElement('li');li.textContent='Новых записей нет.';itemsList.append(li);}
+ items.append(itemsList);
+ const list=document.createElement('ul');
+ for(const warning of diff.warnings.slice(0,60)){const li=document.createElement('li');li.textContent=warning.source+': '+warning.message;list.append(li);}
+ if(!list.childElementCount){const li=document.createElement('li');li.textContent='Нет замечаний.';list.append(li);}
+ warnings.append(list);
+ $('#excel-import-confirm').disabled=!diff.entries.length&&!diff.loans.length;
+ openDialog('#excel-import-dialog');
 }
 function onErrorNoStorage(error){$('#main').innerHTML=`<section class="surface empty-panel"><h1>Хранилище недоступно</h1><p>${escapeHtml(error.message)}</p><p>Финансовые данные не будут незаметно записаны в ненадёжное временное хранилище. Откройте приложение в обычном окне Safari или другого браузера и разрешите сохранение данных.</p></section>`;}
 async function saveEntry(form){
@@ -305,6 +353,7 @@ function bindEvents(){
  $('#payment-form').addEventListener('change',updatePaymentPreview);
  $('#payment-loan').addEventListener('change',()=>{const l=state.loans.find(x=>x.id===$('#payment-loan').value);if(l){$('#payment-form').elements.amount.value=numberInput(loanLedger(l,state.loanPayments).monthlyCents);updatePaymentPreview();}});
  $('#restore-file').addEventListener('change',event=>{const file=event.target.files[0];if(!file)return;if(file.size>8_000_000){toast('Файл превышает предел 8 МБ','error');return;}restoreFile=file;passwordMode='import';$('#password-heading').textContent='Восстановить резервную копию';$('#password-form').reset();openDialog('#password-dialog');});
+ $('#excel-file').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;try{await previewExcelImport(file);}catch(e){pendingExcelImport=null;fail(e);}finally{event.target.value='';}});
  $('#schedule-file').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;
   try{if(file.size>1_000_000)throw Error('График CSV превышает 1 МБ');const rows=parseSchedule(await file.text());const id=scheduleLoanId;
   await mutate(s=>{const loan=s.loans.find(x=>x.id===id);if(!loan)throw Error('Кредит не найден');loan.schedule=rows;loan.scheduleSource=file.name.slice(0,80);audit(s,'schedule',`Импортирован график из CSV: ${loan.title}, ${rows.length} строк`);},'График импортирован локально');}catch(e){fail(e);}

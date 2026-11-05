@@ -59,6 +59,6 @@ test('favicon, PWA manifest and offline precache reference approved brand files'
     assert.ok(existsSync(fileURLToPath(new URL(icon.src,root))));
     assert.ok(sw.includes(icon.src));
   }
-  assert.match(sw,/financial-horizon-shell-v4-approved-brand-20261105/);
+  assert.match(sw,/financial-horizon-shell-v5-excel-local-import/);
   assert.doesNotMatch(sw,/Расходы\.xlsx|user-finance-records/i);
 });

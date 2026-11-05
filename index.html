@@ -107,6 +107,17 @@
 <div class="dialog-head"><div><span class="eyebrow">Шифрованная резервная копия</span><h2 id="password-heading">Сохранить данные</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-close"/></svg></button></div>
 <label class="field"><span>Пароль резервной копии</span><input type="password" name="password" autocomplete="new-password" minlength="12" required placeholder="Не меньше 12 символов"></label><p class="form-note">Пароль нигде не хранится и не передаётся. Если забыть его, восстановить копию будет невозможно.</p>
 <div class="dialog-actions"><button class="button-secondary" value="cancel">Отмена</button><button type="submit" class="button-primary" value="save">Продолжить</button></div></form></dialog>
+<dialog class="dialog" id="excel-import-dialog" aria-labelledby="excel-import-heading">
+ <div class="dialog-body">
+  <div class="dialog-head"><div><span class="eyebrow">Только локально</span><h2 id="excel-import-heading">Предпросмотр импорта Excel</h2></div><button type="button" class="tool-icon" data-action="cancel-excel-import" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-close"/></svg></button></div>
+  <p class="form-note">Ничего ещё не сохранено. Проверьте суммы, график кредитов и предупреждения. При подтверждении данные будут добавлены в текущую бухгалтерию, без удаления существующих записей.</p>
+  <section id="excel-import-summary" class="excel-import-summary" aria-live="polite"></section>
+  <div class="excel-import-list"><h3>Подготовленные записи</h3><div id="excel-import-items"></div></div>
+  <div class="excel-import-list"><h3>Требует проверки</h3><div id="excel-import-warnings"></div></div>
+  <div class="dialog-actions"><button type="button" class="button-secondary" data-action="cancel-excel-import">Отмена</button><button type="button" id="excel-import-confirm" class="button-primary" data-action="confirm-excel-import">Добавить записи</button></div>
+ </div>
+</dialog>
+<input type="file" id="excel-file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
 <input type="file" id="restore-file" accept=".json,application/json" hidden>
 <input type="file" id="schedule-file" accept=".csv,text/csv" hidden>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
