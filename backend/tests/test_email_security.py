@@ -135,3 +135,29 @@ def test_password_reset_race_cannot_issue_old_password_session(tmp_path,monkeypa
  assert response.status_code==401
  assert called[0]
  assert post(client,"login",{"email":"one@example.invalid","password":"New-Password-After-Reset-2026!"}).status_code==200
+
+
+def test_daily_transactional_mail_budget_stays_below_free_relay_quota(tmp_path):
+    # Fixed midnight, so hourly client limits reset while the mail-day
+    # budget remains constant for the whole simulated 14-hour period.
+    clock=[1728000000]
+    store,mailer,client=fixture(tmp_path,now=lambda:clock[0])
+    for i in range(81):
+        if i and i%6==0:clock[0]+=3600
+        response=register(client,email=f"subscriber-{i}@example.invalid")
+        assert response.status_code==202
+    assert len(mailer.sent)==80
+    assert all(purpose=="verify" for _,purpose,_ in mailer.sent)
+
+
+def test_daily_email_budget_is_rolling_not_reset_at_utc_midnight(tmp_path):
+    from fh_email_auth.store import AuthStore,Throttled
+    clock=[1728000000+86300]
+    store=AuthStore(tmp_path/"rolling.sqlite",now=lambda:clock[0])
+    for _ in range(80):
+        store.reserve_transactional_email()
+    clock[0]+=200  # New UTC calendar day, only 200 seconds later
+    with pytest.raises(Throttled):
+        store.reserve_transactional_email()
+    clock[0]+=86401  # All 80 prior reservations have expired
+    store.reserve_transactional_email()

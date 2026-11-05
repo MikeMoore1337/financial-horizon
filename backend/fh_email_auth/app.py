@@ -123,9 +123,15 @@ def create_app(
         )
 
     def deliver(email:str,purpose:str,raw:str):
+        # Stay below the external free relay's daily send allowance even under
+        # distributed CAPTCHA abuse. No user identifiers enter the global key.
         try:
+            assert store is not None
+            store.reserve_transactional_email(max_per_24h=80)
             result=mailer.send(email,purpose,raw)
             if result is False:raise RuntimeError("delivery failed")
+        except Throttled:
+            logger.warning("transactional_email_daily_budget_exceeded purpose=%s",purpose)
         except Exception:
             # Generic response prevents account probing through SMTP failures.
             # Resend endpoints allow recovery without exposing token to caller.

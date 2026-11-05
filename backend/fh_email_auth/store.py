@@ -82,6 +82,11 @@ class AuthStore:
                     count INTEGER NOT NULL,
                     PRIMARY KEY(key,bucket)
                 );
+                CREATE TABLE IF NOT EXISTS mail_reservations (
+                    timestamp INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS mail_reservations_time_idx
+                    ON mail_reservations(timestamp);
             """)
 
     def limit(self, rate_key: str, max_attempts: int, period: int):
@@ -101,6 +106,23 @@ class AuthStore:
                 db.commit()
                 if row is None:
                     raise Throttled()
+            except:
+                db.rollback()
+                raise
+
+    def reserve_transactional_email(self, max_per_24h: int = 80) -> None:
+        """Atomic rolling 24-hour send budget, safe across midnight/time zones."""
+        now=int(self.now())
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                db.execute("DELETE FROM mail_reservations WHERE timestamp <= ?", (now-86400,))
+                row=db.execute("SELECT count(*) FROM mail_reservations").fetchone()
+                if row[0]>=max_per_24h:
+                    db.rollback()
+                    raise Throttled()
+                db.execute("INSERT INTO mail_reservations(timestamp) VALUES(?)",(now,))
+                db.commit()
             except:
                 db.rollback()
                 raise
