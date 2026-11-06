@@ -63,3 +63,8 @@ test('mobile filter strip wraps to two columns without horizontal overflow',()=>
  assert.match(css, /@media\(max-width:380px\)\{\.filter-bar \.segment\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\);width:100%;max-width:100%/);
  assert.match(css, /\.filter-bar \.segment button\{min-width:0;overflow-wrap:anywhere;text-align:center/);
 });
+
+
+test('narrow headers wrap by 430px on systems with wider font metrics',()=>{
+ assert.match(css, /@media\(max-width:430px\)\{\.page-header\{flex-wrap:wrap\}\.page-header \.header-tools\{margin-left:auto\}\}/);
+});
