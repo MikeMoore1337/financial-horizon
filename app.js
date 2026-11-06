@@ -32,7 +32,7 @@ function navigation(view){ui.view=view;$('.sidebar')?.classList.remove('open');w
 function render(){if(!state)return;$('#toolbar-title').textContent=titles[ui.view];document.querySelectorAll('[data-view]').forEach(el=>{const active=el.dataset.view===ui.view;el.classList.toggle('active',active);el.setAttribute('aria-current',active?'page':'false');});
  const sections={overview:renderOverview,calendar:renderCalendar,obligations:renderObligations,loans:renderLoans,settings:renderSettings};$('#main').innerHTML=sections[ui.view]();syncAccountControls();if(ui.view==='settings')void renderStorageStatus();}
 function syncAccountControls(){
- const signedIn=Boolean(emailSession.email);
+ const signedIn=Boolean(emailSession.userId);
  const toolbarButton=$('#account-logout-toolbar');
  toolbarButton.hidden=!signedIn;
  toolbarButton.disabled=emailSession.busy;
@@ -45,7 +45,7 @@ async function refreshEmailSession(){
  if(sessionValidation)return sessionValidation;
  const pending=(async()=>{
   const verified=await emailSession.refresh();
-  if(!verified||emailSession.userId!==activeUserId||!emailSession.email){
+  if(!verified||emailSession.userId!==activeUserId){
    state=null;
    window.location.replace('./account.html');
    return false;
@@ -58,7 +58,7 @@ async function refreshEmailSession(){
  finally{if(sessionValidation===pending)sessionValidation=null;}
 }
 async function logoutEmailAccount(){
- if(busy||!emailSession.email||emailSession.busy)return;
+ if(busy||!emailSession.userId||emailSession.busy)return;
  const pending=emailSession.logout();
  syncAccountControls();
  try{
@@ -491,6 +491,12 @@ async function init(){
  if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(()=>{});
  try{
   const url=new URL(window.location.href);
+  // A successful OAuth callback replaces guest mode with the verified account.
+  if(url.searchParams.get('auth')==='success'){
+   try{sessionStorage.removeItem(GUEST_MODE_KEY);}catch{}
+   url.searchParams.delete('auth');
+   history.replaceState(null,'',url.pathname+url.search+url.hash);
+  }
   if(url.searchParams.get('guest')==='1'){
    guestMode=true;
    try{sessionStorage.setItem(GUEST_MODE_KEY,'1');}catch{}
