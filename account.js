@@ -337,6 +337,20 @@ async function init(){
  });
  document.querySelectorAll("[data-mode]").forEach(button=>button.addEventListener("click",()=>activate(button.dataset.mode)));
  activate(mode);
+ const oauthOutcome=new URLSearchParams(location.search);
+ const oauthStatus=oauthOutcome.get('oauth');
+ if(['failed','denied','linked'].includes(oauthStatus)){
+  oauthOutcome.delete('oauth');
+  const tail=oauthOutcome.toString();
+  history.replaceState(null,'',location.pathname+(tail?'?'+tail:''));
+  if(oauthStatus==='linked'){
+   feedback('Новый способ входа привязан к вашему аккаунту.','success');
+  }else if(oauthStatus==='denied'){
+   feedback('Вход отменён. Вы можете выбрать другой способ.','error');
+  }else{
+   feedback('Не удалось войти через выбранный сервис. Повторите попытку.','error');
+  }
+ }
  try{
   const res=await fetch("./api/auth/email/config",{cache:"no-store",credentials:"same-origin"});
   if(!res.ok)throw Error("disabled");

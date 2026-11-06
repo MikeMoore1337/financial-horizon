@@ -16,7 +16,7 @@ const handler=app.slice(revokeStart,revokeEnd)+'\n'+app.slice(start,end);
 function invoke({email='test@example.com',logout,initialBusy=false}={}){
  const events=[];
  const session={
-  email,busy:initialBusy,
+  email,userId:email?'a'.repeat(32):null,busy:initialBusy,
   async logout(){
    events.push('logout-request');
    return logout?logout(session):true;
@@ -42,7 +42,7 @@ function invoke({email='test@example.com',logout,initialBusy=false}={}){
 }
 
 test('successful logout returns to the login page after server confirmation',async()=>{
- const ui=invoke({logout:async session=>{session.email=null;return true;}});
+ const ui=invoke({logout:async session=>{session.email=null;session.userId=null;return true;}});
  await ui.run();
  assert.equal(ui.session.email,null);
  assert.equal(ui.events.filter(x=>x==='logout-request').length,1);
