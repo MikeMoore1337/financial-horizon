@@ -189,7 +189,7 @@ test('PWA upgrade never resolves app modules from old shell caches',()=>{
 
 test('legacy CSV schedule permits nullable optional interest and principal across migration and encrypted recovery',async()=>{
  const old=v1();
- old.loans[0].schedule=parseSchedule('Дата;Платёж;Остаток\\n16.11.2026;30200;2090000\\n');
+ old.loans[0].schedule=parseSchedule('Дата;Платёж;Остаток\n16.11.2026;30200;2090000\n');
  const row=old.loans[0].schedule[0];
  assert.equal(row.amountCents,3020000);
  assert.equal(row.balanceCents,209000000);
@@ -214,7 +214,7 @@ test('legacy CSV schedule permits nullable optional interest and principal acros
 
 test('optional schedule fields only accept null, missing, or nonnegative integer cents',()=>{
  const old=v1();
- old.loans[0].schedule=parseSchedule('Дата;Платёж;Остаток\\n16.11.2026;30200;2090000\\n');
+ old.loans[0].schedule=parseSchedule('Дата;Платёж;Остаток\n16.11.2026;30200;2090000\n');
  for(const [key,value] of [
   ['amountCents',null],['balanceCents',null],['interestCents',1.5],
   ['principalCents',-1],['interestCents','100'],['principalCents',NaN]
