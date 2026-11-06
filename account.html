@@ -38,8 +38,14 @@
       <div id="turnstile-container" aria-label="Защитная проверка" hidden></div>
       <button type="submit" id="auth-submit" class="button-primary" disabled>Войти</button>
     </form>
-    <p class="auth-feedback" id="auth-feedback" role="status" aria-live="polite"></p>
-    <section id="session-panel" hidden aria-label="Аккаунт"><p id="session-email"></p><button type="button" class="button-secondary" id="auth-logout">Выйти из аккаунта</button></section>
+    <div class="auth-feedback" id="auth-feedback" role="status" aria-live="polite"></div>
+    <section id="session-panel" hidden aria-label="Аккаунт">
+      <p id="session-email"></p>
+      <div class="session-actions">
+        <a class="button-secondary" href="./">Открыть бухгалтерию</a>
+        <button type="button" class="button-secondary" id="auth-logout">Выйти из аккаунта</button>
+      </div>
+    </section>
     <div class="auth-actions">
       <button type="button" data-mode="resend">Не пришло письмо? Отправить повторно</button>
       <a href="./">Вернуться к бухгалтерии</a>
