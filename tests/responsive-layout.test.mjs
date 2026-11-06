@@ -38,10 +38,10 @@ test('mobile floating navigation stays compact above the iPhone safe area',()=>{
   return mobile.slice(start+marker.length,mobile.indexOf('}',start));
  };
  const dock=mobileRule('.bottom-nav');
- assert.match(dock,/bottom:calc\(9px \+ env\(safe-area-inset-bottom,0px\)\)/);
+ assert.match(dock,/bottom:calc\(4px \+ env\(safe-area-inset-bottom,0px\)\)/);
  assert.match(dock,/padding:8px 6px(?:;|$)/);
  assert.doesNotMatch(dock,/padding:[^;]*safe-area-inset-bottom/,'Safe area must stay outside the floating panel');
  assert.match(mobileRule('.bottom-nav button'),/min-height:49px/);
- assert.match(mobileRule('.page'),/padding:23px 16px calc\(90px \+ env\(safe-area-inset-bottom,0px\)\)/);
- assert.match(mobileRule('.toast'),/bottom:calc\(84px \+ env\(safe-area-inset-bottom,0px\)\)/);
+ assert.match(mobileRule('.page'),/padding:23px 16px calc\(85px \+ env\(safe-area-inset-bottom,0px\)\)/);
+ assert.match(mobileRule('.toast'),/bottom:calc\(79px \+ env\(safe-area-inset-bottom,0px\)\)/);
 });
