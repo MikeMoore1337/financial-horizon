@@ -40,7 +40,7 @@ test('password is not requested on email-only registration and CSS honors hidden
 test('service worker caches only app assets and includes account UI for offline support',()=>{
  const sw=get('sw.js');
  assert.match(sw,/financial-horizon-shell-v18-auth-scopes/);
- for(const file of ['account.html','account.css','account.js']){
+ for(const file of ['account.html','account.css','account.js?rev=auth-scopes-v18']){
    assert.ok(sw.includes("'./"+file+"'"),file);
  }
  assert.doesNotMatch(sw,/auth\.sqlite|email_session|token=|SMTP_PASSWORD/);
@@ -70,7 +70,7 @@ test('signed-in ledger exposes accessible logout controls with a vendored Lucide
  assert.match(app,/syncAccountControls\(\)/);
  assert.match(css,/\.toolbar-logout\[hidden\][^{]*\{display:none\}/);
  assert.match(css,/mask:url\('\.\/assets\/icons\/log-out\.svg'\)/);
- assert.match(sw,/'\.\/auth-session\.js'/);
+ assert.match(sw,/'\.\/auth-session\.js\?rev=auth-scopes-v18'/);
  assert.match(sw,/'\.\/assets\/icons\/log-out\.svg'/);
  assert.match(icon,/stroke="currentColor"/);
  assert.match(icon,/<path d="m16 17 5-5-5-5"/);
