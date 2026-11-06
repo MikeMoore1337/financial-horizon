@@ -188,6 +188,8 @@ async function submit(event){
     throw Error("Вход выполнен, но браузер не подтвердил сессию. Проверьте настройки cookies и повторите вход.");
    }
    token=null;
+   // Re-enter the authenticated ledger instead of reusing an earlier guest tab.
+   try{sessionStorage.removeItem('fh-guest-session-v2');}catch{}
    location.assign("./");
   }else if(selected==="reset-confirm"){
    token=null;
