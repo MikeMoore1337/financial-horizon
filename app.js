@@ -413,11 +413,28 @@ function bindEvents(){
  });
  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;});
  window.addEventListener('storage',e=>{if(e.key==='fh-theme'&&e.newValue&&['light','dark'].includes(e.newValue)){themeSet(e.newValue);render();}});
+ window.addEventListener('pageshow',event=>{
+  if(!event.persisted||guestMode||!activeUserId)return;
+  // A restored page from back/forward cache must re-validate authorization
+  // before it can show any finance records.
+  state=null;
+  $('#main').textContent='Проверяем доступ к бухгалтерии…';
+  void (async()=>{
+   const verified=await emailSession.refresh();
+   if(!verified||emailSession.userId!==activeUserId){
+    window.location.replace('./account.html');
+    return;
+   }
+   state=await readState();
+   render();
+  })().catch(()=>window.location.replace('./account.html'));
+ });
  try{channel=new BroadcastChannel('financial-horizon-updates');channel.onmessage=async()=>{try{state=await readState();render();}catch(e){fail(e);}};}catch{}
 }
 async function init(){
  try{themeSet(localStorage.getItem('fh-theme')||((window.matchMedia?.('(prefers-color-scheme: dark)').matches)?'dark':'light'));}catch{themeSet('light');}
  bindEvents();
+ if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(()=>{});
  try{
   const url=new URL(window.location.href);
   if(url.searchParams.get('guest')==='1'){
@@ -454,6 +471,5 @@ async function init(){
   $('#save-indicator').textContent='Локальная база готова';
  }catch(e){onErrorNoStorage(e);return;}
  if(ui.view==='settings')renderStorageStatus();
- if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(()=>{});
 }
 init();
