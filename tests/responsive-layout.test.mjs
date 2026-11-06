@@ -57,3 +57,9 @@ test('mobile dock uses the YFC-style safe-area correction and preserves symmetri
   assert.ok(76+dockGap>=dockGap+dockHeight+8,'Toast must clear dock');
  }
 });
+
+
+test('mobile filter strip wraps to two columns without horizontal overflow',()=>{
+ assert.match(css, /@media\(max-width:380px\)\{\.filter-bar \.segment\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\);width:100%;max-width:100%/);
+ assert.match(css, /\.filter-bar \.segment button\{min-width:0;overflow-wrap:anywhere;text-align:center/);
+});
