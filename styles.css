@@ -1,5 +1,5 @@
 :root{font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',Inter,system-ui,sans-serif;font-synthesis:none;font-size:15px;font-variant-numeric:tabular-nums}
-*{box-sizing:border-box}html{min-width:320px;background:#f5f7fc;color-scheme:light}html[data-theme=dark]{background:#0e1624;color-scheme:dark}body{margin:0;--bg:#f5f7fc;--surface:#ffffff;--ink:#192434;--sub:#5c6c83;--line:#e3eaf4;--soft:#eef3fb;--accent:#3078fa;--accent-deep:#1d5cc6;--onaccent:#fff;--green:#0e8965;--red:#be3f57;--shade:#dfeaff;--glass:rgba(255,255,255,.80);--shadow:0 4px 26px rgba(25,48,99,.035);background:var(--bg);color:var(--ink);color-scheme:light}
+*{box-sizing:border-box}html{min-width:320px;background:#ffffff;color-scheme:light}html[data-theme=dark]{background:#172336;color-scheme:dark}body{margin:0;--bg:#f5f7fc;--surface:#ffffff;--ink:#192434;--sub:#5c6c83;--line:#e3eaf4;--soft:#eef3fb;--accent:#3078fa;--accent-deep:#1d5cc6;--onaccent:#fff;--green:#0e8965;--red:#be3f57;--shade:#dfeaff;--glass:rgba(255,255,255,.80);--shadow:0 4px 26px rgba(25,48,99,.035);background:var(--bg);color:var(--ink);color-scheme:light}
 body[data-theme=dark],html[data-theme=dark] body{--bg:#0e1624;--surface:#172336;--ink:#eef4ff;--sub:#adbed6;--line:#304057;--soft:#1f3049;--accent:#6c9dff;--accent-deep:#a8c5ff;--onaccent:#081625;--green:#66d9af;--red:#ff8e9d;--shade:#263e65;--glass:rgba(28,43,65,.88);--shadow:0 4px 22px rgba(0,0,0,.13);color-scheme:dark}
 button,input,select{font:inherit}button{cursor:pointer}svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;stroke-width:1.7}.svgdefs{position:absolute;width:0;height:0;overflow:hidden}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--accent);outline-offset:3px}button:disabled{opacity:.45;cursor:not-allowed}h1,h2,h3,p{margin-top:0}.app-shell{min-height:100dvh;display:flex}.sidebar{position:sticky;top:0;width:238px;height:100dvh;flex-shrink:0;display:flex;flex-direction:column;padding:27px 14px 20px;border-right:1px solid var(--line);background:var(--bg)}
 .brand{display:flex;align-items:center;gap:11px;margin:8px 5px 31px}.brand strong{font-size:16px;line-height:1.18;font-weight:780;letter-spacing:-.4px}.brand-sub{display:block;color:var(--sub);font-size:11px;margin-top:5px}.brand-mark{display:grid;place-items:center;width:40px;height:40px;flex-shrink:0;background:var(--accent);color:var(--onaccent);border-radius:13px}.brand-mark svg{width:30px;height:30px;stroke-width:2.3}
@@ -43,10 +43,3 @@ button,input,select{font:inherit}button{cursor:pointer}svg{width:20px;height:20p
 .toolbar-logout{min-height:44px;padding:0 13px;gap:8px}
 .toolbar-logout[hidden],#account-entry[hidden],#account-session[hidden]{display:none}
 @media(max-width:760px){.toolbar-logout{width:44px;min-width:44px;padding:0;border-radius:13px}.toolbar-logout-label{display:none}}
-
-/* iOS 26/27 samples fixed top-edge elements to tint the standalone status bar.
-   Use a real, opaque 12px element instead of a pseudo-element or translucent meta mode. */
-.ios-status-bar-sample{display:none}
-@media(max-width:760px){
- .ios-status-bar-sample{display:block;position:fixed;top:0;left:0;right:0;height:12px;z-index:40;background-color:var(--surface);pointer-events:none}
-}
