@@ -167,3 +167,13 @@ test('entry, loan and settlement forms keep proper date expressions after splitt
  assert.equal(handlers.split(String.raw`/^\d{4}-\d{2}-\d{2}$/`).length-1,3);
  assert.equal(handlers.includes(String.raw`\\d`),false,'form validators must not match a literal backslash');
 });
+
+test('open CRUD forms preserve their opening revision through cross-tab UI updates',()=>{
+ const app=readFileSync(new URL('../app.js',import.meta.url),'utf8');
+ for(const id of ['entry-form','loan-form','payment-form','settlement-form']){
+  assert.ok(app.includes("const form=$('#"+id+"');form.reset();stampFormRevision(form)"),id);
+ }
+ assert.ok(app.includes("expectedRevision=state?.revision"));
+ assert.equal(app.split('revisionForForm(form)').length-1,5);
+ assert.ok(app.includes("const originalRevision=state?.revision;"));
+});
