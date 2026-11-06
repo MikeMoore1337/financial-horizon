@@ -16,7 +16,7 @@ function element(name){
  };
 }
 
-async function boot({initialSignedIn=false,sessionReadable=true,hash="",supportsChange=false,supportsOthers=false}={}){
+async function boot({initialSignedIn=false,sessionReadable=true,hash="",search="",supportsChange=false,supportsOthers=false}={}){
  const selectors=[
   "#auth-feedback","#auth-submit","#form-heading","#form-description",
   "#email-label","#email","#password-label","#password",
@@ -69,7 +69,7 @@ async function boot({initialSignedIn=false,sessionReadable=true,hash="",supports
   head:{append(){}}
  };
  const location={
-  hash,pathname:"/account.html",search:"",
+  hash,pathname:"/account.html",search,
   assign(url){navigation.push(url);}
  };
  const window={
@@ -210,4 +210,25 @@ test("email-change controls are hidden until the backend advertises support",asy
  const page=await boot({initialSignedIn:true,supportsChange:false});
  assert.equal(page.elements["#change-email-panel"].hidden,true);
  assert.ok(!page.calls.some(call=>call.url.endsWith("/change/request")));
+});
+
+test("OAuth callback failures show Russian-only actionable feedback and clear query",async()=>{
+ for(const [status,expected] of [
+  ["failed",/Не удалось войти через выбранный сервис/],
+  ["denied",/Вход отменён/],
+ ]){
+  const page=await boot({search:"?oauth="+status+"&other=keep"});
+  assert.equal(page.elements["#auth-feedback"].dataset.status,"error");
+  assert.match(page.elements["#auth-feedback"].textContent,expected);
+  assert.ok(page.historyCalls.some(args=>args[2]==="/account.html?other=keep"));
+  assert.deepEqual(page.navigation,[]);
+ }
+});
+
+test("successful OAuth linking confirms status without exposing provider tokens",async()=>{
+ const page=await boot({initialSignedIn:true,search:"?oauth=linked"});
+ assert.equal(page.elements["#auth-feedback"].dataset.status,"success");
+ assert.match(page.elements["#auth-feedback"].textContent,/Новый способ входа привязан/);
+ assert.ok(page.historyCalls.some(args=>args[2]==="/account.html"));
+ assert.equal(page.elements["#session-panel"].hidden,false);
 });

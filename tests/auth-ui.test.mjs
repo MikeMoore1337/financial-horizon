@@ -49,3 +49,22 @@ test('OAuth-only account with null email retains account scope and logs out thro
  assert.equal(session.userId,null);
  assert.ok(urls.some(([url,method])=>url.endsWith('/api/auth/email/logout')&&method==='POST'));
 });
+
+test('OAuth-only accounts are authorized by stable user ID even without email',()=>{
+ const main=read('app.js');
+ assert.match(main,/const signedIn=Boolean\(emailSession\.userId\)/);
+ assert.match(main,/if\(!verified\|\|emailSession\.userId!==activeUserId\)\{/);
+ assert.match(main,/if\(busy\|\|!emailSession\.userId\|\|emailSession\.busy\)return;/);
+ assert.doesNotMatch(main,/if\(!verified\|\|emailSession\.userId!==activeUserId\|\|!emailSession\.email\)/);
+ assert.doesNotMatch(main,/const signedIn=Boolean\(emailSession\.email\)/);
+});
+
+test('OAuth callback clears only guest-mode choice before selecting the account scope',()=>{
+ const main=read('app.js');
+ const start=main.indexOf("url.searchParams.get('auth')==='success'");
+ const clear=main.indexOf("sessionStorage.removeItem(GUEST_MODE_KEY)",start);
+ const select=main.indexOf("guestMode=sessionStorage.getItem(GUEST_MODE_KEY)",start);
+ assert.ok(start>0 && clear>start && select>clear);
+ assert.match(main,/url\.searchParams\.delete\('auth'\)/);
+ assert.match(main,/await selectStateScope\(activeUserId\)/);
+});

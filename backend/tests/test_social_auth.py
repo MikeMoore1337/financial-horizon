@@ -197,8 +197,10 @@ def test_explicit_link_requires_origin_confirmation_and_rotates_session(tmp_path
     assert browser.post(endpoint, headers={"origin": ORIGIN}, json={"confirm": 1}).status_code == 422
     begin = browser.post(endpoint, headers={"origin": ORIGIN}, json={"confirm": True},
                          follow_redirects=False)
-    assert begin.status_code == 303
-    state = parse_qs(urlsplit(begin.headers["location"]).query)["state"][0]
+    assert begin.status_code == 200
+    assert begin.headers["cache-control"] == "no-store"
+    assert begin.json()["authorization_url"].startswith("https://oauth.yandex.ru/authorize?")
+    state = parse_qs(urlsplit(begin.json()["authorization_url"]).query)["state"][0]
     finish_link = finish(browser, state, "sub-2", "yandex")
     assert finish_link.status_code == 303
     assert finish_link.headers["location"] == "/account.html?oauth=linked"
@@ -218,7 +220,7 @@ def test_link_session_swap_cross_account_and_collision_denied(tmp_path):
     endpoint = "/api/auth/oauth/google/link/start"
     begun = browser_a.post(endpoint, json={"confirm": True},
                            headers={"origin": ORIGIN}, follow_redirects=False)
-    state = parse_qs(urlsplit(begun.headers["location"]).query)["state"][0]
+    state = parse_qs(urlsplit(begun.json()["authorization_url"]).query)["state"][0]
     browser_a.cookies.set(SESSION_COOKIE, token_b, domain="127.0.0.1", path="/api/auth")
     swapped = finish(browser_a, state, "subject-swap", "google")
     assert swapped.headers["location"] == "/account.html?oauth=failed"
@@ -227,13 +229,13 @@ def test_link_session_swap_cross_account_and_collision_denied(tmp_path):
     # The subject already belongs to B, linking it to A must fail.
     b_state = browser_a.post(endpoint, json={"confirm": True},
                              headers={"origin": ORIGIN}, follow_redirects=False)
-    state_b = parse_qs(urlsplit(b_state.headers["location"]).query)["state"][0]
+    state_b = parse_qs(urlsplit(b_state.json()["authorization_url"]).query)["state"][0]
     assert finish(browser_a, state_b, "owned", "google").headers["location"].endswith("linked")
     assert oauth.user_id_for("google", "google-owned") == uid_b
     browser_a.cookies.set(SESSION_COOKIE, token_a, domain="127.0.0.1", path="/api/auth")
     a_state = browser_a.post(endpoint, json={"confirm": True},
                              headers={"origin": ORIGIN}, follow_redirects=False)
-    state_a = parse_qs(urlsplit(a_state.headers["location"]).query)["state"][0]
+    state_a = parse_qs(urlsplit(a_state.json()["authorization_url"]).query)["state"][0]
     conflict = finish(browser_a, state_a, "owned", "google")
     assert conflict.headers["location"] == "/account.html?oauth=failed"
     assert oauth.user_id_for("google", "google-owned") == uid_b

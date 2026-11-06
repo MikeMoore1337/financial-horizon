@@ -135,7 +135,11 @@ def make_oauth_router(
                     intent=intent,
                     target_user_id=current["id"] if intent == "link" else None,
                     session=session if intent == "link" else None)
-        response = RedirectResponse(target, status_code=303)
+        # A link is initiated by a same-origin JSON POST and must be navigated
+        # by the browser after the explicit confirmation. Redirecting a fetch()
+        # across origins would otherwise fail its CORS checks.
+        response = (JSONResponse({"authorization_url": target}) if intent == "link"
+                    else RedirectResponse(target, status_code=303))
         response.set_cookie(_MARKER, marker, path="/api/auth/oauth",
                             secure=not config.test_mode, httponly=True,
                             samesite="lax", max_age=600)
@@ -196,7 +200,7 @@ def make_oauth_router(
                                     samesite="lax", max_age=7 * 86400)
         except Exception:
             # No raw code, id_token, provider response, email or subject in logs.
-            _logger.warning("oauth_callback_failed provider=%s", provider)
+            _logger.warning("OAuth callback rejected")
             response = RedirectResponse("/account.html?oauth=failed", status_code=303)
         finally:
             store.finish(state)
