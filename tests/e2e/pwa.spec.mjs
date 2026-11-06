@@ -28,7 +28,7 @@ test('native Service Worker upgrade preserves financial IndexedDB and PWA manife
  const response=await request.post('/__e2e__/sw-upgrade');
  expect(response.ok()).toBe(true);
  await page.evaluate(async()=>{const reg=await navigator.serviceWorker.ready;await reg.update();});
- await expect.poll(()=>page.evaluate(async()=> (await caches.keys()).some(k=>k.endsWith('-e2e-1'))),{timeout:15000}).toBe(true);
+ await expect.poll(()=>page.evaluate(async()=> (await caches.keys()).some(k=>k.endsWith('-e2e-1')||k.endsWith('-e2e-1-schema-v2'))),{timeout:15000}).toBe(true);
  await page.reload();
  expect((await scopedState(page,'state')).entries[0].id).toBe(id);
  const manifest=await page.evaluate(async()=> (await fetch('/manifest.webmanifest')).json());
