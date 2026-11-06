@@ -3,6 +3,7 @@ import {readState,updateState,replaceState,askPersistentStorage,storageStatus} f
 import {encryptBackup,decryptBackup} from './backup.js';
 import {parseSchedule} from './schedule.js';
 import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.js';
+import {createEmailSession} from './auth-session.js';
 
 const $=sel=>document.querySelector(sel);
 const svg=name=>`<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-${name}"></use></svg>`;
@@ -12,6 +13,7 @@ const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMon
 const uuid=()=>crypto.randomUUID();
 const titles={overview:'Обзор',calendar:'Календарь',obligations:'Обязательства',loans:'Кредиты',settings:'Настройки'};
 let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null},passwordMode='export',restoreFile=null,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
+const emailSession=createEmailSession();
 const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
 const monthEvents=()=>getMonthEvents(state,ui.month);
 function toast(message,kind='success'){$('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('visible'),3800);$('#save-indicator').textContent=kind==='error'?'Ошибка':'Сохранено на устройстве';}
@@ -22,9 +24,38 @@ async function mutate(change,msg='Сохранено на устройстве')
  try{state=await updateState(s=>change(s));channel?.postMessage('updated');render();toast(msg);}catch(e){fail(e);throw e;}finally{busy=false;}
 }
 function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#0e1624':'#f5f7fc';$('#theme-toggle').innerHTML=svg(mode==='dark'?'sun':'moon');$('#theme-toggle').setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}
-function navigation(view){ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();}
+function navigation(view){ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings')void refreshEmailSession();}
 function render(){if(!state)return;$('#toolbar-title').textContent=titles[ui.view];document.querySelectorAll('[data-view]').forEach(el=>{const active=el.dataset.view===ui.view;el.classList.toggle('active',active);el.setAttribute('aria-current',active?'page':'false');});
- const sections={overview:renderOverview,calendar:renderCalendar,obligations:renderObligations,loans:renderLoans,settings:renderSettings};$('#main').innerHTML=sections[ui.view]();if(ui.view==='settings'&&document.querySelector('meta[name="fh-email-auth"]')?.content==='enabled'){$('#account-entry').hidden=false;}}
+ const sections={overview:renderOverview,calendar:renderCalendar,obligations:renderObligations,loans:renderLoans,settings:renderSettings};$('#main').innerHTML=sections[ui.view]();syncAccountControls();}
+function syncAccountControls(){
+ const signedIn=Boolean(emailSession.email);
+ const toolbarButton=$('#account-logout-toolbar');
+ toolbarButton.hidden=!signedIn;
+ toolbarButton.disabled=emailSession.busy;
+ if(ui.view!=='settings')return;
+ $('#account-entry').hidden=signedIn||document.querySelector('meta[name="fh-email-auth"]')?.content!=='enabled';
+ $('#account-session').hidden=!signedIn;
+ $('#account-session-email').textContent=emailSession.email||'';
+ $('#account-logout-settings').disabled=emailSession.busy;
+}
+async function refreshEmailSession(){
+ if(await emailSession.refresh())syncAccountControls();
+}
+async function logoutEmailAccount(){
+ if(!emailSession.email||emailSession.busy)return;
+ const pending=emailSession.logout();
+ syncAccountControls();
+ try{
+  if(await pending){
+   render();
+   toast('Вы вышли из аккаунта. Финансовые записи остались в этом браузере.');
+  }
+ }catch(error){
+  toast(error instanceof Error?error.message:'Не удалось выйти из аккаунта. Повторите попытку.','error');
+ }finally{
+  syncAccountControls();
+ }
+}
 function pageHead(title,subtitle,actions=''){return `<header class="page-header"><div><div class="eyebrow">${formatDate(today())} · Личные финансы</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div><div class="header-tools">${actions}</div></header>`;}
 const action=(type,label,kind='button-primary',props='')=>`<button class="${kind}" data-action="${type}" ${props}>${label}</button>`;
 function moneyRow(event,{compact=false}={}){
@@ -98,6 +129,7 @@ function renderLoans(){
 function renderSettings(){const deleted=[...state.entries.filter(x=>x.deletedAt).map(x=>({...x,entity:'entry'})),...state.loans.filter(x=>x.deletedAt).map(x=>({...x,entity:'loan'}))];
  return pageHead('Настройки','Приватность, оформление, резервные копии и восстановление записей')+`<div class="settings-grid">
  <section class="surface" id="account-entry" hidden><h2>Аккаунт</h2><p>Вход и регистрация по email доступны по желанию. Ваши финансовые данные не переносятся на сервер до отдельного включения синхронизации.</p><a class="button-secondary" href="./account.html">Войти или зарегистрироваться</a></section>
+ <section class="surface" id="account-session" hidden><h2>Аккаунт</h2><p>Вы вошли как <strong id="account-session-email"></strong>. Синхронизация ещё не включена: финансовые записи остаются в этом браузере.</p><div class="setting-actions"><button type="button" class="button-secondary" id="account-logout-settings" data-action="account-logout"><span class="lucide-logout-icon" aria-hidden="true"></span>Выйти из аккаунта</button></div></section>
  <section class="surface"><h2>Оформление</h2><p>Вариант А: единая палитра для всех разделов. На Mac - боковая навигация и компактная панель инструментов; на iPhone - нижняя панель.</p><div class="setting-row"><strong>Цветовая тема</strong><div class="segment"><button data-action="theme" data-theme="light" class="${document.body.dataset.theme==='light'?'selected':''}" aria-pressed="${document.body.dataset.theme==='light'}">Светлая</button><button data-action="theme" data-theme="dark" class="${document.body.dataset.theme==='dark'?'selected':''}" aria-pressed="${document.body.dataset.theme==='dark'}">Тёмная</button></div></div></section>
  <section class="surface"><h2>Локальная безопасность</h2><p>Финансовая база хранится в IndexedDB этого браузера. Не отправляется на Hermes VPS и не синхронизируется с другими устройствами. В приватном режиме данные могут исчезнуть после закрытия.</p><div class="setting-actions">${action('persist',`${svg('lock')} Запросить постоянное хранение`,'button-secondary')}</div><div id="storage-status" class="small-hint" style="margin-top:12px">Браузер может удалить данные при очистке хранилища. Делайте резервные копии.</div></section>
  <section class="surface"><h2>Зашифрованная копия</h2><p>Сохраните все записи в один файл с шифрованием AES-256-GCM. Пароль известен только вам. Используйте копию для переноса на другое устройство или восстановления.</p><div class="setting-actions">${action('backup',`${svg('download')} Скачать копию`,'button-primary')}${action('restore',`${svg('upload')} Восстановить`,'button-secondary')}</div></section>
@@ -163,6 +195,7 @@ function requireConfirm(title,text){return new Promise(resolve=>{
  });}
 async function handleAction(button){
  const type=button.dataset.action,id=button.dataset.id;
+ if(type==='account-logout'){await logoutEmailAccount();return;}
  if(type==='new-entry'){openEntry(null,button.dataset.kind||'expense');return;}
  if(type==='new-loan'){openLoan();return;}
  if(type==='edit-entry'){openEntry(id);return;}
@@ -371,7 +404,7 @@ function bindEvents(){
 }
 async function init(){
  try{themeSet(localStorage.getItem('fh-theme')||((window.matchMedia?.('(prefers-color-scheme: dark)').matches)?'dark':'light'));}catch{themeSet('light');}
- bindEvents();try{state=await readState();render();$('#save-indicator').textContent='Локальная база готова';}catch(e){onErrorNoStorage(e);return;}
+ bindEvents();try{state=await readState();render();$('#save-indicator').textContent='Локальная база готова';void refreshEmailSession();}catch(e){onErrorNoStorage(e);return;}
  if(ui.view==='settings')renderStorageStatus();
  if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(()=>{});
 }
