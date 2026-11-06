@@ -21,7 +21,7 @@ async function mutate(change,msg='Сохранено на устройстве')
  if(busy)return;busy=true;$('#save-indicator').textContent='Сохранение…';
  try{state=await updateState(s=>change(s));channel?.postMessage('updated');render();toast(msg);}catch(e){fail(e);throw e;}finally{busy=false;}
 }
-function themeSet(mode){document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#0e1624':'#f5f7fc';$('#theme-toggle').innerHTML=svg(mode==='dark'?'sun':'moon');$('#theme-toggle').setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}
+function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#0e1624':'#f5f7fc';$('#theme-toggle').innerHTML=svg(mode==='dark'?'sun':'moon');$('#theme-toggle').setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}
 function navigation(view){ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();}
 function render(){if(!state)return;$('#toolbar-title').textContent=titles[ui.view];document.querySelectorAll('[data-view]').forEach(el=>{const active=el.dataset.view===ui.view;el.classList.toggle('active',active);el.setAttribute('aria-current',active?'page':'false');});
  const sections={overview:renderOverview,calendar:renderCalendar,obligations:renderObligations,loans:renderLoans,settings:renderSettings};$('#main').innerHTML=sections[ui.view]();if(ui.view==='settings'&&document.querySelector('meta[name="fh-email-auth"]')?.content==='enabled'){$('#account-entry').hidden=false;}}

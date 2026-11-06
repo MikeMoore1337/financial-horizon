@@ -38,10 +38,22 @@ test('mobile floating navigation stays compact above the iPhone safe area',()=>{
   return mobile.slice(start+marker.length,mobile.indexOf('}',start));
  };
  const dock=mobileRule('.bottom-nav');
- assert.match(dock,/bottom:calc\(4px \+ env\(safe-area-inset-bottom,0px\)\)/);
+ assert.match(dock,/bottom:var\(--fh-dock-bottom\)/);
  assert.match(dock,/padding:8px 6px(?:;|$)/);
  assert.doesNotMatch(dock,/padding:[^;]*safe-area-inset-bottom/,'Safe area must stay outside the floating panel');
  assert.match(mobileRule('.bottom-nav button'),/min-height:49px/);
- assert.match(mobileRule('.page'),/padding:23px 16px calc\(85px \+ env\(safe-area-inset-bottom,0px\)\)/);
- assert.match(mobileRule('.toast'),/bottom:calc\(79px \+ env\(safe-area-inset-bottom,0px\)\)/);
+ assert.match(mobileRule('.page'),/padding:23px 16px calc\(78px \+ var\(--fh-dock-bottom\)\)/);
+ assert.match(mobileRule('.toast'),/bottom:calc\(76px \+ var\(--fh-dock-bottom\)\)/);
+});
+
+test('mobile dock uses the YFC-style safe-area correction and preserves symmetric button padding',()=>{
+ const mobile=css.slice(css.indexOf('@media(max-width:760px)'));
+ assert.match(mobile,/body\{--fh-dock-bottom:max\(12px,calc\(env\(safe-area-inset-bottom,0px\) - 14px\)\)\}/);
+ assert.match(mobile,/\.bottom-nav\{[^}]*padding:8px 6px;border-radius:24px/);
+ for(const inset of [0,20,34,47]) {
+  const dockGap=Math.max(12,inset-14);
+  const dockHeight=49+8+8+2;
+  assert.ok(78+dockGap>=dockGap+dockHeight+10,'Page content must clear dock');
+  assert.ok(76+dockGap>=dockGap+dockHeight+8,'Toast must clear dock');
+ }
 });
