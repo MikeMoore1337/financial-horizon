@@ -137,6 +137,9 @@ async function refreshSession(){
   if(!response.ok)return false;
   const result=await response.json();
   const authenticated=result.authenticated===true&&typeof result.user?.email==='string';
+  if(authenticated){
+   try{sessionStorage.removeItem('fh-guest-session-v2');}catch{}
+  }
   $('#session-panel').hidden=!authenticated;
   $('#auth-form').hidden=authenticated;
   $('.auth-modes').hidden=authenticated;
