@@ -39,7 +39,7 @@ test('password is not requested on email-only registration and CSS honors hidden
 
 test('service worker caches only app assets and includes account UI for offline support',()=>{
  const sw=get('sw.js');
- assert.match(sw,/financial-horizon-shell-v13-ios27-theme-statusbar/);
+ assert.match(sw,/financial-horizon-shell-v14-ios27-statusbar-theme/);
  for(const file of ['account.html','account.css','account.js']){
    assert.ok(sw.includes("'./"+file+"'"),file);
  }
@@ -56,4 +56,23 @@ test('Turnstile failures offer actionable feedback and do not poison retries',()
  assert.match(js,/Не удалось пройти защитную проверку/);
  assert.match(js,/Срок защитной проверки истёк/);
  assert.match(js,/Проверка не завершена/);
+});
+
+test('signed-in ledger exposes accessible logout controls with a vendored Lucide SVG',()=>{
+ const main=get('index.html'),app=get('app.js'),css=get('styles.css'),sw=get('sw.js');
+ const icon=get('assets/icons/log-out.svg'),license=get('assets/icons/LICENSE');
+ assert.match(main,/id="account-logout-toolbar"[^>]*data-action="account-logout"[^>]*hidden/);
+ assert.match(main,/aria-label="Выйти из аккаунта"/);
+ assert.match(app,/id="account-session" hidden/);
+ assert.match(app,/id="account-logout-settings" data-action="account-logout"/);
+ assert.match(app,/await logoutEmailAccount\(\)/);
+ assert.match(app,/\.textContent=emailSession\.email\|\|''/);
+ assert.match(app,/syncAccountControls\(\)/);
+ assert.match(css,/\.toolbar-logout\[hidden\][^{]*\{display:none\}/);
+ assert.match(css,/mask:url\('\.\/assets\/icons\/log-out\.svg'\)/);
+ assert.match(sw,/'\.\/auth-session\.js'/);
+ assert.match(sw,/'\.\/assets\/icons\/log-out\.svg'/);
+ assert.match(icon,/stroke="currentColor"/);
+ assert.match(icon,/<path d="m16 17 5-5-5-5"/);
+ assert.match(license,/MIT License/);
 });

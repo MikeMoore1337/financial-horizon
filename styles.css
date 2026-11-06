@@ -37,6 +37,13 @@ button,input,select{font:inherit}button{cursor:pointer}svg{width:20px;height:20p
 .excel-import-list ul{list-style:none;padding:0;margin:0}
 .excel-import-list li{border-bottom:1px solid var(--line);padding:7px 0;font-size:12px;line-height:1.45;overflow-wrap:anywhere}
 .excel-import-list li:last-child{border-bottom:0}
+
+/* Unmodified Lucide log-out SVG, locally hosted and theme-aware. */
+.lucide-logout-icon{width:18px;height:18px;display:inline-block;flex:none;background:currentColor;-webkit-mask:url('./assets/icons/log-out.svg') center / contain no-repeat;mask:url('./assets/icons/log-out.svg') center / contain no-repeat}
+.toolbar-logout{min-height:44px;padding:0 13px;gap:8px}
+.toolbar-logout[hidden],#account-entry[hidden],#account-session[hidden]{display:none}
+@media(max-width:760px){.toolbar-logout{width:44px;min-width:44px;padding:0;border-radius:13px}.toolbar-logout-label{display:none}}
+
 /* iOS 26/27 samples fixed top-edge elements to tint the standalone status bar.
    Use a real, opaque 12px element instead of a pseudo-element or translucent meta mode. */
 .ios-status-bar-sample{display:none}
