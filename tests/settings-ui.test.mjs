@@ -24,6 +24,8 @@ test('settings use compact independent columns with one-column layout on narrow 
  assert.ok(css.includes('.settings-column{min-width:0;display:flex;flex-direction:column;gap:14px}'));
  assert.ok(css.includes('.settings-grid{grid-template-columns:1fr}'));
  assert.ok(css.includes('.settings-install{margin-top:14px;padding:18px 20px}'));
+ assert.ok(settings.includes('</div></div><section class="surface settings-install"'));
+
 });
 
 test('settings controls and cache-busted assets are preserved',()=>{
