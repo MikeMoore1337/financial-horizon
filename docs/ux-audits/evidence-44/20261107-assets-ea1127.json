@@ -1,0 +1,127 @@
+{
+  "schema": "issue44-production-exact-assets-v1",
+  "type": "static-assets-and-auth-config",
+  "sha": "ea1127bde8f1f263fbc3223d8d8c8e7e01f9d009",
+  "date": "2026-11-07",
+  "original_full_json_sha256": "d313769dcf3ddb3679c0653fc0de7c29d9733fb3050e26d7ec7c1b90a8f9063d",
+  "assets": [
+    {
+      "file": "index.html",
+      "url_path": "/",
+      "status": 200,
+      "identical": true,
+      "local_sha256": "70e090137b4a188ed96caadab3f23c813b12704d46b9c20bb336004d8b905512",
+      "public_sha256": "70e090137b4a188ed96caadab3f23c813b12704d46b9c20bb336004d8b905512",
+      "served_bytes": 19189
+    },
+    {
+      "file": "account.html",
+      "url_path": "/account.html",
+      "status": 200,
+      "identical": true,
+      "local_sha256": "64402039c01e4b2b747ca0fca2209ff896a3097c480d92e6463312f8d0889789",
+      "public_sha256": "64402039c01e4b2b747ca0fca2209ff896a3097c480d92e6463312f8d0889789",
+      "served_bytes": 4916
+    },
+    {
+      "file": "styles.css",
+      "url_path": "/styles.css?rev=auth-theme-v27",
+      "status": 200,
+      "identical": true,
+      "local_sha256": "0f4919a3e5d7e8f116cbaf184f7c9f9c9c9fdbab2b680fd35ac9b6fb16a4d1a4",
+      "public_sha256": "0f4919a3e5d7e8f116cbaf184f7c9f9c9c9fdbab2b680fd35ac9b6fb16a4d1a4",
+      "served_bytes": 25616
+    },
+    {
+      "file": "app.js",
+      "url_path": "/app.js?rev=auth-theme-v25",
+      "status": 200,
+      "identical": true,
+      "local_sha256": "9bdb834cd446a7617a22bef69f9abf25c5c1631767a01433b583e88e708362c7",
+      "public_sha256": "9bdb834cd446a7617a22bef69f9abf25c5c1631767a01433b583e88e708362c7",
+      "served_bytes": 63427
+    },
+    {
+      "file": "sw.js",
+      "url_path": "/sw.js",
+      "status": 200,
+      "identical": true,
+      "local_sha256": "e59bc4b4d59262e60cc008d19ec33819f6d112fe125b9445bfe1d77bb7065779",
+      "public_sha256": "e59bc4b4d59262e60cc008d19ec33819f6d112fe125b9445bfe1d77bb7065779",
+      "served_bytes": 2355
+    },
+    {
+      "file": "theme-bootstrap.js",
+      "url_path": "/theme-bootstrap.js?rev=ios27-chrome-v17",
+      "status": 200,
+      "identical": true,
+      "local_sha256": "5ed783c32f9abfb97a51bcdcf8675b8aa71ed052926f4886ebdd4e87040180d8",
+      "public_sha256": "5ed783c32f9abfb97a51bcdcf8675b8aa71ed052926f4886ebdd4e87040180d8",
+      "served_bytes": 670
+    },
+    {
+      "file": "state-migrations.js",
+      "url_path": "/state-migrations.js",
+      "status": 200,
+      "identical": true,
+      "local_sha256": "1e4359e2408a543acecef98d3da8ef81d27ed826bb58c20c7cbcbf9696a76be5",
+      "public_sha256": "1e4359e2408a543acecef98d3da8ef81d27ed826bb58c20c7cbcbf9696a76be5",
+      "served_bytes": 1075
+    },
+    {
+      "file": "ledger-operations.js",
+      "url_path": "/ledger-operations.js",
+      "status": 200,
+      "identical": true,
+      "local_sha256": "43e8a9c26550216c6c406f9908d05ba0292ab221dac23ace022ac1a9852c9d9c",
+      "public_sha256": "43e8a9c26550216c6c406f9908d05ba0292ab221dac23ace022ac1a9852c9d9c",
+      "served_bytes": 4009
+    },
+    {
+      "file": "finance.js",
+      "url_path": "/finance.js",
+      "status": 200,
+      "identical": true,
+      "local_sha256": "b6b0f9097f46814311f7f45af65d4768658d69866e78c4083f7418e55185f0c7",
+      "public_sha256": "b6b0f9097f46814311f7f45af65d4768658d69866e78c4083f7418e55185f0c7",
+      "served_bytes": 12112
+    },
+    {
+      "file": "storage.js",
+      "url_path": "/storage.js?rev=auth-scopes-v18",
+      "status": 200,
+      "identical": true,
+      "local_sha256": "094519624689c2030d4a173739b9098659945205ada0dcdb7603e3de6c2af5b1",
+      "public_sha256": "094519624689c2030d4a173739b9098659945205ada0dcdb7603e3de6c2af5b1",
+      "served_bytes": 7643
+    },
+    {
+      "file": "account.js",
+      "url_path": "/account.js?rev=auth-theme-v25",
+      "status": 200,
+      "identical": true,
+      "local_sha256": "4d400a6fb4e832dd0bfa35204e093ece83edc036d982bb81617d14eb93783be2",
+      "public_sha256": "4d400a6fb4e832dd0bfa35204e093ece83edc036d982bb81617d14eb93783be2",
+      "served_bytes": 16671
+    },
+    {
+      "file": "manifest.webmanifest",
+      "url_path": "/manifest.webmanifest",
+      "status": 200,
+      "identical": true,
+      "local_sha256": "cc0877629c1a9bb6d67f8fdea9950eddd3e3b4ba0f1f208743344203f4ea6222",
+      "public_sha256": "cc0877629c1a9bb6d67f8fdea9950eddd3e3b4ba0f1f208743344203f4ea6222",
+      "served_bytes": 1077
+    }
+  ],
+  "auth_config": {
+    "status": 200,
+    "enabled": true,
+    "capability_keys": [
+      "email_change",
+      "revoke_other_sessions",
+      "rotate_session"
+    ]
+  },
+  "note": "static equality does not prove real SMTP/VoiceOver or backend deployment SHA"
+}
