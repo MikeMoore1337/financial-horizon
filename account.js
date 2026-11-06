@@ -213,6 +213,21 @@ async function refreshSession(){
  }
 }
 
+async function logoutOthers(){
+ const button=$("#auth-logout-others");
+ if(button.disabled||button.hidden)return;
+ button.disabled=true;
+ try{
+  const result=await request("logout-others",{});
+  if(result.ok!==true)throw Error("Сервер не подтвердил завершение других сеансов");
+  feedback("Вход на остальных устройствах завершён. Здесь вы остались в аккаунте.","success");
+ }catch(error){
+  feedback(error instanceof Error?error.message:"Не удалось завершить другие сеансы","error");
+ }finally{
+  button.disabled=false;
+ }
+}
+
 async function logout(){
  try{
   const formerId=activeAccountId;
@@ -298,6 +313,7 @@ async function init(){
  }catch{}
  $("#auth-form").addEventListener("submit",submit);
  $("#auth-logout").addEventListener("click",logout);
+ $("#auth-logout-others").addEventListener("click",logoutOthers);
  $("#change-email-form").addEventListener("submit",requestEmailChange);
  window.addEventListener("hashchange",()=>{
   const params=new URLSearchParams(location.hash.replace(/^#/,""));
@@ -326,6 +342,7 @@ async function init(){
   if(!res.ok)throw Error("disabled");
   config=await res.json();
   if(!config.enabled||!config.sitekey)throw Error("disabled");
+  $("#auth-logout-others").hidden=config.capabilities?.revoke_other_sessions!==true;
   updateButton();await challengeFor(mode);
   const authenticated=await refreshSession();
   if(changeToken){

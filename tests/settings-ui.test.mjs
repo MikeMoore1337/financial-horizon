@@ -35,9 +35,9 @@ test('settings controls and cache-busted assets are preserved',()=>{
  assert.ok(settings.includes('data-action="theme" data-theme="light"'));
  assert.ok(settings.includes('data-action="theme" data-theme="dark"'));
  const sw=read('sw.js');
- for(const path of ['styles.css?rev=settings-compact-v19','app.js?rev=email-change-v21']){
+ for(const path of ['styles.css?rev=auth-unified-v22','app.js?rev=auth-unified-v22']){
   assert.ok(page.includes(path),'Missing '+path+' in page');
   assert.ok(sw.includes(path),'Missing '+path+' in cache');
  }
- assert.ok(sw.includes('financial-horizon-shell-v21-email-change'));
+ assert.ok(sw.includes('financial-horizon-shell-v22-auth-unified'));
 });

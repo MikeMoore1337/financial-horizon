@@ -105,6 +105,7 @@ def create_app(
             "verify":((30,3600),None),
             "confirm":((20,3600),None),
             "logout":((60,3600),None),
+            "logout-others":((10,3600),None),
             "change-email":((5,3600),(2,86400)),
             "change-confirm":((15,3600),None),
             "rotate":((6,3600),None)
@@ -157,7 +158,7 @@ def create_app(
             "enabled":config.enabled,
             "sitekey":config.turnstile_sitekey if config.enabled else "",
             "email_only":True,
-            "capabilities":{"email_change":config.enabled,"rotate_session":config.enabled}
+            "capabilities":{"email_change":config.enabled,"rotate_session":config.enabled,"revoke_other_sessions":config.enabled}
         }
 
     @app.post("/api/auth/email/register",status_code=202)
@@ -287,6 +288,14 @@ def create_app(
         if store is None:raise RuntimeError("Email AuthStore was not initialized")
         user=store.current(request.cookies.get(SESSION_COOKIE))
         return {"authenticated":bool(user),"user":user if user else None}
+
+    @app.post("/api/auth/email/logout-others")
+    def logout_others(request:Request):
+        require_enabled();guard_origin(request);throttle(request,"logout-others")
+        if store is None:raise RuntimeError("Email AuthStore was not initialized")
+        if not store.revoke_other_sessions(request.cookies.get(SESSION_COOKIE)):
+            raise HTTPException(status_code=401,detail="Требуется вход в аккаунт")
+        return {"ok":True}
 
     @app.post("/api/auth/email/logout")
     def logout(request:Request,response:Response):

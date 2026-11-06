@@ -14,7 +14,7 @@ const uuid=()=>crypto.randomUUID();
 const titles={overview:'Обзор',calendar:'Календарь',obligations:'Обязательства',loans:'Кредиты',settings:'Настройки'};
 let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null},passwordMode='export',restoreFile=null,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
 const emailSession=createEmailSession();
-let guestMode=false,activeUserId=null,authBroadcast=null;
+let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,supportsOtherSessionLogout=false;
 const GUEST_MODE_KEY='fh-guest-session-v2';
 const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
 const monthEvents=()=>getMonthEvents(state,ui.month);
@@ -39,17 +39,28 @@ function syncAccountControls(){
  $('#account-session').hidden=!signedIn;
  $('#account-session-email').textContent=emailSession.email||'';
  $('#account-logout-settings').disabled=emailSession.busy;
+ const others=$('#account-logout-others');
+ others.hidden=!signedIn||!supportsOtherSessionLogout;
+ others.disabled=emailSession.busy;
 }
 async function refreshEmailSession(){
- if(guestMode)return;
- const verified=await emailSession.refresh();
- if(!verified||emailSession.userId!==activeUserId||!emailSession.email){
-  // Never render the previous account's ledger after its session expires.
-  state=null;
-  window.location.replace('./account.html');
-  return;
- }
- syncAccountControls();
+ if(guestMode||!activeUserId||emailSession.busy)return true;
+ // Focus, visibility and Settings can request validation together. A single
+ // in-flight check avoids a stale response falsely signing out a valid session.
+ if(sessionValidation)return sessionValidation;
+ const pending=(async()=>{
+  const verified=await emailSession.refresh();
+  if(!verified||emailSession.userId!==activeUserId||!emailSession.email){
+   state=null;
+   window.location.replace('./account.html');
+   return false;
+  }
+  syncAccountControls();
+  return true;
+ })();
+ sessionValidation=pending;
+ try{return await pending;}
+ finally{if(sessionValidation===pending)sessionValidation=null;}
 }
 async function logoutEmailAccount(){
  if(busy||!emailSession.email||emailSession.busy)return;
@@ -67,6 +78,40 @@ async function logoutEmailAccount(){
   toast(error instanceof Error?error.message:'Не удалось выйти из аккаунта. Повторите попытку.','error');
  }finally{
   syncAccountControls();
+ }
+}
+async function refreshSessionCapabilities(){
+ if(guestMode||!activeUserId)return;
+ try{
+  const response=await fetch('./api/auth/email/config',{credentials:'same-origin',cache:'no-store'});
+  if(!response.ok)return;
+  const result=await response.json();
+  supportsOtherSessionLogout=result?.capabilities?.revoke_other_sessions===true;
+ }catch{
+  supportsOtherSessionLogout=false;
+ }
+ if(state)syncAccountControls();
+}
+async function revokeOtherEmailSessions(){
+ if(guestMode||!supportsOtherSessionLogout||!emailSession.email||emailSession.busy)return;
+ const button=$('#account-logout-others');
+ if(!button||button.disabled)return;
+ button.disabled=true;
+ try{
+  const response=await fetch('./api/auth/email/logout-others',{
+   method:'POST',credentials:'same-origin',cache:'no-store',
+   headers:{'Content-Type':'application/json'},body:'{}'
+  });
+  if(!response.ok)throw Error(response.status===401
+   ?'Сеанс истёк. Войдите снова.'
+   :'Не удалось завершить другие сеансы. Повторите попытку.');
+  const result=await response.json();
+  if(result?.ok!==true)throw Error('Сервер не подтвердил завершение других сеансов');
+  toast('Выход на других устройствах выполнен. Текущий сеанс сохранён.');
+ }catch(error){
+  toast(error instanceof Error?error.message:'Не удалось завершить другие сеансы','error');
+ }finally{
+  if(button.isConnected)button.disabled=false;
  }
 }
 function pageHead(title,subtitle,actions=''){return `<header class="page-header"><div><div class="eyebrow">${formatDate(today())} · Личные финансы</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div><div class="header-tools">${actions}</div></header>`;}
@@ -142,7 +187,7 @@ function renderLoans(){
 function renderSettings(){const deleted=[...state.entries.filter(x=>x.deletedAt).map(x=>({...x,entity:'entry'})),...state.loans.filter(x=>x.deletedAt).map(x=>({...x,entity:'loan'}))];
  return pageHead('Настройки','Аккаунт, безопасность, оформление и управление данными')+`<div class="settings-grid"><div class="settings-column">
  <section class="surface" id="account-entry" hidden><h2>Аккаунт</h2><p>Для доступа к данным аккаунта войдите по email. Синхронизация между устройствами пока недоступна.</p><a class="button-secondary" href="./account.html">Войти в аккаунт</a></section>
- <section class="surface" id="account-session" hidden><h2>Аккаунт</h2><p>Вы вошли как <strong id="account-session-email"></strong>. Финансовые записи хранятся в этом браузере, без синхронизации между устройствами.</p><div class="setting-actions"><a class="button-secondary" href="./account.html">Управление аккаунтом</a><button type="button" class="button-secondary" id="account-logout-settings" data-action="account-logout"><span class="lucide-logout-icon" aria-hidden="true"></span>Выйти из аккаунта</button></div></section>
+ <section class="surface" id="account-session" hidden><h2>Аккаунт</h2><p>Вы вошли как <strong id="account-session-email"></strong>. Финансовые записи хранятся в этом браузере, без синхронизации между устройствами.</p><div class="setting-actions"><a class="button-secondary" href="./account.html">Управление аккаунтом</a><button type="button" class="button-secondary" id="account-logout-others" data-action="account-logout-others" hidden>Выйти на других устройствах</button><button type="button" class="button-secondary" id="account-logout-settings" data-action="account-logout"><span class="lucide-logout-icon" aria-hidden="true"></span>Выйти из аккаунта</button></div></section>
  <section class="surface"><h2>Локальная безопасность</h2><p>Финансовые записи хранятся в этом браузере и не передаются на сервер. В приватном режиме они могут быть удалены после закрытия окна.</p><div class="setting-actions">${action('persist',`${svg('lock')} Запросить постоянное хранение`,'button-secondary')}</div><div id="storage-status" class="small-hint settings-footnote">Браузер может удалить данные при очистке хранилища. Делайте резервные копии.</div></section>
  <section class="surface"><h2>Импорт из Excel</h2><p>Выберите XLSX для предварительного просмотра. Файл обрабатывается в браузере, без передачи на сервер. Текущие записи не заменяются.</p><div class="setting-actions">${action('excel-import',svg('upload')+' Выбрать XLSX','button-secondary')}</div><p class="small-hint settings-footnote">Поддерживается определённый шаблон с доходами и кредитами. Перед импортом проверьте суммы, даты и остатки.</p></section>
  <section class="surface"><h2>Архив записей</h2><p>Удалённые записи остаются в архиве и доступны для восстановления.</p><div class="archive-list">${deleted.length?deleted.map(x=>`<div class="archive-row"><span>${escapeHtml(x.title)}</span>${action('restore-item','Восстановить','button-text',`data-id="${escapeHtml(x.id)}" data-entity="${x.entity}"`)}</div>`).join(''):'<div class="small-hint">Архив пуст.</div>'}</div></section>
@@ -210,6 +255,7 @@ function requireConfirm(title,text){return new Promise(resolve=>{
 async function handleAction(button){
  const type=button.dataset.action,id=button.dataset.id;
  if(type==='account-logout'){await logoutEmailAccount();return;}
+ if(type==='account-logout-others'){await revokeOtherEmailSessions();return;}
  if(type==='new-entry'){openEntry(null,button.dataset.kind||'expense');return;}
  if(type==='new-loan'){openLoan();return;}
  if(type==='edit-entry'){openEntry(id);return;}
@@ -414,6 +460,10 @@ function bindEvents(){
  });
  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;});
  window.addEventListener('storage',e=>{if(e.key==='fh-theme'&&e.newValue&&['light','dark'].includes(e.newValue)){themeSet(e.newValue);render();}});
+ // Revoked sessions on other devices become invalid when this tab is revisited.
+ // Concurrent focus/visibility checks share the same request.
+ window.addEventListener('focus',()=>{if(!guestMode&&activeUserId)void refreshEmailSession();});
+ document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&!guestMode&&activeUserId)void refreshEmailSession();});
  window.addEventListener('pageshow',event=>{
   if(!event.persisted||guestMode||!activeUserId)return;
   // A restored page from back/forward cache must re-validate authorization
@@ -421,11 +471,7 @@ function bindEvents(){
   state=null;
   $('#main').textContent='Проверяем доступ к бухгалтерии…';
   void (async()=>{
-   const verified=await emailSession.refresh();
-   if(!verified||emailSession.userId!==activeUserId){
-    window.location.replace('./account.html');
-    return;
-   }
+   if(!await refreshEmailSession())return;
    state=await readState();
    render();
   })().catch(()=>window.location.replace('./account.html'));
@@ -469,6 +515,7 @@ async function init(){
   }
   state=await readState();
   render();
+  void refreshSessionCapabilities();
   $('#save-indicator').textContent='Локальная база готова';
  }catch(e){onErrorNoStorage(e);return;}
  if(ui.view==='settings')renderStorageStatus();

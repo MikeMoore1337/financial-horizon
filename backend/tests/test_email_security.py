@@ -17,7 +17,7 @@ def test_disabled_default_and_required_external_integrations(tmp_path):
  disabled=Settings(False,ORIGIN,tmp_path/"off.db","","","","",465,"","","",True)
  from fastapi.testclient import TestClient
  c=TestClient(create_app(disabled))
- assert c.get("/api/auth/email/config").json()=={"enabled":False,"sitekey":"","email_only":True,"capabilities":{"email_change":False,"rotate_session":False}}
+ assert c.get("/api/auth/email/config").json()=={"enabled":False,"sitekey":"","email_only":True,"capabilities":{"email_change":False,"rotate_session":False,"revoke_other_sessions":False}}
  assert register(c).status_code==404
  assert c.get("/api/auth/email/me").json()=={"authenticated":False}
  with pytest.raises(ValueError):

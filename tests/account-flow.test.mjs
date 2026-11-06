@@ -16,13 +16,13 @@ function element(name){
  };
 }
 
-async function boot({initialSignedIn=false,sessionReadable=true,hash="",supportsChange=false}={}){
+async function boot({initialSignedIn=false,sessionReadable=true,hash="",supportsChange=false,supportsOthers=false}={}){
  const selectors=[
   "#auth-feedback","#auth-submit","#form-heading","#form-description",
   "#email-label","#email","#password-label","#password",
   "#turnstile-container","#session-panel","#auth-form",
   ".auth-modes",".auth-actions",".auth-actions [data-mode=\"resend\"]",
-  "#session-email","#auth-logout","#change-email-panel","#change-email-form",
+  "#session-email","#auth-logout","#auth-logout-others","#change-email-panel","#change-email-form",
   "#change-email","#change-email-password","#change-email-challenge","#change-email-submit"
  ];
  const elements=Object.fromEntries(selectors.map(s=>[s,element(s)]));
@@ -35,7 +35,7 @@ async function boot({initialSignedIn=false,sessionReadable=true,hash="",supports
  let signedIn=initialSignedIn,email="user@example.com";
  const fetch=async (url,options={})=>{
   calls.push({url,options});
-  if(url.endsWith("/config"))return {ok:true,json:async()=>({enabled:true,sitekey:"test-site-key",capabilities:{email_change:supportsChange}})};
+  if(url.endsWith("/config"))return {ok:true,json:async()=>({enabled:true,sitekey:"test-site-key",capabilities:{email_change:supportsChange,revoke_other_sessions:supportsOthers}})};
   if(url.endsWith("/me"))return {
    ok:true,json:async()=>sessionReadable&&signedIn
     ?{authenticated:true,user:{email,id:"a".repeat(32)}}
@@ -47,6 +47,7 @@ async function boot({initialSignedIn=false,sessionReadable=true,hash="",supports
   }
   if(url.endsWith("/reset/request"))return {ok:true,json:async()=>({message:"Generic response"})};
   if(url.endsWith("/reset/confirm"))return {ok:true,json:async()=>({message:"Updated"})};
+  if(url.endsWith("/logout-others"))return {ok:true,json:async()=>({ok:true})};
   if(url.endsWith("/change/request"))return {ok:true,json:async()=>({message:"Generic"})};
   if(url.endsWith("/change/confirm")){
    email="new@example.com";
