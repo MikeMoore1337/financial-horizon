@@ -76,6 +76,14 @@ class AuthStore:
                     created_at INTEGER NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
+                CREATE TABLE IF NOT EXISTS email_changes (
+                    hash TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    new_email TEXT NOT NULL,
+                    expires_at INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS email_changes_user_idx ON email_changes(user_id);
                 CREATE TABLE IF NOT EXISTS counters (
                     key TEXT NOT NULL,
                     bucket INTEGER NOT NULL,
@@ -276,8 +284,134 @@ class AuthStore:
                     "UPDATE users SET password_hash=?,password_changed_at=? WHERE id=?",
                     (new_hash,now,uid)
                 )
+                # A password reset must also invalidate pending mailbox changes.
+                db.execute("DELETE FROM email_changes WHERE user_id=?",(uid,))
                 db.execute("UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",(now,uid))
                 db.commit()
+            except:
+                db.rollback()
+                raise
+
+    def request_email_change(self, session: str|None, new_email: str, password: str) -> str | None:
+        """Verify the current password, then issue a one-time token for the NEW mailbox.
+
+        The caller always gives a neutral response when the target email is in use.
+        No data is moved between account IDs.
+        """
+        if not isinstance(session,str) or not 32 <= len(session) <= 256 or not session.isascii():
+            raise AuthFailure()
+        now=int(self.now())
+        current_hash=token_hash(session)
+        with self._db() as db:
+            row=db.execute(
+                """SELECT u.id,u.email,u.password_hash FROM sessions s
+                   JOIN users u ON u.id=s.user_id WHERE s.hash=? AND s.expires_at>?
+                     AND s.revoked_at IS NULL AND u.disabled=0 AND u.verified_at IS NOT NULL""",
+                (current_hash,now)
+            ).fetchone()
+        if not row or not verify_password(password,row[2]):
+            raise AuthFailure()
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                fresh=db.execute(
+                    """SELECT u.id,u.email,u.password_hash FROM sessions s
+                       JOIN users u ON u.id=s.user_id WHERE s.hash=? AND s.expires_at>?
+                         AND s.revoked_at IS NULL AND u.disabled=0 AND u.verified_at IS NOT NULL""",
+                    (current_hash,int(self.now()))
+                ).fetchone()
+                if not fresh or fresh!=row:
+                    raise AuthFailure()
+                if new_email==fresh[1] or db.execute(
+                    "SELECT 1 FROM users WHERE email=?",(new_email,)
+                ).fetchone():
+                    db.rollback()
+                    return None
+                token=random_token()
+                db.execute("DELETE FROM email_changes WHERE user_id=?",(fresh[0],))
+                db.execute(
+                    """INSERT INTO email_changes(hash,user_id,new_email,expires_at,created_at)
+                       VALUES(?,?,?,?,?)""",
+                    (token_hash(token),fresh[0],new_email,int(self.now())+3600,int(self.now()))
+                )
+                db.commit()
+                return token
+            except:
+                db.rollback()
+                raise
+
+    def confirm_email_change(self, session: str|None, token: str) -> tuple[str,str]:
+        """Atomically change mailbox, invalidate all earlier sessions, issue a new cookie."""
+        if not isinstance(session,str) or not 32<=len(session)<=256 or not session.isascii():
+            raise AuthFailure()
+        if not isinstance(token,str) or not 32<=len(token)<=256 or not token.isascii():
+            raise AuthFailure()
+        now=int(self.now())
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                current=db.execute(
+                    """SELECT s.user_id,u.email FROM sessions s
+                       JOIN users u ON u.id=s.user_id
+                       WHERE s.hash=? AND s.revoked_at IS NULL AND s.expires_at>?
+                       AND u.verified_at IS NOT NULL AND u.disabled=0""",
+                    (token_hash(session),now)
+                ).fetchone()
+                if not current:
+                    raise AuthFailure()
+                row=db.execute(
+                    """SELECT new_email FROM email_changes WHERE hash=? AND user_id=?
+                       AND expires_at>?""",
+                    (token_hash(token),current[0],now)
+                ).fetchone()
+                if not row:
+                    raise AuthFailure()
+                try:
+                    updated=db.execute(
+                        "UPDATE users SET email=? WHERE id=? AND email=? AND disabled=0",
+                        (row[0],current[0],current[1])
+                    )
+                except sqlite3.IntegrityError:
+                    raise AuthFailure() from None
+                if updated.rowcount!=1:
+                    raise AuthFailure()
+                db.execute("DELETE FROM email_changes WHERE user_id=?",(current[0],))
+                # Old reset links are no longer trustworthy after an email change.
+                db.execute("DELETE FROM actions WHERE user_id=?",(current[0],))
+                db.execute(
+                    "UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+                    (now,current[0])
+                )
+                new_session=self._session(db,current[0])
+                db.commit()
+                return new_session,current[1]
+            except:
+                db.rollback()
+                raise
+
+    def rotate_session(self, session: str|None) -> str:
+        """Single-use rotation with no window accepting the old and new tokens."""
+        if not isinstance(session,str) or not 32<=len(session)<=256 or not session.isascii():
+            raise AuthFailure()
+        now=int(self.now())
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row=db.execute(
+                    """SELECT s.user_id FROM sessions s JOIN users u ON u.id=s.user_id
+                       WHERE s.hash=? AND s.revoked_at IS NULL AND s.expires_at>?
+                       AND u.disabled=0 AND u.verified_at IS NOT NULL""",
+                    (token_hash(session),now)
+                ).fetchone()
+                if not row:
+                    raise AuthFailure()
+                db.execute(
+                    "UPDATE sessions SET revoked_at=? WHERE hash=? AND revoked_at IS NULL",
+                    (now,token_hash(session))
+                )
+                token=self._session(db,row[0])
+                db.commit()
+                return token
             except:
                 db.rollback()
                 raise

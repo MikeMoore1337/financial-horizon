@@ -47,6 +47,12 @@ class PasswordChange(TokenRequest):
     password: str=Field(min_length=12,max_length=128)
 
 
+class EmailChangeRequest(BaseModel):
+    email: str=Field(min_length=5,max_length=254)
+    password: str=Field(min_length=1,max_length=128)
+    challenge: str=Field(min_length=1,max_length=2048)
+
+
 def create_app(
     config: Settings|None=None,
     store: AuthStore|None=None,
@@ -98,7 +104,10 @@ def create_app(
             "login":((30,3600),(10,3600)),
             "verify":((30,3600),None),
             "confirm":((20,3600),None),
-            "logout":((60,3600),None)
+            "logout":((60,3600),None),
+            "change-email":((5,3600),(2,86400)),
+            "change-confirm":((15,3600),None),
+            "rotate":((6,3600),None)
         }
         ip_policy,email_policy=policy[action]
         # Global quota must be consumed first, so distributed abusive IPs cannot
@@ -147,7 +156,8 @@ def create_app(
         return {
             "enabled":config.enabled,
             "sitekey":config.turnstile_sitekey if config.enabled else "",
-            "email_only":True
+            "email_only":True,
+            "capabilities":{"email_change":config.enabled,"rotate_session":config.enabled}
         }
 
     @app.post("/api/auth/email/register",status_code=202)
@@ -183,6 +193,9 @@ def create_app(
         if store is None:raise RuntimeError("Email AuthStore was not initialized")
         try:session=store.confirm_email(payload.token,payload.password)
         except (AuthFailure,ValueError):raise HTTPException(status_code=400,detail="Ссылка недействительна или пароль не подходит") from None
+        # Revoke the prior cookie before replacing it with a new identity.
+        prior=request.cookies.get(SESSION_COOKIE)
+        if prior and prior!=session:store.logout(prior)
         cookie(response,session)
         return {"authenticated":True}
 
@@ -195,6 +208,9 @@ def create_app(
         if store is None:raise RuntimeError("Email AuthStore was not initialized")
         try:session=store.login(email,payload.password)
         except AuthFailure:raise HTTPException(status_code=401,detail="Неверный email или пароль") from None
+        # Revoke the prior cookie before replacing it with a new identity.
+        prior=request.cookies.get(SESSION_COOKIE)
+        if prior and prior!=session:store.logout(prior)
         cookie(response,session)
         return {"authenticated":True}
 
@@ -218,6 +234,52 @@ def create_app(
         except (AuthFailure,ValueError):
             raise HTTPException(status_code=400,detail="Ссылка недействительна или пароль не подходит") from None
         return {"message":"Пароль обновлён. Войдите с новым паролем."}
+
+    @app.post("/api/auth/email/change/request",status_code=202)
+    def request_change(request:Request,payload:EmailChangeRequest,background:BackgroundTasks):
+        require_enabled();guard_origin(request)
+        if store is None:raise RuntimeError("Email AuthStore was not initialized")
+        current=store.current(request.cookies.get(SESSION_COOKIE))
+        if not current:
+            raise HTTPException(status_code=401,detail="Войдите в аккаунт")
+        try:
+            email=normalize_email(payload.email)
+        except ValueError:
+            raise HTTPException(status_code=422,detail="Некорректный email") from None
+        throttle(request,"change-email")
+        challenge(payload.challenge,"change-email")
+        # Quota is bound to the existing principal, NOT the requested new address.
+        throttle(request,"change-email",current["email"],only_email=True)
+        try:
+            token=store.request_email_change(request.cookies.get(SESSION_COOKIE),email,payload.password)
+        except AuthFailure:
+            raise HTTPException(status_code=401,detail="Неверный пароль или сеанс истёк") from None
+        if token:
+            background.add_task(deliver,email,"email-change",token)
+        return {"message":GENERIC_MESSAGE}
+
+    @app.post("/api/auth/email/change/confirm")
+    def confirm_change(request:Request,payload:TokenRequest,response:Response,background:BackgroundTasks):
+        require_enabled();guard_origin(request);throttle(request,"change-confirm")
+        if store is None:raise RuntimeError("Email AuthStore was not initialized")
+        try:
+            session,old_email=store.confirm_email_change(request.cookies.get(SESSION_COOKIE),payload.token)
+        except AuthFailure:
+            raise HTTPException(status_code=400,detail="Ссылка недействительна или требуется вход в аккаунт") from None
+        cookie(response,session)
+        background.add_task(deliver,old_email,"email-changed","")
+        return {"ok":True,"authenticated":True}
+
+    @app.post("/api/auth/email/session/rotate")
+    def rotate(request:Request,response:Response):
+        require_enabled();guard_origin(request);throttle(request,"rotate")
+        if store is None:raise RuntimeError("Email AuthStore was not initialized")
+        try:
+            session=store.rotate_session(request.cookies.get(SESSION_COOKIE))
+        except AuthFailure:
+            raise HTTPException(status_code=401,detail="Войдите в аккаунт") from None
+        cookie(response,session)
+        return {"ok":True,"authenticated":True}
 
     @app.get("/api/auth/email/me")
     def current(request:Request):

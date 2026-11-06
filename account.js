@@ -10,14 +10,17 @@ const MODES={
 };
 const hashValues=new URLSearchParams(location.hash.replace(/^#/,""));
 let token=hashValues.get("verify-email")||hashValues.get("reset-password")||null;
+let changeToken=hashValues.get("confirm-email-change")||null;
 let mode=hashValues.has("verify-email")?"verify":hashValues.has("reset-password")?"reset-confirm":"login";
 // Remove sensitive token before loading any external challenge scripts.
 if(location.hash)history.replaceState(null,"",location.pathname+location.search);
 const VALID_TOKEN=/^[a-zA-Z0-9_-]{32,256}$/;
 if(token&&!VALID_TOKEN.test(token)){token=null;mode="login";}
+if(changeToken&&!VALID_TOKEN.test(changeToken))changeToken=null;
 let config={enabled:false,sitekey:""};
 let activeAccountId=null;
 let challengeToken=null,widgetId=null,activeScript=null,renderVersion=0;
+let changeChallengeToken=null,changeWidgetId=null;
 const challengeModes=new Set(["register","resend","reset"]);
 const routes={
  login:"login",register:"register",resend:"resend",reset:"reset/request",
@@ -101,6 +104,52 @@ async function challengeFor(currentMode){
  }
 }
 
+async function renderChangeEmailChallenge(){
+ if(!config.enabled||config.capabilities?.email_change!==true||changeWidgetId!==null)return;
+ try{
+  await challengeReady();
+  if(changeWidgetId!==null||$("#change-email-panel").hidden)return;
+  changeWidgetId=window.turnstile.render($("#change-email-challenge"),{
+   sitekey:config.sitekey,action:"change-email",theme:"auto",
+   callback:value=>{changeChallengeToken=value;$("#change-email-submit").disabled=false;},
+   "expired-callback":()=>{changeChallengeToken=null;$("#change-email-submit").disabled=true;},
+   "error-callback":()=>{changeChallengeToken=null;$("#change-email-submit").disabled=true;return true;}
+  });
+ }catch{
+  feedback("Не удалось загрузить защитную проверку смены email.","error");
+ }
+}
+async function requestEmailChange(event){
+ event.preventDefault();
+ if(!config.enabled||config.capabilities?.email_change!==true||!changeChallengeToken)return;
+ const button=$("#change-email-submit");
+ if(button.disabled)return;
+ button.disabled=true;
+ try{
+  await request("change/request",{
+   email:$("#change-email").value.trim(),
+   password:$("#change-email-password").value,
+   challenge:changeChallengeToken
+  });
+  $("#change-email-password").value="";
+  feedback("Если новый адрес доступен, письмо со ссылкой для подтверждения будет отправлено. Проверьте «Входящие» и «Спам». Подтверждение выполняется в течение часа из авторизованного аккаунта.","success","Проверьте новый email");
+ }catch(error){
+  feedback(error instanceof Error?error.message:"Не удалось запросить смену email","error");
+ }finally{
+  changeChallengeToken=null;
+  if(changeWidgetId!==null&&window.turnstile)window.turnstile.reset(changeWidgetId);
+  button.disabled=true;
+ }
+}
+async function confirmEmailChange(){
+ if(!changeToken||!config.enabled||config.capabilities?.email_change!==true)return;
+ const result=await request("change/confirm",{token:changeToken});
+ if(result.ok!==true)throw Error("Сервер не подтвердил изменение email");
+ changeToken=null;
+ await refreshSession();
+ feedback("Новый адрес подтверждён. Другие сеансы завершены, а текущий сохранён.","success","Email изменён");
+}
+
 function activate(next,{preserveFeedback=false}={}){
  if(!(next in MODES))return;
  mode=next;$("#form-heading").textContent=MODES[next][0];$("#auth-submit").textContent=MODES[next][1];
@@ -144,6 +193,8 @@ async function refreshSession(){
    try{sessionStorage.removeItem('fh-guest-session-v2');}catch{}
   }
   $('#session-panel').hidden=!authenticated;
+  $('#change-email-panel').hidden=!authenticated||config.capabilities?.email_change!==true;
+  if(authenticated&&config.capabilities?.email_change===true)void renderChangeEmailChallenge();
   $('#auth-form').hidden=authenticated;
   $('.auth-modes').hidden=authenticated;
   $('.auth-actions').hidden=authenticated;
@@ -174,6 +225,13 @@ async function logout(){
     channel.close();
    }catch{}
   }
+  changeChallengeToken=null;
+  if(changeWidgetId!==null&&window.turnstile){
+   window.turnstile.remove(changeWidgetId);
+   changeWidgetId=null;
+  }
+  $("#change-email-submit").disabled=true;
+  $("#change-email-password").value="";
   await refreshSession();
   activate('login');
   feedback('Сеанс завершён. Локальная бухгалтерия сохранена.','success');
@@ -203,6 +261,10 @@ async function submit(event){
     throw Error("Вход выполнен, но браузер не подтвердил сессию. Проверьте настройки cookies и повторите вход.");
    }
    token=null;
+   if(changeToken){
+    await confirmEmailChange();
+    return;
+   }
    // Re-enter the authenticated ledger instead of reusing an earlier guest tab.
    try{sessionStorage.removeItem('fh-guest-session-v2');}catch{}
    location.assign("./");
@@ -236,6 +298,27 @@ async function init(){
  }catch{}
  $("#auth-form").addEventListener("submit",submit);
  $("#auth-logout").addEventListener("click",logout);
+ $("#change-email-form").addEventListener("submit",requestEmailChange);
+ window.addEventListener("hashchange",()=>{
+  const params=new URLSearchParams(location.hash.replace(/^#/,""));
+  const candidate=params.get("confirm-email-change");
+  if(!candidate)return;
+  history.replaceState(null,"",location.pathname+location.search);
+  if(!VALID_TOKEN.test(candidate)){
+   feedback("Ссылка подтверждения email недействительна.","error");
+   return;
+  }
+  changeToken=candidate;
+  void (async()=>{
+   if(await refreshSession()){
+    try{await confirmEmailChange();}catch(error){
+     feedback(error instanceof Error?error.message:"Не удалось подтвердить новый email","error");
+    }
+   }else{
+    feedback("Сначала войдите по прежнему email, затем повторите подтверждение.","info");
+   }
+  })();
+ });
  document.querySelectorAll("[data-mode]").forEach(button=>button.addEventListener("click",()=>activate(button.dataset.mode)));
  activate(mode);
  try{
@@ -243,7 +326,17 @@ async function init(){
   if(!res.ok)throw Error("disabled");
   config=await res.json();
   if(!config.enabled||!config.sitekey)throw Error("disabled");
-  updateButton();await challengeFor(mode);await refreshSession();
+  updateButton();await challengeFor(mode);
+  const authenticated=await refreshSession();
+  if(changeToken){
+   if(authenticated){
+    try{await confirmEmailChange();}catch(error){
+     feedback(error instanceof Error?error.message:"Не удалось подтвердить новый email","error");
+    }
+   }else{
+    feedback("Для подтверждения нового адреса сначала войдите в существующий аккаунт по старому email. После входа подтверждение продолжится автоматически.","info");
+   }
+  }
  }catch{
   config={enabled:false,sitekey:""};
   feedback("Регистрация пока не включена. Можно пользоваться бухгалтерией без аккаунта.","info");

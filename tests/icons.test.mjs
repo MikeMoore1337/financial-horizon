@@ -31,7 +31,7 @@ test('SVG PWA icon and compatible PNG fallback are local', () => {
   assert.match(html,/rel="apple-touch-icon"[^>]*apple-touch-icon-180\.png/);
   assert.match(html,/rel="icon" type="image\/svg\+xml"[^>]*brand\/favicon\.svg/);
   assert.match(sw,/assets\/brand\/favicon\.svg/);
-  assert.match(sw,/financial-horizon-shell-v19-settings-layout/);
+  assert.match(sw,/financial-horizon-shell-v21-email-change/);
 });
 
 test('settings is a gear and dark-theme action has a crescent with a star', () => {

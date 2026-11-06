@@ -16,13 +16,14 @@ function element(name){
  };
 }
 
-async function boot({initialSignedIn=false,sessionReadable=true,hash=""}={}){
+async function boot({initialSignedIn=false,sessionReadable=true,hash="",supportsChange=false}={}){
  const selectors=[
   "#auth-feedback","#auth-submit","#form-heading","#form-description",
   "#email-label","#email","#password-label","#password",
   "#turnstile-container","#session-panel","#auth-form",
   ".auth-modes",".auth-actions",".auth-actions [data-mode=\"resend\"]",
-  "#session-email","#auth-logout"
+  "#session-email","#auth-logout","#change-email-panel","#change-email-form",
+  "#change-email","#change-email-password","#change-email-challenge","#change-email-submit"
  ];
  const elements=Object.fromEntries(selectors.map(s=>[s,element(s)]));
  const buttons=["login","register","reset","resend"].map(value=>{
@@ -31,13 +32,13 @@ async function boot({initialSignedIn=false,sessionReadable=true,hash=""}={}){
   return item;
  });
  const calls=[],navigation=[],historyCalls=[];
- let signedIn=initialSignedIn;
+ let signedIn=initialSignedIn,email="user@example.com";
  const fetch=async (url,options={})=>{
   calls.push({url,options});
-  if(url.endsWith("/config"))return {ok:true,json:async()=>({enabled:true,sitekey:"test-site-key"})};
+  if(url.endsWith("/config"))return {ok:true,json:async()=>({enabled:true,sitekey:"test-site-key",capabilities:{email_change:supportsChange}})};
   if(url.endsWith("/me"))return {
    ok:true,json:async()=>sessionReadable&&signedIn
-    ?{authenticated:true,user:{email:"user@example.com"}}
+    ?{authenticated:true,user:{email,id:"a".repeat(32)}}
     :{authenticated:false,user:null}
   };
   if(url.endsWith("/login")||url.endsWith("/verify")) {
@@ -46,6 +47,11 @@ async function boot({initialSignedIn=false,sessionReadable=true,hash=""}={}){
   }
   if(url.endsWith("/reset/request"))return {ok:true,json:async()=>({message:"Generic response"})};
   if(url.endsWith("/reset/confirm"))return {ok:true,json:async()=>({message:"Updated"})};
+  if(url.endsWith("/change/request"))return {ok:true,json:async()=>({message:"Generic"})};
+  if(url.endsWith("/change/confirm")){
+   email="new@example.com";
+   return {ok:true,json:async()=>({ok:true,authenticated:true})};
+  }
   if(url.endsWith("/logout")){signedIn=false;return {ok:true,json:async()=>({ok:true})};}
   throw Error("Unexpected request "+url);
  };
@@ -66,6 +72,7 @@ async function boot({initialSignedIn=false,sessionReadable=true,hash=""}={}){
   assign(url){navigation.push(url);}
  };
  const window={
+  addEventListener(type,callback){(this.__events??={})[type]=callback;},
   turnstile:{
    render(_place,settings){settings.callback("simulated-challenge");return "widget";},
    remove(){},reset(){}
@@ -86,7 +93,9 @@ async function boot({initialSignedIn=false,sessionReadable=true,hash=""}={}){
    button.events.click();
    await new Promise(resolve=>setImmediate(resolve));
   },
-  submit:async()=>elements["#auth-form"].events.submit({preventDefault(){}})
+  submit:async()=>elements["#auth-form"].events.submit({preventDefault(){}}),
+  changeEmail:async()=>elements["#change-email-form"].events.submit({preventDefault(){}}),
+  triggerHash:async hash=>{location.hash=hash;window.__events.hashchange();await new Promise(resolve=>setImmediate(resolve));}
  };
 }
 
@@ -152,4 +161,52 @@ test("password reset confirmation returns to login without navigating",async()=>
  assert.deepEqual(page.navigation,[]);
  assert.match(page.elements["#auth-feedback"].textContent,/Пароль изменён/);
  assert.equal(page.elements["#form-heading"].textContent,"Войти по email");
+});
+
+test("verified account can request change of email with fresh challenge and current password",async()=>{
+ const page=await boot({initialSignedIn:true,supportsChange:true});
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(page.elements["#change-email-panel"].hidden,false);
+ page.elements["#change-email"].value="new@example.com";
+ page.elements["#change-email-password"].value="current-password-is-secret";
+ await page.changeEmail();
+ const req=page.calls.find(call=>call.url.endsWith("/change/request"));
+ assert.ok(req);
+ assert.equal(req.options.credentials,"same-origin");
+ assert.deepEqual(JSON.parse(req.options.body),{
+  email:"new@example.com",password:"current-password-is-secret",challenge:"simulated-challenge"
+ });
+ assert.equal(page.elements["#change-email-password"].value,"");
+ assert.match(page.elements["#auth-feedback"].textContent,/Проверьте новый email/);
+ assert.deepEqual(page.navigation,[]);
+});
+
+test("already signed-in user confirms change from fragment and stays authenticated",async()=>{
+ const page=await boot({initialSignedIn:true,supportsChange:true,hash:"#confirm-email-change="+("N".repeat(48))});
+ assert.equal(page.historyCalls.length,1);
+ assert.ok(page.calls.some(call=>call.url.endsWith("/change/confirm")));
+ assert.equal(page.elements["#session-panel"].hidden,false);
+ assert.match(page.elements["#session-email"].textContent,/new@example.com/);
+ assert.match(page.elements["#auth-feedback"].textContent,/Email изменён/);
+ assert.deepEqual(page.navigation,[]);
+});
+
+test("signed-out confirmation link waits for login to apply matching token",async()=>{
+ const page=await boot({supportsChange:true,hash:"#confirm-email-change="+("R".repeat(48))});
+ assert.equal(page.elements["#auth-form"].hidden,false);
+ assert.match(page.elements["#auth-feedback"].textContent,/сначала войдите/);
+ assert.ok(!page.calls.some(call=>call.url.endsWith("/change/confirm")));
+ page.elements["#email"].value="user@example.com";
+ page.elements["#password"].value="long-enough-password";
+ await page.submit();
+ assert.ok(page.calls.some(call=>call.url.endsWith("/change/confirm")));
+ assert.deepEqual(page.navigation,[]);
+ assert.equal(page.elements["#session-panel"].hidden,false);
+ assert.match(page.elements["#session-email"].textContent,/new@example.com/);
+});
+
+test("email-change controls are hidden until the backend advertises support",async()=>{
+ const page=await boot({initialSignedIn:true,supportsChange:false});
+ assert.equal(page.elements["#change-email-panel"].hidden,true);
+ assert.ok(!page.calls.some(call=>call.url.endsWith("/change/request")));
 });
