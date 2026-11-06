@@ -16,7 +16,7 @@ function element(name){
  };
 }
 
-async function boot({initialSignedIn=false,sessionReadable=true,hash=""}={}){
+async function boot({initialSignedIn=false,sessionReadable=true,hash="",supportsOthers=true}={}){
  const selectors=[
   "#auth-feedback","#auth-submit","#form-heading","#form-description",
   "#email-label","#email","#password-label","#password",
@@ -34,7 +34,7 @@ async function boot({initialSignedIn=false,sessionReadable=true,hash=""}={}){
  let signedIn=initialSignedIn;
  const fetch=async (url,options={})=>{
   calls.push({url,options});
-  if(url.endsWith("/config"))return {ok:true,json:async()=>({enabled:true,sitekey:"test-site-key"})};
+  if(url.endsWith("/config"))return {ok:true,json:async()=>({enabled:true,sitekey:"test-site-key",capabilities:{revoke_other_sessions:supportsOthers}})};
   if(url.endsWith("/me"))return {
    ok:true,json:async()=>sessionReadable&&signedIn
     ?{authenticated:true,user:{email:"user@example.com"}}
@@ -165,4 +165,14 @@ test("revoking other sessions keeps the current account page authenticated",asyn
  assert.equal(page.elements["#session-panel"].hidden,false);
  assert.equal(page.elements["#auth-feedback"].dataset.status,"success");
  assert.deepEqual(page.navigation,[]);
+});
+
+test("account page hides remote-session action when backend has no capability",async()=>{
+ const page=await boot({initialSignedIn:true,supportsOthers:false});
+ assert.equal(page.elements["#auth-logout-others"].hidden,true);
+ assert.equal(page.elements["#session-panel"].hidden,false);
+});
+test("account page offers remote-session action after backend advertises support",async()=>{
+ const page=await boot({initialSignedIn:true,supportsOthers:true});
+ assert.equal(page.elements["#auth-logout-others"].hidden,false);
 });

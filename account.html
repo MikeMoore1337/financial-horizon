@@ -8,8 +8,8 @@
 <title>Аккаунт - Финансовый горизонт</title>
 <link rel="icon" type="image/svg+xml" href="./assets/brand/favicon.svg">
 <script src="./theme-bootstrap.js?rev=ios27-chrome-v17"></script>
-<link rel="stylesheet" href="./styles.css?rev=settings-compact-v19">
-<link rel="stylesheet" href="./account.css">
+<link rel="stylesheet" href="./styles.css?rev=auth-sessions-v20">
+<link rel="stylesheet" href="./account.css?rev=auth-sessions-v20">
 <script type="module" src="./account.js?rev=auth-sessions-v20"></script>
 </head>
 <body data-theme="light">
@@ -44,7 +44,7 @@
       <p id="session-email"></p>
       <div class="session-actions">
         <a class="button-secondary" href="./">Открыть бухгалтерию</a>
-        <button type="button" class="button-secondary" id="auth-logout-others">Выйти на других устройствах</button>
+        <button type="button" class="button-secondary" id="auth-logout-others" hidden>Выйти на других устройствах</button>
         <button type="button" class="button-secondary" id="auth-logout">Выйти из аккаунта</button>
       </div>
     </section>

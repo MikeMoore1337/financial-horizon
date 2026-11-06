@@ -35,7 +35,7 @@ test('settings controls and cache-busted assets are preserved',()=>{
  assert.ok(settings.includes('data-action="theme" data-theme="light"'));
  assert.ok(settings.includes('data-action="theme" data-theme="dark"'));
  const sw=read('sw.js');
- for(const path of ['styles.css?rev=settings-compact-v19','app.js?rev=auth-sessions-v20']){
+ for(const path of ['styles.css?rev=auth-sessions-v20','app.js?rev=auth-sessions-v20']){
   assert.ok(page.includes(path),'Missing '+path+' in page');
   assert.ok(sw.includes(path),'Missing '+path+' in cache');
  }

@@ -148,7 +148,8 @@ def create_app(
         return {
             "enabled":config.enabled,
             "sitekey":config.turnstile_sitekey if config.enabled else "",
-            "email_only":True
+            "email_only":True,
+            "capabilities":{"revoke_other_sessions":config.enabled}
         }
 
     @app.post("/api/auth/email/register",status_code=202)

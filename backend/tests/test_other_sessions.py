@@ -63,3 +63,10 @@ def test_revocation_stays_rate_limited(tmp_path):
     for _ in range(10):
         assert post(current, "logout-others", {}).status_code == 200
     assert post(current, "logout-others", {}).status_code == 429
+
+
+def test_public_config_advertises_remote_revocation_only_when_enabled(tmp_path):
+    _, _, client = fixture(tmp_path)
+    res = client.get("/api/auth/email/config")
+    assert res.status_code == 200
+    assert res.json()["capabilities"] == {"revoke_other_sessions": True}

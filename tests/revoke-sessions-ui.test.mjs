@@ -10,11 +10,11 @@ const b=app.indexOf('\nfunction pageHead(',a);
 assert.ok(a>=0&&b>a);
 const fn=app.slice(a,b);
 
-function invoke({signedIn=true,guestMode=false,status=200,result={ok:true}}={}){
+function invoke({signedIn=true,guestMode=false,supportsOthers=true,status=200,result={ok:true}}={}){
  const requests=[],messages=[];
  const button={disabled:false,isConnected:true};
  const ctx={
-  Error,guestMode,emailSession:{email:signedIn?'qa@example.invalid':null,busy:false},
+  Error,guestMode,supportsOtherSessionLogout:supportsOthers,emailSession:{email:signedIn?'qa@example.invalid':null,busy:false},
   $:name=>name==='#account-logout-others'?button:null,
   toast:(message,kind)=>messages.push({message,kind}),
   fetch:async(url,options)=>{
@@ -60,9 +60,25 @@ test('buttons exist only inside the authenticated account panel',()=>{
  assert.match(app,/id="account-logout-others" data-action="account-logout-others"/);
  assert.match(app,/if\(type==='account-logout-others'\)/);
  assert.match(html,/id="session-panel" hidden/);
- assert.match(html,/id="auth-logout-others"/);
+ assert.match(html,/id="auth-logout-others" hidden/);
  assert.match(html,/Выйти на других устройствах/);
  assert.match(sw,/financial-horizon-shell-v20-auth-sessions/);
  assert.ok(sw.includes("'./app.js?rev=auth-sessions-v20'"));
  assert.ok(sw.includes("'./account.js?rev=auth-sessions-v20'"));
+});
+
+test('unsupported backend cannot trigger the revocation endpoint',async()=>{
+ const ui=invoke({supportsOthers:false});
+ await ui.run();
+ assert.equal(ui.requests.length,0);
+ assert.equal(ui.messages.length,0);
+});
+test('control visibility is negotiated with the server and defaults off',()=>{
+ const app=get('app.js'),html=get('account.html'),css=get('account.css');
+ assert.match(app,/supportsOtherSessionLogout=false/);
+ assert.match(app,/result\?\.capabilities\?\.revoke_other_sessions===true/);
+ assert.match(app,/others\.hidden=!signedIn\|\|!supportsOtherSessionLogout/);
+ assert.match(app,/refreshSessionCapabilities\(\)/);
+ assert.match(html,/id="auth-logout-others" hidden/);
+ assert.match(css,/\.session-actions \[hidden\]\{display:none\}/);
 });

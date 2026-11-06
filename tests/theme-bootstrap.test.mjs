@@ -60,7 +60,7 @@ test('iOS status bar is themed without a fixed element that covers the toolbar',
 });
 
 test('both PWA pages use revisioned assets, consistent with offline precache',()=>{
- const sheet='./styles.css?rev=settings-compact-v19';
+ const sheet='./styles.css?rev=auth-sessions-v20';
  const preload='./theme-bootstrap.js?rev='+revision;
  const application='./app.js?rev=auth-sessions-v20';
  for(const page of [html,account]){

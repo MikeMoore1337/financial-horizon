@@ -14,7 +14,7 @@
 .auth-modes[hidden]{display:none}
 #session-panel{margin:14px 0;padding:14px;border:1px solid var(--line);border-radius:13px;background:var(--soft)}
 #session-panel[hidden]{display:none}
-.session-actions{display:flex;gap:10px;flex-wrap:wrap}
+.session-actions{display:flex;gap:10px;flex-wrap:wrap}.session-actions [hidden]{display:none}
 #session-email{font-size:13px;line-height:1.6;margin-bottom:12px;overflow-wrap:anywhere}
 .auth-modes button,.auth-actions button,.auth-actions a{background:transparent;border:0;color:var(--accent-deep);font-size:13px;font-weight:680;padding:8px;text-decoration:none;border-radius:9px;min-height:40px}
 .auth-modes button[aria-current=page]{background:var(--soft);color:var(--ink)}

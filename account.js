@@ -259,6 +259,7 @@ async function init(){
   if(!res.ok)throw Error("disabled");
   config=await res.json();
   if(!config.enabled||!config.sitekey)throw Error("disabled");
+  $("#auth-logout-others").hidden=config.capabilities?.revoke_other_sessions!==true;
   updateButton();await challengeFor(mode);await refreshSession();
  }catch{
   config={enabled:false,sitekey:""};
