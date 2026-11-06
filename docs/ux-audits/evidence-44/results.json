@@ -1,0 +1,1518 @@
+{
+  "schema": "financial-horizon-ux-audit-evidence-1",
+  "sourceSha": "03e719a34b72f8354d1d3e730a4f8d4c4f254211",
+  "date": "2026-11-06",
+  "method": "isolated clone of main; local HTTP origin; guest synthetic dataset; Microsoft Edge headless; Playwright; axe-core",
+  "browserVersion": "156.0.4314.58",
+  "tools": {
+    "playwright": "1.65.0",
+    "axePlaywright": "4.14.0",
+    "nodeTests": {
+      "total": 83,
+      "pass": 83,
+      "fail": 0
+    }
+  },
+  "coverage": {
+    "widths": [
+      320,
+      360,
+      393,
+      768,
+      1440,
+      2560
+    ],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "views": [
+      "overview",
+      "calendar",
+      "obligations",
+      "loans",
+      "settings"
+    ],
+    "matrixRows": 56,
+    "initialNavigationTimeouts": [
+      {
+        "name": "matrix-320-light-loans",
+        "status": "FAIL"
+      },
+      {
+        "name": "matrix-320-light-settings",
+        "status": "FAIL"
+      },
+      {
+        "name": "matrix-320-dark-loans",
+        "status": "FAIL"
+      },
+      {
+        "name": "matrix-320-dark-settings",
+        "status": "FAIL"
+      }
+    ],
+    "axeScans": 23,
+    "addtlDialogAxeScans": 2,
+    "physicalSafariVoiceOver": "NOT_RUN",
+    "accountBackend": "NOT_RUN"
+  },
+  "responsive": [
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "overview",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 320,
+      "clientWidth": 320,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "calendar",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 320,
+      "clientWidth": 320,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "obligations",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 347,
+      "clientWidth": 320,
+      "horizontalOverflow": true,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "overview",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 320,
+      "clientWidth": 320,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "calendar",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 320,
+      "clientWidth": 320,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "obligations",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 347,
+      "clientWidth": 320,
+      "horizontalOverflow": true,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "view": "overview",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 360,
+      "clientWidth": 360,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "view": "calendar",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 360,
+      "clientWidth": 360,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "view": "obligations",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 360,
+      "clientWidth": 360,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "view": "loans",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 360,
+      "clientWidth": 360,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "view": "settings",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 360,
+      "clientWidth": 360,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "view": "overview",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 360,
+      "clientWidth": 360,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "view": "calendar",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 360,
+      "clientWidth": 360,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "view": "obligations",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 360,
+      "clientWidth": 360,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "view": "loans",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 360,
+      "clientWidth": 360,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "view": "settings",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 360,
+      "clientWidth": 360,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "overview",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 393,
+      "clientWidth": 393,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "calendar",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 393,
+      "clientWidth": 393,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "obligations",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 393,
+      "clientWidth": 393,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "loans",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 393,
+      "clientWidth": 393,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "settings",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 393,
+      "clientWidth": 393,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "overview",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 393,
+      "clientWidth": 393,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "calendar",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 393,
+      "clientWidth": 393,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "obligations",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 393,
+      "clientWidth": 393,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "loans",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 393,
+      "clientWidth": 393,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "settings",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 393,
+      "clientWidth": 393,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "overview",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 768,
+      "clientWidth": 768,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "calendar",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 768,
+      "clientWidth": 768,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "obligations",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 819,
+      "clientWidth": 768,
+      "horizontalOverflow": true,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "loans",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 768,
+      "clientWidth": 768,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "settings",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 768,
+      "clientWidth": 768,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "overview",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 768,
+      "clientWidth": 768,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "calendar",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 768,
+      "clientWidth": 768,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "obligations",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 819,
+      "clientWidth": 768,
+      "horizontalOverflow": true,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "loans",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 768,
+      "clientWidth": 768,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "settings",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 768,
+      "clientWidth": 768,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "overview",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 1440,
+      "clientWidth": 1440,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "calendar",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 1440,
+      "clientWidth": 1440,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "obligations",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 1440,
+      "clientWidth": 1440,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "loans",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 1440,
+      "clientWidth": 1440,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "settings",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 1440,
+      "clientWidth": 1440,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "overview",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 1440,
+      "clientWidth": 1440,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "calendar",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 1440,
+      "clientWidth": 1440,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "obligations",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 1440,
+      "clientWidth": 1440,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "loans",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 1440,
+      "clientWidth": 1440,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "settings",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 1440,
+      "clientWidth": 1440,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 2560,
+      "theme": "light",
+      "view": "overview",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 2560,
+      "clientWidth": 2560,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 2560,
+      "theme": "light",
+      "view": "calendar",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 2560,
+      "clientWidth": 2560,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 2560,
+      "theme": "light",
+      "view": "obligations",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 2560,
+      "clientWidth": 2560,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 2560,
+      "theme": "light",
+      "view": "loans",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 2560,
+      "clientWidth": 2560,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 2560,
+      "theme": "light",
+      "view": "settings",
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "documentScrollWidth": 2560,
+      "clientWidth": 2560,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 2560,
+      "theme": "dark",
+      "view": "overview",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 2560,
+      "clientWidth": 2560,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 2560,
+      "theme": "dark",
+      "view": "calendar",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 2560,
+      "clientWidth": 2560,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 2560,
+      "theme": "dark",
+      "view": "obligations",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 2560,
+      "clientWidth": 2560,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 2560,
+      "theme": "dark",
+      "view": "loans",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 2560,
+      "clientWidth": 2560,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    },
+    {
+      "width": 2560,
+      "theme": "dark",
+      "view": "settings",
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "documentScrollWidth": 2560,
+      "clientWidth": 2560,
+      "horizontalOverflow": false,
+      "tooSmallTargets": 0
+    }
+  ],
+  "axe": [
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "overview",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "nodes": [
+            {
+              "selector": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element does not have an implicit (wrapped) <label>\n  Elemen"
+            }
+          ]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "nodes": [
+            {
+              "selector": [
+                ".list-row-right > .pos"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.38 (foreground color: #0e8965, background color: #ffffff, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            },
+            {
+              "selector": [
+                ".button-primary[data-action=\"pay\"][data-id=\"s-mortgage\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "calendar",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "nodes": [
+            {
+              "selector": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element does not have an implicit (wrapped) <label>\n  Elemen"
+            }
+          ]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "nodes": [
+            {
+              "selector": [
+                "button[data-action=\"new-entry\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 9.0pt (12px), font weight: bold). Expected contrast ratio of 4.5:1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "obligations",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "nodes": [
+            {
+              "selector": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element does not have an implicit (wrapped) <label>\n  Elemen"
+            }
+          ]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "nodes": [
+            {
+              "selector": [
+                "button[data-action=\"new-entry\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 9.0pt (12px), font weight: bold). Expected contrast ratio of 4.5:1"
+            },
+            {
+              "selector": [
+                ".record-mobile-row:nth-child(2) > div:nth-child(3) > .record-mobile-amount.pos"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.38 (foreground color: #0e8965, background color: #ffffff, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            },
+            {
+              "selector": [
+                ".record-mobile-row:nth-child(5) > div:nth-child(3) > .record-mobile-amount.pos"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.38 (foreground color: #0e8965, background color: #ffffff, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "loans",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "nodes": [
+            {
+              "selector": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element does not have an implicit (wrapped) <label>\n  Elemen"
+            }
+          ]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "nodes": [
+            {
+              "selector": [
+                "button[data-action=\"new-loan\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 9.0pt (12px), font weight: bold). Expected contrast ratio of 4.5:1"
+            },
+            {
+              "selector": [
+                "button[data-action=\"pay\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "settings",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "nodes": [
+            {
+              "selector": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element does not have an implicit (wrapped) <label>\n  Elemen"
+            }
+          ]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "nodes": [
+            {
+              "selector": [
+                "button[data-action=\"backup\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 9.8pt (13px), font weight: bold). Expected contrast ratio of 4.5:1"
+            },
+            {
+              "selector": [
+                "#category-form > .button-primary[type=\"submit\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "overview",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "nodes": [
+            {
+              "selector": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element does not have an implicit (wrapped) <label>\n  Elemen"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "calendar",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "nodes": [
+            {
+              "selector": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element does not have an implicit (wrapped) <label>\n  Elemen"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "obligations",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "nodes": [
+            {
+              "selector": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element does not have an implicit (wrapped) <label>\n  Elemen"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "loans",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "nodes": [
+            {
+              "selector": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element does not have an implicit (wrapped) <label>\n  Elemen"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "settings",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "nodes": [
+            {
+              "selector": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does not exist, references elements that do not exist or references elements that are empty\n  Element has no title attribute\n  Element does not have an implicit (wrapped) <label>\n  Elemen"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "overview",
+      "violations": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "nodes": [
+            {
+              "selector": [
+                "#top-add > span"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            },
+            {
+              "selector": [
+                ".list-row-right > .pos"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.38 (foreground color: #0e8965, background color: #ffffff, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            },
+            {
+              "selector": [
+                ".button-primary[data-action=\"pay\"][data-id=\"s-mortgage\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "calendar",
+      "violations": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "nodes": [
+            {
+              "selector": [
+                "#top-add > span"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            },
+            {
+              "selector": [
+                "button[data-action=\"new-entry\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            }
+          ]
+        },
+        {
+          "id": "label-content-name-mismatch",
+          "impact": "serious",
+          "nodes": [
+            {
+              "selector": [
+                "button[data-date=\"2026-11-10\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "selector": [
+                "button[data-date=\"2026-11-15\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "selector": [
+                "button[data-date=\"2026-11-16\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "selector": [
+                "button[data-date=\"2026-11-20\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "selector": [
+                "button[data-date=\"2026-11-22\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "selector": [
+                "button[data-date=\"2026-11-30\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "obligations",
+      "violations": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "nodes": [
+            {
+              "selector": [
+                "#top-add > span"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            },
+            {
+              "selector": [
+                "button[data-action=\"new-entry\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            },
+            {
+              "selector": [
+                "tr:nth-child(2) > .money-cell.pos"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.38 (foreground color: #0e8965, background color: #ffffff, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            },
+            {
+              "selector": [
+                "tr:nth-child(5) > .money-cell.pos"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.38 (foreground color: #0e8965, background color: #ffffff, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "loans",
+      "violations": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "nodes": [
+            {
+              "selector": [
+                "#top-add > span"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            },
+            {
+              "selector": [
+                "button[data-action=\"new-loan\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            },
+            {
+              "selector": [
+                "button[data-action=\"pay\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "settings",
+      "violations": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "nodes": [
+            {
+              "selector": [
+                "#top-add > span"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            },
+            {
+              "selector": [
+                "button[data-action=\"backup\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 9.8pt (13px), font weight: bold). Expected contrast ratio of 4.5:1"
+            },
+            {
+              "selector": [
+                "#category-form > .button-primary[type=\"submit\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Expected contrast ratio of 4.5:1"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "overview",
+      "violations": []
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "calendar",
+      "violations": [
+        {
+          "id": "label-content-name-mismatch",
+          "impact": "serious",
+          "nodes": [
+            {
+              "selector": [
+                "button[data-date=\"2026-11-10\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "selector": [
+                "button[data-date=\"2026-11-15\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "selector": [
+                "button[data-date=\"2026-11-16\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "selector": [
+                "button[data-date=\"2026-11-20\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "selector": [
+                "button[data-date=\"2026-11-22\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "selector": [
+                "button[data-date=\"2026-11-30\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "obligations",
+      "violations": []
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "loans",
+      "violations": []
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "settings",
+      "violations": []
+    },
+    {
+      "width": 393,
+      "theme": "system",
+      "view": "auth-reset",
+      "violations": [
+        {
+          "id": "aria-prohibited-attr",
+          "impact": "serious",
+          "nodes": [
+            {
+              "selector": [
+                "#turnstile-container"
+              ],
+              "summary": "Fix all of the following:\n  aria-label attribute cannot be used on \"div\" elements with no valid role attribute."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scope": "excel-import-dialog",
+      "violations": [
+        {
+          "id": "scrollable-region-focusable",
+          "impact": "serious",
+          "nodes": [
+            [
+              "#excel-import-items"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "scope": "entry-dialog",
+      "violations": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "nodes": [
+            [
+              "#entry-form > .dialog-actions > .button-primary[value=\"save\"][type=\"submit\"]"
+            ]
+          ]
+        }
+      ]
+    }
+  ],
+  "functionalScenarios": [
+    {
+      "name": "Native IndexedDB + reload",
+      "status": "PASS",
+      "details": {
+        "dbs": [
+          "financial-horizon-browser-v1"
+        ],
+        "sw": true
+      }
+    },
+    {
+      "name": "Dialog opened from header, Escape closes",
+      "status": "PASS",
+      "details": {
+        "isOpen": true,
+        "closed": true,
+        "focused": "<button class=\"tool-icon\" value=\"cancel\" aria-label=\"Закрыть\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\" focusable=\"false\"><use href=\"#ico-close\"></use></svg></button>"
+      }
+    },
+    {
+      "name": "Keyboard Tab visible focus",
+      "status": "PASS",
+      "details": {
+        "focused": "<button data-view=\"obligations\" aria-current=\"false\"><svg><use href=\"#ico-list\"></use></svg><span>Платежи</span></button>",
+        "focusVisible": true,
+        "outline": "rgb(48, 120, 250) solid 3px"
+      }
+    },
+    {
+      "name": "Create synthetic entry / real IndexedDB",
+      "status": "PASS",
+      "details": {
+        "savedAfterReload": true
+      }
+    },
+    {
+      "name": "Edit synthetic entry",
+      "status": "FAIL",
+      "details": "First run did not establish a regression: New amount missing"
+    },
+    {
+      "name": "Archive, then restore entry",
+      "status": "PASS",
+      "details": {
+        "hidden": true,
+        "restored": true
+      }
+    },
+    {
+      "name": "Encrypted backup export",
+      "status": "PASS",
+      "details": {
+        "filename": "finansovyi-gorizont-2026-11-06-encrypted.json",
+        "bytes": 1946
+      }
+    },
+    {
+      "name": "Encrypted backup restore",
+      "status": "PASS",
+      "details": {
+        "restoredAfterReload": true
+      }
+    },
+    {
+      "name": "Excel invalid file feedback",
+      "status": "PASS",
+      "details": {
+        "toast": "XLSX повреждён или превышает 4 МБ",
+        "errorKind": "toast visible"
+      }
+    },
+    {
+      "name": "Service worker cached shell offline",
+      "status": "PASS",
+      "details": {
+        "loadedOffline": true
+      }
+    },
+    {
+      "name": "Auth form navigation login/register/reset",
+      "status": "PASS",
+      "details": {
+        "login": {
+          "heading": "Войти по email",
+          "passwordVisible": true,
+          "submitDisabled": true,
+          "ariaCurrent": "page"
+        },
+        "register": {
+          "heading": "Создать аккаунт",
+          "passwordVisible": false,
+          "submitDisabled": true,
+          "ariaCurrent": "page"
+        },
+        "reset": {
+          "heading": "Восстановление доступа",
+          "passwordVisible": false,
+          "submitDisabled": true,
+          "ariaCurrent": "page"
+        }
+      }
+    }
+  ],
+  "extraVerifiedChecks": [
+    {
+      "name": "320 dock click after obligations",
+      "status": "PASS",
+      "details": {
+        "heading": "Кредиты и ипотека"
+      }
+    },
+    {
+      "name": "320 dock keyboard activation",
+      "status": "PASS",
+      "details": {
+        "heading": "Кредиты и ипотека"
+      }
+    },
+    {
+      "name": "edit amount normalizing NBSP",
+      "status": "PASS",
+      "details": {
+        "amount": "23 456,78",
+        "persistedAfterReload": true
+      }
+    }
+  ],
+  "importChecks": [
+    {
+      "name": "Valid XLSX preview",
+      "status": "PASS",
+      "details": {
+        "summary": "Лист «Расходы». Добавятся: 4 доходов и расходов, 0 кредитов. Пропущено повторов: 0.\n\nПлановые доходы: 165 000 ₽. Плановые расходы: 8 050 ₽ (без обязательных платежей по кредитам).",
+        "rows": "I2 · Зарплата · 82 000 ₽ · доход · 2026-11-15 · ежемесячно · Работа\nI3 · Синтетическая связь · 850 ₽ · расход · 2026-11-22 · ежемесячно · Связь\nI16 · Аванс · 83 000 ₽ · доход · 2026-11-30 · ежемесячно · Работа\nI17 · Синтетический ЖКХ · 7 200 ₽ · расход · 2026-11-30 · ежемесячно · Жильё"
+      }
+    },
+    {
+      "name": "Cancel XLSX preview",
+      "status": "PASS",
+      "details": "no persisted income"
+    },
+    {
+      "name": "Confirm XLSX import",
+      "status": "PASS",
+      "details": {
+        "sample": "6 нояб. 2026 г. · Личные финансы\nОбязательства\n\nДоходы и расходы. Полный учёт запланированных и фактических сумм\n\nДобавить\nРасходы по плану\n8 050 ₽\nОплачено фактически\n0 ₽\nВсе\nРегулярные\nРазовые\nДоходы\n4 записей · ноябрь 2026 г.\nЗарплата\n15 нояб. 2026 г. · Работа\nОжидается\n+82 000 ₽\nСинтетическая связь\n22 нояб. 2026 г. · Связь\nОжидается\n−850 ₽\nАван"
+      }
+    },
+    {
+      "name": "Repeated XLSX import idempotence",
+      "status": "PASS",
+      "details": {
+        "duplicate": "Лист «Расходы». Добавятся: 0 доходов и расходов, 0 кредитов. Пропущено повторов: 4.\n\nПлановые доходы: 0 ₽. Плановые расходы: 0 ₽ (без обязательных платежей по кредитам).",
+        "disabled": true
+      }
+    },
+    {
+      "name": "Entry dialog keyboard and focus",
+      "status": "PASS",
+      "details": {
+        "first": "<button class=\"tool-icon\" value=\"cancel\" aria-label=\"Закрыть\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\" focusable=\"false\"><use href=\"#ico-close\"></u",
+        "closed": true
+      }
+    }
+  ],
+  "jsPageErrors": 0,
+  "externalRequests": 0,
+  "screenshots": [
+    "obligations-320-light.png",
+    "obligations-768-light.png",
+    "excel-preview-393.png",
+    "overview-393-light.png",
+    "overview-393-dark.png",
+    "overview-1440-light.png",
+    "settings-393-light.png",
+    "settings-1440-dark.png",
+    "account-393.png"
+  ],
+  "disclaimers": [
+    "Browser does not simulate iOS Safari/WebKit/VoiceOver",
+    "Static local HTTP server has no production email-auth backend",
+    "Initial 320 dock navigation timeouts not reproduced in clean focused retest; further regression needed",
+    "Initial edit assertion falsely failed due to NBSP string matching; corrected check passed and persisted after reload"
+  ]
+}
