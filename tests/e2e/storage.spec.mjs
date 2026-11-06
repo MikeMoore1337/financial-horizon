@@ -40,6 +40,7 @@ test('two browser profiles have distinct real origin storage',async({browser})=>
 test('theme, navigation and responsive widths do not overflow',async({page,context})=>{
  const watcher=await observe(context,page);
  await visitGuest(page);
+ const overflows=[];
  for(const size of [{width:320,height:740},{width:390,height:844},{width:1280,height:800}]){
   await page.setViewportSize(size);
   for(const section of ['calendar','obligations','loans','settings','overview']){
@@ -52,9 +53,10 @@ test('theme, navigation and responsive widths do not overflow',async({page,conte
       right:Math.round(el.getBoundingClientRect().right),width:Math.round(el.getBoundingClientRect().width)})));
     console.log('E2E_OVERFLOW_DIAG '+JSON.stringify({section,viewport:size.width,scrollWidth:width.page,offenders}));
    }
-   expect(width.page,'Horizontal overflow in '+section+' at '+size.width+'px').toBeLessThanOrEqual(width.viewport+1);
+   if(width.page>width.viewport+1)overflows.push({section,viewport:size.width,documentWidth:width.page});
   }
  }
+ expect(overflows,'Document overflow across all tested widths').toEqual([]);
  await page.locator('#theme-toggle').click();
  const chosen=await page.locator('body').getAttribute('data-theme');
  expect(['dark','light']).toContain(chosen);
@@ -62,6 +64,7 @@ test('theme, navigation and responsive widths do not overflow',async({page,conte
  expect(await page.locator('#theme-color').getAttribute('content')).toBe(chosen==='dark'?'#172336':'#ffffff');
  await page.reload();
  await expect(page.locator('body')).toHaveAttribute('data-theme',chosen);
+ expect(overflows,'Document overflow across all tested widths').toEqual([]);
  await page.locator('#theme-toggle').click();
  await expect(page.locator('body')).not.toHaveAttribute('data-theme',chosen);
  watcher.assertClean();
