@@ -4,6 +4,7 @@ import {encryptBackup,decryptBackup} from './backup.js';
 import {parseSchedule} from './schedule.js';
 import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.js';
 import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
+import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
 
 const $=sel=>document.querySelector(sel);
 const svg=name=>`<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-${name}"></use></svg>`;
@@ -20,11 +21,12 @@ const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
 const monthEvents=()=>getMonthEvents(state,ui.month);
 function toast(message,kind='success'){$('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('visible'),3800);$('#save-indicator').textContent=kind==='error'?'Ошибка':'Сохранено на устройстве';}
 function fail(error){console.error(error);toast(error?.message||'Не удалось выполнить действие','error');}
-function audit(s,action,description){s.audit.push({id:uuid(),action,description:String(description).slice(0,160),date:new Date().toISOString()});}
-async function mutate(change,msg='Сохранено на устройстве'){
+async function mutate(change,msg='Сохранено на устройстве',expectedRevision=state?.revision){
  if(busy)return;busy=true;$('#save-indicator').textContent='Сохранение…';
- try{state=await updateState(s=>change(s));channel?.postMessage('updated');render();toast(msg);}catch(e){fail(e);throw e;}finally{busy=false;}
+ try{state=await updateState(s=>change(s),{expectedRevision});channel?.postMessage('updated');render();toast(msg);}catch(e){fail(e);throw e;}finally{busy=false;}
 }
+function stampFormRevision(form){form.dataset.stateRevision=String(state.revision);}
+function revisionForForm(form){const revision=Number(form.dataset.stateRevision);if(!Number.isSafeInteger(revision)||revision<0)throw Error('Не удалось определить версию записи. Откройте форму повторно.');return revision;}
 function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#172336':'#ffffff';$('#theme-toggle').innerHTML=svg(mode==='dark'?'sun':'moon');$('#theme-toggle').setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}
 function navigation(view){ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings'&&!guestMode)void refreshEmailSession();}
 function render(){if(!state)return;$('#toolbar-title').textContent=titles[ui.view];document.querySelectorAll('[data-view]').forEach(el=>{const active=el.dataset.view===ui.view;el.classList.toggle('active',active);el.setAttribute('aria-current',active?'page':'false');});
@@ -208,20 +210,20 @@ function openDialog(sel){const dlg=$(sel);if(!dlg?.open)dlg.showModal();}
 function formValue(form,name){return form.elements.namedItem(name).value;}
 function fillSelect(el,items,selected){el.innerHTML=items.map(x=>`<option value="${escapeHtml(x.id)}" ${x.id===selected?'selected':''}>${escapeHtml(x.title)}</option>`).join('');}
 function openEntry(id=null,kind='expense'){
- const form=$('#entry-form');form.reset();const record=state.entries.find(x=>x.id===id);$('#entry-heading').textContent=record?'Изменить запись':'Добавить запись';
+ const form=$('#entry-form');form.reset();stampFormRevision(form);const record=state.entries.find(x=>x.id===id);$('#entry-heading').textContent=record?'Изменить запись':'Добавить запись';
  form.elements.id.value=id||'';form.elements.title.value=record?.title||'';form.elements.kind.value=record?.kind||kind;form.elements.amount.value=record?numberInput(record.amountCents):'';
  form.elements.date.value=record?.date||today();form.elements.recurrence.value=record?.recurrence||'monthly';
  fillSelect($('#entry-category'),state.categories.map(x=>({id:x,title:x})),record?.category||'Другое');openDialog('#entry-dialog');
 }
 function openLoan(id=null){
- const form=$('#loan-form');form.reset();const record=state.loans.find(x=>x.id===id);$('#loan-heading').textContent=record?'Изменить кредит':'Добавить кредит';
+ const form=$('#loan-form');form.reset();stampFormRevision(form);const record=state.loans.find(x=>x.id===id);$('#loan-heading').textContent=record?'Изменить кредит':'Добавить кредит';
  form.elements.id.value=id||'';form.elements.title.value=record?.title||'';form.elements.opening.value=record?numberInput(record.openingCents):'';
  form.elements.apr.value=record?String(record.apr).replace('.',','):'';form.elements.payment.value=record?numberInput(record.paymentCents):'';
  form.elements.term.value=record?.termMonths??'';form.elements.asOfDate.value=record?.asOfDate||today();form.elements.dueDay.value=record?.dueDay??15;openDialog('#loan-dialog');
 }
 function openPayment(id=null,paymentId=null){
  const loans=state.loans.filter(isActive);if(!loans.length){toast('Сначала добавьте кредит','error');return;}
- const form=$('#payment-form');form.reset();fillSelect($('#payment-loan'),loans.map(x=>({id:x.id,title:x.title})),id||ui.selectedLoan||loans[0].id);
+ const form=$('#payment-form');form.reset();stampFormRevision(form);fillSelect($('#payment-loan'),loans.map(x=>({id:x.id,title:x.title})),id||ui.selectedLoan||loans[0].id);
  const payment=state.loanPayments.find(p=>p.id===paymentId&&!p.voidedAt);const loan=loans.find(x=>x.id===formValue(form,'loanId'));
  form.elements.paymentId.value=paymentId||'';form.elements.amount.value=payment?numberInput(payment.amountCents):(loan?numberInput(loanLedger(loan,state.loanPayments).monthlyCents):'');
  form.elements.date.value=payment?.date||today();form.querySelector(`[name="strategy"][value="${payment?.strategy||'term'}"]`).checked=true;$('#payment-heading').textContent=payment?'Изменить платёж':'Внести платёж';
@@ -239,7 +241,7 @@ function updatePaymentPreview(){
 }
 function openSettlement(entryId,occurrence=ui.month,paymentId=null){
  const entry=state.entries.find(e=>e.id===entryId);if(!entry)return;
- const form=$('#settlement-form');form.reset();const existing=state.settlements.find(p=>p.id===paymentId);
+ const form=$('#settlement-form');form.reset();stampFormRevision(form);const existing=state.settlements.find(p=>p.id===paymentId);
  form.elements.entryId.value=entryId;form.elements.occurrence.value=existing?.occurrence||occurrence;
  const paid=state.settlements.filter(s=>s.entryId===entryId&&s.occurrence===occurrence&&!s.voidedAt).reduce((a,b)=>a+b.amountCents,0);
  form.elements.amount.value=existing?numberInput(existing.amountCents):numberInput(Math.max(0,entry.amountCents-paid));
@@ -295,25 +297,29 @@ async function handleAction(button){
  }
  if(type==='install'){if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;}else toast('iPhone: Safari → Поделиться → На экран «Домой». Mac: Safari → Добавить в Dock.');return;}
  if(type==='sample'){
+  const originalRevision=state?.revision;
   const ok=await requireConfirm('Загрузить вымышленные данные?',hasData()?'Это заменит вашу текущую бухгалтерию демонстрационными записями. Сначала сохраните резервную копию.':'Будет создана отдельная вымышленная бухгалтерия, которую можно удалить.');
-  if(!ok)return;const sample=createSampleState();audit(sample,'sample','Загружен вымышленный пример');await mutate(s=>{for(const key of Object.keys(s))delete s[key];Object.assign(s,sample);},'Демонстрационные данные загружены');ui.month='2026-11';ui.selectedDate='2026-11-15';render();return;
+  if(!ok)return;const sample=createSampleState();audit(sample,'sample','Загружен вымышленный пример');await mutate(s=>{for(const key of Object.keys(s))delete s[key];Object.assign(s,sample);},'Демонстрационные данные загружены',originalRevision);ui.month='2026-11';ui.selectedDate='2026-11-15';render();return;
  }
  if(type==='clear'){
+  const originalRevision=state?.revision;
   const ok=await requireConfirm('Удалить всю бухгалтерию?', 'Все локальные доходы, расходы, кредиты, фактические платежи и журнал будут очищены. Восстановить можно только из заранее созданной резервной копии.');
-  if(!ok)return;const initial=emptyState();await mutate(s=>{for(const key of Object.keys(s))delete s[key];Object.assign(s,initial);},'Бухгалтерия очищена');return;
+  if(!ok)return;const initial=emptyState();await mutate(s=>{for(const key of Object.keys(s))delete s[key];Object.assign(s,initial);},'Бухгалтерия очищена',originalRevision);return;
  }
  if(type==='archive-entry'||type==='archive-loan'){
+  const originalRevision=state?.revision;
   const isLoan=type==='archive-loan',item=state[isLoan?'loans':'entries'].find(x=>x.id===id);if(!item)return;
   if(!await requireConfirm('Перенести в архив?',`Запись «${item.title}» исчезнет из активных расчётов. История оплат сохранится.`))return;
-  await mutate(s=>{const target=s[isLoan?'loans':'entries'].find(x=>x.id===id);target.deletedAt=new Date().toISOString();audit(s,'archive',`Архив: ${target.title}`);},'Запись перенесена в архив');return;
+  await mutate(s=>{const target=s[isLoan?'loans':'entries'].find(x=>x.id===id);target.deletedAt=new Date().toISOString();audit(s,'archive',`Архив: ${target.title}`);},'Запись перенесена в архив',originalRevision);return;
  }
  if(type==='restore-item'){
   const key=button.dataset.entity==='loan'?'loans':'entries';await mutate(s=>{const item=s[key].find(x=>x.id===id);if(!item)return;delete item.deletedAt;if(key==='entries'&&item.category&&!s.categories.includes(item.category))s.categories.push(item.category);audit(s,'restore',`Восстановлено: ${item.title}`);},'Запись восстановлена');return;
  }
  if(type==='void-payment'||type==='void-settlement'){
+  const originalRevision=state?.revision;
   const key=type==='void-payment'?'loanPayments':'settlements';const record=state[key].find(x=>x.id===id);if(!record||record.voidedAt)return;
   if(!await requireConfirm('Отменить фактическую оплату?',`Сумма ${rubles(record.amountCents)} перестанет участвовать в расчёте. Запись об отмене останется в истории.`))return;
-  await mutate(s=>{s[key].find(x=>x.id===id).voidedAt=new Date().toISOString();audit(s,'void',`Отменена оплата ${rubles(record.amountCents)}`);},'Операция отменена, прогноз обновлён');return;
+  await mutate(s=>{s[key].find(x=>x.id===id).voidedAt=new Date().toISOString();audit(s,'void',`Отменена оплата ${rubles(record.amountCents)}`);},'Операция отменена, прогноз обновлён',originalRevision);return;
  }
  if(type==='edit-category'){const cat=button.dataset.category;const form=$('#rename-category-form');form.elements.old.value=cat;form.elements.newName.value=cat;openDialog('#category-dialog');return;}
  if(type==='clear-schedule'){if(!await requireConfirm('Удалить импортированный график?', 'Изменится только справочный график банка. Фактические платежи и параметры кредита сохранятся.'))return;await mutate(s=>{const l=s.loans.find(x=>x.id===id);l.schedule=[];delete l.scheduleSource;audit(s,'schedule-remove',`Удалён график кредита: ${l.title}`);},'График удалён');return;}
@@ -368,10 +374,8 @@ async function saveEntry(form){
  const kind=formValue(form,'kind'),date=formValue(form,'date'),recurrence=formValue(form,'recurrence'),category=formValue(form,'category');
  if(!title||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!['income','expense'].includes(kind)||!['monthly','once','yearly'].includes(recurrence)||amountCents<1)throw Error('Заполните корректные поля записи');
  if(!state.categories.includes(category))throw Error('Категория не найдена');
- await mutate(s=>{
-  if(id){const current=s.entries.find(x=>x.id===id);if(!current)throw Error('Запись не найдена');Object.assign(current,{title,amountCents,kind,date,recurrence,category,updatedAt:new Date().toISOString()});audit(s,'update',`Изменено: ${title}`);}
-  else{s.entries.push({id:uuid(),title,amountCents,kind,date,recurrence,category,createdAt:new Date().toISOString()});audit(s,'create',`Добавлено: ${title}`);}
- },id?'Запись обновлена':'Запись добавлена');$('#entry-dialog').close();
+ await mutate(s=>applyEntry(s,{id,title,amountCents,kind,date,recurrence,category}),id?'Запись обновлена':'Запись добавлена',revisionForForm(form));
+ $('#entry-dialog').close();
 }
 async function saveLoan(form){
  const id=formValue(form,'id'),title=formValue(form,'title').trim(),openingCents=cents(formValue(form,'opening')),
@@ -383,10 +387,10 @@ async function saveLoan(form){
   if(!await requireConfirm('Изменить условия кредита?', 'У этого кредита уже есть фактические оплаты. Изменение исходных условий пересчитает прогноз, но не удалит историю операций.'))return;
  }
  await mutate(s=>{
-  const fields={title,openingCents,paymentCents,apr,termMonths,dueDay,asOfDate};
-  if(id){const current=s.loans.find(x=>x.id===id);if(!current)throw Error('Кредит не найден');Object.assign(current,fields,{updatedAt:new Date().toISOString()});audit(s,'loan-update',`Изменён кредит: ${title}`);}
-  else {const loanId=uuid();s.loans.push({id:loanId,...fields,schedule:[],createdAt:new Date().toISOString()});ui.selectedLoan=loanId;audit(s,'loan-create',`Добавлен кредит: ${title}`);}
- },id?'Кредит обновлён':'Кредит добавлен');$('#loan-dialog').close();
+  const loanId=applyLoan(s,{id,title,openingCents,paymentCents,apr,termMonths,dueDay,asOfDate});
+  if(!id)ui.selectedLoan=loanId;
+ },id?'Кредит обновлён':'Кредит добавлен',revisionForForm(form));
+ $('#loan-dialog').close();
 }
 async function savePayment(form){
  const loanId=formValue(form,'loanId'),paymentId=formValue(form,'paymentId'),amountCents=cents(formValue(form,'amount')),date=formValue(form,'date'),strategy=form.querySelector('[name="strategy"]:checked')?.value;
@@ -394,27 +398,25 @@ async function savePayment(form){
  const paymentsExcludingOld=state.loanPayments.map(p=>p.id===paymentId?{...p,voidedAt:'EDIT_PREVIEW'}:p);
  const projection=previewLoanPayment(loan,paymentsExcludingOld,amountCents,date,strategy);
  if(!projection.canApply)throw Error('Сумма выше долга с процентами в расчётной модели');
- await mutate(s=>{
-  if(paymentId){const original=s.loanPayments.find(x=>x.id===paymentId);if(!original||original.voidedAt)throw Error('Исходный платёж недоступен');const before=`${rubles(original.amountCents)}, ${original.date}`;Object.assign(original,{loanId,amountCents,date,strategy,updatedAt:new Date().toISOString()});audit(s,'payment-update',`Исправлена оплата ${loan.title}: ${before} → ${rubles(amountCents)}, ${date}`);}
-  else{s.loanPayments.push({id:uuid(),loanId,amountCents,date,strategy,createdAt:new Date().toISOString()});audit(s,'payment',`Оплата «${loan.title}» ${rubles(amountCents)}; перерасчёт: ${strategy==='term'?'срок':'платёж'}`);}
- },paymentId?'Платёж исправлен, прогноз обновлён':'Фактический платёж сохранён и учтён в прогнозе');
+ await mutate(s=>applyLoanPayment(s,{loanId,paymentId,amountCents,date,strategy}),paymentId?'Платёж исправлен, прогноз обновлён':'Фактический платёж сохранён и учтён в прогнозе',revisionForForm(form));
  $('#payment-dialog').close();ui.selectedLoan=loanId;
 }
 async function saveSettlement(form){
  const entryId=formValue(form,'entryId'),occurrence=formValue(form,'occurrence'),date=formValue(form,'date'),amountCents=cents(formValue(form,'amount')),
  id=form.dataset.paymentId;
  if(amountCents<=0||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!/\d{4}-\d{2}/.test(occurrence)||!state.entries.find(e=>e.id===entryId&&isActive(e)))throw Error('Некорректная фактическая операция');
- await mutate(s=>{if(id){const existing=s.settlements.find(p=>p.id===id);if(!existing||existing.voidedAt)throw Error('Операция не найдена');Object.assign(existing,{amountCents,date,updatedAt:new Date().toISOString()});audit(s,'fact-update',`Исправлена фактическая сумма: ${rubles(amountCents)}`);}
- else{s.settlements.push({id:uuid(),entryId,occurrence,date,amountCents,createdAt:new Date().toISOString()});audit(s,'fact-create',`Отмечено фактически: ${rubles(amountCents)}`);}},'Фактическая сумма учтена');$('#settlement-dialog').close();
+ await mutate(s=>applySettlement(s,{id,entryId,occurrence,date,amountCents}),'Фактическая сумма учтена',revisionForForm(form));
+ $('#settlement-dialog').close();
 }
 async function performBackup(password){
  const file=await encryptBackup(await readState(),password);const url=URL.createObjectURL(new Blob([file],{type:'application/json'}));
  const a=document.createElement('a');a.href=url;a.download=`finansovyi-gorizont-${today()}-encrypted.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),12000);toast('Шифрованная резервная копия подготовлена');
 }
 async function performRestore(password){
+ const originalRevision=state?.revision;
  const decrypted=await decryptBackup(await restoreFile.text(),password);
  if(!await requireConfirm('Заменить локальные данные?', 'Импорт заменит всю текущую бухгалтерию данными из резервной копии. При необходимости сохраните текущую копию перед продолжением.'))return;
- await mutate(s=>{for(const key of Object.keys(s))delete s[key];Object.assign(s,structuredClone(decrypted));audit(s,'restore-backup','Восстановлена резервная копия');},'Данные восстановлены');
+ await mutate(s=>{for(const key of Object.keys(s))delete s[key];Object.assign(s,structuredClone(decrypted));audit(s,'restore-backup','Восстановлена резервная копия');},'Данные восстановлены',originalRevision);
 }
 async function onFormSubmit(event){
  const form=event.target;

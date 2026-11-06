@@ -1,11 +1,12 @@
 /* Кэшируем только неизменяемую оболочку приложения. Финансовые записи не попадают в CacheStorage. */
 const CACHE='financial-horizon-shell-v25-theme-auth';
-const ASSETS=['./','./index.html','./styles.css?rev=auth-theme-v27','./app.js?rev=auth-theme-v25','./auth-session.js?rev=auth-scopes-v18','./theme-bootstrap.js?rev=ios27-chrome-v17','./account.html','./account.css?rev=auth-theme-v25','./account.js?rev=auth-theme-v25','./excel-import.js','./finance.js','./storage.js?rev=auth-scopes-v18','./backup.js','./schedule.js','./manifest.webmanifest','./assets/brand/logo-compact-light.svg','./assets/brand/logo-compact-dark.svg','./assets/brand/favicon.svg','./assets/brand/favicon.ico','./assets/brand/favicon-32.png','./assets/brand/apple-touch-icon-180.png','./assets/icons/log-out.svg','./assets/icons/user-round.svg','./assets/brand/symbol.svg','./assets/brand/pwa-192.png','./assets/brand/pwa-512.png','./assets/brand/pwa-maskable-512.png'];
+const ACTIVE_CACHE=CACHE+'-schema-v2';
+const ASSETS=['./','./index.html','./styles.css?rev=auth-theme-v27','./app.js?rev=auth-theme-v25','./auth-session.js?rev=auth-scopes-v18','./theme-bootstrap.js?rev=ios27-chrome-v17','./account.html','./account.css?rev=auth-theme-v25','./account.js?rev=auth-theme-v25','./excel-import.js','./finance.js','./state-migrations.js','./ledger-operations.js','./storage.js?rev=auth-scopes-v18','./backup.js','./schedule.js','./manifest.webmanifest','./assets/brand/logo-compact-light.svg','./assets/brand/logo-compact-dark.svg','./assets/brand/favicon.svg','./assets/brand/favicon.ico','./assets/brand/favicon-32.png','./assets/brand/apple-touch-icon-180.png','./assets/icons/log-out.svg','./assets/icons/user-round.svg','./assets/brand/symbol.svg','./assets/brand/pwa-192.png','./assets/brand/pwa-512.png','./assets/brand/pwa-maskable-512.png'];
 self.addEventListener('install',event=>{
- event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting()));
+ event.waitUntil(caches.open(ACTIVE_CACHE).then(cache=>cache.addAll(ASSETS.map(path=>new Request(path,{cache:'reload'})))).then(()=>self.skipWaiting()));
 });
 self.addEventListener('activate',event=>{
- event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key!==CACHE&&key.startsWith('financial-horizon-shell-')).map(key=>caches.delete(key)))).then(()=>self.clients.claim()));
+ event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key!==ACTIVE_CACHE&&key.startsWith('financial-horizon-shell-')).map(key=>caches.delete(key)))).then(()=>self.clients.claim()));
 });
 self.addEventListener('fetch',event=>{
  const request=event.request;
@@ -17,9 +18,9 @@ self.addEventListener('fetch',event=>{
    // Never substitute the ledger for the sign-in screen when offline.
    const pathname=new URL(request.url).pathname;
    const fallback=pathname.endsWith('/account.html')?'./account.html':'./index.html';
-   return (await caches.match(fallback))||Response.error();
+   return (await (await caches.open(ACTIVE_CACHE)).match(fallback))||Response.error();
   }));
   return;
  }
- event.respondWith(caches.match(request).then(cached=>cached||fetch(request)));
+ event.respondWith(caches.open(ACTIVE_CACHE).then(cache=>cache.match(request)).then(cached=>cached||fetch(request)));
 });
