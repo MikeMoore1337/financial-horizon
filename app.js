@@ -1,9 +1,9 @@
 import {cents,rubles,numberInput,monthKey,monthIndex,shiftMonth,monthLabel,dayInMonth,loanLedger,previewLoanPayment,getMonthEvents,monthTotals,createSampleState,isActive,emptyState,payoffMonths} from './finance.js';
-import {readState,updateState,replaceState,askPersistentStorage,storageStatus,selectStateScope} from './storage.js';
+import {readState,updateState,replaceState,askPersistentStorage,storageStatus,selectStateScope} from './storage.js?rev=auth-scopes-v18';
 import {encryptBackup,decryptBackup} from './backup.js';
 import {parseSchedule} from './schedule.js';
 import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.js';
-import {createEmailSession} from './auth-session.js';
+import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 
 const $=sel=>document.querySelector(sel);
 const svg=name=>`<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-${name}"></use></svg>`;
