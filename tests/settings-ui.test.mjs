@@ -44,11 +44,11 @@ test('actions, local persistence feedback and activity log stay available',()=>{
 test('versioned app shell is consistent across both PWA pages',()=>{
  const sw=read('sw.js');
  const account=read('account.html');
- for(const p of ['styles.css?rev=auth-theme-v27','app.js?rev=auth-theme-v25']) {
+ for(const p of ['styles.css?rev=auth-theme-v28','app.js?rev=auth-theme-v25']) {
   assert.ok(sw.includes(p),p);
   assert.ok(html.includes(p),p);
  }
- assert.ok(account.includes('styles.css?rev=auth-theme-v27'));
+ assert.ok(account.includes('styles.css?rev=auth-theme-v28'));
  assert.ok(sw.includes('financial-horizon-shell-v25-theme-auth'));
 });
 
