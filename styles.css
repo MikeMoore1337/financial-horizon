@@ -83,7 +83,8 @@ button,input,select{font:inherit}button{cursor:pointer}svg{width:20px;height:20p
 .lucide-user-icon{width:18px;height:18px;display:block;flex:none;background:currentColor;-webkit-mask:url('./assets/icons/user-round.svg') center/contain no-repeat;mask:url('./assets/icons/user-round.svg') center/contain no-repeat}
 
 /* Compact header: let a long section title and action use separate rows on narrow screens. */
-@media(max-width:380px){.page-header{flex-wrap:wrap}.page-header .header-tools{margin-left:auto}.settings-grid .setting-actions .button-primary,.settings-grid .setting-actions .button-secondary{min-width:0;max-width:100%;white-space:normal;text-align:center;padding-block:8px}}
+@media(max-width:430px){.page-header{flex-wrap:wrap}.page-header .header-tools{margin-left:auto}}
+@media(max-width:380px){.settings-grid .setting-actions .button-primary,.settings-grid .setting-actions .button-secondary{min-width:0;max-width:100%;white-space:normal;text-align:center;padding-block:8px}}
 
 /* Keep all four filters accessible even with wider Linux font metrics. */
 @media(max-width:380px){.filter-bar .segment{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));width:100%;max-width:100%}.filter-bar .segment button{min-width:0;overflow-wrap:anywhere;text-align:center}}
