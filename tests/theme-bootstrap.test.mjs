@@ -64,7 +64,7 @@ test('PWA CSS uses a revisioned URL on both screens and in offline precache',()=
  const stylesheet='<link rel="stylesheet" href="./styles.css?rev=ios27-statusbar-v15">';
  assert.ok(html.includes(stylesheet),'Main page should bypass stale Cloudflare CSS');
  assert.ok(accountHtml.includes(stylesheet),'Account page should use the same CSS version');
- assert.ok(sw.includes("const CACHE='financial-horizon-shell-v15-ios27-css-revisioned'"));
+ assert.ok(sw.includes("const CACHE='financial-horizon-shell-v16-auth-logout-redirect'"));
  assert.ok(sw.includes("'./styles.css?rev=ios27-statusbar-v15'"),'Versioned stylesheet must work offline');
  assert.ok(!sw.includes("'./styles.css'"),'Unversioned stylesheet cannot contaminate the new cache');
 });
