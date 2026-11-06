@@ -9,7 +9,9 @@ self.addEventListener('activate',event=>{
 });
 self.addEventListener('fetch',event=>{
  const request=event.request;
- if(request.method!=='GET'||new URL(request.url).origin!==self.location.origin)return;
+ const url=new URL(request.url);
+ // Auth/session API must bypass CacheStorage and this service worker entirely.
+ if(request.method!=='GET'||url.origin!==self.location.origin||url.pathname.startsWith('/api/'))return;
  if(request.mode==='navigate'){
   event.respondWith(fetch(request).catch(async()=>{
    // Never substitute the ledger for the sign-in screen when offline.
