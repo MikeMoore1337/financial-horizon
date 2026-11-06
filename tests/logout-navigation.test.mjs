@@ -75,10 +75,10 @@ test('logout redirect waits for success and ignores a non-success result',async(
 
 test('PWA loads revisioned application code, including offline, without opening registration',()=>{
  const html=get('index.html'),sw=get('sw.js');
- const script='./app.js?rev=auth-ui-v24';
+ const script='./app.js?rev=auth-theme-v25';
  assert.ok(html.includes('<script type="module" src="'+script+'"></script>'));
  assert.ok(sw.includes("'"+script+"'"));
  assert.ok(!sw.includes("'./app.js'"),'Stale unrevisioned app.js must not enter precache');
- assert.ok(sw.includes("const CACHE='financial-horizon-shell-v24-auth-ui'"));
+ assert.ok(sw.includes("const CACHE='financial-horizon-shell-v25-theme-auth'"));
  assert.ok(html.includes('<meta name="fh-email-auth" content="disabled">'));
 });
