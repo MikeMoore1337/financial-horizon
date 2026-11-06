@@ -177,3 +177,11 @@ test('open CRUD forms preserve their opening revision through cross-tab UI updat
  assert.equal(app.split('revisionForForm(form)').length-1,5);
  assert.ok(app.includes("const originalRevision=state?.revision;"));
 });
+
+test('PWA upgrade never resolves app modules from old shell caches',()=>{
+ const sw=readFileSync(new URL('../sw.js',import.meta.url),'utf8');
+ assert.ok(sw.includes("const ACTIVE_CACHE=CACHE+'-schema-v2'"));
+ assert.ok(sw.includes('caches.open(ACTIVE_CACHE).then(cache=>cache.match(request))'));
+ assert.ok(sw.includes('(await caches.open(ACTIVE_CACHE)).match(fallback)'));
+ assert.ok(!sw.includes('caches.match('),'global cache matching may serve stale JS from v1');
+});
