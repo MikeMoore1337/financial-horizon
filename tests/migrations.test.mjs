@@ -5,6 +5,7 @@ import {emptyState,createSampleState,validateState,getMonthEvents,monthTotals} f
 import {migrateState,downgradeStateForRollback,CURRENT_STATE_VERSION} from '../state-migrations.js';
 import {encryptBackup,decryptBackup} from '../backup.js';
 import {applyEntry,applyLoan,applyLoanPayment,applySettlement} from '../ledger-operations.js';
+import {parseSchedule} from '../schedule.js';
 
 const v1=()=>{
  const state=createSampleState();
@@ -184,4 +185,46 @@ test('PWA upgrade never resolves app modules from old shell caches',()=>{
  assert.ok(sw.includes('caches.open(ACTIVE_CACHE).then(cache=>cache.match(request))'));
  assert.ok(sw.includes('(await caches.open(ACTIVE_CACHE)).match(fallback)'));
  assert.ok(!sw.includes('caches.match('),'global cache matching may serve stale JS from v1');
+});
+
+test('legacy CSV schedule permits nullable optional interest and principal across migration and encrypted recovery',async()=>{
+ const old=v1();
+ old.loans[0].schedule=parseSchedule('Дата;Платёж;Остаток\\n16.11.2026;30200;2090000\\n');
+ const row=old.loans[0].schedule[0];
+ assert.equal(row.amountCents,3020000);
+ assert.equal(row.balanceCents,209000000);
+ assert.equal(row.interestCents,null);
+ assert.equal(row.principalCents,null);
+ const before=structuredClone(old);
+ const upgraded=migrateState(old);
+ assert.equal(upgraded.version,2);
+ assert.deepEqual(upgraded.loans[0].schedule,old.loans[0].schedule);
+ assert.deepEqual(old,before);
+ const password='a-test-schedule-password';
+ const encrypted=await encryptBackup(old,password);
+ const restored=await decryptBackup(encrypted,password);
+ assert.deepEqual(restored,old);
+ const db=browserDatabase({state:old});
+ const storage=await scopedStorage(db);
+ assert.deepEqual((await storage.readState()).loans[0].schedule,old.loans[0].schedule);
+ const written=await storage.updateState(s=>{s.loans[0].schedule=structuredClone(old.loans[0].schedule);},{expectedRevision:0});
+ assert.equal(written.revision,1);
+ assert.deepEqual(db.table.get('state').loans[0].schedule,old.loans[0].schedule);
+});
+
+test('optional schedule fields only accept null, missing, or nonnegative integer cents',()=>{
+ const old=v1();
+ old.loans[0].schedule=parseSchedule('Дата;Платёж;Остаток\\n16.11.2026;30200;2090000\\n');
+ for(const [key,value] of [
+  ['amountCents',null],['balanceCents',null],['interestCents',1.5],
+  ['principalCents',-1],['interestCents','100'],['principalCents',NaN]
+ ]){
+  const candidate=structuredClone(old);
+  candidate.loans[0].schedule[0][key]=value;
+  assert.throws(()=>migrateState(candidate),/суммы/);
+ }
+ const optionalMissing=structuredClone(old);
+ delete optionalMissing.loans[0].schedule[0].interestCents;
+ delete optionalMissing.loans[0].schedule[0].principalCents;
+ assert.doesNotThrow(()=>migrateState(optionalMissing));
 });
