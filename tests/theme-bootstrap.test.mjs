@@ -86,7 +86,7 @@ test('iOS status bar can sample an opaque theme surface without any top overlay'
 });
 
 test('both PWA pages use revisioned assets, consistent with offline precache',()=>{
- const sheet='./styles.css?rev=auth-theme-v26';
+ const sheet='./styles.css?rev=auth-theme-v27';
  const preload='./theme-bootstrap.js?rev='+revision;
  const application='./app.js?rev=auth-theme-v25';
  for(const page of [html,account]){
