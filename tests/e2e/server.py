@@ -14,7 +14,7 @@ from fh_email_auth.config import Settings
 ORIGIN = "http://127.0.0.1:8791"
 FRONTEND = {
  "index.html","account.html","account.css","styles.css","app.js","account.js",
- "finance.js","storage.js","backup.js","auth-session.js","theme-bootstrap.js",
+ "finance.js","storage.js","state-migrations.js","ledger-operations.js","backup.js","auth-session.js","theme-bootstrap.js",
  "excel-import.js","schedule.js","sw.js","manifest.webmanifest",
 }
 
