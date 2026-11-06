@@ -39,9 +39,21 @@ test('password is not requested on email-only registration and CSS honors hidden
 
 test('service worker caches only app assets and includes account UI for offline support',()=>{
  const sw=get('sw.js');
- assert.match(sw,/financial-horizon-shell-v9-ios-dock-lowered/);
+ assert.match(sw,/financial-horizon-shell-v10-auth-turnstile-feedback/);
  for(const file of ['account.html','account.css','account.js']){
    assert.ok(sw.includes("'./"+file+"'"),file);
  }
  assert.doesNotMatch(sw,/auth\.sqlite|email_session|token=|SMTP_PASSWORD/);
+});
+
+test('Turnstile failures offer actionable feedback and do not poison retries',()=>{
+ const js=get('account.js');
+ assert.match(js,/activeScript=activeScript\.catch\(error=>\{activeScript=null/);
+ assert.match(js,/s\.onerror=\(\)=>\{s\.remove\(\);reject/);
+ for(const callback of ['expired-callback','timeout-callback','error-callback']){
+  assert.ok(js.includes('"'+callback+'"'),callback);
+ }
+ assert.match(js,/Не удалось пройти защитную проверку/);
+ assert.match(js,/Срок защитной проверки истёк/);
+ assert.match(js,/Проверка не завершена/);
 });

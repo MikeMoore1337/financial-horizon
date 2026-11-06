@@ -39,10 +39,12 @@ function challengeReady(){
   const s=document.createElement("script");
   s.src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
   s.async=true;
-  s.onload=()=>window.turnstile?resolve():reject(Error("Не удалось загрузить защиту"));
-  s.onerror=()=>reject(Error("Не удалось загрузить защиту"));
+  s.onload=()=>{if(window.turnstile)resolve();else{s.remove();reject(Error("Не удалось загрузить защиту"));}};
+  s.onerror=()=>{s.remove();reject(Error("Не удалось загрузить защиту"));};
   document.head.append(s);
  });
+ // A failed CDN request must not permanently poison all subsequent attempts.
+ activeScript=activeScript.catch(error=>{activeScript=null;throw error;});
  return activeScript;
 }
 
@@ -60,9 +62,26 @@ async function challengeFor(currentMode){
   const action=currentMode==="reset"?"reset":currentMode;
   widgetId=window.turnstile.render(place,{
    sitekey:config.sitekey,action,theme:"auto",
-   callback:value=>{if(version===renderVersion&&mode===currentMode){challengeToken=value;updateButton();}},
-   "expired-callback":()=>{challengeToken=null;updateButton();},
-   "error-callback":()=>{challengeToken=null;updateButton();}
+   callback:value=>{if(version===renderVersion&&mode===currentMode){challengeToken=value;feedback("");updateButton();}},
+   "expired-callback":()=>{
+    if(version===renderVersion&&mode===currentMode){
+     challengeToken=null;updateButton();
+     feedback("Срок защитной проверки истёк. Выберите действие ещё раз.","error");
+    }
+   },
+   "timeout-callback":()=>{
+    if(version===renderVersion&&mode===currentMode){
+     challengeToken=null;updateButton();
+     feedback("Проверка не завершена. Выберите действие ещё раз.","error");
+    }
+   },
+   "error-callback":()=>{
+    if(version===renderVersion&&mode===currentMode){
+     challengeToken=null;updateButton();
+     feedback("Не удалось пройти защитную проверку. Повторите попытку.","error");
+    }
+    return true;
+   }
   });
  }catch{
   if(version===renderVersion)feedback("Защитная проверка недоступна. Попробуйте позже.","error");
