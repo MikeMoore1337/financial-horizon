@@ -1,6 +1,6 @@
 /* Кэшируем только неизменяемую оболочку приложения. Финансовые записи не попадают в CacheStorage. */
-const CACHE='financial-horizon-shell-v16-ios-no-header-overlay';
-const ASSETS=['./','./index.html','./styles.css?rev=ios27-chrome-v16','./app.js?rev=ios27-chrome-v16','./auth-session.js','./theme-bootstrap.js?rev=ios27-chrome-v16','./account.html','./account.css','./account.js','./excel-import.js','./finance.js','./storage.js','./backup.js','./schedule.js','./manifest.webmanifest','./assets/brand/logo-compact-light.svg','./assets/brand/logo-compact-dark.svg','./assets/brand/favicon.svg','./assets/brand/favicon.ico','./assets/brand/favicon-32.png','./assets/brand/apple-touch-icon-180.png','./assets/icons/log-out.svg','./assets/brand/symbol.svg','./assets/brand/pwa-192.png','./assets/brand/pwa-512.png','./assets/brand/pwa-maskable-512.png'];
+const CACHE='financial-horizon-shell-v17-ios-header-uncovered';
+const ASSETS=['./','./index.html','./styles.css?rev=ios27-chrome-v17','./app.js?rev=ios27-chrome-v17','./auth-session.js','./theme-bootstrap.js?rev=ios27-chrome-v17','./account.html','./account.css','./account.js','./excel-import.js','./finance.js','./storage.js','./backup.js','./schedule.js','./manifest.webmanifest','./assets/brand/logo-compact-light.svg','./assets/brand/logo-compact-dark.svg','./assets/brand/favicon.svg','./assets/brand/favicon.ico','./assets/brand/favicon-32.png','./assets/brand/apple-touch-icon-180.png','./assets/icons/log-out.svg','./assets/brand/symbol.svg','./assets/brand/pwa-192.png','./assets/brand/pwa-512.png','./assets/brand/pwa-maskable-512.png'];
 self.addEventListener('install',event=>{
  event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting()));
 });

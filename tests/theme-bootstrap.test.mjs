@@ -10,8 +10,8 @@ const css=read('styles.css');
 const app=read('app.js');
 const sw=read('sw.js');
 const bootstrap=read('theme-bootstrap.js');
-const revision='ios27-chrome-v16';
-const cache='financial-horizon-shell-v16-ios-no-header-overlay';
+const revision='ios27-chrome-v17';
+const cache='financial-horizon-shell-v17-ios-header-uncovered';
 
 const initialTheme=({stored,systemDark=false,storageBlocked=false}={})=>{
  const root={dataset:{}};

@@ -47,8 +47,9 @@ async function logoutEmailAccount(){
  syncAccountControls();
  try{
   if(await pending){
-   render();
-   toast('Вы вышли из аккаунта. Финансовые записи остались в этом браузере.');
+   // After the server revokes the session, return to the login screen.
+   // Replace the history entry so Back does not reopen the signed-in view.
+   window.location.replace('./account.html');
   }
  }catch(error){
   toast(error instanceof Error?error.message:'Не удалось выйти из аккаунта. Повторите попытку.','error');
