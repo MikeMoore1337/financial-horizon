@@ -1,0 +1,30 @@
+import {test,expect} from '@playwright/test';
+import {execFileSync} from 'node:child_process';
+import {resolve} from 'node:path';
+import {observe,visitGuest,view,scopedState} from './helpers.mjs';
+
+test('XLSX file upload, browser preview, import, and deduplication',async({page,context},testInfo)=>{
+ const watcher=await observe(context,page);
+ const filename=testInfo.outputPath('fixture-budget.xlsx');
+ const py=process.env.FH_E2E_PYTHON||(process.platform==='win32'?'py':'python3');
+ const prefix=process.platform==='win32'&&!process.env.FH_E2E_PYTHON?['-3']:[];
+ execFileSync(py,[...prefix,resolve('tests/e2e/make_xlsx.py'),filename]);
+ await visitGuest(page);
+ await view(page,'settings');
+ await page.locator('[data-action="excel-import"]').click();
+ await page.locator('#excel-file').setInputFiles(filename);
+ await expect(page.locator('#excel-import-dialog')).toBeVisible();
+ await expect(page.locator('#excel-import-confirm')).toBeEnabled();
+ await page.locator('#excel-import-confirm').click();
+ await expect.poll(async()=> (await scopedState(page,'state')).entries.length).toBe(4);
+ const first=await scopedState(page,'state');
+ expect(first.entries.map(e=>e.title)).toEqual(expect.arrayContaining(['Интернет E2E','Продукты E2E','Зарплата','Аванс']));
+ await view(page,'settings');
+ await page.locator('[data-action="excel-import"]').click();
+ await page.locator('#excel-file').setInputFiles(filename);
+ await expect(page.locator('#excel-import-dialog')).toBeVisible();
+ await expect(page.locator('#excel-import-confirm')).toBeDisabled();
+ await page.locator('[data-action="cancel-excel-import"]').first().click();
+ expect((await scopedState(page,'state')).entries.map(e=>e.id)).toEqual(first.entries.map(e=>e.id));
+ watcher.assertClean();
+});
