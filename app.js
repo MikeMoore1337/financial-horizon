@@ -159,7 +159,7 @@ function renderSettings(){
   ${panelIcon('download')}<div class="settings-card-body">
    <h2>Зашифрованная копия</h2>
    <p>Сохраните записи в зашифрованный файл (AES-256-GCM) для переноса на другое устройство или восстановления.</p>
-   <div class="setting-actions">${action('backup',`${svg('download')} Скачать копию`,'button-primary settings-cta')}${action('restore',`${svg('upload')} Восстановить`,'button-secondary')}</div>
+   <div class="setting-actions">${action('backup',`${svg('download')} Скачать копию`,'button-primary')}${action('restore',`${svg('upload')} Восстановить`,'button-secondary')}</div>
   </div>
  </section>
  <section class="surface settings-card" data-settings-card="import">
@@ -175,7 +175,7 @@ function renderSettings(){
    <h2>Категории</h2>
    <p>Добавляйте, переименовывайте и удаляйте категории. Используемую категорию сначала замените в записях.</p>
    <div class="category-items">${state.categories.map(x=>`<span class="category-chip"><span class="category-name">${escapeHtml(x)}</span><button type="button" data-action="edit-category" data-category="${escapeHtml(x)}" aria-label="Переименовать категорию ${escapeHtml(x)}" title="Переименовать">${svg('edit')}</button><button type="button" data-action="delete-category" data-category="${escapeHtml(x)}" aria-label="Удалить категорию ${escapeHtml(x)}" title="Удалить">${svg('trash')}</button></span>`).join('')}</div>
-   <form id="category-form" class="category-add"><input name="name" maxlength="40" required aria-label="Новая категория" placeholder="Название категории"><button class="button-primary settings-cta" type="submit">Добавить</button></form>
+   <form id="category-form" class="category-add"><input name="name" maxlength="40" required aria-label="Новая категория" placeholder="Название категории"><button class="button-primary" type="submit">Добавить</button></form>
   </div>
  </section>
  <section class="surface settings-card" data-settings-card="archive">

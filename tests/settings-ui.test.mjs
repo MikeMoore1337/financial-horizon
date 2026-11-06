@@ -21,7 +21,7 @@ test('reference composition is six cards in three rows plus full-width installat
  for(const id of ['security','backup','import','categories','archive','history','install'])
   assert.ok(settings.includes('data-settings-card="'+id+'"'),id);
  assert.equal((settings.match(/class="surface settings-card(?:\s|")/g)||[]).length,7);
- assert.ok(css.includes('.settings-grid{--settings-highlight:#b8ff66;'));
+ assert.ok(css.includes('.settings-grid{display:grid;'));
  assert.ok(css.includes('grid-template-columns:repeat(2,minmax(0,1fr))'));
  assert.ok(css.includes('.settings-install{grid-column:1/-1}'));
  assert.ok(css.includes('.settings-grid{grid-template-columns:1fr}'));
@@ -44,10 +44,22 @@ test('actions, local persistence feedback and activity log stay available',()=>{
 test('versioned app shell is consistent across both PWA pages',()=>{
  const sw=read('sw.js');
  const account=read('account.html');
- for(const p of ['styles.css?rev=auth-ui-v23','app.js?rev=auth-ui-v23']) {
+ for(const p of ['styles.css?rev=auth-ui-v24','app.js?rev=auth-ui-v24']) {
   assert.ok(sw.includes(p),p);
   assert.ok(html.includes(p),p);
  }
- assert.ok(account.includes('styles.css?rev=auth-ui-v23'));
- assert.ok(sw.includes('financial-horizon-shell-v23-auth-ui'));
+ assert.ok(account.includes('styles.css?rev=auth-ui-v24'));
+ assert.ok(sw.includes('financial-horizon-shell-v24-auth-ui'));
+});
+
+test('settings primary actions inherit the common income-button palette in both themes',()=>{
+ const css=read('styles.css');
+ const section=settings.slice(settings.indexOf('data-settings-card="backup"'),settings.indexOf('data-settings-card="import"'));
+ assert.match(section,/action\('backup',[^\n]*'button-primary'\)/);
+ assert.match(settings,/<button class="button-primary" type="submit">Добавить<\/button>/);
+ assert.doesNotMatch(settings,/settings-cta|settings-highlight/);
+ assert.doesNotMatch(css,/--settings-highlight|\.settings-grid \.settings-cta/);
+ assert.match(css,/\.button-primary\{background:var\(--accent\);color:var\(--onaccent\);border:1px solid transparent\}/);
+ assert.match(css,/body\[data-theme=dark\][^\n]*--accent:#6c9dff;[^\n]*--onaccent:#081625/);
+ assert.match(css,/body\{margin:0;[^\n]*--accent:#3078fa;[^\n]*--onaccent:#fff/);
 });
