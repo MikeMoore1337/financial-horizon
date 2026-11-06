@@ -10,7 +10,7 @@
 <script src="./theme-bootstrap.js?rev=ios27-chrome-v17"></script>
 <link rel="stylesheet" href="./styles.css?rev=ios27-chrome-v17">
 <link rel="stylesheet" href="./account.css">
-<script type="module" src="./account.js"></script>
+<script type="module" src="./account.js?rev=auth-scopes-v18"></script>
 </head>
 <body data-theme="light">
 <main class="auth-layout">
@@ -18,7 +18,7 @@
     <div class="auth-lockup"><img src="./assets/brand/symbol.svg" alt="" width="56" height="56"><div><strong>Финансовый горизонт</strong><small>Личная бухгалтерия</small></div></div>
     <h1 id="app-heading">Личные финансы под контролем</h1>
     <p>Работайте без регистрации. Подключение аккаунта предназначено для будущей синхронизации устройств.</p>
-    <a class="button-secondary" href="./">Продолжить без регистрации</a>
+    <a class="button-secondary" href="./?guest=1">Продолжить без регистрации</a>
   </section>
   <section class="auth-card surface" aria-labelledby="form-heading">
     <span class="eyebrow">Защищённый доступ</span>
@@ -49,7 +49,7 @@
     </section>
     <div class="auth-actions">
       <button type="button" data-mode="resend">Не пришло письмо? Отправить повторно</button>
-      <a href="./">Вернуться к бухгалтерии</a>
+      <a href="./?guest=1">Продолжить без регистрации</a>
     </div>
     <p class="small-hint">Без аккаунта все записи сохраняются локально. До включения синхронизации вход не переносит бюджет между устройствами.</p>
   </section>
