@@ -45,6 +45,13 @@ test('theme, navigation and responsive widths do not overflow',async({page,conte
   for(const section of ['calendar','obligations','loans','settings','overview']){
    await view(page,section);
    const width=await page.evaluate(()=>({page:document.documentElement.scrollWidth,viewport:window.innerWidth}));
+   if(width.page>width.viewport+1){
+    const offenders=await page.evaluate(()=>Array.from(document.body.querySelectorAll('*'))
+     .filter(el=>{const box=el.getBoundingClientRect();return box.width>0&&box.right>innerWidth+1&&getComputedStyle(el).display!=='none';})
+     .slice(0,14).map(el=>({tag:el.tagName.toLowerCase(),id:el.id,css:typeof el.className==='string'?el.className:'',
+      right:Math.round(el.getBoundingClientRect().right),width:Math.round(el.getBoundingClientRect().width)})));
+    console.log('E2E_OVERFLOW_DIAG '+JSON.stringify({section,viewport:size.width,scrollWidth:width.page,offenders}));
+   }
    expect(width.page,'Horizontal overflow in '+section+' at '+size.width+'px').toBeLessThanOrEqual(width.viewport+1);
   }
  }
