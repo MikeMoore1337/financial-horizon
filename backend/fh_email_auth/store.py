@@ -292,6 +292,35 @@ class AuthStore:
             ).fetchone()
         return {"id":row[0],"email":row[1]} if row else None
 
+    def revoke_other_sessions(self,session: str|None) -> bool:
+        """Revoke only the current principal's other sessions; keep this cookie valid."""
+        if not isinstance(session,str) or not 32<=len(session)<=256 or not session.isascii():
+            return False
+        now=int(self.now())
+        current_hash=token_hash(session)
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row=db.execute(
+                    """SELECT s.user_id FROM sessions s JOIN users u ON u.id=s.user_id
+                       WHERE s.hash=? AND s.expires_at>? AND s.revoked_at IS NULL
+                         AND u.disabled=0 AND u.verified_at IS NOT NULL""",
+                    (current_hash,now)
+                ).fetchone()
+                if not row:
+                    db.rollback()
+                    return False
+                db.execute(
+                    """UPDATE sessions SET revoked_at=?
+                       WHERE user_id=? AND hash<>? AND revoked_at IS NULL""",
+                    (now,row[0],current_hash)
+                )
+                db.commit()
+                return True
+            except:
+                db.rollback()
+                raise
+
     def logout(self,session: str|None):
         if not isinstance(session,str) or not 32<=len(session)<=256 or not session.isascii():return
         with self._db() as db:

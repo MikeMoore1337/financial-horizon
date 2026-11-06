@@ -22,7 +22,7 @@ async function boot({initialSignedIn=false,sessionReadable=true,hash=""}={}){
   "#email-label","#email","#password-label","#password",
   "#turnstile-container","#session-panel","#auth-form",
   ".auth-modes",".auth-actions",".auth-actions [data-mode=\"resend\"]",
-  "#session-email","#auth-logout"
+  "#session-email","#auth-logout","#auth-logout-others"
  ];
  const elements=Object.fromEntries(selectors.map(s=>[s,element(s)]));
  const buttons=["login","register","reset","resend"].map(value=>{
@@ -46,6 +46,7 @@ async function boot({initialSignedIn=false,sessionReadable=true,hash=""}={}){
   }
   if(url.endsWith("/reset/request"))return {ok:true,json:async()=>({message:"Generic response"})};
   if(url.endsWith("/reset/confirm"))return {ok:true,json:async()=>({message:"Updated"})};
+  if(url.endsWith("/logout-others"))return {ok:true,json:async()=>({ok:true})};
   if(url.endsWith("/logout")){signedIn=false;return {ok:true,json:async()=>({ok:true})};}
   throw Error("Unexpected request "+url);
  };
@@ -152,4 +153,16 @@ test("password reset confirmation returns to login without navigating",async()=>
  assert.deepEqual(page.navigation,[]);
  assert.match(page.elements["#auth-feedback"].textContent,/Пароль изменён/);
  assert.equal(page.elements["#form-heading"].textContent,"Войти по email");
+});
+
+test("revoking other sessions keeps the current account page authenticated",async()=>{
+ const page=await boot({initialSignedIn:true});
+ await page.elements["#auth-logout-others"].events.click();
+ const posts=page.calls.filter(call=>call.url.endsWith("/logout-others"));
+ assert.equal(posts.length,1);
+ assert.equal(posts[0].options.method,"POST");
+ assert.equal(posts[0].options.credentials,"same-origin");
+ assert.equal(page.elements["#session-panel"].hidden,false);
+ assert.equal(page.elements["#auth-feedback"].dataset.status,"success");
+ assert.deepEqual(page.navigation,[]);
 });

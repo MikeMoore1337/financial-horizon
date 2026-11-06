@@ -162,6 +162,21 @@ async function refreshSession(){
  }
 }
 
+async function logoutOthers(){
+ const button=$("#auth-logout-others");
+ if(button.disabled)return;
+ button.disabled=true;
+ try{
+  const result=await request("logout-others",{});
+  if(result.ok!==true)throw Error("Сервер не подтвердил завершение других сеансов");
+  feedback("Вход на остальных устройствах завершён. Здесь вы остались в аккаунте.","success");
+ }catch(error){
+  feedback(error instanceof Error?error.message:"Не удалось завершить другие сеансы","error");
+ }finally{
+  button.disabled=false;
+ }
+}
+
 async function logout(){
  try{
   const formerId=activeAccountId;
@@ -236,6 +251,7 @@ async function init(){
  }catch{}
  $("#auth-form").addEventListener("submit",submit);
  $("#auth-logout").addEventListener("click",logout);
+ $("#auth-logout-others").addEventListener("click",logoutOthers);
  document.querySelectorAll("[data-mode]").forEach(button=>button.addEventListener("click",()=>activate(button.dataset.mode)));
  activate(mode);
  try{

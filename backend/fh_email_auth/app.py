@@ -98,7 +98,8 @@ def create_app(
             "login":((30,3600),(10,3600)),
             "verify":((30,3600),None),
             "confirm":((20,3600),None),
-            "logout":((60,3600),None)
+            "logout":((60,3600),None),
+            "logout-others":((10,3600),None)
         }
         ip_policy,email_policy=policy[action]
         # Global quota must be consumed first, so distributed abusive IPs cannot
@@ -225,6 +226,14 @@ def create_app(
         if store is None:raise RuntimeError("Email AuthStore was not initialized")
         user=store.current(request.cookies.get(SESSION_COOKIE))
         return {"authenticated":bool(user),"user":user if user else None}
+
+    @app.post("/api/auth/email/logout-others")
+    def logout_others(request:Request):
+        require_enabled();guard_origin(request);throttle(request,"logout-others")
+        if store is None:raise RuntimeError("Email AuthStore was not initialized")
+        if not store.revoke_other_sessions(request.cookies.get(SESSION_COOKIE)):
+            raise HTTPException(status_code=401,detail="Требуется вход в аккаунт")
+        return {"ok":True}
 
     @app.post("/api/auth/email/logout")
     def logout(request:Request,response:Response):

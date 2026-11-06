@@ -69,6 +69,28 @@ async function logoutEmailAccount(){
   syncAccountControls();
  }
 }
+async function revokeOtherEmailSessions(){
+ if(guestMode||!emailSession.email||emailSession.busy)return;
+ const button=$('#account-logout-others');
+ if(!button||button.disabled)return;
+ button.disabled=true;
+ try{
+  const response=await fetch('./api/auth/email/logout-others',{
+   method:'POST',credentials:'same-origin',cache:'no-store',
+   headers:{'Content-Type':'application/json'},body:'{}'
+  });
+  if(!response.ok)throw Error(response.status===401
+   ?'Сеанс истёк. Войдите снова.'
+   :'Не удалось завершить другие сеансы. Повторите попытку.');
+  const result=await response.json();
+  if(result?.ok!==true)throw Error('Сервер не подтвердил завершение других сеансов');
+  toast('Выход на других устройствах выполнен. Текущий сеанс сохранён.');
+ }catch(error){
+  toast(error instanceof Error?error.message:'Не удалось завершить другие сеансы','error');
+ }finally{
+  if(button.isConnected)button.disabled=false;
+ }
+}
 function pageHead(title,subtitle,actions=''){return `<header class="page-header"><div><div class="eyebrow">${formatDate(today())} · Личные финансы</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div><div class="header-tools">${actions}</div></header>`;}
 const action=(type,label,kind='button-primary',props='')=>`<button class="${kind}" data-action="${type}" ${props}>${label}</button>`;
 function moneyRow(event,{compact=false}={}){
@@ -142,7 +164,7 @@ function renderLoans(){
 function renderSettings(){const deleted=[...state.entries.filter(x=>x.deletedAt).map(x=>({...x,entity:'entry'})),...state.loans.filter(x=>x.deletedAt).map(x=>({...x,entity:'loan'}))];
  return pageHead('Настройки','Приватность, оформление, резервные копии и восстановление записей')+`<div class="settings-grid">
  <section class="surface" id="account-entry" hidden><h2>Аккаунт</h2><p>Войдите по email, чтобы открыть данные своего аккаунта в этом браузере. Синхронизация с другими устройствами пока не включена.</p><a class="button-secondary" href="./account.html">Войти в аккаунт</a></section>
- <section class="surface" id="account-session" hidden><h2>Аккаунт</h2><p>Вы вошли как <strong id="account-session-email"></strong>. Синхронизация ещё не включена: финансовые записи остаются в этом браузере.</p><div class="setting-actions"><button type="button" class="button-secondary" id="account-logout-settings" data-action="account-logout"><span class="lucide-logout-icon" aria-hidden="true"></span>Выйти из аккаунта</button></div></section>
+ <section class="surface" id="account-session" hidden><h2>Аккаунт</h2><p>Вы вошли как <strong id="account-session-email"></strong>. Синхронизация ещё не включена: финансовые записи остаются в этом браузере.</p><div class="setting-actions"><button type="button" class="button-secondary" id="account-logout-others" data-action="account-logout-others">Выйти на других устройствах</button><button type="button" class="button-secondary" id="account-logout-settings" data-action="account-logout"><span class="lucide-logout-icon" aria-hidden="true"></span>Выйти из аккаунта</button></div></section>
  <section class="surface"><h2>Оформление</h2><p>Вариант А: единая палитра для всех разделов. На Mac - боковая навигация и компактная панель инструментов; на iPhone - нижняя панель.</p><div class="setting-row"><strong>Цветовая тема</strong><div class="segment"><button data-action="theme" data-theme="light" class="${document.body.dataset.theme==='light'?'selected':''}" aria-pressed="${document.body.dataset.theme==='light'}">Светлая</button><button data-action="theme" data-theme="dark" class="${document.body.dataset.theme==='dark'?'selected':''}" aria-pressed="${document.body.dataset.theme==='dark'}">Тёмная</button></div></div></section>
  <section class="surface"><h2>Локальная безопасность</h2><p>Финансовая база хранится в IndexedDB этого браузера. Не отправляется на Hermes VPS и не синхронизируется с другими устройствами. В приватном режиме данные могут исчезнуть после закрытия.</p><div class="setting-actions">${action('persist',`${svg('lock')} Запросить постоянное хранение`,'button-secondary')}</div><div id="storage-status" class="small-hint" style="margin-top:12px">Браузер может удалить данные при очистке хранилища. Делайте резервные копии.</div></section>
  <section class="surface"><h2>Зашифрованная копия</h2><p>Сохраните все записи в один файл с шифрованием AES-256-GCM. Пароль известен только вам. Используйте копию для переноса на другое устройство или восстановления.</p><div class="setting-actions">${action('backup',`${svg('download')} Скачать копию`,'button-primary')}${action('restore',`${svg('upload')} Восстановить`,'button-secondary')}</div></section>
@@ -209,6 +231,7 @@ function requireConfirm(title,text){return new Promise(resolve=>{
 async function handleAction(button){
  const type=button.dataset.action,id=button.dataset.id;
  if(type==='account-logout'){await logoutEmailAccount();return;}
+ if(type==='account-logout-others'){await revokeOtherEmailSessions();return;}
  if(type==='new-entry'){openEntry(null,button.dataset.kind||'expense');return;}
  if(type==='new-loan'){openLoan();return;}
  if(type==='edit-entry'){openEntry(id);return;}
