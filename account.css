@@ -14,6 +14,7 @@
 .auth-modes[hidden]{display:none}
 #session-panel{margin:14px 0;padding:14px;border:1px solid var(--line);border-radius:13px;background:var(--soft)}
 #session-panel[hidden]{display:none}
+.session-actions{display:flex;gap:10px;flex-wrap:wrap}
 #session-email{font-size:13px;line-height:1.6;margin-bottom:12px;overflow-wrap:anywhere}
 .auth-modes button,.auth-actions button,.auth-actions a{background:transparent;border:0;color:var(--accent-deep);font-size:13px;font-weight:680;padding:8px;text-decoration:none;border-radius:9px;min-height:40px}
 .auth-modes button[aria-current=page]{background:var(--soft);color:var(--ink)}
@@ -23,9 +24,14 @@
 .auth-label input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 .auth-card #auth-submit{width:100%;margin:14px 0 0}
 .auth-feedback{min-height:26px;font-size:13px;line-height:1.55;margin:15px 0;color:var(--sub)}
+.auth-feedback:empty{min-height:0;margin:0}
+.auth-feedback strong{display:block;margin-bottom:6px;font-size:15px}
+.auth-feedback span{display:block}
 .auth-feedback[data-status=error]{color:var(--red)}
-.auth-feedback[data-status=success]{color:var(--green)}
+.auth-feedback[data-status=success]{color:var(--ink);background:color-mix(in srgb,var(--green) 10%,var(--surface));border:1px solid color-mix(in srgb,var(--green) 45%,var(--line));border-left:3px solid var(--green);border-radius:12px;padding:14px}
+.auth-feedback[data-status=success] strong{color:var(--green)}
 .auth-actions{display:flex;gap:6px;justify-content:space-between;flex-wrap:wrap}
+.auth-actions[hidden]{display:none}
 #turnstile-container{margin:15px 0;min-height:65px}
 #turnstile-container[hidden]{display:none}
 @media(max-width:770px){.auth-layout{grid-template-columns:1fr;gap:20px;padding:20px 16px 60px;align-content:start}.auth-intro{gap:12px}.auth-intro h1{font-size:28px;margin:0}.auth-intro p{display:none}.auth-card{max-width:none;padding:22px;border-radius:20px}.auth-intro>a{display:none}.auth-lockup img{width:42px;height:42px}.auth-lockup strong{font-size:17px}}
