@@ -20,6 +20,7 @@ function invoke({email='test@example.com',logout,initialBusy=false}={}){
   }
  };
  const ctx={
+  Error, // Match the browser realm for instanceof Error in the handler.
   emailSession:session,
   syncAccountControls:()=>events.push('sync'),
   render:()=>events.push('render'),
