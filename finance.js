@@ -106,7 +106,7 @@ export function monthTotals(events){const incomes=events.filter(x=>x.kind==='inc
 };}
 export function createSampleState() {
  const asOf='2026-11-01'; return {
-  version:1,entries:[
+  version:2,revision:0,entries:[
    {id:'s-income-1',title:'Зарплата',kind:'income',amountCents:9000000,date:'2026-11-15',recurrence:'monthly',category:'Работа'},
    {id:'s-income-2',title:'Аванс',kind:'income',amountCents:9000000,date:'2026-11-30',recurrence:'monthly',category:'Работа'},
    {id:'s-utilities',title:'ЖКХ',kind:'expense',amountCents:1250000,date:'2026-11-10',recurrence:'monthly',category:'Жильё'},
@@ -116,13 +116,32 @@ export function createSampleState() {
   settlements:[],loanPayments:[],categories:['Жильё','Кредиты','Работа','Связь','Покупки','Подписки','Здоровье','Другое'],audit:[],settings:{currency:'RUB'}
  };
 }
-export function emptyState() {return {version:1,entries:[],loans:[],settlements:[],loanPayments:[],categories:['Жильё','Кредиты','Работа','Связь','Покупки','Подписки','Здоровье','Другое'],audit:[],settings:{currency:'RUB'}};}
+export function emptyState() {return {version:2,revision:0,entries:[],loans:[],settlements:[],loanPayments:[],categories:['Жильё','Кредиты','Работа','Связь','Покупки','Подписки','Здоровье','Другое'],audit:[],settings:{currency:'RUB'}};}
 export function validateState(s){
- if(!s || s.version!==1 || !Array.isArray(s.entries)||!Array.isArray(s.loans)||!Array.isArray(s.settlements)||!Array.isArray(s.loanPayments)||!Array.isArray(s.categories)||!Array.isArray(s.audit))throw Error('Неподдерживаемый или повреждённый формат резервной копии');
- if(s.entries.length>50000||s.loans.length>1000||s.loanPayments.length>100000||s.audit.length>150000)throw Error('Превышен безопасный объём данных');
+ // v1 remains readable for historical IndexedDB records and encrypted backups.
+ if(!s || (s.version!==1&&s.version!==2) || !Array.isArray(s.entries) ||
+    !Array.isArray(s.loans)||!Array.isArray(s.settlements)||
+    !Array.isArray(s.loanPayments)||!Array.isArray(s.categories)||
+    !Array.isArray(s.audit))throw Error('Неподдерживаемая версия или повреждённые финансовые данные');
+ if(s.version===2&&(!Number.isSafeInteger(s.revision)||s.revision<0))
+  throw Error('Повреждён счётчик изменений финансовой базы');
+ if(s.entries.length>50000||s.loans.length>1000||
+    s.loanPayments.length>100000||s.audit.length>150000)
+  throw Error('Превышен безопасный объём данных');
+ const moneyFields=['amountCents','openingCents','paymentCents','balanceCents','interestCents','principalCents'];
  for(const x of [...s.entries,...s.loans,...s.settlements,...s.loanPayments]){
-  if(!x || typeof x.id!=='string'||x.id.length>128)throw Error('Ошибка идентификаторов данных');
-  if(x.amountCents!==undefined && (!Number.isSafeInteger(x.amountCents)||x.amountCents<0))throw Error('Неверные суммы в резервной копии');
+  if(!x||typeof x.id!=='string'||x.id.length>128)throw Error('Ошибка идентификаторов данных');
+  for(const field of moneyFields)
+   if(x[field]!==undefined&&(!Number.isSafeInteger(x[field])||x[field]<0))
+    throw Error('Неверные суммы в финансовых данных');
+ }
+ for(const loan of s.loans){
+  if(loan.schedule!==undefined&&!Array.isArray(loan.schedule))
+   throw Error('Повреждён график кредита');
+  for(const row of loan.schedule||[])
+   for(const field of moneyFields)
+    if(row?.[field]!==undefined&&(!Number.isSafeInteger(row[field])||row[field]<0))
+     throw Error('Неверные суммы в графике кредита');
  }
  return s;
 }

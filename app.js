@@ -4,6 +4,7 @@ import {encryptBackup,decryptBackup} from './backup.js';
 import {parseSchedule} from './schedule.js';
 import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.js';
 import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
+import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
 
 const $=sel=>document.querySelector(sel);
 const svg=name=>`<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-${name}"></use></svg>`;
@@ -20,10 +21,9 @@ const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
 const monthEvents=()=>getMonthEvents(state,ui.month);
 function toast(message,kind='success'){$('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('visible'),3800);$('#save-indicator').textContent=kind==='error'?'Ошибка':'Сохранено на устройстве';}
 function fail(error){console.error(error);toast(error?.message||'Не удалось выполнить действие','error');}
-function audit(s,action,description){s.audit.push({id:uuid(),action,description:String(description).slice(0,160),date:new Date().toISOString()});}
 async function mutate(change,msg='Сохранено на устройстве'){
  if(busy)return;busy=true;$('#save-indicator').textContent='Сохранение…';
- try{state=await updateState(s=>change(s));channel?.postMessage('updated');render();toast(msg);}catch(e){fail(e);throw e;}finally{busy=false;}
+ try{state=await updateState(s=>change(s),{expectedRevision:state?.revision});channel?.postMessage('updated');render();toast(msg);}catch(e){fail(e);throw e;}finally{busy=false;}
 }
 function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#172336':'#ffffff';$('#theme-toggle').innerHTML=svg(mode==='dark'?'sun':'moon');$('#theme-toggle').setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}
 function navigation(view){ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings'&&!guestMode)void refreshEmailSession();}
@@ -366,27 +366,25 @@ function onErrorNoStorage(error){$('#main').innerHTML=`<section class="surface e
 async function saveEntry(form){
  const id=formValue(form,'id'),title=formValue(form,'title').trim(),amountCents=cents(formValue(form,'amount'));
  const kind=formValue(form,'kind'),date=formValue(form,'date'),recurrence=formValue(form,'recurrence'),category=formValue(form,'category');
- if(!title||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!['income','expense'].includes(kind)||!['monthly','once','yearly'].includes(recurrence)||amountCents<1)throw Error('Заполните корректные поля записи');
+ if(!title||!/^\\d{4}-\\d{2}-\\d{2}$/.test(date)||!['income','expense'].includes(kind)||!['monthly','once','yearly'].includes(recurrence)||amountCents<1)throw Error('Заполните корректные поля записи');
  if(!state.categories.includes(category))throw Error('Категория не найдена');
- await mutate(s=>{
-  if(id){const current=s.entries.find(x=>x.id===id);if(!current)throw Error('Запись не найдена');Object.assign(current,{title,amountCents,kind,date,recurrence,category,updatedAt:new Date().toISOString()});audit(s,'update',`Изменено: ${title}`);}
-  else{s.entries.push({id:uuid(),title,amountCents,kind,date,recurrence,category,createdAt:new Date().toISOString()});audit(s,'create',`Добавлено: ${title}`);}
- },id?'Запись обновлена':'Запись добавлена');$('#entry-dialog').close();
+ await mutate(s=>applyEntry(s,{id,title,amountCents,kind,date,recurrence,category}),id?'Запись обновлена':'Запись добавлена');
+ $('#entry-dialog').close();
 }
 async function saveLoan(form){
  const id=formValue(form,'id'),title=formValue(form,'title').trim(),openingCents=cents(formValue(form,'opening')),
  paymentCents=cents(formValue(form,'payment')),apr=Number(formValue(form,'apr').replace(',','.')),
  termMonths=Number(formValue(form,'term')),dueDay=Number(formValue(form,'dueDay')),asOfDate=formValue(form,'asOfDate');
- if(!title||openingCents<1||paymentCents<1||!Number.isFinite(apr)||apr<0||apr>100||!Number.isInteger(termMonths)||termMonths<1||termMonths>1200||!Number.isInteger(dueDay)||dueDay<1||dueDay>31||!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate))throw Error('Проверьте параметры кредита');
+ if(!title||openingCents<1||paymentCents<1||!Number.isFinite(apr)||apr<0||apr>100||!Number.isInteger(termMonths)||termMonths<1||termMonths>1200||!Number.isInteger(dueDay)||dueDay<1||dueDay>31||!/^\\d{4}-\\d{2}-\\d{2}$/.test(asOfDate))throw Error('Проверьте параметры кредита');
  if(paymentCents<=Math.round(openingCents*apr/1200))throw Error('Платёж не покрывает месячные проценты: срок не рассчитан');
  if(id&&state.loanPayments.some(p=>p.loanId===id&&!p.voidedAt)){
   if(!await requireConfirm('Изменить условия кредита?', 'У этого кредита уже есть фактические оплаты. Изменение исходных условий пересчитает прогноз, но не удалит историю операций.'))return;
  }
  await mutate(s=>{
-  const fields={title,openingCents,paymentCents,apr,termMonths,dueDay,asOfDate};
-  if(id){const current=s.loans.find(x=>x.id===id);if(!current)throw Error('Кредит не найден');Object.assign(current,fields,{updatedAt:new Date().toISOString()});audit(s,'loan-update',`Изменён кредит: ${title}`);}
-  else {const loanId=uuid();s.loans.push({id:loanId,...fields,schedule:[],createdAt:new Date().toISOString()});ui.selectedLoan=loanId;audit(s,'loan-create',`Добавлен кредит: ${title}`);}
- },id?'Кредит обновлён':'Кредит добавлен');$('#loan-dialog').close();
+  const loanId=applyLoan(s,{id,title,openingCents,paymentCents,apr,termMonths,dueDay,asOfDate});
+  if(!id)ui.selectedLoan=loanId;
+ },id?'Кредит обновлён':'Кредит добавлен');
+ $('#loan-dialog').close();
 }
 async function savePayment(form){
  const loanId=formValue(form,'loanId'),paymentId=formValue(form,'paymentId'),amountCents=cents(formValue(form,'amount')),date=formValue(form,'date'),strategy=form.querySelector('[name="strategy"]:checked')?.value;
@@ -394,18 +392,15 @@ async function savePayment(form){
  const paymentsExcludingOld=state.loanPayments.map(p=>p.id===paymentId?{...p,voidedAt:'EDIT_PREVIEW'}:p);
  const projection=previewLoanPayment(loan,paymentsExcludingOld,amountCents,date,strategy);
  if(!projection.canApply)throw Error('Сумма выше долга с процентами в расчётной модели');
- await mutate(s=>{
-  if(paymentId){const original=s.loanPayments.find(x=>x.id===paymentId);if(!original||original.voidedAt)throw Error('Исходный платёж недоступен');const before=`${rubles(original.amountCents)}, ${original.date}`;Object.assign(original,{loanId,amountCents,date,strategy,updatedAt:new Date().toISOString()});audit(s,'payment-update',`Исправлена оплата ${loan.title}: ${before} → ${rubles(amountCents)}, ${date}`);}
-  else{s.loanPayments.push({id:uuid(),loanId,amountCents,date,strategy,createdAt:new Date().toISOString()});audit(s,'payment',`Оплата «${loan.title}» ${rubles(amountCents)}; перерасчёт: ${strategy==='term'?'срок':'платёж'}`);}
- },paymentId?'Платёж исправлен, прогноз обновлён':'Фактический платёж сохранён и учтён в прогнозе');
+ await mutate(s=>applyLoanPayment(s,{loanId,paymentId,amountCents,date,strategy}),paymentId?'Платёж исправлен, прогноз обновлён':'Фактический платёж сохранён и учтён в прогнозе');
  $('#payment-dialog').close();ui.selectedLoan=loanId;
 }
 async function saveSettlement(form){
  const entryId=formValue(form,'entryId'),occurrence=formValue(form,'occurrence'),date=formValue(form,'date'),amountCents=cents(formValue(form,'amount')),
  id=form.dataset.paymentId;
- if(amountCents<=0||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!/\d{4}-\d{2}/.test(occurrence)||!state.entries.find(e=>e.id===entryId&&isActive(e)))throw Error('Некорректная фактическая операция');
- await mutate(s=>{if(id){const existing=s.settlements.find(p=>p.id===id);if(!existing||existing.voidedAt)throw Error('Операция не найдена');Object.assign(existing,{amountCents,date,updatedAt:new Date().toISOString()});audit(s,'fact-update',`Исправлена фактическая сумма: ${rubles(amountCents)}`);}
- else{s.settlements.push({id:uuid(),entryId,occurrence,date,amountCents,createdAt:new Date().toISOString()});audit(s,'fact-create',`Отмечено фактически: ${rubles(amountCents)}`);}},'Фактическая сумма учтена');$('#settlement-dialog').close();
+ if(amountCents<=0||!/^\\d{4}-\\d{2}-\\d{2}$/.test(date)||!/\\d{4}-\\d{2}/.test(occurrence)||!state.entries.find(e=>e.id===entryId&&isActive(e)))throw Error('Некорректная фактическая операция');
+ await mutate(s=>applySettlement(s,{id,entryId,occurrence,date,amountCents}),'Фактическая сумма учтена');
+ $('#settlement-dialog').close();
 }
 async function performBackup(password){
  const file=await encryptBackup(await readState(),password);const url=URL.createObjectURL(new Blob([file],{type:'application/json'}));
