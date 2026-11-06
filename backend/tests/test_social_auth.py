@@ -390,3 +390,47 @@ def test_real_loopback_http_with_sqlite_and_cookies(tmp_path):
         worker.join(timeout=7)
         listener.close()
         assert not worker.is_alive(), "Uvicorn loopback server failed to stop"
+
+
+def test_single_provider_identity_per_user_matches_yfc_policy(tmp_path):
+    """A linked account cannot add a second, conflicting subject for one provider.
+
+    Adopt YFC's unique(user_id, provider) identity invariant without sharing
+    accounts or secrets with YFC.
+    """
+    email, oauth, cfg, app = context(tmp_path)
+    user_id, initial_token = create_email_user(email, "single@example.test")
+    browser = client(app)
+    browser.cookies.set(
+        SESSION_COOKIE, initial_token, domain="127.0.0.1", path="/api/auth"
+    )
+    target = "/api/auth/oauth/google/link/start"
+
+    def link_subject(subject):
+        started = browser.post(
+            target, headers={"origin": ORIGIN}, json={"confirm": True},
+            follow_redirects=False
+        )
+        assert started.status_code == 200
+        url = started.json()["authorization_url"]
+        state = parse_qs(urlsplit(url).query)["state"][0]
+        return finish(browser, state, subject, "google")
+
+    first = link_subject("account-a")
+    assert first.status_code == 303
+    assert first.headers["location"] == "/account.html?oauth=linked"
+    assert oauth.user_id_for("google", "google-account-a") == user_id
+
+    # A different subject of the same provider must not silently become
+    # a second login alias of the same financial user.
+    second = link_subject("account-b")
+    assert second.status_code == 303
+    assert second.headers["location"] == "/account.html?oauth=failed"
+    assert oauth.user_id_for("google", "google-account-b") is None
+    assert oauth.user_id_for("google", "google-account-a") == user_id
+
+    # An unsuccessful link must neither revoke the current session
+    # nor change its principal.
+    current = browser.get("/api/auth/email/me").json()
+    assert current["authenticated"] is True
+    assert current["user"]["id"] == user_id
