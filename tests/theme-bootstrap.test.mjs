@@ -10,8 +10,8 @@ const css=read('styles.css');
 const app=read('app.js');
 const sw=read('sw.js');
 const bootstrap=read('theme-bootstrap.js');
-const revision='ios27-chrome-v17';
-const cache='financial-horizon-shell-v18-auth-scopes';
+const revision='ios27-chrome-v18';
+const cache='financial-horizon-shell-v19-ios27-statusbar';
 
 const initialTheme=({stored,systemDark=false,storageBlocked=false}={})=>{
  const root={dataset:{}};
@@ -57,6 +57,37 @@ test('iOS status bar is themed without a fixed element that covers the toolbar',
  assert.match(css,/@media\(max-width:760px\)\{\.sidebar\{display:none\}body\{--fh-dock-bottom:/);
  assert.ok(css.includes('.toolbar{height:58px;padding:0 16px;top:0}'));
  assert.ok(html.includes('<nav class="bottom-nav"'));
+});
+
+
+test('repeated theme toggles keep root, body, meta and toolbar in sync',()=>{
+ const fn=app.match(/^function themeSet\(mode\)\{[^\n]+\}/m)?.[0];
+ assert.ok(fn,'themeSet should be available for regression checks');
+ const root={dataset:{}},body={dataset:{}};
+ const meta={content:'#ffffff'};
+ const toggle={innerHTML:'',setAttribute(name,value){this[name]=value;}};
+ const stored={};
+ const context={
+  document:{documentElement:root,body,querySelector(selector){return selector==='#theme-color'?meta:selector==='#theme-toggle'?toggle:null;}},
+  localStorage:{setItem(key,value){stored[key]=value;}},
+ };
+ runInNewContext("const $ = sel => document.querySelector(sel); const svg = name => name; "+fn+"; this.applyTheme = themeSet;",context);
+ for(const [mode,color] of [['dark','#172336'],['light','#ffffff'],['dark','#172336'],['light','#ffffff']]){
+  context.applyTheme(mode);
+  assert.equal(root.dataset.theme,mode);
+  assert.equal(body.dataset.theme,mode);
+  assert.equal(meta.content,color);
+  assert.equal(stored['fh-theme'],mode);
+  assert.equal(toggle['aria-label'],mode==='dark'?'Включить светлую тему':'Включить тёмную тему');
+ }
+});
+
+test('iOS sticky header has a solid theme surface with no backdrop filter or overlay',()=>{
+ assert.match(css, /@supports \(-webkit-touch-callout:none\)\{@media\(max-width:760px\)\{\.toolbar\{background:var\(--surface\);-webkit-backdrop-filter:none;backdrop-filter:none\}\}\}/);
+ assert.match(css, /body\[data-theme=dark\],html\[data-theme=dark\] body\{[^\n]*--surface:#172336/);
+ assert.match(css, /body\{[^\n]*--surface:#ffffff/);
+ assert.match(css, /\.bottom-nav\{position:fixed;z-index:20;/);
+ for(const page of [html,account])assert.doesNotMatch(page,/ios-status-bar-sample/);
 });
 
 test('both PWA pages use revisioned assets, consistent with offline precache',()=>{
