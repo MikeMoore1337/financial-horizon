@@ -4,81 +4,64 @@ import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 
 const get=name=>readFileSync(new URL('../'+name,import.meta.url),'utf8');
-const app=get('app.js');
-const a=app.indexOf('async function revokeOtherEmailSessions(){');
-const b=app.indexOf('\nfunction pageHead(',a);
-assert.ok(a>=0&&b>a);
-const fn=app.slice(a,b);
+const account=get('account.js');
+const first=account.indexOf('async function logoutOthers(){');
+const last=account.indexOf('\nasync function logout(){',first);
+assert.ok(first>=0&&last>first,'Account must implement logoutOthers');
+const fn=account.slice(first,last);
 
-function invoke({signedIn=true,guestMode=false,supportsOthers=true,status=200,result={ok:true}}={}){
- const requests=[],messages=[];
- const button={disabled:false,isConnected:true};
- const ctx={
-  Error,guestMode,supportsOtherSessionLogout:supportsOthers,emailSession:{email:signedIn?'qa@example.invalid':null,busy:false},
-  $:name=>name==='#account-logout-others'?button:null,
-  toast:(message,kind)=>messages.push({message,kind}),
-  fetch:async(url,options)=>{
-   requests.push({url,options});
-   return {ok:status>=200&&status<300,status,json:async()=>result};
-  }
+function invoke({hidden=false,status=200,result={ok:true}}={}){
+ const calls=[],messages=[],button={disabled:false,hidden};
+ const context={
+  Error,$:selector=>selector==='#auth-logout-others'?button:null,
+  request:async(path,body)=>{
+   calls.push({path,body});
+   if(status!==200)throw Error(status===401?'Сеанс истёк':'Сервер недоступен');
+   return result;
+  },
+  feedback:(message,kind)=>messages.push({message,kind})
  };
- const run=()=>runInNewContext(fn+'\nrevokeOtherEmailSessions()',ctx);
- return {run,requests,messages,button};
+ const run=()=>runInNewContext(fn+'\nlogoutOthers()',context);
+ return {run,calls,messages,button};
 }
 
-test('authenticated browser may revoke other sessions without logging out itself',async()=>{
- const ui=invoke();
- await ui.run();
- assert.equal(ui.requests.length,1);
- assert.equal(ui.requests[0].url,'./api/auth/email/logout-others');
- assert.equal(ui.requests[0].options.method,'POST');
- assert.equal(ui.requests[0].options.credentials,'same-origin');
- assert.equal(ui.requests[0].options.cache,'no-store');
- assert.equal(ui.button.disabled,false);
- assert.match(ui.messages[0].message,/Текущий сеанс сохранён/);
- assert.equal(ui.messages[0].kind,undefined);
+test('authenticated account page revokes other devices through the protected endpoint',async()=>{
+ const x=invoke();
+ await x.run();
+ assert.equal(x.calls.length,1);
+ assert.equal(x.calls[0].path,'logout-others');
+ assert.equal(JSON.stringify(x.calls[0].body),'{}');
+ assert.match(x.messages[0].message,/остались в аккаунте/);
+ assert.equal(x.messages[0].kind,'success');
+ assert.equal(x.button.disabled,false);
 });
-test('guest or unauthenticated browser never sends revocation request',async()=>{
- for(const args of [{guestMode:true},{signedIn:false}]){
-  const ui=invoke(args);
-  await ui.run();
-  assert.deepEqual(ui.requests,[]);
+test('invisible and disabled controls must not send revocation requests',async()=>{
+ const x=invoke({hidden:true});
+ await x.run();
+ assert.deepEqual(x.calls,[]);
+ assert.deepEqual(x.messages,[]);
+});
+test('server errors or unconfirmed responses cannot be shown as successful logout',async()=>{
+ for(const options of [{status:401},{status:503},{result:{ok:false}}]){
+  const x=invoke(options);
+  await x.run();
+  assert.equal(x.calls.length,1);
+  assert.equal(x.messages[0].kind,'error');
+  assert.equal(x.button.disabled,false);
  }
 });
-test('failed request does not masquerade as success or clear current session',async()=>{
- for(const args of [{status:401},{status:503},{result:{ok:false}}]){
-  const ui=invoke(args);
-  await ui.run();
-  assert.equal(ui.requests.length,1);
-  assert.equal(ui.messages[0].kind,'error');
-  assert.equal(ui.button.disabled,false);
- }
-});
-test('buttons exist only inside the authenticated account panel',()=>{
- const html=get('account.html'),sw=get('sw.js');
- assert.match(app,/id="account-session" hidden/);
- assert.match(app,/id="account-logout-others" data-action="account-logout-others"/);
- assert.match(app,/if\(type==='account-logout-others'\)/);
+test('server-advertised capability gates the account action and leaves settings unchanged',()=>{
+ const html=get('account.html'),app=get('app.js'),index=get('index.html');
+ const sw=get('sw.js'),css=get('account.css');
+ assert.match(account,/config\.capabilities\?\.revoke_other_sessions!==true/);
+ assert.ok(account.includes('$("#auth-logout-others")'));
+ assert.match(html,/id="auth-logout-others" hidden/);
  assert.match(html,/id="session-panel" hidden/);
- assert.match(html,/id="auth-logout-others" hidden/);
- assert.match(html,/Выйти на других устройствах/);
- assert.match(sw,/financial-horizon-shell-v22-auth-unified/);
- assert.ok(sw.includes("'./app.js?rev=auth-unified-v22'"));
- assert.ok(sw.includes("'./account.js?rev=auth-unified-v22'"));
-});
-
-test('unsupported backend cannot trigger the revocation endpoint',async()=>{
- const ui=invoke({supportsOthers:false});
- await ui.run();
- assert.equal(ui.requests.length,0);
- assert.equal(ui.messages.length,0);
-});
-test('control visibility is negotiated with the server and defaults off',()=>{
- const app=get('app.js'),html=get('account.html'),css=get('account.css');
- assert.match(app,/supportsOtherSessionLogout=false/);
- assert.match(app,/result\?\.capabilities\?\.revoke_other_sessions===true/);
- assert.match(app,/others\.hidden=!signedIn\|\|!supportsOtherSessionLogout/);
- assert.match(app,/refreshSessionCapabilities\(\)/);
- assert.match(html,/id="auth-logout-others" hidden/);
  assert.match(css,/\.session-actions \[hidden\]\{display:none\}/);
+ assert.doesNotMatch(app,/async function revokeOtherEmailSessions/);
+ assert.doesNotMatch(app,/id="account-session" hidden/);
+ assert.match(index,/id="account-entry-toolbar"/);
+ assert.match(sw,/financial-horizon-shell-v23-auth-ui/);
+ assert.ok(sw.includes("'./app.js?rev=auth-ui-v23'"));
+ assert.ok(sw.includes("'./account.js?rev=auth-ui-v23'"));
 });

@@ -15,7 +15,7 @@
 <link rel="icon" type="image/svg+xml" href="./assets/brand/favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="./assets/brand/favicon-32.png">
 <link rel="icon" type="image/x-icon" href="./assets/brand/favicon.ico">
-<link rel="stylesheet" href="./styles.css?rev=auth-unified-v22">
+<link rel="stylesheet" href="./styles.css?rev=auth-ui-v23">
 <title>Финансовый горизонт</title>
 </head>
 <body data-theme="light">
@@ -36,6 +36,12 @@
  <symbol id="ico-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14M10 11v6m4-6v6"/></symbol>
  <symbol id="ico-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
  <symbol id="ico-lock" viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></symbol>
+ <symbol id="ico-shield" viewBox="0 0 24 24"><path d="M12 2 4 5v6c0 5 3.4 8.7 8 11 4.6-2.3 8-6 8-11V5z"/><path d="m9 12 2 2 4-4"/></symbol>
+ <symbol id="ico-sheet" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h3M14 16h2"/></symbol>
+ <symbol id="ico-tag" viewBox="0 0 24 24"><path d="m3 12 9-9h8v8l-9 9a2 2 0 0 1-3 0l-5-5a2 2 0 0 1 0-3z"/><circle cx="16.5" cy="7.5" r="1"/></symbol>
+ <symbol id="ico-archive" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v11h14V9M10 13h4"/></symbol>
+ <symbol id="ico-database" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/></symbol>
+ <symbol id="ico-smartphone" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2.5"/><path d="M10 18h4"/></symbol>
  <symbol id="ico-close" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
 </svg>
 <div class="app-shell">
@@ -48,12 +54,12 @@
       <button class="nav-item" data-view="loans"><svg><use href="#ico-credit"/></svg><span>Кредиты</span></button>
       <button class="nav-item" data-view="settings"><svg><use href="#ico-settings"/></svg><span>Настройки</span></button>
     </nav>
-    <div class="side-bottom"><div class="privacy-dot"></div><div><strong>Хранится на устройстве</strong><span>Без регистрации и банковских API</span></div></div>
+    <div class="side-bottom"><div class="privacy-dot"></div><div><strong>Хранится на устройстве</strong><span>Без банковских подключений</span></div></div>
   </aside>
   <div class="work-area">
     <header class="toolbar">
       <div class="toolbar-leading"><button class="tool-icon hamburger" id="menu-toggle" aria-label="Открыть меню"><svg><use href="#ico-menu"/></svg></button><span class="crumb">Личные финансы</span><span class="crumb-slash">/</span><span id="toolbar-title">Обзор</span></div>
-      <div class="toolbar-actions"><span class="local-chip"><span class="privacy-dot"></span> Локально</span><button class="tool-icon" id="theme-toggle" aria-label="Переключить тему" title="Переключить тему"><svg><use href="#ico-moon"/></svg></button><button type="button" class="button-secondary toolbar-logout" id="account-logout-toolbar" data-action="account-logout" aria-label="Выйти из аккаунта" title="Выйти из аккаунта" hidden><span class="lucide-logout-icon" aria-hidden="true"></span><span class="toolbar-logout-label">Выйти</span></button><button class="button-primary toolbar-add" id="top-add"><svg><use href="#ico-plus"/></svg><span>Добавить</span></button></div>
+      <div class="toolbar-actions"><span class="local-chip"><span class="privacy-dot"></span> Локально</span><button class="tool-icon" id="theme-toggle" aria-label="Переключить тему" title="Переключить тему"><svg><use href="#ico-moon"/></svg></button><a class="tool-icon toolbar-account" href="./account.html" id="account-entry-toolbar" aria-label="Управление аккаунтом" title="Управление аккаунтом" hidden><span class="lucide-user-icon" aria-hidden="true"></span></a><button type="button" class="button-secondary toolbar-logout" id="account-logout-toolbar" data-action="account-logout" aria-label="Выйти из аккаунта" title="Выйти из аккаунта" hidden><span class="lucide-logout-icon" aria-hidden="true"></span><span class="toolbar-logout-label">Выйти</span></button><button class="button-primary toolbar-add" id="top-add"><svg><use href="#ico-plus"/></svg><span>Добавить</span></button></div>
     </header>
     <main class="page" id="main"><div class="loading">Проверяем доступ к бухгалтерии…</div></main>
     <footer class="footer"><span>Данные остаются в этом браузере. Делайте резервные копии.</span><span id="save-indicator" role="status" aria-live="polite">Локальная база</span></footer>
@@ -122,5 +128,5 @@
 <input type="file" id="restore-file" accept=".json,application/json" hidden>
 <input type="file" id="schedule-file" accept=".csv,text/csv" hidden>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<script type="module" src="./app.js?rev=auth-unified-v22"></script>
+<script type="module" src="./app.js?rev=auth-ui-v23"></script>
 </body></html>

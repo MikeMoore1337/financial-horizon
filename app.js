@@ -14,7 +14,7 @@ const uuid=()=>crypto.randomUUID();
 const titles={overview:'Обзор',calendar:'Календарь',obligations:'Обязательства',loans:'Кредиты',settings:'Настройки'};
 let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null},passwordMode='export',restoreFile=null,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
 const emailSession=createEmailSession();
-let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,supportsOtherSessionLogout=false;
+let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null;
 const GUEST_MODE_KEY='fh-guest-session-v2';
 const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
 const monthEvents=()=>getMonthEvents(state,ui.month);
@@ -28,20 +28,13 @@ async function mutate(change,msg='Сохранено на устройстве')
 function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#172336':'#ffffff';$('#theme-toggle').innerHTML=svg(mode==='dark'?'sun':'moon');$('#theme-toggle').setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}
 function navigation(view){ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings'&&!guestMode)void refreshEmailSession();}
 function render(){if(!state)return;$('#toolbar-title').textContent=titles[ui.view];document.querySelectorAll('[data-view]').forEach(el=>{const active=el.dataset.view===ui.view;el.classList.toggle('active',active);el.setAttribute('aria-current',active?'page':'false');});
- const sections={overview:renderOverview,calendar:renderCalendar,obligations:renderObligations,loans:renderLoans,settings:renderSettings};$('#main').innerHTML=sections[ui.view]();syncAccountControls();}
+ const sections={overview:renderOverview,calendar:renderCalendar,obligations:renderObligations,loans:renderLoans,settings:renderSettings};$('#main').innerHTML=sections[ui.view]();syncAccountControls();if(ui.view==='settings')void renderStorageStatus();}
 function syncAccountControls(){
  const signedIn=Boolean(emailSession.email);
  const toolbarButton=$('#account-logout-toolbar');
  toolbarButton.hidden=!signedIn;
  toolbarButton.disabled=emailSession.busy;
- if(ui.view!=='settings')return;
- $('#account-entry').hidden=signedIn;
- $('#account-session').hidden=!signedIn;
- $('#account-session-email').textContent=emailSession.email||'';
- $('#account-logout-settings').disabled=emailSession.busy;
- const others=$('#account-logout-others');
- others.hidden=!signedIn||!supportsOtherSessionLogout;
- others.disabled=emailSession.busy;
+ $('#account-entry-toolbar').hidden=!signedIn;
 }
 async function refreshEmailSession(){
  if(guestMode||!activeUserId||emailSession.busy)return true;
@@ -78,40 +71,6 @@ async function logoutEmailAccount(){
   toast(error instanceof Error?error.message:'Не удалось выйти из аккаунта. Повторите попытку.','error');
  }finally{
   syncAccountControls();
- }
-}
-async function refreshSessionCapabilities(){
- if(guestMode||!activeUserId)return;
- try{
-  const response=await fetch('./api/auth/email/config',{credentials:'same-origin',cache:'no-store'});
-  if(!response.ok)return;
-  const result=await response.json();
-  supportsOtherSessionLogout=result?.capabilities?.revoke_other_sessions===true;
- }catch{
-  supportsOtherSessionLogout=false;
- }
- if(state)syncAccountControls();
-}
-async function revokeOtherEmailSessions(){
- if(guestMode||!supportsOtherSessionLogout||!emailSession.email||emailSession.busy)return;
- const button=$('#account-logout-others');
- if(!button||button.disabled)return;
- button.disabled=true;
- try{
-  const response=await fetch('./api/auth/email/logout-others',{
-   method:'POST',credentials:'same-origin',cache:'no-store',
-   headers:{'Content-Type':'application/json'},body:'{}'
-  });
-  if(!response.ok)throw Error(response.status===401
-   ?'Сеанс истёк. Войдите снова.'
-   :'Не удалось завершить другие сеансы. Повторите попытку.');
-  const result=await response.json();
-  if(result?.ok!==true)throw Error('Сервер не подтвердил завершение других сеансов');
-  toast('Выход на других устройствах выполнен. Текущий сеанс сохранён.');
- }catch(error){
-  toast(error instanceof Error?error.message:'Не удалось завершить другие сеансы','error');
- }finally{
-  if(button.isConnected)button.disabled=false;
  }
 }
 function pageHead(title,subtitle,actions=''){return `<header class="page-header"><div><div class="eyebrow">${formatDate(today())} · Личные финансы</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div><div class="header-tools">${actions}</div></header>`;}
@@ -184,19 +143,66 @@ function renderLoans(){
  return pageHead('Кредиты и ипотека','Остатки долга, реальные платежи и приблизительный прогноз погашения',`${action('new-loan',`${svg('plus')} Кредит`,'button-primary')}`)+`
  ${loans.length?`<div class="loan-grid"><div>${loans.map(l=>{const s=loanLedger(l,state.loanPayments);const paid=Math.max(0,Math.min(100,Math.round((1-s.outstandingCents/l.openingCents)*100)));return `<button class="loan-card ${l.id===ui.selectedLoan?'selected':''}" data-action="select-loan" data-id="${escapeHtml(l.id)}" aria-pressed="${l.id===ui.selectedLoan}"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><span class="title">${escapeHtml(l.title)}</span><span class="pill">${paid}% закрыто</span></div><div class="balance">${rubles(s.outstandingCents)}</div><div class="progress-track"><div class="progress-fill" style="width:${paid}%"></div></div><div class="small-hint" style="margin-top:10px">${rubles(s.monthlyCents)} / мес. · ${s.months??'—'} мес. приблизительно</div></button>`}).join('')}</div><div class="surface loan-detail"><div class="section-title" style="margin-top:0"><h2>${escapeHtml(selected.title)}</h2><span class="pill">${selected.apr}% годовых</span></div><div class="eyebrow">Текущий расчётный долг</div><div class="hero-amount" style="font-size:39px">${rubles(snap.outstandingCents)}</div><div class="loan-stats"><div><span>Плановый платёж</span><strong>${rubles(snap.monthlyCents)}</strong></div><div><span>Осталось ориентировочно</span><strong>${snap.months===null?'Нет расчёта':snap.months+' мес.'}</strong></div><div><span>Предполагаемая дата</span><strong>${snap.projectedEnd?formatDate(snap.projectedEnd):'Не определена'}</strong></div><div><span>День платежа</span><strong>${selected.dueDay}-е число</strong></div></div><div class="loan-actions">${action('pay',`${svg('plus')} Внести платёж`,'button-primary',`data-id="${escapeHtml(selected.id)}"`)}${action('edit-loan',`${svg('edit')} Изменить`,'button-secondary',`data-id="${escapeHtml(selected.id)}"`)}${action('schedule-import','Импорт графика CSV','button-secondary',`data-id="${escapeHtml(selected.id)}"`)}${action('archive-loan','В архив','button-secondary',`data-id="${escapeHtml(selected.id)}"`)}</div><div class="info-card" style="margin-top:14px"><strong style="font-size:13px">Расчёт по аннуитетной модели</strong><p class="small-hint" style="margin:7px 0 0">Не учитывает индивидуальные банковские правила, ежедневные проценты, комиссии и просрочки. Итоговые даты проверяйте по официальному графику.</p></div>${selected.schedule?.length?`<div class="section-title"><h2>Импортированный график</h2>${action('clear-schedule','Удалить график','button-text',`data-id="${escapeHtml(selected.id)}"`)}</div><span class="pill">${selected.schedule.length} строк</span><p class="small-hint">Источник: ${escapeHtml(selected.scheduleSource||'CSV')}. График хранится на устройстве для сверки с прогнозом; автоматически не подменяет факты.</p><div style="overflow:auto"><table class="compact-table"><tr><th>Дата</th><th>Платёж</th><th>Остаток</th></tr>${selected.schedule.slice(0,4).map(r=>`<tr><td>${formatDate(r.date)}</td><td>${rubles(r.amountCents)}</td><td>${rubles(r.balanceCents)}</td></tr>`).join('')}</table></div>`:''}<div class="loan-history"><h3>История оплат</h3>${renderLoanHistory(selected,snap)}</div></div></div>`:`<div class="surface empty-panel">${svg('credit')}<h3>Кредитов пока нет</h3><p>Можно добавить ипотеку, остаток и параметры платежа. График обновится после каждого сохранённого фактического платежа.</p>${action('new-loan','Добавить ипотеку или кредит','button-primary')}</div>`}`;
 }
-function renderSettings(){const deleted=[...state.entries.filter(x=>x.deletedAt).map(x=>({...x,entity:'entry'})),...state.loans.filter(x=>x.deletedAt).map(x=>({...x,entity:'loan'}))];
- return pageHead('Настройки','Аккаунт, безопасность, оформление и управление данными')+`<div class="settings-grid"><div class="settings-column">
- <section class="surface" id="account-entry" hidden><h2>Аккаунт</h2><p>Для доступа к данным аккаунта войдите по email. Синхронизация между устройствами пока недоступна.</p><a class="button-secondary" href="./account.html">Войти в аккаунт</a></section>
- <section class="surface" id="account-session" hidden><h2>Аккаунт</h2><p>Вы вошли как <strong id="account-session-email"></strong>. Финансовые записи хранятся в этом браузере, без синхронизации между устройствами.</p><div class="setting-actions"><a class="button-secondary" href="./account.html">Управление аккаунтом</a><button type="button" class="button-secondary" id="account-logout-others" data-action="account-logout-others" hidden>Выйти на других устройствах</button><button type="button" class="button-secondary" id="account-logout-settings" data-action="account-logout"><span class="lucide-logout-icon" aria-hidden="true"></span>Выйти из аккаунта</button></div></section>
- <section class="surface"><h2>Локальная безопасность</h2><p>Финансовые записи хранятся в этом браузере и не передаются на сервер. В приватном режиме они могут быть удалены после закрытия окна.</p><div class="setting-actions">${action('persist',`${svg('lock')} Запросить постоянное хранение`,'button-secondary')}</div><div id="storage-status" class="small-hint settings-footnote">Браузер может удалить данные при очистке хранилища. Делайте резервные копии.</div></section>
- <section class="surface"><h2>Импорт из Excel</h2><p>Выберите XLSX для предварительного просмотра. Файл обрабатывается в браузере, без передачи на сервер. Текущие записи не заменяются.</p><div class="setting-actions">${action('excel-import',svg('upload')+' Выбрать XLSX','button-secondary')}</div><p class="small-hint settings-footnote">Поддерживается определённый шаблон с доходами и кредитами. Перед импортом проверьте суммы, даты и остатки.</p></section>
- <section class="surface"><h2>Архив записей</h2><p>Удалённые записи остаются в архиве и доступны для восстановления.</p><div class="archive-list">${deleted.length?deleted.map(x=>`<div class="archive-row"><span>${escapeHtml(x.title)}</span>${action('restore-item','Восстановить','button-text',`data-id="${escapeHtml(x.id)}" data-entity="${x.entity}"`)}</div>`).join(''):'<div class="small-hint">Архив пуст.</div>'}</div></section>
-  </div><div class="settings-column">
- <section class="surface"><h2>Оформление</h2><div class="setting-row"><strong>Цветовая тема</strong><div class="segment"><button data-action="theme" data-theme="light" class="${document.body.dataset.theme==='light'?'selected':''}" aria-pressed="${document.body.dataset.theme==='light'}">Светлая</button><button data-action="theme" data-theme="dark" class="${document.body.dataset.theme==='dark'?'selected':''}" aria-pressed="${document.body.dataset.theme==='dark'}">Тёмная</button></div></div></section>
- <section class="surface"><h2>Зашифрованная копия</h2><p>Сохраните данные в зашифрованный файл (AES-256-GCM). Пароль известен только вам. Копия пригодится для переноса и восстановления.</p><div class="setting-actions">${action('backup',`${svg('download')} Скачать копию`,'button-primary')}${action('restore',`${svg('upload')} Восстановить`,'button-secondary')}</div></section>
- <section class="surface"><h2>Категории</h2><p>Добавляйте, переименовывайте и удаляйте категории. Используемую категорию сначала замените в записях.</p><div class="category-items">${state.categories.map(x=>`<span class="category-chip">${escapeHtml(x)}<button data-action="edit-category" data-category="${escapeHtml(x)}" aria-label="Переименовать категорию ${escapeHtml(x)}">${svg('edit')}</button><button data-action="delete-category" data-category="${escapeHtml(x)}" aria-label="Удалить категорию ${escapeHtml(x)}">${svg('trash')}</button></span>`).join('')}</div><form id="category-form" class="category-add"><input name="name" maxlength="40" required aria-label="Новая категория" placeholder="Название категории"><button class="button-secondary" type="submit">Добавить</button></form></section>
- <section class="surface"><h2>Пример и история</h2><p>Загрузите вымышленные записи для знакомства с интерфейсом или очистите бухгалтерию.</p><div class="setting-actions">${action('sample','Загрузить пример','button-secondary')}${action('clear','Очистить бухгалтерию','button-secondary danger-zone')}</div><h3 class="settings-subheading">Последние изменения</h3><div class="archive-list">${state.audit.slice(-8).reverse().map(x=>`<div class="archive-row"><span>${escapeHtml(x.description)}</span><span class="muted">${formatDate(x.date.slice(0,10))}</span></div>`).join('')||'<div class="small-hint">Пока изменений нет.</div>'}</div></section>
- </div></div><section class="surface settings-install"><h2>Установка приложения</h2><p class="small-hint">Установите приложение через меню браузера. На iPhone используйте «Поделиться» → «На экран Домой», на Mac - «Добавить в Dock». Данные разных устройств автоматически не объединяются.</p>${action('install','Установить (где поддерживается)','button-secondary')}</section>`;
+function renderSettings(){
+ const deleted=[...state.entries.filter(x=>x.deletedAt).map(x=>({...x,entity:'entry'})),...state.loans.filter(x=>x.deletedAt).map(x=>({...x,entity:'loan'}))];
+ const panelIcon=name=>'<div class="settings-symbol" aria-hidden="true">'+svg(name)+'</div>';
+ return pageHead('Настройки','Безопасность, данные и управление записями')+`<div class="settings-grid">
+ <section class="surface settings-card" data-settings-card="security">
+  ${panelIcon('shield')}<div class="settings-card-body">
+   <h2>Локальная безопасность</h2>
+   <p>Финансовые записи хранятся в этом браузере и не передаются на сервер. В приватном режиме они могут быть удалены после закрытия окна.</p>
+   <div class="setting-actions">${action('persist',`${svg('lock')} Запросить постоянное хранение`,'button-secondary')}</div>
+   <p id="storage-status" class="small-hint settings-footnote" role="status">Браузер может удалить данные при очистке хранилища. Делайте резервные копии.</p>
+  </div>
+ </section>
+ <section class="surface settings-card" data-settings-card="backup">
+  ${panelIcon('download')}<div class="settings-card-body">
+   <h2>Зашифрованная копия</h2>
+   <p>Сохраните записи в зашифрованный файл (AES-256-GCM) для переноса на другое устройство или восстановления.</p>
+   <div class="setting-actions">${action('backup',`${svg('download')} Скачать копию`,'button-primary settings-cta')}${action('restore',`${svg('upload')} Восстановить`,'button-secondary')}</div>
+  </div>
+ </section>
+ <section class="surface settings-card" data-settings-card="import">
+  ${panelIcon('sheet')}<div class="settings-card-body">
+   <h2>Импорт из Excel</h2>
+   <p>Выберите XLSX для предварительного просмотра. Файл обрабатывается в браузере, текущие записи не заменяются.</p>
+   <div class="setting-actions">${action('excel-import',`${svg('upload')} Выбрать файл`,'button-secondary')}</div>
+   <p class="small-hint settings-footnote">Поддерживается шаблон с доходами и кредитами. Перед импортом проверьте суммы, даты и остатки.</p>
+  </div>
+ </section>
+ <section class="surface settings-card" data-settings-card="categories">
+  ${panelIcon('tag')}<div class="settings-card-body">
+   <h2>Категории</h2>
+   <p>Добавляйте, переименовывайте и удаляйте категории. Используемую категорию сначала замените в записях.</p>
+   <div class="category-items">${state.categories.map(x=>`<span class="category-chip"><span class="category-name">${escapeHtml(x)}</span><button type="button" data-action="edit-category" data-category="${escapeHtml(x)}" aria-label="Переименовать категорию ${escapeHtml(x)}" title="Переименовать">${svg('edit')}</button><button type="button" data-action="delete-category" data-category="${escapeHtml(x)}" aria-label="Удалить категорию ${escapeHtml(x)}" title="Удалить">${svg('trash')}</button></span>`).join('')}</div>
+   <form id="category-form" class="category-add"><input name="name" maxlength="40" required aria-label="Новая категория" placeholder="Название категории"><button class="button-primary settings-cta" type="submit">Добавить</button></form>
+  </div>
+ </section>
+ <section class="surface settings-card" data-settings-card="archive">
+  ${panelIcon('archive')}<div class="settings-card-body">
+   <h2>Архив записей</h2>
+   <p>Удалённые записи остаются в архиве и доступны для восстановления.</p>
+   <div class="archive-list">${deleted.length?deleted.map(x=>`<div class="archive-row"><span>${escapeHtml(x.title)}</span>${action('restore-item','Восстановить','button-text',`data-id="${escapeHtml(x.id)}" data-entity="${x.entity}"`)}</div>`).join(''):'<div class="small-hint">Архив пуст.</div>'}</div>
+  </div>
+ </section>
+ <section class="surface settings-card" data-settings-card="history">
+  ${panelIcon('database')}<div class="settings-card-body">
+   <h2>Пример и история</h2>
+   <p>Загрузите пример записей для знакомства с интерфейсом или очистите бухгалтерию.</p>
+   <div class="setting-actions">${action('sample','Загрузить пример','button-secondary')}${action('clear','Очистить бухгалтерию','button-secondary danger-zone')}</div>
+   <details class="settings-history"><summary>Последние изменения${state.audit.length?' ('+Math.min(state.audit.length,8)+')':''}</summary>
+    <div class="archive-list">${state.audit.slice(-8).reverse().map(x=>`<div class="archive-row"><span>${escapeHtml(x.description)}</span><span class="muted">${formatDate(x.date.slice(0,10))}</span></div>`).join('')||'<div class="small-hint">Пока изменений нет.</div>'}</div>
+   </details>
+  </div>
+ </section>
+ <section class="surface settings-card settings-install" data-settings-card="install">
+  ${panelIcon('smartphone')}<div class="settings-card-body">
+   <h2>Установка приложения</h2>
+   <p>Установите приложение через меню браузера. На iPhone используйте «Поделиться» → «На экран Домой», на Mac - «Добавить в Dock». Данные разных устройств автоматически не объединяются.</p>
+   <div class="setting-actions">${action('install','Установить (где поддерживается)','button-secondary')}</div>
+  </div>
+ </section>
+ </div>`;
 }
 function openDialog(sel){const dlg=$(sel);if(!dlg?.open)dlg.showModal();}
 function formValue(form,name){return form.elements.namedItem(name).value;}
@@ -255,7 +261,6 @@ function requireConfirm(title,text){return new Promise(resolve=>{
 async function handleAction(button){
  const type=button.dataset.action,id=button.dataset.id;
  if(type==='account-logout'){await logoutEmailAccount();return;}
- if(type==='account-logout-others'){await revokeOtherEmailSessions();return;}
  if(type==='new-entry'){openEntry(null,button.dataset.kind||'expense');return;}
  if(type==='new-loan'){openLoan();return;}
  if(type==='edit-entry'){openEntry(id);return;}
@@ -515,7 +520,6 @@ async function init(){
   }
   state=await readState();
   render();
-  void refreshSessionCapabilities();
   $('#save-indicator').textContent='Локальная база готова';
  }catch(e){onErrorNoStorage(e);return;}
  if(ui.view==='settings')renderStorageStatus();

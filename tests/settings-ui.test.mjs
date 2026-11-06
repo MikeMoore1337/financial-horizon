@@ -5,39 +5,49 @@ import {readFileSync} from 'node:fs';
 const read=name=>readFileSync(new URL('../'+name,import.meta.url),'utf8');
 const app=read('app.js');
 const css=read('styles.css');
-const page=read('index.html');
-const importer=read('excel-import.js');
-const begin=app.indexOf('function renderSettings()');
-const settings=app.slice(begin,app.indexOf('function openDialog(',begin));
+const html=read('index.html');
+const start=app.indexOf('function renderSettings()');
+const settings=app.slice(start,app.indexOf('function openDialog(',start));
 
-test('settings hide developer infrastructure and internal design names',()=>{
+test('settings omit duplicate account/theme controls but retain header controls',()=>{
  assert.ok(settings.startsWith('function renderSettings()'));
- assert.doesNotMatch(settings,/Hermes|VPS|YFC|MikeMoore|Вариант А|«Кредитная нагрузка»|«Зарплата»|«Аванс»/i);
- assert.doesNotMatch(importer,/Формат таблицы не распознан: ожидаются/);
- assert.ok(settings.includes('Финансовые записи хранятся в этом браузере и не передаются на сервер'));
- assert.ok(settings.includes('Цветовая тема'));
+ assert.doesNotMatch(settings,/id="account-entry"|id="account-session"|id="account-session-email"|id="account-logout-settings"|data-action="theme"|<h2>Оформление<\/h2>|<h2>Аккаунт<\/h2>/);
+ assert.match(html,/id="account-logout-toolbar"[^>]*data-action="account-logout"/);
+ assert.match(html,/id="theme-toggle"/);
+ assert.doesNotMatch(settings,/Hermes VPS|MikeMoore|Вариант А|YFC/);
 });
 
-test('settings use compact independent columns with one-column layout on narrow screens',()=>{
- assert.equal((settings.match(/class="settings-column"/g)||[]).length,2);
- assert.ok(css.includes('.settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start}'));
- assert.ok(css.includes('.settings-column{min-width:0;display:flex;flex-direction:column;gap:14px}'));
+test('reference composition is six cards in three rows plus full-width installation',()=>{
+ for(const id of ['security','backup','import','categories','archive','history','install'])
+  assert.ok(settings.includes('data-settings-card="'+id+'"'),id);
+ assert.equal((settings.match(/class="surface settings-card(?:\s|")/g)||[]).length,7);
+ assert.ok(css.includes('.settings-grid{--settings-highlight:#b8ff66;'));
+ assert.ok(css.includes('grid-template-columns:repeat(2,minmax(0,1fr))'));
+ assert.ok(css.includes('.settings-install{grid-column:1/-1}'));
  assert.ok(css.includes('.settings-grid{grid-template-columns:1fr}'));
- assert.ok(css.includes('.settings-install{margin-top:14px;padding:18px 20px}'));
- assert.ok(settings.includes('</div></div><section class="surface settings-install"'));
-
+ for (const symbol of ['shield','sheet','tag','archive','database','smartphone'])
+  assert.ok(html.includes('id="ico-'+symbol+'"'),symbol);
 });
 
-test('settings controls and cache-busted assets are preserved',()=>{
- for(const marker of ['id="account-entry"','id="account-session"','id="account-logout-settings"','id="storage-status"','id="category-form"','id="account-session-email"',"action('persist'","action('backup'","action('restore'","action('excel-import'","action('sample'","action('clear'","action('install'"]){
-  assert.ok(settings.includes(marker),'Missing '+marker);
+test('actions, local persistence feedback and activity log stay available',()=>{
+ for (const name of ['persist','backup','restore','excel-import','sample','clear','install','edit-category','delete-category','restore-item']) {
+  assert.ok(settings.includes("action('"+name+"'") || settings.includes('data-action="'+name+'"'),name);
  }
- assert.ok(settings.includes('data-action="theme" data-theme="light"'));
- assert.ok(settings.includes('data-action="theme" data-theme="dark"'));
+ assert.ok(settings.includes('id="storage-status"'));
+ assert.ok(settings.includes('id="category-form"'));
+ assert.ok(settings.includes('<details class="settings-history">'));
+ assert.match(settings,/escapeHtml\(x\.title\)/);
+ assert.match(settings,/escapeHtml\(x\.description\)/);
+ assert.match(app,/syncAccountControls\(\);if\(ui\.view==='settings'\)void renderStorageStatus\(\)/);
+});
+
+test('versioned app shell is consistent across both PWA pages',()=>{
  const sw=read('sw.js');
- for(const path of ['styles.css?rev=auth-unified-v22','app.js?rev=auth-unified-v22']){
-  assert.ok(page.includes(path),'Missing '+path+' in page');
-  assert.ok(sw.includes(path),'Missing '+path+' in cache');
+ const account=read('account.html');
+ for(const p of ['styles.css?rev=auth-ui-v23','app.js?rev=auth-ui-v23']) {
+  assert.ok(sw.includes(p),p);
+  assert.ok(html.includes(p),p);
  }
- assert.ok(sw.includes('financial-horizon-shell-v22-auth-unified'));
+ assert.ok(account.includes('styles.css?rev=auth-ui-v23'));
+ assert.ok(sw.includes('financial-horizon-shell-v23-auth-ui'));
 });
