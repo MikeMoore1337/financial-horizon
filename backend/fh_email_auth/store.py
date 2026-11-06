@@ -85,6 +85,8 @@ class AuthStore:
                 );
                 CREATE INDEX IF NOT EXISTS oauth_identities_user_idx
                     ON oauth_identities(user_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS oauth_identities_one_provider_per_user
+                    ON oauth_identities(user_id, provider);
                 CREATE TABLE IF NOT EXISTS email_changes (
                     hash TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL REFERENCES users(id),
