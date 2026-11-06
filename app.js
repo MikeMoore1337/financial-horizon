@@ -366,7 +366,7 @@ function onErrorNoStorage(error){$('#main').innerHTML=`<section class="surface e
 async function saveEntry(form){
  const id=formValue(form,'id'),title=formValue(form,'title').trim(),amountCents=cents(formValue(form,'amount'));
  const kind=formValue(form,'kind'),date=formValue(form,'date'),recurrence=formValue(form,'recurrence'),category=formValue(form,'category');
- if(!title||!/^\\d{4}-\\d{2}-\\d{2}$/.test(date)||!['income','expense'].includes(kind)||!['monthly','once','yearly'].includes(recurrence)||amountCents<1)throw Error('Заполните корректные поля записи');
+ if(!title||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!['income','expense'].includes(kind)||!['monthly','once','yearly'].includes(recurrence)||amountCents<1)throw Error('Заполните корректные поля записи');
  if(!state.categories.includes(category))throw Error('Категория не найдена');
  await mutate(s=>applyEntry(s,{id,title,amountCents,kind,date,recurrence,category}),id?'Запись обновлена':'Запись добавлена');
  $('#entry-dialog').close();
@@ -375,7 +375,7 @@ async function saveLoan(form){
  const id=formValue(form,'id'),title=formValue(form,'title').trim(),openingCents=cents(formValue(form,'opening')),
  paymentCents=cents(formValue(form,'payment')),apr=Number(formValue(form,'apr').replace(',','.')),
  termMonths=Number(formValue(form,'term')),dueDay=Number(formValue(form,'dueDay')),asOfDate=formValue(form,'asOfDate');
- if(!title||openingCents<1||paymentCents<1||!Number.isFinite(apr)||apr<0||apr>100||!Number.isInteger(termMonths)||termMonths<1||termMonths>1200||!Number.isInteger(dueDay)||dueDay<1||dueDay>31||!/^\\d{4}-\\d{2}-\\d{2}$/.test(asOfDate))throw Error('Проверьте параметры кредита');
+ if(!title||openingCents<1||paymentCents<1||!Number.isFinite(apr)||apr<0||apr>100||!Number.isInteger(termMonths)||termMonths<1||termMonths>1200||!Number.isInteger(dueDay)||dueDay<1||dueDay>31||!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate))throw Error('Проверьте параметры кредита');
  if(paymentCents<=Math.round(openingCents*apr/1200))throw Error('Платёж не покрывает месячные проценты: срок не рассчитан');
  if(id&&state.loanPayments.some(p=>p.loanId===id&&!p.voidedAt)){
   if(!await requireConfirm('Изменить условия кредита?', 'У этого кредита уже есть фактические оплаты. Изменение исходных условий пересчитает прогноз, но не удалит историю операций.'))return;
@@ -398,7 +398,7 @@ async function savePayment(form){
 async function saveSettlement(form){
  const entryId=formValue(form,'entryId'),occurrence=formValue(form,'occurrence'),date=formValue(form,'date'),amountCents=cents(formValue(form,'amount')),
  id=form.dataset.paymentId;
- if(amountCents<=0||!/^\\d{4}-\\d{2}-\\d{2}$/.test(date)||!/\\d{4}-\\d{2}/.test(occurrence)||!state.entries.find(e=>e.id===entryId&&isActive(e)))throw Error('Некорректная фактическая операция');
+ if(amountCents<=0||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!/\d{4}-\d{2}/.test(occurrence)||!state.entries.find(e=>e.id===entryId&&isActive(e)))throw Error('Некорректная фактическая операция');
  await mutate(s=>applySettlement(s,{id,entryId,occurrence,date,amountCents}),'Фактическая сумма учтена');
  $('#settlement-dialog').close();
 }
