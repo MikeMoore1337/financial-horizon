@@ -39,7 +39,7 @@ test('password is not requested on email-only registration and CSS honors hidden
 
 test('service worker caches only app assets and includes account UI for offline support',()=>{
  const sw=get('sw.js');
- assert.match(sw,/financial-horizon-shell-v18-auth-scopes/);
+ assert.match(sw,/financial-horizon-shell-v19-settings-layout/);
  for(const file of ['account.html','account.css','account.js?rev=auth-scopes-v18']){
    assert.ok(sw.includes("'./"+file+"'"),file);
  }

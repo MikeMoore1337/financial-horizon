@@ -184,7 +184,7 @@ export function parseBudgetRows(rows,asOfDate=new Date().toISOString().slice(0,1
  if(!Array.isArray(rows)||!rows.length)bad('Пустая таблица');
  const first=key(get(rows[0],0)),incomeHead=key(get(rows[0],8));
  const sectionHeads=rows.map((row,i)=>({i,text:key(get(row,8))})).filter(x=>/^(зарплата|аванс)[\s,]/.test(x.text)||/^(зарплата|аванс)$/.test(x.text));
- if(!first.includes('кредитная нагрузка')||!incomeHead.includes('зарплата')||!sectionHeads.length)bad('Формат таблицы не распознан: ожидаются «Кредитная нагрузка» и два блока поступлений');
+ if(!first.includes('кредитная нагрузка')||!incomeHead.includes('зарплата')||!sectionHeads.length)bad('Формат таблицы не распознан: нужен поддерживаемый шаблон с кредитами и двумя блоками доходов');
  const warnings=[],entries=[],loans=[];
  const notice=(src,msg)=>{if(warnings.length<60)warnings.push({source:src,message:msg});};
  for(let i=2;i<Math.min(rows.length,40);i++){
