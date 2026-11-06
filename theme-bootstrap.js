@@ -12,5 +12,5 @@
   if (!mode) mode = window.matchMedia?.('(prefers-color-scheme: dark)')?.matches ? 'dark' : 'light';
   root.dataset.theme = mode;
   const meta = document.getElementById('theme-color');
-  if (meta) meta.content = mode === 'dark' ? '#0e1624' : '#f5f7fc';
+  if (meta) meta.content = mode === 'dark' ? '#172336' : '#ffffff';
 })();
