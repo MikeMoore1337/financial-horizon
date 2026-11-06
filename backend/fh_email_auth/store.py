@@ -95,6 +95,12 @@ class AuthStore:
                 );
                 CREATE INDEX IF NOT EXISTS mail_reservations_time_idx
                     ON mail_reservations(timestamp);
+                CREATE TABLE IF NOT EXISTS login_backoff (
+                    key TEXT PRIMARY KEY,
+                    failures INTEGER NOT NULL,
+                    locked_until INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL
+                );
             """)
 
     def limit(self, rate_key: str, max_attempts: int, period: int):
@@ -117,6 +123,43 @@ class AuthStore:
             except:
                 db.rollback()
                 raise
+
+    def login_retry_after(self, key: str) -> int:
+        """Return the remaining delay for one HMAC-hashed client+email pair."""
+        now=int(self.now())
+        with self._db() as db:
+            row=db.execute("SELECT locked_until FROM login_backoff WHERE key=?", (key,)).fetchone()
+        return max(0,row[0]-now) if row else 0
+
+    def note_login_failure(self, key: str) -> int:
+        """Short exponential backoff; no blocking sleeps or plain-text principals."""
+        now=int(self.now())
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                db.execute("DELETE FROM login_backoff WHERE updated_at<?", (now-7*86400,))
+                row=db.execute(
+                    "SELECT failures,updated_at FROM login_backoff WHERE key=?", (key,)
+                ).fetchone()
+                failures=1+(row[0] if row and now-row[1]<3600 else 0)
+                delay=min(900,2*(2**min(9,failures-3))) if failures>=3 else 0
+                db.execute(
+                    """INSERT INTO login_backoff(key,failures,locked_until,updated_at)
+                       VALUES(?,?,?,?)
+                       ON CONFLICT(key) DO UPDATE
+                       SET failures=excluded.failures,locked_until=excluded.locked_until,
+                           updated_at=excluded.updated_at""",
+                    (key,failures,now+delay,now)
+                )
+                db.commit()
+                return delay
+            except:
+                db.rollback()
+                raise
+
+    def clear_login_backoff(self, key: str) -> None:
+        with self._db() as db:
+            db.execute("DELETE FROM login_backoff WHERE key=?", (key,))
 
     def reserve_transactional_email(self, max_per_24h: int = 80) -> None:
         """Atomic rolling 24-hour send budget, safe across midnight/time zones."""

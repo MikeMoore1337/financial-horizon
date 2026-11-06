@@ -207,8 +207,18 @@ def create_app(
         except ValueError:raise HTTPException(status_code=401,detail="Неверный email или пароль") from None
         throttle(request,"login",email)
         if store is None:raise RuntimeError("Email AuthStore was not initialized")
-        try:session=store.login(email,payload.password)
-        except AuthFailure:raise HTTPException(status_code=401,detail="Неверный email или пароль") from None
+        peer=request.client.host if request.client else "unknown"
+        pair=limit_key(config.rate_secret,"login-backoff",peer+"\x00"+email)
+        retry=store.login_retry_after(pair)
+        if retry:
+            raise HTTPException(status_code=429,detail="Слишком много попыток. Попробуйте позже.",
+                                headers={"Retry-After":str(retry)})
+        try:
+            session=store.login(email,payload.password)
+        except AuthFailure:
+            store.note_login_failure(pair)
+            raise HTTPException(status_code=401,detail="Неверный email или пароль") from None
+        store.clear_login_backoff(pair)
         # Revoke the prior cookie before replacing it with a new identity.
         prior=request.cookies.get(SESSION_COOKIE)
         if prior and prior!=session:store.logout(prior)
