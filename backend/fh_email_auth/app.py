@@ -13,6 +13,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from urllib.parse import urlsplit
 from pydantic import BaseModel, Field
 
+from . import SESSION_COOKIE
 from .config import Settings
 from .security import normalize_email, valid_password, limit_key
 from .store import AuthStore, Throttled, AuthFailure
@@ -20,7 +21,6 @@ from .turnstile import validate_token
 from .mailer import Mailer
 
 logger=logging.getLogger("fh.email_auth")
-SESSION_COOKIE="fh_email_session"
 GENERIC_MESSAGE="Если адрес допускает действие, письмо с инструкцией будет отправлено."
 
 
@@ -57,7 +57,10 @@ def create_app(
     config: Settings|None=None,
     store: AuthStore|None=None,
     captcha: Callable[[str,str,str,str],bool]|None=None,
-    mailer: Mailer|None=None
+    mailer: Mailer|None=None,
+    oauth_config=None,
+    oauth_store=None,
+    oauth_exchanger=None,
 ) -> FastAPI:
     config=config or Settings.from_env()
     app=FastAPI(title="Financial Horizon Email Auth", docs_url=None, redoc_url=None,
@@ -134,7 +137,7 @@ def create_app(
     def cookie(response:Response,session:str):
         response.set_cookie(
             key=SESSION_COOKIE,value=session,path="/api/auth",max_age=7*86400,
-            secure=not config.test_mode,httponly=True,samesite="strict"
+            secure=not config.test_mode,httponly=True,samesite="lax"
         )
 
     def deliver(email:str,purpose:str,raw:str):
@@ -313,9 +316,24 @@ def create_app(
         if store is None:raise RuntimeError("Email AuthStore was not initialized")
         store.logout(request.cookies.get(SESSION_COOKIE))
         response.delete_cookie(SESSION_COOKIE,path="/api/auth",
-                               secure=not config.test_mode,httponly=True,samesite="strict")
+                               secure=not config.test_mode,httponly=True,samesite="lax")
         return {"ok":True}
 
+    # The email application remains the only session and user authority.
+    # No OAuth database migration occurs during normal startup.
+    from fh_auth.config import Config as OAuthConfig
+    from fh_auth.app import make_oauth_router
+    from fh_auth.store import OAuthStore
+    oauth_config = oauth_config or OAuthConfig.from_env()
+    if oauth_config.enabled:
+        if not config.enabled:
+            raise ValueError("OAuth requires the existing email auth service")
+        if (oauth_config.database_path.resolve(strict=False) !=
+                config.database_path.resolve(strict=False) or
+                oauth_config.public_url != config.public_origin):
+            raise ValueError("OAuth and email auth must use one origin and SQLite database")
+        oauth_store = oauth_store or OAuthStore(config.database_path)
+    app.include_router(make_oauth_router(oauth_config, oauth_store, oauth_exchanger))
     return app
 
 

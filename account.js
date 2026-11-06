@@ -186,14 +186,14 @@ async function refreshSession(){
   const response=await fetch('./api/auth/email/me',{cache:'no-store',credentials:'same-origin'});
   if(!response.ok)return false;
   const result=await response.json();
-  const authenticated=result.authenticated===true&&typeof result.user?.email==='string';
+  const authenticated=result.authenticated===true&&typeof result.user?.id==='string'&&/^[a-f0-9]{32}$/.test(result.user.id)&&(result.user.email===null||typeof result.user.email==='string');
   activeAccountId=authenticated&&typeof result.user?.id==='string'&&/^[a-f0-9]{32}$/.test(result.user.id)
    ?result.user.id:null;
   if(authenticated){
    try{sessionStorage.removeItem('fh-guest-session-v2');}catch{}
   }
   $('#session-panel').hidden=!authenticated;
-  $('#change-email-panel').hidden=!authenticated||config.capabilities?.email_change!==true;
+  $('#change-email-panel').hidden=!authenticated||typeof result.user?.email!=='string'||config.capabilities?.email_change!==true;
   if(authenticated&&config.capabilities?.email_change===true)void renderChangeEmailChallenge();
   $('#auth-form').hidden=authenticated;
   $('.auth-modes').hidden=authenticated;
@@ -204,7 +204,7 @@ async function refreshSession(){
     ?"Вы вошли в Финансовый горизонт."
     :"Для доступа к аккаунту нужен подтверждённый email.";
   $('#session-email').textContent=authenticated
-    ?'Вы вошли как '+result.user.email+'. Синхронизация финансовых данных ещё не включена.'
+    ?(result.user.email?'Вы вошли как '+result.user.email+'. ':'Вы вошли через внешний сервис. ')+'Синхронизация финансовых данных ещё не включена.'
     :'';
   return authenticated;
  }catch{
