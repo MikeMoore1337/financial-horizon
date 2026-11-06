@@ -13,7 +13,7 @@ test('account page is independent, free and disabled by default',()=>{
  assert.match(page,/autocomplete="new-password"|type="password"/);
  assert.doesNotMatch(page,/yfc|your-fitness-coach/i);
  assert.match(main,/<meta name="fh-email-auth" content="disabled">/);
- assert.match(app,/id="account-entry" hidden/);
+ assert.doesNotMatch(app,/id="account-entry" hidden/);
 });
 
 test('email page strips sensitive confirmation fragment before fetching Turnstile',()=>{
@@ -39,7 +39,7 @@ test('password is not requested on email-only registration and CSS honors hidden
 
 test('service worker caches only app assets and includes account UI for offline support',()=>{
  const sw=get('sw.js');
- assert.match(sw,/financial-horizon-shell-v19-settings-layout/);
+ assert.match(sw,/financial-horizon-shell-v20-settings-reference/);
  for(const file of ['account.html','account.css','account.js?rev=auth-scopes-v18']){
    assert.ok(sw.includes("'./"+file+"'"),file);
  }
@@ -63,10 +63,10 @@ test('signed-in ledger exposes accessible logout controls with a vendored Lucide
  const icon=get('assets/icons/log-out.svg'),license=get('assets/icons/LICENSE');
  assert.match(main,/id="account-logout-toolbar"[^>]*data-action="account-logout"[^>]*hidden/);
  assert.match(main,/aria-label="Выйти из аккаунта"/);
- assert.match(app,/id="account-session" hidden/);
- assert.match(app,/id="account-logout-settings" data-action="account-logout"/);
+ assert.doesNotMatch(app,/id="account-session" hidden/);
+ assert.doesNotMatch(app,/id="account-logout-settings" data-action="account-logout"/);
  assert.match(app,/await logoutEmailAccount\(\)/);
- assert.match(app,/\.textContent=emailSession\.email\|\|''/);
+ assert.match(app,/toolbarButton\.hidden=!Boolean\(emailSession\.email\)/);
  assert.match(app,/syncAccountControls\(\)/);
  assert.match(css,/\.toolbar-logout\[hidden\][^{]*\{display:none\}/);
  assert.match(css,/mask:url\('\.\/assets\/icons\/log-out\.svg'\)/);
