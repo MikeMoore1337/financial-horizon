@@ -1,4 +1,4 @@
-// Apply the saved theme before first paint, as in YFC's theme bootstrap.
+// Apply the saved theme before first paint on every app page.
 // The page and iOS PWA chrome must start with the same background.
 (() => {
   const root = document.documentElement;
