@@ -79,6 +79,6 @@ test('PWA loads revisioned application code, including offline, without opening 
  assert.ok(html.includes('<script type="module" src="'+script+'"></script>'));
  assert.ok(sw.includes("'"+script+"'"));
  assert.ok(!sw.includes("'./app.js'"),'Stale unrevisioned app.js must not enter precache');
- assert.ok(sw.includes("const CACHE='financial-horizon-shell-v21-settings-brand'"));
+ assert.ok(sw.includes("const CACHE='financial-horizon-shell-v22-statusbar'"));
  assert.ok(html.includes('<meta name="fh-email-auth" content="disabled">'));
 });

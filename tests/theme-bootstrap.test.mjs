@@ -11,7 +11,7 @@ const app=read('app.js');
 const sw=read('sw.js');
 const bootstrap=read('theme-bootstrap.js');
 const revision='ios27-chrome-v17';
-const cache='financial-horizon-shell-v21-settings-brand';
+const cache='financial-horizon-shell-v22-statusbar';
 
 const initialTheme=({stored,systemDark=false,storageBlocked=false}={})=>{
  const root={dataset:{}};
@@ -59,8 +59,34 @@ test('iOS status bar is themed without a fixed element that covers the toolbar',
  assert.ok(html.includes('<nav class="bottom-nav"'));
 });
 
+
+test('live theme toggles repeatedly sync root, body and iOS status bar meta',()=>{
+ const fn=app.match(/^function themeSet\(mode\)\{[^\n]+\}/m)?.[0];
+ assert.ok(fn,'themeSet should remain available');
+ const root={dataset:{}},body={dataset:{}},meta={content:'#ffffff'};
+ const toggle={innerHTML:'',setAttribute(name,value){this[name]=value;}};
+ const stored={};
+ const context={document:{documentElement:root,body,querySelector(selector){return selector==='#theme-color'?meta:selector==='#theme-toggle'?toggle:null;}},localStorage:{setItem(k,v){stored[k]=v;}}};
+ runInNewContext("const $ = sel => document.querySelector(sel); const svg = name => name; "+fn+"; this.applyTheme = themeSet;",context);
+ for(const [mode,color] of [['dark','#172336'],['light','#ffffff'],['dark','#172336'],['light','#ffffff']]){
+  context.applyTheme(mode);
+  assert.equal(root.dataset.theme,mode);
+  assert.equal(body.dataset.theme,mode);
+  assert.equal(meta.content,color);
+  assert.equal(stored['fh-theme'],mode);
+  assert.equal(toggle['aria-label'],mode==='dark'?'Включить светлую тему':'Включить тёмную тему');
+ }
+});
+
+test('iOS status bar can sample an opaque theme surface without any top overlay',()=>{
+ assert.match(css, /@supports \(-webkit-touch-callout:none\)\{@media\(max-width:760px\)\{\.toolbar\{background:var\(--surface\);-webkit-backdrop-filter:none;backdrop-filter:none\}\}\}/);
+ assert.match(css, /body\[data-theme=dark\],html\[data-theme=dark\] body\{[^\n]*--surface:#172336/);
+ assert.match(css, /body\{[^\n]*--surface:#ffffff/);
+ assert.match(css, /\.bottom-nav\{position:fixed;z-index:20;/);
+});
+
 test('both PWA pages use revisioned assets, consistent with offline precache',()=>{
- const sheet='./styles.css?rev=settings-brand-v21';
+ const sheet='./styles.css?rev=settings-statusbar-v22';
  const preload='./theme-bootstrap.js?rev='+revision;
  const application='./app.js?rev=settings-brand-v21';
  for(const page of [html,account]){
