@@ -75,3 +75,9 @@ button,input,select{font:inherit}button{cursor:pointer}svg{width:20px;height:20p
 .toolbar-logout{min-height:44px;padding:0 13px;gap:8px}
 .toolbar-logout[hidden],#account-entry[hidden],#account-session[hidden]{display:none}
 @media(max-width:760px){.toolbar-logout{width:44px;min-width:44px;padding:0;border-radius:13px}.toolbar-logout-label{display:none}}
+.settings-grid .setting-actions [hidden]{display:none}
+
+/* Account management lives in the toolbar; vendor-provided Lucide user-round icon. */
+.toolbar-account{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;border-radius:13px}
+.toolbar-account[hidden]{display:none}
+.lucide-user-icon{width:18px;height:18px;display:block;flex:none;background:currentColor;-webkit-mask:url('./assets/icons/user-round.svg') center/contain no-repeat;mask:url('./assets/icons/user-round.svg') center/contain no-repeat}

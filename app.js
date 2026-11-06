@@ -14,7 +14,7 @@ const uuid=()=>crypto.randomUUID();
 const titles={overview:'Обзор',calendar:'Календарь',obligations:'Обязательства',loans:'Кредиты',settings:'Настройки'};
 let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null},passwordMode='export',restoreFile=null,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
 const emailSession=createEmailSession();
-let guestMode=false,activeUserId=null,authBroadcast=null;
+let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null;
 const GUEST_MODE_KEY='fh-guest-session-v2';
 const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
 const monthEvents=()=>getMonthEvents(state,ui.month);
@@ -30,20 +30,30 @@ function navigation(view){ui.view=view;$('.sidebar')?.classList.remove('open');w
 function render(){if(!state)return;$('#toolbar-title').textContent=titles[ui.view];document.querySelectorAll('[data-view]').forEach(el=>{const active=el.dataset.view===ui.view;el.classList.toggle('active',active);el.setAttribute('aria-current',active?'page':'false');});
  const sections={overview:renderOverview,calendar:renderCalendar,obligations:renderObligations,loans:renderLoans,settings:renderSettings};$('#main').innerHTML=sections[ui.view]();syncAccountControls();if(ui.view==='settings')void renderStorageStatus();}
 function syncAccountControls(){
+ const signedIn=Boolean(emailSession.email);
  const toolbarButton=$('#account-logout-toolbar');
- toolbarButton.hidden=!Boolean(emailSession.email);
+ toolbarButton.hidden=!signedIn;
  toolbarButton.disabled=emailSession.busy;
+ $('#account-entry-toolbar').hidden=!signedIn;
 }
 async function refreshEmailSession(){
- if(guestMode)return;
- const verified=await emailSession.refresh();
- if(!verified||emailSession.userId!==activeUserId||!emailSession.email){
-  // Never render the previous account's ledger after its session expires.
-  state=null;
-  window.location.replace('./account.html');
-  return;
- }
- syncAccountControls();
+ if(guestMode||!activeUserId||emailSession.busy)return true;
+ // Focus, visibility and Settings can request validation together. A single
+ // in-flight check avoids a stale response falsely signing out a valid session.
+ if(sessionValidation)return sessionValidation;
+ const pending=(async()=>{
+  const verified=await emailSession.refresh();
+  if(!verified||emailSession.userId!==activeUserId||!emailSession.email){
+   state=null;
+   window.location.replace('./account.html');
+   return false;
+  }
+  syncAccountControls();
+  return true;
+ })();
+ sessionValidation=pending;
+ try{return await pending;}
+ finally{if(sessionValidation===pending)sessionValidation=null;}
 }
 async function logoutEmailAccount(){
  if(busy||!emailSession.email||emailSession.busy)return;
@@ -455,6 +465,10 @@ function bindEvents(){
  });
  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();installPrompt=e;});
  window.addEventListener('storage',e=>{if(e.key==='fh-theme'&&e.newValue&&['light','dark'].includes(e.newValue)){themeSet(e.newValue);render();}});
+ // Revoked sessions on other devices become invalid when this tab is revisited.
+ // Concurrent focus/visibility checks share the same request.
+ window.addEventListener('focus',()=>{if(!guestMode&&activeUserId)void refreshEmailSession();});
+ document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&!guestMode&&activeUserId)void refreshEmailSession();});
  window.addEventListener('pageshow',event=>{
   if(!event.persisted||guestMode||!activeUserId)return;
   // A restored page from back/forward cache must re-validate authorization
@@ -462,11 +476,7 @@ function bindEvents(){
   state=null;
   $('#main').textContent='Проверяем доступ к бухгалтерии…';
   void (async()=>{
-   const verified=await emailSession.refresh();
-   if(!verified||emailSession.userId!==activeUserId){
-    window.location.replace('./account.html');
-    return;
-   }
+   if(!await refreshEmailSession())return;
    state=await readState();
    render();
   })().catch(()=>window.location.replace('./account.html'));

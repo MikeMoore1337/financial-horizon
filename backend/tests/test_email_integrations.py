@@ -80,3 +80,24 @@ def test_starttls_required_no_plaintext_credentials(monkeypatch,tmp_path):
  monkeypatch.setattr(module.smtplib,"SMTP",SMTP)
  Mailer(settings(tmp_path,587)).send("one@example.invalid","reset","TOKEN2345678")
  assert events==["ehlo","tls","ehlo","login","sent"]
+
+
+def test_change_email_message_requires_tls_and_old_email_notice_has_no_secret(monkeypatch,tmp_path):
+ import fh_email_auth.mailer as module
+ sent=[]
+ class SMTP:
+  def __init__(self,host,port,timeout,context=None):
+   assert host=="smtp.test.invalid" and port==465 and context
+  def __enter__(self):return self
+  def __exit__(self,*args):pass
+  def login(self,user,password):pass
+  def send_message(self,msg):sent.append(msg)
+ monkeypatch.setattr(module.smtplib,"SMTP_SSL",SMTP)
+ mail=Mailer(settings(tmp_path))
+ assert mail.send("new@example.invalid","email-change","ONE_TIME_SYNTHETIC_TEST_TOKEN")
+ assert mail.send("old@example.invalid","email-changed","")
+ assert sent[0]["To"]=="new@example.invalid"
+ assert "#confirm-email-change=ONE_TIME_SYNTHETIC_TEST_TOKEN" in sent[0].get_content()
+ assert sent[1]["To"]=="old@example.invalid"
+ assert "ONE_TIME_SYNTHETIC_TEST_TOKEN" not in sent[1].get_content()
+ assert "#confirm-email-change" not in sent[1].get_content()

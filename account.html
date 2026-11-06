@@ -8,9 +8,9 @@
 <title>Аккаунт - Финансовый горизонт</title>
 <link rel="icon" type="image/svg+xml" href="./assets/brand/favicon.svg">
 <script src="./theme-bootstrap.js?rev=ios27-chrome-v17"></script>
-<link rel="stylesheet" href="./styles.css?rev=settings-statusbar-v22">
-<link rel="stylesheet" href="./account.css">
-<script type="module" src="./account.js?rev=auth-scopes-v18"></script>
+<link rel="stylesheet" href="./styles.css?rev=auth-theme-v25">
+<link rel="stylesheet" href="./account.css?rev=auth-theme-v25">
+<script type="module" src="./account.js?rev=auth-theme-v25"></script>
 </head>
 <body data-theme="light">
 <main class="auth-layout">
@@ -44,8 +44,23 @@
       <p id="session-email"></p>
       <div class="session-actions">
         <a class="button-secondary" href="./">Открыть бухгалтерию</a>
+        <button type="button" class="button-secondary" id="auth-logout-others" hidden>Выйти на других устройствах</button>
         <button type="button" class="button-secondary" id="auth-logout">Выйти из аккаунта</button>
       </div>
+    </section>
+    <section id="change-email-panel" hidden aria-label="Изменение email">
+      <h3>Сменить email</h3>
+      <p class="small-hint">Укажите новый адрес и текущий пароль. Изменение вступит в силу после подтверждения из письма.</p>
+      <form id="change-email-form" autocomplete="off">
+        <label class="auth-label">Новый email
+          <input id="change-email" name="new-email" type="email" maxlength="254" autocomplete="off" required>
+        </label>
+        <label class="auth-label">Текущий пароль
+          <input id="change-email-password" name="current-password" type="password" maxlength="128" autocomplete="current-password" required>
+        </label>
+        <div id="change-email-challenge" aria-label="Проверка смены адреса"></div>
+        <button type="submit" id="change-email-submit" class="button-primary" disabled>Отправить подтверждение</button>
+      </form>
     </section>
     <div class="auth-actions">
       <button type="button" data-mode="resend">Не пришло письмо? Отправить повторно</button>
