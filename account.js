@@ -23,8 +23,20 @@ const routes={
  verify:"verify","reset-confirm":"reset/confirm"
 };
 
-function feedback(text,status="info"){
- const el=$("#auth-feedback");el.textContent=text;el.dataset.status=status;
+function feedback(text,status="info",title=""){
+ const el=$("#auth-feedback");
+ el.replaceChildren();
+ if(title){
+  const heading=document.createElement("strong");
+  heading.textContent=title;
+  el.append(heading);
+ }
+ if(text){
+  const detail=document.createElement("span");
+  detail.textContent=text;
+  el.append(detail);
+ }
+ el.dataset.status=status;
 }
 
 function updateButton(){
@@ -102,6 +114,8 @@ function activate(next,{preserveFeedback=false}={}){
  $("#password").minLength=next==="login"?1:12;
  $("#password").value="";
  document.querySelectorAll("[data-mode]").forEach(el=>el.setAttribute("aria-current",el.dataset.mode===next?"page":"false"));
+ // The resend endpoint is for email verification, never password recovery.
+ $('.auth-actions [data-mode="resend"]').hidden=next==="reset"||next==="reset-confirm";
  void challengeFor(next);
 }
 
@@ -117,21 +131,28 @@ async function request(path,body){
 }
 
 async function refreshSession(){
- if(!config.enabled)return;
+ if(!config.enabled)return false;
  try{
   const response=await fetch('./api/auth/email/me',{cache:'no-store',credentials:'same-origin'});
-  if(!response.ok)return;
+  if(!response.ok)return false;
   const result=await response.json();
   const authenticated=result.authenticated===true&&typeof result.user?.email==='string';
   $('#session-panel').hidden=!authenticated;
   $('#auth-form').hidden=authenticated;
   $('.auth-modes').hidden=authenticated;
-  $('.auth-actions [data-mode="resend"]').hidden=authenticated;
+  $('.auth-actions').hidden=authenticated;
+  $('.auth-actions [data-mode="resend"]').hidden=authenticated||mode==="reset"||mode==="reset-confirm";
+  $('#form-heading').textContent=authenticated?"Аккаунт":MODES[mode][0];
+  $('#form-description').textContent=authenticated
+    ?"Вы вошли в Финансовый горизонт."
+    :"Для доступа к аккаунту нужен подтверждённый email.";
   $('#session-email').textContent=authenticated
     ?'Вы вошли как '+result.user.email+'. Синхронизация финансовых данных ещё не включена.'
     :'';
+  return authenticated;
  }catch{
   // Local-first accounting is unaffected by a temporary authorization outage.
+  return false;
  }
 }
 
@@ -159,15 +180,24 @@ async function submit(event){
     :selected==="login"?{email,password}
     :{email,challenge:challengeToken};
  try{
-  await request(routes[selected],payload);
+  const result=await request(routes[selected],payload);
   if(selected==="login"||selected==="verify"){
+   if(result.authenticated!==true)throw Error("Не удалось подтвердить вход. Повторите попытку.");
+   // Do not navigate to the ledger until the browser can read its new session.
+   if(!await refreshSession()){
+    throw Error("Вход выполнен, но браузер не подтвердил сессию. Проверьте настройки cookies и повторите вход.");
+   }
    token=null;
-   feedback("Вы вошли в аккаунт. Пока финансовые данные остаются на этом устройстве.","success");
-   await refreshSession();
+   location.assign("./");
   }else if(selected==="reset-confirm"){
    token=null;
    feedback("Пароль изменён. Теперь можно войти.","success");
    activate("login",{preserveFeedback:true});
+  }else if(selected==="reset"){
+   feedback(
+    "Если с этим адресом связан аккаунт, письмо со ссылкой на смену пароля будет отправлено. Проверьте папки «Входящие» и «Спам». Письмо может прийти через несколько минут. Если его нет, пройдите защитную проверку и отправьте запрос повторно.",
+    "success","Запрос принят. Проверьте почту"
+   );
   }else{
    feedback("Если адрес допускает действие, письмо с инструкцией будет отправлено.","success");
   }
