@@ -1,8 +1,9 @@
 /* Only the auth API controls session state. Financial records stay in IndexedDB. */
 export function createEmailSession(request=fetch){
- let email=null,revision=0,busy=false;
+ let email=null,userId=null,revision=0,busy=false;
  return {
   get email(){return email;},
+  get userId(){return userId;},
   get busy(){return busy;},
   async refresh(){
    if(busy)return false;
@@ -12,7 +13,9 @@ export function createEmailSession(request=fetch){
     if(!response.ok)return false;
     const result=await response.json();
     if(current!==revision)return false;
-    email=result?.authenticated===true&&typeof result.user?.email==='string'?result.user.email:null;
+    const valid=result?.authenticated===true&&typeof result.user?.email==='string'&&typeof result.user?.id==='string'&&/^[a-f0-9]{32}$/.test(result.user.id);
+    email=valid?result.user.email:null;
+    userId=valid?result.user.id:null;
     return true;
    }catch{
     // The local-first ledger remains available when auth is offline or gated.
@@ -32,6 +35,7 @@ export function createEmailSession(request=fetch){
     const result=await response.json();
     if(result?.ok!==true)throw Error('Сервер не подтвердил выход. Повторите попытку.');
     email=null;
+    userId=null;
     return true;
    }finally{busy=false;}
   }

@@ -21,6 +21,11 @@ function invoke({email='test@example.com',logout,initialBusy=false}={}){
  };
  const ctx={
   Error, // Match the browser realm for instanceof Error in the handler.
+  busy:false,
+  activeUserId:'a'.repeat(32),
+  authBroadcast:null,
+  GUEST_MODE_KEY:'fh-guest-session-v2',
+  sessionStorage:{removeItem:key=>events.push('storage-remove:'+key)},
   emailSession:session,
   syncAccountControls:()=>events.push('sync'),
   render:()=>events.push('render'),
@@ -70,10 +75,10 @@ test('logout redirect waits for success and ignores a non-success result',async(
 
 test('PWA loads revisioned application code, including offline, without opening registration',()=>{
  const html=get('index.html'),sw=get('sw.js');
- const script='./app.js?rev=ios27-chrome-v17';
+ const script='./app.js?rev=auth-scopes-v18';
  assert.ok(html.includes('<script type="module" src="'+script+'"></script>'));
  assert.ok(sw.includes("'"+script+"'"));
  assert.ok(!sw.includes("'./app.js'"),'Stale unrevisioned app.js must not enter precache');
- assert.ok(sw.includes("const CACHE='financial-horizon-shell-v17-ios-header-uncovered'"));
+ assert.ok(sw.includes("const CACHE='financial-horizon-shell-v18-auth-scopes'"));
  assert.ok(html.includes('<meta name="fh-email-auth" content="disabled">'));
 });

@@ -55,7 +55,7 @@
       <div class="toolbar-leading"><button class="tool-icon hamburger" id="menu-toggle" aria-label="Открыть меню"><svg><use href="#ico-menu"/></svg></button><span class="crumb">Личные финансы</span><span class="crumb-slash">/</span><span id="toolbar-title">Обзор</span></div>
       <div class="toolbar-actions"><span class="local-chip"><span class="privacy-dot"></span> Локально</span><button class="tool-icon" id="theme-toggle" aria-label="Переключить тему" title="Переключить тему"><svg><use href="#ico-moon"/></svg></button><button type="button" class="button-secondary toolbar-logout" id="account-logout-toolbar" data-action="account-logout" aria-label="Выйти из аккаунта" title="Выйти из аккаунта" hidden><span class="lucide-logout-icon" aria-hidden="true"></span><span class="toolbar-logout-label">Выйти</span></button><button class="button-primary toolbar-add" id="top-add"><svg><use href="#ico-plus"/></svg><span>Добавить</span></button></div>
     </header>
-    <main class="page" id="main"><div class="loading">Открываем локальную бухгалтерию…</div></main>
+    <main class="page" id="main"><div class="loading">Проверяем доступ к бухгалтерии…</div></main>
     <footer class="footer"><span>Данные остаются в этом браузере. Делайте резервные копии.</span><span id="save-indicator" role="status" aria-live="polite">Локальная база</span></footer>
   </div>
 </div>
@@ -122,5 +122,5 @@
 <input type="file" id="restore-file" accept=".json,application/json" hidden>
 <input type="file" id="schedule-file" accept=".csv,text/csv" hidden>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<script type="module" src="./app.js?rev=ios27-chrome-v17"></script>
+<script type="module" src="./app.js?rev=auth-scopes-v18"></script>
 </body></html>

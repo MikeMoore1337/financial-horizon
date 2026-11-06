@@ -16,6 +16,7 @@ if(location.hash)history.replaceState(null,"",location.pathname+location.search)
 const VALID_TOKEN=/^[a-zA-Z0-9_-]{32,256}$/;
 if(token&&!VALID_TOKEN.test(token)){token=null;mode="login";}
 let config={enabled:false,sitekey:""};
+let activeAccountId=null;
 let challengeToken=null,widgetId=null,activeScript=null,renderVersion=0;
 const challengeModes=new Set(["register","resend","reset"]);
 const routes={
@@ -137,6 +138,11 @@ async function refreshSession(){
   if(!response.ok)return false;
   const result=await response.json();
   const authenticated=result.authenticated===true&&typeof result.user?.email==='string';
+  activeAccountId=authenticated&&typeof result.user?.id==='string'&&/^[a-f0-9]{32}$/.test(result.user.id)
+   ?result.user.id:null;
+  if(authenticated){
+   try{sessionStorage.removeItem('fh-guest-session-v2');}catch{}
+  }
   $('#session-panel').hidden=!authenticated;
   $('#auth-form').hidden=authenticated;
   $('.auth-modes').hidden=authenticated;
@@ -158,7 +164,16 @@ async function refreshSession(){
 
 async function logout(){
  try{
-  await request('logout',{});
+  const formerId=activeAccountId;
+  const result=await request('logout',{});
+  if(result.ok!==true)throw Error('Сервер не подтвердил выход');
+  if(formerId){
+   try{
+    const channel=new BroadcastChannel('fh-auth-session-v2');
+    channel.postMessage({type:'logout',userId:formerId});
+    channel.close();
+   }catch{}
+  }
   await refreshSession();
   activate('login');
   feedback('Сеанс завершён. Локальная бухгалтерия сохранена.','success');
@@ -188,6 +203,8 @@ async function submit(event){
     throw Error("Вход выполнен, но браузер не подтвердил сессию. Проверьте настройки cookies и повторите вход.");
    }
    token=null;
+   // Re-enter the authenticated ledger instead of reusing an earlier guest tab.
+   try{sessionStorage.removeItem('fh-guest-session-v2');}catch{}
    location.assign("./");
   }else if(selected==="reset-confirm"){
    token=null;

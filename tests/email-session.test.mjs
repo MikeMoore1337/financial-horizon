@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createEmailSession} from '../auth-session.js';
 
-const signedIn={ok:true,json:async()=>({authenticated:true,user:{email:'test@example.com'}})};
+const signedIn={ok:true,json:async()=>({authenticated:true,user:{id:'a'.repeat(32),email:'test@example.com'}})};
 const signedOut={ok:true,json:async()=>({authenticated:false,user:null})};
 const logoutOk={ok:true,json:async()=>({ok:true})};
 
@@ -14,8 +14,10 @@ test('authenticated session logs out through POST without touching local finance
  });
  assert.equal(await session.refresh(),true);
  assert.equal(session.email,'test@example.com');
+ assert.equal(session.userId,'a'.repeat(32));
  assert.equal(await session.logout(),true);
  assert.equal(session.email,null);
+ assert.equal(session.userId,null);
  assert.equal(session.busy,false);
  assert.equal(calls.length,2);
  assert.equal(calls[0].url,'./api/auth/email/me');

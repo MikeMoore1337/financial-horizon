@@ -11,7 +11,7 @@ const app=read('app.js');
 const sw=read('sw.js');
 const bootstrap=read('theme-bootstrap.js');
 const revision='ios27-chrome-v17';
-const cache='financial-horizon-shell-v17-ios-header-uncovered';
+const cache='financial-horizon-shell-v18-auth-scopes';
 
 const initialTheme=({stored,systemDark=false,storageBlocked=false}={})=>{
  const root={dataset:{}};
@@ -62,7 +62,7 @@ test('iOS status bar is themed without a fixed element that covers the toolbar',
 test('both PWA pages use revisioned assets, consistent with offline precache',()=>{
  const sheet='./styles.css?rev='+revision;
  const preload='./theme-bootstrap.js?rev='+revision;
- const application='./app.js?rev='+revision;
+ const application='./app.js?rev=auth-scopes-v18';
  for(const page of [html,account]){
   assert.ok(page.includes('<link rel="stylesheet" href="'+sheet+'">'));
   assert.ok(page.includes('<script src="'+preload+'"></script>'));
@@ -73,5 +73,5 @@ test('both PWA pages use revisioned assets, consistent with offline precache',()
   assert.ok(sw.includes("'"+path+"'"),'SW precache missing '+path);
  }
  assert.ok(!sw.includes("'./styles.css'"));
- assert.ok(sw.includes("'./auth-session.js'"),'Preserve logout workflow');
+ assert.ok(sw.includes("'./auth-session.js?rev=auth-scopes-v18'"),'Preserve logout workflow');
 });
