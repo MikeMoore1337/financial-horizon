@@ -138,10 +138,18 @@ export function validateState(s){
  for(const loan of s.loans){
   if(loan.schedule!==undefined&&!Array.isArray(loan.schedule))
    throw Error('Повреждён график кредита');
-  for(const row of loan.schedule||[])
-   for(const field of moneyFields)
-    if(row?.[field]!==undefined&&(!Number.isSafeInteger(row[field])||row[field]<0))
+  for(const row of loan.schedule||[]){
+   if(!row||typeof row!=='object'||Array.isArray(row))
+    throw Error('Повреждена строка графика кредита');
+   for(const field of moneyFields){
+    const value=row[field];
+    // parseSchedule() intentionally stores absent optional CSV columns as null.
+    if(value===undefined||((field==='interestCents'||field==='principalCents')&&value===null))
+     continue;
+    if(!Number.isSafeInteger(value)||value<0)
      throw Error('Неверные суммы в графике кредита');
+   }
+  }
  }
  return s;
 }
