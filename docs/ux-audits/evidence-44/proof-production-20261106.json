@@ -1,0 +1,154 @@
+{
+  "schema": "financial-horizon-issue44-production-smoke-20261106",
+  "date": "2026-11-06",
+  "target_origin": "https://fin-horizon.mikemoore.top",
+  "source_commit_compared": "455e8a8581316221bdfe62f46af60cc5ea19156b",
+  "scope": "public static frontend assets plus guest-mode UI; excludes backend auth, real Safari/VoiceOver",
+  "financial_test_data": "synthetic demo only, fresh ephemeral Playwright Chromium context",
+  "assets": [
+    {
+      "path": "index.html",
+      "query_path": "/",
+      "same_as_main_455e8a": true,
+      "expected_sha256": "78868175b031014ec0234b2d14a73dac4eaac59acfb15bcbfc4904a08ed9e855",
+      "served_sha256": "78868175b031014ec0234b2d14a73dac4eaac59acfb15bcbfc4904a08ed9e855",
+      "served_bytes": 19189
+    },
+    {
+      "path": "account.html",
+      "query_path": "account.html",
+      "same_as_main_455e8a": true,
+      "expected_sha256": "ff663260b2ce18d260b229559e4eea899520a624c7c0dfea0ac124f70d70ae25",
+      "served_sha256": "ff663260b2ce18d260b229559e4eea899520a624c7c0dfea0ac124f70d70ae25",
+      "served_bytes": 4916
+    },
+    {
+      "path": "styles.css",
+      "query_path": "styles.css?rev=auth-theme-v26",
+      "same_as_main_455e8a": true,
+      "expected_sha256": "2ab2b536afc21107f5d3884f62e0275919ecfe9bcb72d6f993021f50be462562",
+      "served_sha256": "2ab2b536afc21107f5d3884f62e0275919ecfe9bcb72d6f993021f50be462562",
+      "served_bytes": 25326
+    },
+    {
+      "path": "app.js",
+      "query_path": "app.js?rev=auth-theme-v25",
+      "same_as_main_455e8a": true,
+      "expected_sha256": "fdc7be76226972d397d16dd72b93d08b3ca3cb4e6f199376c04edbcde1c08106",
+      "served_sha256": "fdc7be76226972d397d16dd72b93d08b3ca3cb4e6f199376c04edbcde1c08106",
+      "served_bytes": 64458
+    },
+    {
+      "path": "sw.js",
+      "query_path": "sw.js",
+      "same_as_main_455e8a": true,
+      "expected_sha256": "db5d8a2382e2b8b94b267fcb3180657355c9869646afa3f73e4007c2b8fc2a02",
+      "served_sha256": "db5d8a2382e2b8b94b267fcb3180657355c9869646afa3f73e4007c2b8fc2a02",
+      "served_bytes": 2142
+    },
+    {
+      "path": "theme-bootstrap.js",
+      "query_path": "theme-bootstrap.js?rev=ios27-chrome-v17",
+      "same_as_main_455e8a": true,
+      "expected_sha256": "5ed783c32f9abfb97a51bcdcf8675b8aa71ed052926f4886ebdd4e87040180d8",
+      "served_sha256": "5ed783c32f9abfb97a51bcdcf8675b8aa71ed052926f4886ebdd4e87040180d8",
+      "served_bytes": 670
+    }
+  ],
+  "browser_cases": [
+    {
+      "width": 320,
+      "theme": "light",
+      "success": true,
+      "scrollWidth": 320,
+      "title": "Обязательства",
+      "metaTheme": "#ffffff",
+      "css": [
+        "auth-theme-v26"
+      ]
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "success": true,
+      "scrollWidth": 320,
+      "title": "Обязательства",
+      "metaTheme": "#172336",
+      "css": [
+        "auth-theme-v26"
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "success": true,
+      "scrollWidth": 393,
+      "title": "Обязательства",
+      "metaTheme": "#ffffff",
+      "css": [
+        "auth-theme-v26"
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "success": true,
+      "scrollWidth": 393,
+      "title": "Обязательства",
+      "metaTheme": "#172336",
+      "css": [
+        "auth-theme-v26"
+      ]
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "success": true,
+      "scrollWidth": 819,
+      "title": "Обязательства",
+      "metaTheme": "#ffffff",
+      "css": [
+        "auth-theme-v26"
+      ]
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "success": true,
+      "scrollWidth": 819,
+      "title": "Обязательства",
+      "metaTheme": "#172336",
+      "css": [
+        "auth-theme-v26"
+      ]
+    }
+  ],
+  "javascript_pageerrors": [],
+  "screenshots": [
+    {
+      "filename": "production-320-light.png",
+      "sha256": "2f54952528dfdc1a9164bbdd738d44c589b4ecdf22373b63d72a133c0e34df22",
+      "bytes": 70109
+    },
+    {
+      "filename": "production-320-dark.png",
+      "sha256": "c17c3904b8002a450cf64d14fc9db31fd497d63aec488470ffb6e15ec14c8ac2",
+      "bytes": 68079
+    },
+    {
+      "filename": "production-768-light.png",
+      "sha256": "3615f21e477c71192ae480df3082572c4dee947db87b5c2b7f69b42514680a2d",
+      "bytes": 91848
+    },
+    {
+      "filename": "production-768-dark.png",
+      "sha256": "197bdf4cfdf2c164cf9a902470bb82d6caf5168c3dc7cdd88ccf85f95ed75593",
+      "bytes": 90272
+    }
+  ],
+  "limitations": [
+    "HTTPS static frontend content equality does not prove backend production revision",
+    "Chromium is not iOS Safari",
+    "No real email was used"
+  ]
+}
