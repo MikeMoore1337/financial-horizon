@@ -11,7 +11,7 @@ const app=read('app.js');
 const sw=read('sw.js');
 const bootstrap=read('theme-bootstrap.js');
 const revision='ios27-chrome-v17';
-const cache='financial-horizon-shell-v19-logout-others';
+const cache='financial-horizon-shell-v20-auth-sessions';
 
 const initialTheme=({stored,systemDark=false,storageBlocked=false}={})=>{
  const root={dataset:{}};
@@ -60,9 +60,9 @@ test('iOS status bar is themed without a fixed element that covers the toolbar',
 });
 
 test('both PWA pages use revisioned assets, consistent with offline precache',()=>{
- const sheet='./styles.css?rev='+revision;
+ const sheet='./styles.css?rev=settings-compact-v19';
  const preload='./theme-bootstrap.js?rev='+revision;
- const application='./app.js?rev=logout-others-v19';
+ const application='./app.js?rev=auth-sessions-v20';
  for(const page of [html,account]){
   assert.ok(page.includes('<link rel="stylesheet" href="'+sheet+'">'));
   assert.ok(page.includes('<script src="'+preload+'"></script>'));

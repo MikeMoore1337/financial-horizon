@@ -62,7 +62,7 @@ test('buttons exist only inside the authenticated account panel',()=>{
  assert.match(html,/id="session-panel" hidden/);
  assert.match(html,/id="auth-logout-others"/);
  assert.match(html,/Выйти на других устройствах/);
- assert.match(sw,/financial-horizon-shell-v19-logout-others/);
- assert.ok(sw.includes("'./app.js?rev=logout-others-v19'"));
- assert.ok(sw.includes("'./account.js?rev=logout-others-v19'"));
+ assert.match(sw,/financial-horizon-shell-v20-auth-sessions/);
+ assert.ok(sw.includes("'./app.js?rev=auth-sessions-v20'"));
+ assert.ok(sw.includes("'./account.js?rev=auth-sessions-v20'"));
 });
