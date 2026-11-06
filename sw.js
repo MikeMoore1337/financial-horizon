@@ -18,9 +18,9 @@ self.addEventListener('fetch',event=>{
    // Never substitute the ledger for the sign-in screen when offline.
    const pathname=new URL(request.url).pathname;
    const fallback=pathname.endsWith('/account.html')?'./account.html':'./index.html';
-   return (await caches.match(fallback))||Response.error();
+   return (await (await caches.open(ACTIVE_CACHE)).match(fallback))||Response.error();
   }));
   return;
  }
- event.respondWith(caches.match(request).then(cached=>cached||fetch(request)));
+ event.respondWith(caches.open(ACTIVE_CACHE).then(cache=>cache.match(request)).then(cached=>cached||fetch(request)));
 });
