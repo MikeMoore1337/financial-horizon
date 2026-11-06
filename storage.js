@@ -1,6 +1,61 @@
 import {emptyState, validateState} from './finance.js';
 const DB='financial-horizon-browser-v1'; const STORE='finance'; const KEY='state';
-let dbPromise;
+const CLAIM_KEY='legacy-account-claim-v2', GUEST_KEY='guest-state-v2';
+let dbPromise,activeKey=KEY;
+
+/* Guest mode is deliberately separate once a legacy ledger has been claimed by an
+   account. The original key is retained for rollback, never destroyed on logout. */
+export async function selectStateScope(userId=null){
+ const db=await openDb();
+ if(userId===null){
+  const owner=await new Promise((resolve,reject)=>{
+   const tx=db.transaction(STORE,'readonly');
+   const req=tx.objectStore(STORE).get(CLAIM_KEY);
+   req.onsuccess=()=>resolve(req.result);
+   req.onerror=()=>reject(req.error||new Error('Не удалось проверить локальную бухгалтерию'));
+  });
+  activeKey=owner?GUEST_KEY:KEY;
+  return activeKey;
+ }
+ if(typeof userId!=='string'||!/^[a-f0-9]{32}$/.test(userId)){
+  throw Error('Невозможно определить подтверждённый аккаунт');
+ }
+ const key='account-state-v2:'+userId;
+ await new Promise((resolve,reject)=>{
+  const tx=db.transaction(STORE,'readwrite');
+  const object=tx.objectStore(STORE);
+  let invalid=null;
+  const fail=error=>{invalid=error;try{tx.abort();}catch{}};
+  const claim=object.get(CLAIM_KEY);
+  claim.onsuccess=()=>{
+   const owner=claim.result;
+   const existing=object.get(key);
+   existing.onsuccess=()=>{
+    if(existing.result!==undefined){
+     try{validateState(existing.result);}catch(error){fail(error);return;}
+     if(!owner)object.put(userId,CLAIM_KEY);
+     return;
+    }
+    // Only the first verified account may copy the historical single-user data.
+    // A second account always receives a new, empty ledger.
+    if(owner&&owner!==userId)return;
+    const legacy=object.get(KEY);
+    legacy.onsuccess=()=>{
+     try{
+      if(legacy.result!==undefined)object.put(structuredClone(validateState(legacy.result)),key);
+      if(!owner)object.put(userId,CLAIM_KEY);
+     }catch(error){fail(error);}
+    };
+   };
+  };
+  tx.oncomplete=()=>resolve();
+  tx.onerror=()=>reject(invalid||tx.error||new Error('Не удалось переключить аккаунт'));
+  tx.onabort=()=>reject(invalid||tx.error||new Error('Не удалось перенести локальные данные'));
+ });
+ activeKey=key;
+ return key;
+}
+
 function openDb(){
  if(!dbPromise){
   dbPromise=new Promise((resolve,reject)=>{
@@ -16,15 +71,15 @@ function openDb(){
  return dbPromise;
 }
 export async function readState(){const db=await openDb(); return new Promise((resolve,reject)=>{
- const tx=db.transaction(STORE,'readonly'),req=tx.objectStore(STORE).get(KEY);
+ const tx=db.transaction(STORE,'readonly'),req=tx.objectStore(STORE).get(activeKey);
  req.onsuccess=()=>{try{resolve(req.result===undefined?emptyState():validateState(req.result));}catch(e){reject(e);}};
  req.onerror=()=>reject(req.error);});}
 export async function updateState(change){
  const db=await openDb();
  return new Promise((resolve,reject)=>{
   const tx=db.transaction(STORE,'readwrite');let updated;
-  const obj=tx.objectStore(STORE),req=obj.get(KEY);
-  req.onsuccess=()=>{try{const state=req.result===undefined?emptyState():validateState(req.result);updated=structuredClone(state);change(updated);validateState(updated);obj.put(updated,KEY);}catch(error){tx.abort();reject(error);}};
+  const obj=tx.objectStore(STORE),req=obj.get(activeKey);
+  req.onsuccess=()=>{try{const state=req.result===undefined?emptyState():validateState(req.result);updated=structuredClone(state);change(updated);validateState(updated);obj.put(updated,activeKey);}catch(error){tx.abort();reject(error);}};
   req.onerror=()=>reject(req.error);
   tx.oncomplete=()=>resolve(updated);
   tx.onerror=()=>reject(tx.error||new Error('Ошибка записи'));
