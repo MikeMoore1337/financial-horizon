@@ -1,0 +1,1582 @@
+{
+  "sourceSha": "455e8a8581316221bdfe62f46af60cc5ea19156b",
+  "browser": "Edge Chromium 156",
+  "method": "local isolated origin and real IndexedDB/SW",
+  "matrix": [
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "overview",
+      "scrollWidth": 320,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Обзор месяца"
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "calendar",
+      "scrollWidth": 320,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Календарь платежей"
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "obligations",
+      "scrollWidth": 320,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Обязательства"
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "loans",
+      "scrollWidth": 320,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Кредиты и ипотека"
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "settings",
+      "scrollWidth": 320,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Настройки"
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "overview",
+      "scrollWidth": 320,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Обзор месяца"
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "calendar",
+      "scrollWidth": 320,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Календарь платежей"
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "obligations",
+      "scrollWidth": 320,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Обязательства"
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "loans",
+      "scrollWidth": 320,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Кредиты и ипотека"
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "settings",
+      "scrollWidth": 320,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Настройки"
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "view": "overview",
+      "scrollWidth": 360,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Обзор месяца"
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "view": "calendar",
+      "scrollWidth": 360,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Календарь платежей"
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "view": "obligations",
+      "scrollWidth": 360,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Обязательства"
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "view": "loans",
+      "scrollWidth": 360,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Кредиты и ипотека"
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "view": "settings",
+      "scrollWidth": 360,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Настройки"
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "view": "overview",
+      "scrollWidth": 360,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Обзор месяца"
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "view": "calendar",
+      "scrollWidth": 360,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Календарь платежей"
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "view": "obligations",
+      "scrollWidth": 360,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Обязательства"
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "view": "loans",
+      "scrollWidth": 360,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Кредиты и ипотека"
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "view": "settings",
+      "scrollWidth": 360,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Настройки"
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "overview",
+      "scrollWidth": 393,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Обзор месяца"
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "calendar",
+      "scrollWidth": 393,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Календарь платежей"
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "obligations",
+      "scrollWidth": 393,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Обязательства"
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "loans",
+      "scrollWidth": 393,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Кредиты и ипотека"
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "settings",
+      "scrollWidth": 393,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Настройки"
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "overview",
+      "scrollWidth": 393,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Обзор месяца"
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "calendar",
+      "scrollWidth": 393,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Календарь платежей"
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "obligations",
+      "scrollWidth": 393,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Обязательства"
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "loans",
+      "scrollWidth": 393,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Кредиты и ипотека"
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "settings",
+      "scrollWidth": 393,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "",
+      "dockVisible": true,
+      "dockBottom": 888,
+      "heading": "Настройки"
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "overview",
+      "scrollWidth": 768,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Обзор месяца"
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "calendar",
+      "scrollWidth": 768,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Календарь платежей"
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "obligations",
+      "scrollWidth": 819,
+      "overflow": true,
+      "outside": [
+        {
+          "node": "BUTTON",
+          "cl": "mini-action",
+          "right": 770
+        },
+        {
+          "node": "BUTTON",
+          "cl": "mini-action",
+          "right": 819
+        },
+        {
+          "node": "svg",
+          "cl": "[object SVGAnimatedString]",
+          "right": 806
+        },
+        {
+          "node": "use",
+          "cl": "[object SVGAnimatedString]",
+          "right": 803
+        },
+        {
+          "node": "BUTTON",
+          "cl": "mini-action",
+          "right": 770
+        },
+        {
+          "node": "BUTTON",
+          "cl": "mini-action",
+          "right": 819
+        },
+        {
+          "node": "svg",
+          "cl": "[object SVGAnimatedString]",
+          "right": 806
+        },
+        {
+          "node": "use",
+          "cl": "[object SVGAnimatedString]",
+          "right": 803
+        },
+        {
+          "node": "BUTTON",
+          "cl": "mini-action",
+          "right": 770
+        },
+        {
+          "node": "BUTTON",
+          "cl": "mini-action",
+          "right": 819
+        }
+      ],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Обязательства"
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "loans",
+      "scrollWidth": 768,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Кредиты и ипотека"
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "settings",
+      "scrollWidth": 768,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Настройки"
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "overview",
+      "scrollWidth": 768,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Обзор месяца"
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "calendar",
+      "scrollWidth": 768,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Календарь платежей"
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "obligations",
+      "scrollWidth": 819,
+      "overflow": true,
+      "outside": [
+        {
+          "node": "BUTTON",
+          "cl": "mini-action",
+          "right": 770
+        },
+        {
+          "node": "BUTTON",
+          "cl": "mini-action",
+          "right": 819
+        },
+        {
+          "node": "svg",
+          "cl": "[object SVGAnimatedString]",
+          "right": 806
+        },
+        {
+          "node": "use",
+          "cl": "[object SVGAnimatedString]",
+          "right": 803
+        },
+        {
+          "node": "BUTTON",
+          "cl": "mini-action",
+          "right": 770
+        },
+        {
+          "node": "BUTTON",
+          "cl": "mini-action",
+          "right": 819
+        },
+        {
+          "node": "svg",
+          "cl": "[object SVGAnimatedString]",
+          "right": 806
+        },
+        {
+          "node": "use",
+          "cl": "[object SVGAnimatedString]",
+          "right": 803
+        },
+        {
+          "node": "BUTTON",
+          "cl": "mini-action",
+          "right": 770
+        },
+        {
+          "node": "BUTTON",
+          "cl": "mini-action",
+          "right": 819
+        }
+      ],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Обязательства"
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "loans",
+      "scrollWidth": 768,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Кредиты и ипотека"
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "settings",
+      "scrollWidth": 768,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Настройки"
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "overview",
+      "scrollWidth": 1440,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Обзор месяца"
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "calendar",
+      "scrollWidth": 1440,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Календарь платежей"
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "obligations",
+      "scrollWidth": 1440,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Обязательства"
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "loans",
+      "scrollWidth": 1440,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Кредиты и ипотека"
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "settings",
+      "scrollWidth": 1440,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Настройки"
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "overview",
+      "scrollWidth": 1440,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Обзор месяца"
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "calendar",
+      "scrollWidth": 1440,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Календарь платежей"
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "obligations",
+      "scrollWidth": 1440,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Обязательства"
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "loans",
+      "scrollWidth": 1440,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Кредиты и ипотека"
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "settings",
+      "scrollWidth": 1440,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Настройки"
+    },
+    {
+      "width": 2560,
+      "theme": "light",
+      "view": "overview",
+      "scrollWidth": 2560,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Обзор месяца"
+    },
+    {
+      "width": 2560,
+      "theme": "light",
+      "view": "calendar",
+      "scrollWidth": 2560,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Календарь платежей"
+    },
+    {
+      "width": 2560,
+      "theme": "light",
+      "view": "obligations",
+      "scrollWidth": 2560,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Обязательства"
+    },
+    {
+      "width": 2560,
+      "theme": "light",
+      "view": "loans",
+      "scrollWidth": 2560,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Кредиты и ипотека"
+    },
+    {
+      "width": 2560,
+      "theme": "light",
+      "view": "settings",
+      "scrollWidth": 2560,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Настройки"
+    },
+    {
+      "width": 2560,
+      "theme": "dark",
+      "view": "overview",
+      "scrollWidth": 2560,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Обзор месяца"
+    },
+    {
+      "width": 2560,
+      "theme": "dark",
+      "view": "calendar",
+      "scrollWidth": 2560,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Календарь платежей"
+    },
+    {
+      "width": 2560,
+      "theme": "dark",
+      "view": "obligations",
+      "scrollWidth": 2560,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Обязательства"
+    },
+    {
+      "width": 2560,
+      "theme": "dark",
+      "view": "loans",
+      "scrollWidth": 2560,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Кредиты и ипотека"
+    },
+    {
+      "width": 2560,
+      "theme": "dark",
+      "view": "settings",
+      "scrollWidth": 2560,
+      "overflow": false,
+      "outside": [],
+      "rootTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "topButtonAccessibleText": "Добавить",
+      "dockVisible": false,
+      "dockBottom": null,
+      "heading": "Настройки"
+    }
+  ],
+  "axe": [
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "overview",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "details": [
+            {
+              "target": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does no"
+            }
+          ]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "details": [
+            {
+              "target": [
+                ".list-row-right > .pos"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.38 (foreground color: #0e8965, background color: #ffffff, font size: 10.5pt (14px), font weight: bold). Exp"
+            },
+            {
+              "target": [
+                ".button-primary[data-action=\"pay\"][data-id=\"s-mortgage\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Exp"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "calendar",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "details": [
+            {
+              "target": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does no"
+            }
+          ]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "details": [
+            {
+              "target": [
+                "button[data-action=\"new-entry\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 9.0pt (12px), font weight: bold). Expe"
+            },
+            {
+              "target": [
+                ".pos"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.38 (foreground color: #0e8965, background color: #ffffff, font size: 10.5pt (14px), font weight: bold). Exp"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "obligations",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "details": [
+            {
+              "target": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does no"
+            }
+          ]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "details": [
+            {
+              "target": [
+                "button[data-action=\"new-entry\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 9.0pt (12px), font weight: bold). Expe"
+            },
+            {
+              "target": [
+                ".record-mobile-row:nth-child(2) > div:nth-child(3) > .record-mobile-amount.pos"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.38 (foreground color: #0e8965, background color: #ffffff, font size: 10.5pt (14px), font weight: bold). Exp"
+            },
+            {
+              "target": [
+                ".record-mobile-row:nth-child(5) > div:nth-child(3) > .record-mobile-amount.pos"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.38 (foreground color: #0e8965, background color: #ffffff, font size: 10.5pt (14px), font weight: bold). Exp"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "loans",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "details": [
+            {
+              "target": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does no"
+            }
+          ]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "details": [
+            {
+              "target": [
+                "button[data-action=\"new-loan\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 9.0pt (12px), font weight: bold). Expe"
+            },
+            {
+              "target": [
+                "button[data-action=\"pay\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Exp"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "settings",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "details": [
+            {
+              "target": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does no"
+            }
+          ]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "details": [
+            {
+              "target": [
+                "button[data-action=\"backup\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 9.8pt (13px), font weight: bold). Expe"
+            },
+            {
+              "target": [
+                "#category-form > .button-primary[type=\"submit\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Exp"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "overview",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "details": [
+            {
+              "target": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does no"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "calendar",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "details": [
+            {
+              "target": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does no"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "obligations",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "details": [
+            {
+              "target": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does no"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "loans",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "details": [
+            {
+              "target": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does no"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "settings",
+      "violations": [
+        {
+          "id": "button-name",
+          "impact": "critical",
+          "details": [
+            {
+              "target": [
+                "#top-add"
+              ],
+              "summary": "Fix any of the following:\n  Element does not have inner text that is visible to screen readers\n  aria-label attribute does not exist or is empty\n  aria-labelledby attribute does no"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "overview",
+      "violations": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "details": [
+            {
+              "target": [
+                "#top-add > span"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Exp"
+            },
+            {
+              "target": [
+                ".list-row-right > .pos"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.38 (foreground color: #0e8965, background color: #ffffff, font size: 10.5pt (14px), font weight: bold). Exp"
+            },
+            {
+              "target": [
+                ".button-primary[data-action=\"pay\"][data-id=\"s-mortgage\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Exp"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "calendar",
+      "violations": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "details": [
+            {
+              "target": [
+                "#top-add > span"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Exp"
+            },
+            {
+              "target": [
+                "button[data-action=\"new-entry\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Exp"
+            },
+            {
+              "target": [
+                ".pos"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.38 (foreground color: #0e8965, background color: #ffffff, font size: 10.5pt (14px), font weight: bold). Exp"
+            }
+          ]
+        },
+        {
+          "id": "label-content-name-mismatch",
+          "impact": "serious",
+          "details": [
+            {
+              "target": [
+                "button[data-date=\"2026-11-10\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "target": [
+                ".selected"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "target": [
+                "button[data-date=\"2026-11-16\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "target": [
+                "button[data-date=\"2026-11-20\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "target": [
+                "button[data-date=\"2026-11-22\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "target": [
+                "button[data-date=\"2026-11-30\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "obligations",
+      "violations": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "details": [
+            {
+              "target": [
+                "#top-add > span"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Exp"
+            },
+            {
+              "target": [
+                "button[data-action=\"new-entry\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Exp"
+            },
+            {
+              "target": [
+                "tr:nth-child(2) > .money-cell.pos"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.38 (foreground color: #0e8965, background color: #ffffff, font size: 10.5pt (14px), font weight: bold). Exp"
+            },
+            {
+              "target": [
+                "tr:nth-child(5) > .money-cell.pos"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.38 (foreground color: #0e8965, background color: #ffffff, font size: 10.5pt (14px), font weight: bold). Exp"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "loans",
+      "violations": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "details": [
+            {
+              "target": [
+                "#top-add > span"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Exp"
+            },
+            {
+              "target": [
+                "button[data-action=\"new-loan\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Exp"
+            },
+            {
+              "target": [
+                "button[data-action=\"pay\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Exp"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "settings",
+      "violations": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "details": [
+            {
+              "target": [
+                "#top-add > span"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Exp"
+            },
+            {
+              "target": [
+                "button[data-action=\"backup\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 9.8pt (13px), font weight: bold). Expe"
+            },
+            {
+              "target": [
+                "#category-form > .button-primary[type=\"submit\"]"
+              ],
+              "summary": "Fix any of the following:\n  Element has insufficient color contrast of 4.04 (foreground color: #ffffff, background color: #3078fa, font size: 10.5pt (14px), font weight: bold). Exp"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "overview",
+      "violations": []
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "calendar",
+      "violations": [
+        {
+          "id": "label-content-name-mismatch",
+          "impact": "serious",
+          "details": [
+            {
+              "target": [
+                "button[data-date=\"2026-11-10\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "target": [
+                ".selected"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "target": [
+                "button[data-date=\"2026-11-16\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "target": [
+                "button[data-date=\"2026-11-20\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "target": [
+                "button[data-date=\"2026-11-22\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            },
+            {
+              "target": [
+                "button[data-date=\"2026-11-30\"]"
+              ],
+              "summary": "Fix any of the following:\n  Text inside the element is not included in the accessible name"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "obligations",
+      "violations": []
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "loans",
+      "violations": []
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "settings",
+      "violations": []
+    }
+  ],
+  "errors": [],
+  "scenarios": [],
+  "screenshots": [
+    "reaudit-320-light-obligations.png",
+    "reaudit-320-dark-obligations.png",
+    "reaudit-393-light-overview.png",
+    "reaudit-768-light-obligations.png",
+    "reaudit-768-dark-obligations.png"
+  ]
+}
