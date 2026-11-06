@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {emptyState,createSampleState,validateState,getMonthEvents,monthTotals} from '../finance.js';
 import {migrateState,downgradeStateForRollback,CURRENT_STATE_VERSION} from '../state-migrations.js';
 import {encryptBackup,decryptBackup} from '../backup.js';
@@ -155,4 +156,14 @@ test('operations service preserves cents, records and audit history across creat
  assert.equal(state.settlements[0].amountCents,500);
  assert.equal(state.audit.length,5);
  assert.doesNotThrow(()=>validateState(state));
+});
+
+test('entry, loan and settlement forms keep proper date expressions after splitting operations',()=>{
+ const app=readFileSync(new URL('../app.js',import.meta.url),'utf8');
+ const begin=app.indexOf('async function saveEntry(form){');
+ const end=app.indexOf('async function performBackup(password){',begin);
+ assert.ok(begin>=0&&end>begin);
+ const handlers=app.slice(begin,end);
+ assert.equal(handlers.split(String.raw`/^\d{4}-\d{2}-\d{2}$/`).length-1,3);
+ assert.equal(handlers.includes(String.raw`\\d`),false,'form validators must not match a literal backslash');
 });
