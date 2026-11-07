@@ -5,7 +5,7 @@
 ## Trust boundaries и защищаемые ресурсы
 
 - Browser/PWA → FastAPI по HTTPS через Caddy: cookie `fh_email_session` (Secure, HttpOnly, SameSite=Lax, path `/api/auth`), Origin/Host, отсутствие CORS для внешних сайтов. Публичный API не предоставляет финансовые данные.
-- FastAPI → Telegram/Google/Яндекс/VK: только заранее заданные TLS endpoints, server-side Authorization Code/PKCE S256; дополнительные разрешения на телефон/email не запрашиваются.
+- FastAPI → Telegram/Google/Яндекс/VK: только заранее заданные TLS endpoints, Authorization Code и PKCE (Telegram, Google, Яндекс - `S256`; VK ID - `s256` согласно официальному SDK). Google требует `openid profile`, но FH игнорирует личные поля и не запрашивает email.
 - IdP → browser callback: state/nonce/verifier хранит только сервер, marker HttpOnly привязан к браузеру; запрет подмены, replay и неоднозначного разбора полей.
 - FastAPI ↔ private SQLite: стабильный `users.id`, уникальные `oauth_identities(provider,subject)` и `(user_id,provider)`, общие с email сервера сессии. Ни YFC, ни финансовая IndexedDB сюда не подключаются.
 - Операционная граница: отдельные client ID/secret в root-only env, не в GitHub, не в URL ответа, не в логах.
@@ -27,7 +27,7 @@
 | Защита | Основание | Статус |
 | --- | --- | --- |
 | Случайные одноразовые state/marker, TTL, replay | `fh_auth.app` / `OAuthStore.begin/claim/finish`, negative pytest | PASS - синтетически |
-| PKCE S256, nonce для OIDC, allowlisted provider URLs | `providers.py`, `exchange.py`, тесты JWKS/PKCE | PASS - синтетически |
+| PKCE S256 (VK ID `s256`), nonce для OIDC, allowlisted provider URLs | `providers.py`, `exchange.py`, тесты JWKS/PKCE | PASS - синтетически |
 | JWT signature, alg allowlist, issuer/audience/azp/exp/iat/nonce | `verify_oidc` и тестовые RSA/JWKS | PASS - синтетически |
 | VK state и device_id | сравнение state после token exchange, корректный `device_id` обязателен | PASS - синтетически |
 | Строгое explicit linking из действующей сессии, Origin+confirm | `link/start`, `complete_link`, тесты конфликтов/CSRF | PASS - синтетически |

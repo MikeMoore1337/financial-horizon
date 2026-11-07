@@ -181,8 +181,12 @@ async def exchange_provider(
             if not isinstance(token, str) or not token:
                 raise ProviderError("Missing Yandex access token")
             profile = _json(await client.get(
-                YANDEX_PROFILE, headers={"Authorization": "Bearer " + token}
+                YANDEX_PROFILE, headers={"Authorization": "OAuth " + token}
             ))
+            # Yandex supplies client_id in the standard user-info response.
+            # Fail closed rather than accepting a subject from another OAuth app.
+            if profile.get("client_id") != provider.client_id:
+                raise ProviderError("Wrong Yandex client identifier")
             return normalize_subject("yandex", profile)
         id_token = result.get("id_token")
         jwks = _json(await client.get(OIDC_JWKS[provider.name]))

@@ -75,8 +75,8 @@ async def test_yandex_exchange_returns_stable_id_only():
             assert body["code_verifier"]==["v"*48]
             return httpx.Response(200,json={"access_token":"TEST_TOKEN"})
         assert request.url.host=="login.yandex.ru"
-        assert request.headers["authorization"]=="Bearer TEST_TOKEN"
-        return httpx.Response(200,json={"id":"yandex-account-223","default_email":"person@example.test"})
+        assert request.headers["authorization"]=="OAuth TEST_TOKEN"
+        return httpx.Response(200,json={"id":"yandex-account-223","client_id":"test-id","default_email":"person@example.test"})
     tx=Claim("yandex","v"*48,"n"*40,"https://fin-horizon.mikemoore.top/api/auth/oauth/yandex/callback")
     subject=await exchange_provider(OAuthProvider("yandex","test-id","secret-test"),tx,"some-code",transport=httpx.MockTransport(transport))
     assert subject=="yandex-account-223"
@@ -135,3 +135,27 @@ def test_oidc_authorized_party_is_checked_for_multiple_audiences(rsa_key):
  ]:
   with pytest.raises(ProviderError,match="authorized party"):
    verify_oidc(invalid,jwks,client,"n"*40,now=1700000000)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("profile_client_id", ["different-yfc-app", None, "", 22])
+async def test_yandex_user_info_rejects_foreign_client_identifier(profile_client_id):
+    """Even a valid access token must resolve to this Financial Horizon app."""
+    def transport(request):
+        if request.url.host == "oauth.yandex.ru":
+            return httpx.Response(200, json={"access_token": "synthetic-token"})
+        assert request.url.host == "login.yandex.ru"
+        assert request.headers["authorization"] == "OAuth synthetic-token"
+        return httpx.Response(
+            200, json={"id": "user-123", "client_id": profile_client_id}
+        )
+
+    claim = Claim(
+        "yandex", "v" * 48, "n" * 40,
+        "https://fin-horizon.mikemoore.top/api/auth/oauth/yandex/callback"
+    )
+    with pytest.raises(ProviderError, match="Wrong Yandex client identifier"):
+        await exchange_provider(
+            OAuthProvider("yandex", "financial-horizon-client", "synthetic-secret"),
+            claim, "test-code", transport=httpx.MockTransport(transport)
+        )

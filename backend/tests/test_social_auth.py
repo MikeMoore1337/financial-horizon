@@ -101,8 +101,11 @@ def test_provider_redirects_exact_pkce_and_minimal_scope():
             "https://fin-horizon.mikemoore.top/api/auth/oauth/" + p + "/callback"
         ]
         assert query["code_challenge"] == [pkce_challenge("v" * 65)]
-        assert query["code_challenge_method"] == ["S256"]
-        assert query.get("scope", [""])[0] in ("openid", "login:info", "")
+        assert query["code_challenge_method"] == ["s256" if p == "vk" else "S256"]
+        assert query.get("scope", [""])[0] == {
+            "telegram": "openid", "google": "openid profile",
+            "yandex": "login:info", "vk": ""
+        }[p]
         assert "email" not in query.get("scope", [""])[0]
         if p in ("telegram", "google"):
             assert query["nonce"] == ["n" * 45]

@@ -13,7 +13,8 @@ import re
 # Fixed allowlisted endpoints based on original YFC adapters.
 _OAUTH = {
     "telegram": ("https://oauth.telegram.org/auth", "https://oauth.telegram.org/token", "openid"),
-    "google": ("https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token", "openid"),
+    # Google OIDC requires openid plus profile and/or email. Do not request email.
+    "google": ("https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token", "openid profile"),
     "yandex": ("https://oauth.yandex.ru/authorize", "https://oauth.yandex.ru/token", "login:info"),
     "vk": ("https://id.vk.ru/authorize", "https://id.vk.ru/oauth2/auth", ""),
 }
@@ -60,7 +61,8 @@ class OAuthProvider:
             "scope": _OAUTH[self.name][2],
             "state": state,
             "code_challenge": pkce_challenge(verifier),
-            "code_challenge_method": "S256",
+            # VK ID's official web SDK sends lowercase "s256"; other IdPs use IETF "S256".
+            "code_challenge_method": "s256" if self.name == "vk" else "S256",
         }
         if not params["scope"]:
             params.pop("scope")

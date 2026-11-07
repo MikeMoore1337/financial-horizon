@@ -13,9 +13,9 @@ Backend: существующий FastAPI email-auth, одна SQLite auth.sqlit
 | Провайдер | Тип клиента и scope | Точный Redirect URI |
 | --- | --- | --- |
 | Telegram | BotFather Login Widget, OIDC Authorization Code + PKCE S256, openid | https://fin-horizon.mikemoore.top/api/auth/oauth/telegram/callback |
-| Google | Google Cloud Web application, OIDC Code + PKCE S256, openid | https://fin-horizon.mikemoore.top/api/auth/oauth/google/callback |
+| Google | Google Cloud Web application, OIDC Code + PKCE S256, openid profile (без email) | https://fin-horizon.mikemoore.top/api/auth/oauth/google/callback |
 | Яндекс | Yandex OAuth web app, Code + PKCE S256, login:info | https://fin-horizon.mikemoore.top/api/auth/oauth/yandex/callback |
-| VK ID | VK ID Web application, OAuth 2.1 + PKCE S256, пустой scope | https://fin-horizon.mikemoore.top/api/auth/oauth/vk/callback |
+| VK ID | VK ID Web application, OAuth 2.1 + PKCE `s256` (формат официального SDK), пустой scope | https://fin-horizon.mikemoore.top/api/auth/oauth/vk/callback |
 
 ## Telegram
 В @BotFather создать отдельного бота для Financial Horizon.
@@ -34,7 +34,7 @@ Google Cloud Console, настроить OAuth consent screen, test users и
 Authorized redirect URI выше. Authorized origin при необходимости:
 https://fin-horizon.mikemoore.top
 Задать FH_GOOGLE_OAUTH_CLIENT_ID / FH_GOOGLE_OAUTH_CLIENT_SECRET.
-Проверяются issuer, audience, azp, nonce, exp, iat, JWKS signature.
+Google OIDC требует `openid` вместе с `profile` и/или `email`. FH запрашивает только `openid profile`; персональные поля профиля игнорируются, для связывания аккаунтов используется только проверенный `sub`. Проверяются issuer, audience, azp, nonce, exp, iat, JWKS signature.
 Официально: https://developers.google.com/identity/openid-connect/openid-connect
 
 ## Яндекс ID
@@ -42,13 +42,13 @@ https://fin-horizon.mikemoore.top
 с полным redirect URI выше. Требуется только право login:info.
 Секретные поля FH_YANDEX_OAUTH_CLIENT_ID / FH_YANDEX_OAUTH_CLIENT_SECRET.
 Сервер меняет code на token и запрашивает стабильный id из
-https://login.yandex.ru/info?format=json без хранения профиля.
+https://login.yandex.ru/info?format=json через заголовок `Authorization: OAuth ...` без хранения профиля. Ответный `client_id` обязан совпадать с собственным идентификатором Financial Horizon; чужие приложения отклоняются.
 Официально: https://yandex.ru/dev/id/doc/ru/codes/code-url
 
 ## VK ID
 В кабинете подключения VK ID создать отдельное веб-приложение с
 редиректом выше; FH_VK_OAUTH_CLIENT_ID - свой APP_ID, без YFC.
-VK использует code, state и device_id в callback, PKCE S256 и
+VK использует code, state и device_id в callback, PKCE `s256` (как в официальном VKID SDK) и
 POST к https://id.vk.ru/oauth2/auth, затем
 https://id.vk.ru/oauth2/user_info с полученным access token.
 Требуется подтвердить реальный GET callback и возврат из VK app;
