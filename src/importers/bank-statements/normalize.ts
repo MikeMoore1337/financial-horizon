@@ -22,6 +22,8 @@ const ALIASES: Readonly<Record<MappableField, readonly string[]>> = {
   externalId: ['идентификатор', 'номероперации', 'idоперации', 'id', 'transactionid', 'reference', 'operationid', 'externalid'],
 };
 const CODEC = new TextEncoder();
+// Must match the ledger domain limit from #33, not merely JS Number.MAX_SAFE_INTEGER.
+const MAX_OPERATION_CENTS = 1_000_000_000_000;
 function warn(code: string, message: string, severity: ImportWarning['severity'], row?: number, column?: number): ImportWarning {
   return { code, message, severity, ...(row === undefined ? {} : { row }), ...(column === undefined ? {} : { column }) };
 }
@@ -95,9 +97,18 @@ function parseDate(value: BankCell | undefined, table: BankStatementTable, order
     return { iso: makeDate(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)), Number(iso.slice(8, 10))) };
   }
   const raw = text(value);
-  let match = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?:[ T].*)?$/.exec(raw);
+  // Allow a valid local timestamp, but never silently accept arbitrary suffixes.
+  const suffix = /(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2})?)$/i;
+  const timestamp = suffix.exec(raw);
+  if (timestamp) {
+    const hour = Number(timestamp[1]), minute = Number(timestamp[2]);
+    const second = timestamp[3] === undefined ? 0 : Number(timestamp[3]);
+    if (hour > 23 || minute > 59 || second > 59) return { iso: null, issue: 'INVALID_TIME' };
+  }
+  const dateText = timestamp ? raw.slice(0, -timestamp[0].length) : raw;
+  let match = /^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/.exec(dateText);
   if (match) return { iso: makeDate(Number(match[1]), Number(match[2]), Number(match[3])) };
-  match = /^(\d{1,2})([./-])(\d{1,2})\2(\d{4})(?:\s+.*)?$/.exec(raw);
+  match = /^(\d{1,2})([./-])(\d{1,2})\2(\d{4})$/.exec(dateText);
   if (!match) return { iso: null, issue: 'INVALID_DATE' };
   const first = Number(match[1]), second = Number(match[3]), year = Number(match[4]);
   if (!order && match[2] !== '.' && first <= 12 && second <= 12) {
@@ -114,7 +125,7 @@ function parseMoney(value: BankCell | undefined, style: NumberFormat): {
   if (typeof value === 'number') {
     const value100 = Math.abs(value) * 100, rounded = Math.round(value100);
     if (!Number.isFinite(value100) || !Number.isSafeInteger(rounded) ||
-        Math.abs(value100 - rounded) > 0.00001) return { cents: null, negative: false, issue: 'INVALID_AMOUNT' };
+        rounded > MAX_OPERATION_CENTS || Math.abs(value100 - rounded) > 0.00001) return { cents: null, negative: false, issue: 'INVALID_AMOUNT' };
     return { cents: rounded, negative: value < 0 };
   }
   let raw = text(value).replace(/(?:руб(?:лей|ля|ль)?|RUB|RUR|₽)\s*$/i, '')
@@ -154,7 +165,7 @@ function parseMoney(value: BankCell | undefined, style: NumberFormat): {
   const clean = integer.replace(/[.,]/g, '');
   try {
     const cents = BigInt(clean) * 100n + BigInt(fraction.padEnd(2, '0') || '0');
-    if (cents > BigInt(Number.MAX_SAFE_INTEGER)) return { cents: null, negative, issue: 'AMOUNT_OVERFLOW' };
+    if (cents > BigInt(MAX_OPERATION_CENTS)) return { cents: null, negative, issue: 'AMOUNT_OVERFLOW' };
     return { cents: Number(cents), negative };
   } catch {
     return { cents: null, negative, issue: 'INVALID_AMOUNT' };
@@ -167,6 +178,7 @@ function matchAccount(raw: string, accounts: readonly KnownBankAccount[]): { id:
   const found = accounts.filter(x => [x.id, x.name, ...(x.aliases || [])].some(alias => norm(alias) === key));
   if (!found.length) return { id: null, issue: 'UNKNOWN_ACCOUNT' };
   if (found.length > 1) return { id: null, issue: 'AMBIGUOUS_ACCOUNT' };
+  if (found[0]?.currency !== 'RUB') return { id: null, issue: 'UNSUPPORTED_ACCOUNT_CURRENCY' };
   return { id: found[0]?.id || null };
 }
 function classify(value: string): BankKind | null {
@@ -222,8 +234,13 @@ export async function normalizeBankStatement(
       const inPresent = credit.issue !== 'EMPTY_AMOUNT';
       const outPresent = debit.issue !== 'EMPTY_AMOUNT';
       if (inPresent && outPresent) err('CONFLICTING_AMOUNT', 'Заполнены и приход, и расход');
-      else if (inPresent && !credit.issue) { amountCents = credit.cents; isNegative = false; }
-      else if (outPresent && !debit.issue) { amountCents = debit.cents; isNegative = true; }
+      else if (inPresent && !credit.issue) {
+        if (credit.negative) err('NEGATIVE_SPLIT_AMOUNT', 'Приход не может быть отрицательным');
+        amountCents = credit.cents; isNegative = false;
+      } else if (outPresent && !debit.issue) {
+        if (debit.negative) err('NEGATIVE_SPLIT_AMOUNT', 'Расход в отдельной колонке должен быть положительным');
+        amountCents = debit.cents; isNegative = true;
+      }
       else err(credit.issue && inPresent ? credit.issue : debit.issue && outPresent ? debit.issue : 'EMPTY_AMOUNT',
         'Отсутствует или неверна сумма');
     }
@@ -244,12 +261,23 @@ export async function normalizeBankStatement(
     const accountRaw = text(get(source.cells, 'account')) || options.defaultAccountId || '';
     const account = matchAccount(accountRaw, accounts);
     if (!account.id) err(account.issue || 'UNKNOWN_ACCOUNT', 'Счёт не сопоставлен', 'account');
-    let targetId: string | null = null;
+    let accountId: string | null = account.id, targetId: string | null = null;
+    const targetRaw = text(get(source.cells, 'targetAccount'));
+    if (targetRaw && kind !== 'transfer') {
+      err('TRANSFER_KIND_REQUIRED', 'Для второго собственного счёта явно укажите тип перевода', 'kind');
+    }
     if (kind === 'transfer') {
-      const target = matchAccount(text(get(source.cells, 'targetAccount')), accounts);
+      const target = matchAccount(targetRaw, accounts);
       targetId = target.id;
-      if (!targetId) err(target.issue || 'TARGET_REQUIRED', 'Не выбран счёт назначения перевода', 'targetAccount');
-      if (targetId && targetId === account.id) err('SAME_ACCOUNT', 'Перевод на тот же счёт', 'targetAccount');
+      if (!targetId) err(target.issue || 'TARGET_REQUIRED', 'Не выбран второй счёт перевода', 'targetAccount');
+      if (targetId && targetId === accountId) err('SAME_ACCOUNT', 'Перевод на тот же счёт', 'targetAccount');
+      if (!isNegative && !options.transferDirection) {
+        err('TRANSFER_DIRECTION_REQUIRED', 'Положительный перевод требует явного выбора направления', 'kind');
+      }
+      if (!isNegative && options.transferDirection === 'signed-source') {
+        // A positive row is an incoming movement on the listed bank account.
+        [accountId, targetId] = [targetId, accountId];
+      }
     }
     const currency = text(get(source.cells, 'currency')) || 'RUB';
     if (!['RUB', 'RUR', '₽', 'РУБ', 'РУБЛЬ'].includes(currency.toUpperCase())) {
@@ -268,12 +296,12 @@ export async function normalizeBankStatement(
       else category = known || mapped;
     }
     const fatal = issues.some(x => x.severity === 'error');
-    if (fatal || !date.iso || amountCents === null || account.id === null) {
+    if (fatal || !date.iso || amountCents === null || accountId === null) {
       entries.push({ rowNumber: row, operation: null, warnings: issues });
       continue;
     }
     const fingerprint = await sha256([
-      account.id, date.iso, kind, amountCents, targetId || '', norm(description), 'RUB',
+      accountId, date.iso, kind, amountCents, targetId || '', norm(description), 'RUB',
     ].join('\u001f'));
     const sourceKey = await sha256(table.fileDigest + '\u001f' + row);
     if (sourceKeys.has(fingerprint)) note('REPEATED_CONTENT', 'Совпадающая операция внутри файла - требуется сверка');
@@ -281,7 +309,7 @@ export async function normalizeBankStatement(
     const operation: NormalizedBankOperation = {
       sourceRow: row, sourceKey, fingerprint, date: date.iso,
       amountCents, kind, description, externalId: externalId || null,
-      accountId: account.id, targetAccountId: targetId, category, currency: 'RUB',
+      accountId, targetAccountId: targetId, category, currency: 'RUB',
     };
     entries.push({ rowNumber: row, operation, warnings: issues });
     if (kind === 'income') inflowCents += amountCents;
