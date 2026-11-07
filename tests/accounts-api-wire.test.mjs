@@ -24,9 +24,11 @@ function reversal(overrides = {}) {
     ifMatch: etag,
     clientMutationId: id(12),
     baseRevision: 7,
-    expectedEntityRevisions: { [id(13)]: 2 },
+    expectedEntityRevisions: { [id(13)]: 2, [id(14)]: 3 },
     transactionId: id(13),
     reason: 'Возврат',
+    transactionKind: 'expense',
+    postingAccountIds: [id(14)],
     ...overrides,
   };
 }
@@ -65,6 +67,9 @@ test('reversal encoder matches exact published v1 OpenAPI command, without clien
   matchesPublishedSchema(encoded, 'TransactionReversePayload');
   assert.deepEqual(encoded.body.payload, { transaction_id: id(13), reason: 'Возврат' });
   assert.equal(encoded.body.expected_entity_revisions[id(13)], 2);
+  assert.equal(encoded.body.expected_entity_revisions[id(14)], 3);
+  assert.ok(!Object.hasOwn(encoded.body.payload, 'transactionKind'));
+  assert.ok(!Object.hasOwn(encoded.body.payload, 'postingAccountIds'));
 });
 
 test('transfer rejects invalid amount, same-account transfer and impossible calendar dates', () => {
@@ -97,4 +102,28 @@ test('same immutable envelope yields identical bytes for network retry without m
   assert.equal(first.body.client_mutation_id, first.headers['Idempotency-Key']);
   const second = encodeTransfer(transfer());
   assert.deepEqual(second, first);
+});
+
+test('reversal encoder requires every affected account revision without changing v1 payload', () => {
+  const validTransfer = reversal({
+    transactionKind: 'transfer',
+    postingAccountIds: [id(14), id(15)],
+    expectedEntityRevisions: { [id(13)]: 2, [id(14)]: 3, [id(15)]: 4 },
+  });
+  const encoded = encodeReversal(validTransfer);
+  matchesPublishedSchema(encoded, 'TransactionReversePayload');
+  assert.deepEqual(encoded.body.payload, { transaction_id: id(13), reason: 'Возврат' });
+  assert.deepEqual(encoded.body.expected_entity_revisions, {
+    [id(13)]: 2, [id(14)]: 3, [id(15)]: 4,
+  });
+  assert.throws(() => encodeReversal(reversal({ transactionKind: 'payment' })), /Отмена связанной оплаты/);
+  assert.throws(() => encodeReversal(reversal({ transactionKind: 'reversal' })), /Отмена связанной оплаты/);
+  assert.throws(() => encodeReversal(reversal({ postingAccountIds: [] })), /все счета/);
+  assert.throws(() => encodeReversal(reversal({ postingAccountIds: [id(14), id(15)] })), /все счета/);
+  assert.throws(() => encodeReversal(reversal({ postingAccountIds: [id(15)] })), /зависимой сущности/);
+  assert.throws(() => encodeReversal(reversal({ transactionKind: 'transfer' })), /все счета/);
+  assert.throws(() => encodeReversal(reversal({
+    transactionKind: 'transfer',
+    postingAccountIds: [id(14), id(14)],
+  })), /повторяются/);
 });
