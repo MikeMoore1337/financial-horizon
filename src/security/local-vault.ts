@@ -255,17 +255,21 @@ export async function createLocalKeyset(scope: LocalScope, passphrase: string): 
   } finally { raw.fill(0); recoverySecret.fill(0); }
 }
 export async function unlockLocalKeyset(keyset: LocalKeysetV1, credential: {passphrase: string} | {recoveryKey: string}, expectedScope: LocalScope): Promise<LocalVault> {
-  validateKeyset(keyset); scopeValid(expectedScope);
-  if (keyset.scope !== expectedScope) throw Error('Нельзя открыть бюджет другого пользователя');
-  const raw = await unlockRaw(keyset, credential);
-  try { return await asVault(raw, keyset.scope, keyset.keyId); }
+  // An untrusted caller may mutate an IndexedDB-sourced object while Web Crypto awaits.
+  // Pin the entire envelope (including nested slots) before validation/first await.
+  const pinned = structuredClone(keyset);
+  validateKeyset(pinned); scopeValid(expectedScope);
+  if (pinned.scope !== expectedScope) throw Error('Нельзя открыть бюджет другого пользователя');
+  const raw = await unlockRaw(pinned, credential);
+  try { return await asVault(raw, pinned.scope, pinned.keyId); }
   finally { raw.fill(0); }
 }
 /** Changes only the passphrase wrapper; no record re-encryption and no change to recovery material. */
 export async function changeLocalPassphrase(keyset: LocalKeysetV1, credential: {passphrase: string} | {recoveryKey: string}, newPassphrase: string, expectedScope: LocalScope): Promise<LocalKeysetV1> {
-  validateKeyset(keyset); scopeValid(expectedScope); passphraseValid(newPassphrase);
-  if (keyset.scope !== expectedScope) throw Error('Нельзя открыть бюджет другого пользователя');
-  const raw = await unlockRaw(keyset, credential);
-  try { return {...keyset, passphrase: await newPassphraseSlot(raw, newPassphrase, keyset.scope, keyset.keyId)}; }
+  const pinned = structuredClone(keyset);
+  validateKeyset(pinned); scopeValid(expectedScope); passphraseValid(newPassphrase);
+  if (pinned.scope !== expectedScope) throw Error('Нельзя открыть бюджет другого пользователя');
+  const raw = await unlockRaw(pinned, credential);
+  try { return {...pinned, passphrase: await newPassphraseSlot(raw, newPassphrase, pinned.scope, pinned.keyId)}; }
   finally { raw.fill(0); }
 }

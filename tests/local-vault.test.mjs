@@ -197,3 +197,49 @@ test('unlock rejects oversize and too-short passphrases before KDF work', async 
   await assert.rejects(() => unlockLocalKeyset(keyset, {passphrase: 'x'.repeat(1025)}, user1), /Неверный ключ/);
   await assert.rejects(() => unlockLocalKeyset(keyset, {passphrase: 'short'}, user1), /Неверный ключ/);
 });
+
+
+test('async unlock uses the original keyset scope and keyId despite concurrent mutation', async () => {
+  const created = await createLocalKeyset(user1, pass);
+  const replacement = await createLocalKeyset(user2, pass);
+  const mutable = clone(created.keyset);
+  const subtle = globalThis.crypto.subtle;
+  const nativeDecrypt = subtle.decrypt;
+  try {
+    subtle.decrypt = async function(...args) {
+      const result = await nativeDecrypt.apply(this, args);
+      // The genuine GCM decrypt authenticated original AAD before this mutation.
+      mutable.scope = user2;
+      mutable.keyId = replacement.keyset.keyId;
+      mutable.recovery.salt = 'AAAAAAAAAAAAAAAAAAAAAA';
+      return result;
+    };
+    const unlocked = await unlockLocalKeyset(mutable, {passphrase: pass}, user1);
+    assert.equal(unlocked.scope, user1);
+    assert.equal(unlocked.keyId, created.keyset.keyId);
+    const record = await unlocked.encrypt(finance, context);
+    assert.equal(record.scope, user1);
+  } finally { subtle.decrypt = nativeDecrypt; }
+});
+
+test('async passphrase rewrap pins the original keyset when caller mutates it', async () => {
+  const created = await createLocalKeyset(user1, pass);
+  const replacement = await createLocalKeyset(user2, pass);
+  const mutable = clone(created.keyset);
+  const subtle = globalThis.crypto.subtle;
+  const nativeDecrypt = subtle.decrypt;
+  try {
+    subtle.decrypt = async function(...args) {
+      const result = await nativeDecrypt.apply(this, args);
+      mutable.scope = user2;
+      mutable.keyId = replacement.keyset.keyId;
+      mutable.recovery.iv = 'AAAAAAAAAAAAAAAA';
+      return result;
+    };
+    const updated = await changeLocalPassphrase(mutable, {passphrase: pass}, 'rotated local passphrase 2026', user1);
+    assert.equal(updated.scope, user1);
+    assert.equal(updated.keyId, created.keyset.keyId);
+    assert.deepEqual(updated.recovery, created.keyset.recovery);
+    assert.equal((await unlockLocalKeyset(updated, {passphrase: 'rotated local passphrase 2026'}, user1)).scope, user1);
+  } finally { subtle.decrypt = nativeDecrypt; }
+});
