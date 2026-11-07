@@ -147,3 +147,23 @@ test('public balance/cash-flow readers never silently omit corrupt or foreign po
     assert.throws(query, /Проводка/);
   }
 });
+
+test('hydrated ledger rejects a linked payment reversal without an atomic fact void', () => {
+  const s = fixture();
+  const original = s.transactions.find(tx => tx.kind === 'payment');
+  assert.ok(original);
+  const originalPosting = s.postings.find(p => p.transactionId === original.id);
+  assert.ok(originalPosting);
+  const reversalId = uuid(19);
+  s.transactions.push({
+    id: reversalId, profileId: s.profileId, kind: 'reversal',
+    occurredOn: '2026-11-07', actorUserId: original.actorUserId,
+    note: 'Небезопасная отмена', entityRevision: 1, reversedTransactionId: original.id,
+  });
+  s.postings.push({
+    profileId: s.profileId, transactionId: reversalId,
+    accountId: originalPosting.accountId, signedMinor: -originalPosting.signedMinor,
+  });
+  s.revision++;
+  assert.throws(() => assertLedgerState(s), /Связанная оплата отменена/);
+});
