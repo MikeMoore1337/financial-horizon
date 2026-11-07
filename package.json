@@ -6,10 +6,29 @@
   "description": "Локальная домашняя бухгалтерия без банковских API и регистрации",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "serve": "python3 -m http.server 8765 --bind 127.0.0.1",
-    "test:e2e": "playwright test"
+    "serve": "vite preview --host 127.0.0.1 --port 8765",
+    "test:e2e": "npm run build && playwright test --project=chromium-desktop && playwright test --project=webkit-mobile",
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "format:check": "prettier --check vite.config.mjs eslint.config.mjs tsconfig.json .prettierrc.json state-migrations.ts src/types/*.ts scripts/verify-build.mjs playwright.config.mjs",
+    "test:build": "node scripts/verify-build.mjs",
+    "audit:deps": "npm audit --audit-level=high"
   },
   "devDependencies": {
-    "@playwright/test": "1.65.0"
+    "@playwright/test": "1.65.0",
+    "@typescript-eslint/parser": "8.72.1",
+    "eslint": "10.14.0",
+    "prettier": "3.9.10",
+    "typescript": "6.0.3",
+    "vite": "8.3.6"
+  },
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "overrides": {
+    "minimatch": "11.0.5"
   }
 }

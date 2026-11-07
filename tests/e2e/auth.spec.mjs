@@ -6,7 +6,7 @@ import {
 
 test('email registration, true browser cookie, logout and repeat login',async({page,context,request})=>{
  const watcher=await observe(context,page);
- const email='e2e-auth-one@example.invalid';
+ const email='e2e-auth-one+'+test.info().project.name+'@example.invalid';
  await registerViaUi(page,request,email);
  const user=await currentUser(page);
  expect(user.email).toBe(email);
@@ -26,7 +26,8 @@ test('email registration, true browser cookie, logout and repeat login',async({p
 test('two accounts + guest on same origin isolate real IndexedDB',async({page,context,request})=>{
  test.setTimeout(120_000);
  const watcher=await observe(context,page);
- const first='e2e-tenant-a@example.invalid',second='e2e-tenant-b@example.invalid';
+ const suffix='+'+test.info().project.name+'@example.invalid';
+ const first='e2e-tenant-a'+suffix,second='e2e-tenant-b'+suffix;
  await visitGuest(page);
  await addEntry(page,'E2E initial guest budget');
  await registerViaUi(page,request,first);
@@ -58,8 +59,9 @@ test('revoke other real sessions, confirm changed email, preserve user ID',async
  try{
   const owner=await ownerContext.newPage(),other=await otherContext.newPage();
   const ownWatch=await observe(ownerContext,owner),otherWatch=await observe(otherContext,other);
-  const oldEmail='e2e-session-old@example.invalid';
-  const newEmail='e2e-session-new@example.invalid';
+  const suffix='+'+test.info().project.name+'@example.invalid';
+  const oldEmail='e2e-session-old'+suffix;
+  const newEmail='e2e-session-new'+suffix;
   await registerViaUi(owner,request,oldEmail);
   const identity=await currentUser(owner);
   await addEntry(owner,'E2E stable on email change');

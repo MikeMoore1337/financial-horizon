@@ -18,8 +18,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run format:check
+      - run: npm run build
+      - run: npm run test:build
       - run: npm test
       - run: node --check app.js && node --check account.js && node --check sw.js
+      - run: npm run audit:deps
 
   email-auth-tests:
     runs-on: ubuntu-latest
@@ -37,7 +45,7 @@ jobs:
 
   e2e-real-browser:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,7 +61,7 @@ jobs:
           cache-dependency-path: backend/requirements-test.txt
       - run: npm ci
       - run: python -m pip install -r backend/requirements-test.txt
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium webkit
       - run: npm run test:e2e
         env:
           FH_E2E_PYTHON: python3

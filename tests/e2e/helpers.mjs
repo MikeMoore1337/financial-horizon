@@ -2,25 +2,27 @@ import {expect} from '@playwright/test';
 export const ORIGIN='http://127.0.0.1:8791';
 export const DB='financial-horizon-browser-v1';
 export const TEST_PASSWORD='Synthetic-test-passphrase-2026!';
-// Only external Turnstile is substituted, strictly on the isolated test origin.
+// Synthetic Turnstile is the only substituted external dependency; auth/cookies are real.
 const turnstileStub="window.turnstile={render(_el,opts){queueMicrotask(()=>opts.callback('e2e-'+opts.action));return 1;},remove(){},reset(){}};";
 export async function observe(context,page){
+ // Stub only external Turnstile, before page scripts run. Avoid unstable
+ // cross-origin script routing in Windows WebKit; retain real FastAPI and cookies.
+ await context.addInitScript({content:turnstileStub});
  const unplanned=[],exceptions=[],consoleErrors=[];
- page.on('pageerror',e=>exceptions.push(e.message));
+ page.on('pageerror',e=>exceptions.push(e.stack||e.message));
  page.on('console',m=>{if(m.type()==='error')consoleErrors.push(m.text());});
  context.on('request',req=>{
   const url=req.url();
-  if(!url.startsWith(ORIGIN+'/')&&!url.startsWith('https://challenges.cloudflare.com/turnstile/v0/api.js')){
+  if(!url.startsWith(ORIGIN+'/')){
    const origin=new URL(url).origin;
    if(!unplanned.includes(origin))unplanned.push(origin);
   }
  });
- await context.route('**/*',async route=>{
-  const url=route.request().url();
-  if(url.startsWith(ORIGIN+'/'))return route.continue();
-  if(url.startsWith('https://challenges.cloudflare.com/turnstile/v0/api.js'))
-   return route.fulfill({status:200,contentType:'application/javascript',body:turnstileStub});
-  unplanned.push(new URL(url).origin);return route.abort('blockedbyclient');
+ // Do not proxy same-origin traffic through Playwright. It must reach the
+ // real FastAPI service/Service Worker without interception or cache changes.
+ await context.route(/^https?:\/\/(?!127\.0\.0\.1:8791(?:\/|$))/,async route=>{
+  unplanned.push(new URL(route.request().url()).origin);
+  return route.abort('blockedbyclient');
  });
  return {unplanned,exceptions,consoleErrors,assertClean(){
   expect(exceptions,'Uncaught JavaScript exceptions').toEqual([]);
@@ -31,6 +33,7 @@ export async function observe(context,page){
 export async function visitGuest(page){
  await page.goto('/?guest=1');
  await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
+ await expect(page.locator('#save-indicator')).toHaveText('Локальная база готова');
  await expect(page.locator('#main')).not.toContainText('Проверяем доступ');
 }
 export async function view(page,name){
@@ -92,17 +95,22 @@ export async function registerViaUi(page,request,email,password=TEST_PASSWORD){
  await page.locator('#password').fill(password);await page.locator('#auth-submit').click();
  await expect(page).toHaveURL(ORIGIN+'/');
  await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
+ await expect(page.locator('#save-indicator')).toHaveText('Локальная база готова');
+ await page.waitForLoadState('networkidle');
 }
 export async function loginViaUi(page,email,password=TEST_PASSWORD){
  await page.goto('/account.html');await expect(page.locator('#auth-submit')).toBeEnabled();
  await page.locator('#email').fill(email);await page.locator('#password').fill(password);
  await page.locator('#auth-submit').click();await expect(page).toHaveURL(ORIGIN+'/');
  await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
+ await expect(page.locator('#save-indicator')).toHaveText('Локальная база готова');
+ await page.waitForLoadState('networkidle');
 }
 export async function logoutViaUi(page){
  await page.locator('#account-logout-toolbar').click();
  await expect(page).toHaveURL(ORIGIN+'/account.html');
  await expect(page.locator('#auth-form')).toBeVisible();
+ await page.waitForLoadState('networkidle');
 }
 export async function currentUser(page){
  return page.evaluate(async()=> (await (await fetch('/api/auth/email/me',{credentials:'same-origin',cache:'no-store'})).json()).user);

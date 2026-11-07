@@ -2,6 +2,7 @@ import {test,expect} from '@playwright/test';
 import {observe,visitGuest,view,addEntry,scopedState} from './helpers.mjs';
 
 test('income/expense CRUD, fact edit and void through actual UI',async({page,context})=>{
+ await page.setViewportSize({width:1280,height:800});
  const watcher=await observe(context,page);
  await visitGuest(page);
  await addEntry(page,'E2E planned income',{kind:'income',amount:'24000'});
@@ -36,6 +37,7 @@ test('income/expense CRUD, fact edit and void through actual UI',async({page,con
 });
 
 test('archive and restore financial record preserves historic entry',async({page,context})=>{
+ await page.setViewportSize({width:1280,height:800});
  const watcher=await observe(context,page);
  await visitGuest(page);await addEntry(page,'E2E archive-only expense');
  await view(page,'obligations');
