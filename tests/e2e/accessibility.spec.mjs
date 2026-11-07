@@ -19,6 +19,10 @@ async function syntheticSample(page){
  await expect(page.locator('#confirmation-dialog')).toBeVisible();
  await page.locator('#confirm-yes').click();
  await expect(page.locator('#confirmation-dialog')).not.toBeVisible();
+ await expect(page.locator('#save-indicator')).toContainText('Сохранено');
+ // Inspect settled pages, not a toast halfway through its fade-out animation.
+ await page.reload();
+ await expect(page.locator('#main h1')).toBeVisible();
 }
 
 test('WCAG 2.2 AA: all financial screens in both themes at three representative widths',async({page,context})=>{
