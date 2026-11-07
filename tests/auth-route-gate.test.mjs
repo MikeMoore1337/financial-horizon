@@ -15,7 +15,8 @@ test('ledger validates authenticated identity before reading any user records',(
  assert.ok(begin>=0&&gate>=0&&reject>gate&&scope>reject&&read>scope);
  assert.match(init,/if\(!verified\|\|!emailSession\.userId\)/);
  assert.match(app,/function revokeDisplayedLedger\(\)\{\s*state=null;\s*if\(screenRoot\)\{screenRoot\.unmount\(\);screenRoot=null;\}\s*\$\('#main'\)\.replaceChildren\(\);/);
- assert.match(app,/if\(!verified\|\|emailSession\.userId!==activeUserId\|\|!emailSession\.email\)\{\s*revokeDisplayedLedger\(\);\s*window\.location\.replace\('\.\/account\.html'\);/);
+ assert.match(app,/if\(!verified\|\|emailSession\.userId!==activeUserId\)\{\s*revokeDisplayedLedger\(\);\s*window\.location\.replace\('\.\/account\.html'\);/);
+ assert.doesNotMatch(app,/emailSession\.userId!==activeUserId\|\|!emailSession\.email/);
  assert.match(app,/authBroadcast\.onmessage/);
 });
 
