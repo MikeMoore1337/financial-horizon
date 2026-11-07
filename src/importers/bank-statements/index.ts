@@ -35,6 +35,11 @@ export async function readBankStatementFile(
   const format = options.format || (/\.xlsx$/i.test(filename) ? 'xlsx' : zip ? 'xlsx' : 'csv');
   if (format === 'xlsx' && !zip) throw new Error('Файл не является XLSX-архивом');
   if (format === 'csv' && zip) throw new Error('ZIP-архив нельзя обработать как CSV');
+  // Enforce limits before hashing: crypto.subtle.digest buffers the entire input.
+  const maxBytes = format === 'xlsx' ? 6_000_000 : 4_000_000;
+  if (bytes.length === 0 || bytes.length > maxBytes) {
+    throw new Error('Файл пуст или превышает лимит ' + (format === 'xlsx' ? '6 МБ' : '4 МБ'));
+  }
   const fileDigest = await sha256(bytes);
   if (format === 'xlsx') {
     const parsed = await readBankXlsx(bytes, { sheetName: options.sheetName });
