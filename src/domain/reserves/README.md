@@ -10,7 +10,8 @@ change the v1/v2 persisted format or older encrypted backups.
   (1..60), `targetCents`, `openingReservedCents`, `contributionMode` (`auto` or
   `fixed`), and optionally `fixedMonthlyCents` / `dueDay` (1..31).
 - `firstDueDate` is the **first upcoming payment**, inside the initial billing
-  period. Future due dates are calculated as `firstDueDate + N * periodMonths`,
+  period (including a payment due on `openedOn` itself). Future due dates
+  are calculated as `firstDueDate + N * periodMonths`,
   clamped to short months using the **original** `dueDay` anchor. The anchor
   permits 31 January -> 28 February -> 31 March and 29 February across leap years.
 - Monthly installments are due on the anchor day in each calendar month after
