@@ -220,3 +220,74 @@ def test_idempotency_unique_under_concurrency(runtime):
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures=[pool.submit(submit) for _ in range(2)]
         assert sorted(f.result(timeout=8) for f in futures)==["committed","duplicate_rejected"]
+
+
+def test_unlinked_payment_is_rejected_on_commit(runtime):
+    """Every payment debit must attach to exactly one valid settlement/loan payment."""
+    transaction_id = uuid4()
+    with pytest.raises(IntegrityError):
+        with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+            insert_ledger(session, transaction_id, "payment", [(ACCOUNT_A1, -123)])
+    with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+        assert session.execute(
+            text("SELECT count(*) FROM ledger_transactions WHERE id=:t"),
+            {"t": transaction_id},
+        ).scalar_one() == 0
+
+
+def test_actor_cannot_be_spoofed_by_finance_role(runtime):
+    """PostgreSQL rejects an actor ID that does not match SET LOCAL identity."""
+    with pytest.raises(DBAPIError):
+        with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+            session.execute(
+                text("""
+                    INSERT INTO ledger_transactions
+                      (profile_id,id,kind,occurred_on,actor_user_id)
+                    VALUES (:p,:t,'income',current_date,:other)
+                """),
+                {"p": PROFILE_A, "t": uuid4(), "other": USER_B},
+            )
+
+
+def test_failing_ledger_commit_rolls_back_profile_revision_and_receipt(runtime):
+    """A transfer's failed deferred check cannot leave an acknowledged command."""
+    mutation_id, transaction_id = uuid4(), uuid4()
+    with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+        previous = session.execute(
+            text("SELECT revision FROM finance_profiles WHERE id=:p"),
+            {"p": PROFILE_A},
+        ).scalar_one()
+
+    with pytest.raises(IntegrityError):
+        with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+            session.execute(
+                text("UPDATE finance_profiles SET revision=revision+1 WHERE id=:p"),
+                {"p": PROFILE_A},
+            )
+            session.execute(
+                text("""
+                    INSERT INTO command_receipts
+                      (profile_id,client_mutation_id,request_sha256,status_code,
+                       committed_revision,response_body)
+                    VALUES (:p,:id,:hash,200,:rev,CAST(:body AS jsonb))
+                """),
+                {
+                    "p": PROFILE_A, "id": mutation_id, "hash": b"z" * 32,
+                    "rev": previous + 1, "body": "{}",
+                },
+            )
+            insert_ledger(session, transaction_id, "transfer", [(ACCOUNT_A1, -7)])
+
+    with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+        assert session.execute(
+            text("SELECT revision FROM finance_profiles WHERE id=:p"),
+            {"p": PROFILE_A},
+        ).scalar_one() == previous
+        assert session.execute(
+            text("SELECT count(*) FROM command_receipts WHERE client_mutation_id=:id"),
+            {"id": mutation_id},
+        ).scalar_one() == 0
+        assert session.execute(
+            text("SELECT count(*) FROM ledger_transactions WHERE id=:t"),
+            {"t": transaction_id},
+        ).scalar_one() == 0

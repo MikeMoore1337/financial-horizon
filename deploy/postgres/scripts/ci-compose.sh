@@ -9,8 +9,16 @@ umask 077
 export FH_FINANCE_SECRETS_DIR
 FH_FINANCE_SECRETS_DIR="$(mktemp -d)"
 cleanup() {
+  local status=$?
+  if [ "$status" -ne 0 ]; then
+    # Synthetic CI-only secrets; do not reuse this error path in production.
+    docker compose -f deploy/postgres/compose.yml ps -a >&2 || true
+    docker compose -f deploy/postgres/compose.yml logs --no-color --tail=80 db >&2 || true
+    docker inspect fh-finance-postgres --format 'health={{json .State.Health}}' >&2 || true
+  fi
   docker compose -f deploy/postgres/compose.yml --profile ops down --volumes --remove-orphans >/dev/null 2>&1 || true
   rm -rf "$FH_FINANCE_SECRETS_DIR"
+  return "$status"
 }
 trap cleanup EXIT
 printf '%s' 'CI-only-synthetic-admin-password-0123456789' > "$FH_FINANCE_SECRETS_DIR/admin_password"
@@ -18,7 +26,7 @@ printf '%s' 'CI-only-synthetic-migrator-password-0123456789' > "$FH_FINANCE_SECR
 printf '%s' 'CI-only-synthetic-runtime-password-0123456789' > "$FH_FINANCE_SECRETS_DIR/runtime_password"
 chmod 600 "$FH_FINANCE_SECRETS_DIR/"*
 docker compose -f deploy/postgres/compose.yml config --quiet
-docker compose -f deploy/postgres/compose.yml up -d --wait db
+docker compose -f deploy/postgres/compose.yml up -d --wait --wait-timeout 35 db
 docker compose -f deploy/postgres/compose.yml --profile ops run --rm --build migrator
 version="$(docker exec -u postgres fh-finance-postgres \
   psql -U postgres -d fh_finance -Atc 'SELECT version_num FROM finance.alembic_version')"

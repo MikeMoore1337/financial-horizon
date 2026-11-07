@@ -371,6 +371,14 @@ BEGIN
        v_kind NOT IN ('income','expense','payment','adjustment') THEN
       RAISE EXCEPTION 'incorrect ledger posting shape' USING ERRCODE='23514';
     END IF;
+    -- An unlinked payment is an untraceable debit. Require exactly one
+    -- settlement or loan payment link in the same committed transaction.
+    IF v_kind='payment' AND (
+      SELECT count(*) FROM finance.ledger_payment_links
+      WHERE profile_id=v_profile AND transaction_id=v_transaction
+    ) <> 1 THEN
+      RAISE EXCEPTION 'payment debit requires an atomic payment link' USING ERRCODE='23514';
+    END IF;
   END IF;
   RETURN NULL;
 END $$;
@@ -383,6 +391,24 @@ CREATE CONSTRAINT TRIGGER ledger_posting_complete
   AFTER INSERT ON ledger_postings
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION finance.check_ledger_transaction();
+
+-- The audit actor must be the principal verified by the server; rejecting
+-- spoofed actor IDs remains valid even when an application bug passes them.
+CREATE FUNCTION finance.verify_ledger_actor()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = finance, pg_catalog
+AS $$
+BEGIN
+  IF NEW.actor_user_id IS DISTINCT FROM NULLIF(current_setting('fh.user_id',true),'') THEN
+    RAISE EXCEPTION 'ledger actor does not match authenticated principal' USING ERRCODE='42501';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER ledger_actor_guard
+  BEFORE INSERT ON ledger_transactions
+  FOR EACH ROW EXECUTE FUNCTION finance.verify_ledger_actor();
+REVOKE ALL ON FUNCTION finance.verify_ledger_actor() FROM PUBLIC;
 
 -- A payment link never posts new money: it connects one existing payment to
 -- one existing debit of exactly the same amount. Unique keys reject repeats.
