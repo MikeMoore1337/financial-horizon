@@ -587,3 +587,26 @@ test('multiple existing ledger rows with the same bank identity are treated as c
   assert.equal(result.invalid, 1);
   assert.equal(result.rows[0].existingIds.length, 2);
 });
+
+
+test('category alias lookup ignores inherited constructor/__proto__ names', async () => {
+  const table = await readBankStatementFile(input(
+    base +
+    '07.11.2026;-100,00;Тест;Основной;;расход;constructor;ALIAS-1\n' +
+    '08.11.2026;-200,00;Тест;Основной;;расход;__proto__;ALIAS-2\n',
+  ));
+  const { mapping } = suggestColumnMapping(table.headers);
+  const preview = await normalizeBankStatement(table, {
+    mapping, accounts, categories: ['constructor', '__proto__'], categoryAliases: {},
+  });
+  assert.equal(preview.accepted, 2);
+  assert.deepEqual(preview.rows.map(x => x.operation.category), ['constructor', '__proto__']);
+  const aliases = Object.create(null);
+  aliases.constructor = 42;
+  const invalid = await normalizeBankStatement(table, {
+    mapping, accounts, categories: ['constructor', '__proto__'], categoryAliases: aliases,
+  });
+  assert.equal(invalid.accepted, 1);
+  assert.equal(invalid.rejected, 1);
+  assert.ok(invalid.rows[0].warnings.some(x => x.code === 'INVALID_CATEGORY_ALIAS'));
+});
