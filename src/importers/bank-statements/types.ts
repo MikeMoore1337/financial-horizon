@@ -51,6 +51,8 @@ export interface BankImportOptions {
   defaultAccountId?: string;
   dateOrder?: DateOrder;
   numberFormat?: NumberFormat;
+  /** For a positive transfer, explicitly specify how the two mapped accounts relate. */
+  transferDirection?: 'signed-source' | 'from-to';
   /** Explicitly map CSV descriptions to a category, never silently create one. */
   categoryAliases?: Readonly<Record<string, string>>;
 }
@@ -96,10 +98,15 @@ export interface ExistingBankMovement {
   fingerprint?: string | null;
   externalId?: string | null;
   accountId: string;
+  targetAccountId?: string | null;
   date: string;
   amountCents: number;
   kind: BankKind;
   description: string;
+  category?: string | null;
+  currency?: string | null;
+  /** Any change or linked obligation/loan payment must forbid an undo proposal. */
+  linkedPaymentId?: string | null;
   voidedAt?: string | null;
   importBatchKey?: string | null;
 }
