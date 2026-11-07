@@ -321,6 +321,10 @@ export function applyLedgerCommand(source: LedgerState, command: LedgerCommand, 
       text(payload.reason, 500);
       const original = state.transactions.find(t => t.id === payload.transactionId && t.profileId === state.profileId);
       if (!original || original.kind === 'reversal') throw new Error('Исходная операция недоступна');
+      // Linked payment facts belong to #6/#39 and must be voided together with
+      // compensating postings in a single server transaction (#67). A standalone
+      // reversal would refund cash while leaving the obligation/loan marked paid.
+      if (original.kind === 'payment') throw new Error('Отмена оплаты требует одновременного аннулирования факта платежа');
       if (command.expectedEntityRevisions[original.id] !== original.entityRevision) throw new Error('Конфликт ревизии операции');
       if (state.transactions.some(t => t.reversedTransactionId === original.id)) throw new Error('Операция уже отменена');
       const originals = state.postings.filter(p => p.transactionId === original.id && p.profileId === state.profileId);
