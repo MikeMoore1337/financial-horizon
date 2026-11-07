@@ -119,10 +119,10 @@ export interface ReconciliationResult {
 export interface ImportBatchPlan {
   /** Stable for the same file and confirmed row selection; not a database commit. */
   batchKey: string;
-  sourceKeys: string[];
-  operations: NormalizedBankOperation[];
+  sourceKeys: readonly string[];
+  operations: readonly Readonly<NormalizedBankOperation>[];
   expectedOperationCount: number;
-  journal: { type: 'planned'; sourceKey: string; sourceRow: number }[];
+  journal: readonly { type: 'planned'; sourceKey: string; sourceRow: number }[];
 }
 
 export interface ImportUndoPlan {
