@@ -26,8 +26,11 @@ CREATE TABLE accounts (
   profile_id uuid NOT NULL REFERENCES finance_profiles(id) ON DELETE RESTRICT,
   id uuid NOT NULL,
   name varchar(160) NOT NULL CHECK (length(btrim(name)) > 0),
+  kind varchar(16) NOT NULL
+    CHECK (kind IN ('bank','card','cash','savings','other')),
   currency char(3) NOT NULL DEFAULT 'RUB' CHECK (currency = 'RUB'),
-  opening_minor bigint NOT NULL DEFAULT 0
+  -- Opening balance must be entered explicitly, including an explicit zero.
+  opening_minor bigint NOT NULL
     CHECK (opening_minor BETWEEN -1000000000000 AND 1000000000000),
   entity_revision bigint NOT NULL DEFAULT 1 CHECK (entity_revision > 0),
   archived_at timestamptz,
@@ -481,7 +484,7 @@ GRANT UPDATE (revision,min_available_revision,updated_at) ON finance_profiles TO
 -- Deliberately deny UPDATE on tenant identity (profile_id,id), audit metadata
 -- and ownership; fields not listed here are immutable for the runtime role.
 GRANT SELECT,INSERT ON accounts,obligations,loans,reserves TO fh_finance_runtime;
-GRANT UPDATE (name,opening_minor,entity_revision,archived_at,updated_at)
+GRANT UPDATE (name,kind,opening_minor,entity_revision,archived_at,updated_at)
   ON accounts TO fh_finance_runtime;
 GRANT UPDATE (title,direction,amount_minor,starts_on,timezone,
               recurrence_unit,recurrence_every,category,

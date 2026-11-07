@@ -35,7 +35,7 @@ def runtime():
         ), {"p": PROFILE_A, "u": USER_A})
         for a, n in ((ACCOUNT_A1, "Synthetic one"), (ACCOUNT_A2, "Synthetic two")):
             s.execute(text(
-                "INSERT INTO accounts(profile_id,id,name) VALUES (:p,:a,:n)"
+                "INSERT INTO accounts(profile_id,id,name,kind,opening_minor) VALUES (:p,:a,:n,'bank',0)"
             ), {"p": PROFILE_A, "a": a, "n": n})
     with finance_transaction(engine, verified_user_id=USER_B, profile_id=PROFILE_B) as s:
         s.execute(text("INSERT INTO finance_profiles(id,owner_user_id) VALUES (:p,:u)"),
@@ -96,7 +96,7 @@ def test_cross_tenant_select_insert_update_returning_and_delete(runtime):
         ), {"other": PROFILE_A}).first() is None
         with pytest.raises(DBAPIError):
             s.execute(text(
-                "INSERT INTO accounts(profile_id,id,name) VALUES (:p,:a,'forbidden') RETURNING id"
+                "INSERT INTO accounts(profile_id,id,name,kind,opening_minor) VALUES (:p,:a,'forbidden','cash',0) RETURNING id"
             ), {"p": PROFILE_A, "a": uuid4()})
 
 
@@ -112,7 +112,7 @@ def test_delete_and_schema_privileges_denied(runtime):
 def test_amount_checks_and_cross_profile_fk(runtime):
     with pytest.raises(IntegrityError):
         with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as s:
-            s.execute(text("INSERT INTO accounts(profile_id,id,name,opening_minor) VALUES (:p,:a,'bad',1000000000001)"),
+            s.execute(text("INSERT INTO accounts(profile_id,id,name,kind,opening_minor) VALUES (:p,:a,'bad','bank',1000000000001)"),
                       {"p": PROFILE_A, "a": uuid4()})
     with pytest.raises(IntegrityError):
         with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as s:
@@ -361,3 +361,38 @@ def test_runtime_cannot_update_tenant_identity(runtime):
         assert session.execute(text(
             "SELECT count(*) FROM accounts WHERE profile_id=:p AND id=:a"
         ), {"p":PROFILE_A, "a":ACCOUNT_A1}).scalar_one() == 1
+
+
+def test_account_requires_explicit_opening_balance_and_valid_kind(runtime):
+    """Database must not silently interpret an absent balance as 0."""
+    with pytest.raises(IntegrityError):
+        with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+            session.execute(
+                text("INSERT INTO accounts(profile_id,id,name,kind) VALUES (:p,:a,'missing opening','cash')"),
+                {"p": PROFILE_A, "a": uuid4()},
+            )
+
+    with pytest.raises(IntegrityError):
+        with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+            session.execute(
+                text(
+                    "INSERT INTO accounts(profile_id,id,name,kind,opening_minor) "
+                    "VALUES (:p,:a,'invalid kind','crypto',0)"
+                ),
+                {"p": PROFILE_A, "a": uuid4()},
+            )
+
+    with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+        record_id = uuid4()
+        session.execute(
+            text(
+                "INSERT INTO accounts(profile_id,id,name,kind,opening_minor) "
+                "VALUES (:p,:a,'explicit zero','savings',0)"
+            ),
+            {"p": PROFILE_A, "a": record_id},
+        )
+        row = session.execute(
+            text("SELECT kind,opening_minor FROM accounts WHERE profile_id=:p AND id=:a"),
+            {"p": PROFILE_A, "a": record_id},
+        ).one()
+        assert row == ("savings", 0)

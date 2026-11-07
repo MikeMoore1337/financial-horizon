@@ -51,8 +51,9 @@ class Account(ProfileEntity, Revisable, Base):
     __tablename__ = "accounts"
     __table_args__ = (profile_fk(),)
     name: Mapped[str] = mapped_column(String(160))
+    kind: Mapped[str] = mapped_column(String(16))
     currency: Mapped[str] = mapped_column(CHAR(3), server_default=text("'RUB'"))
-    opening_minor: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
+    opening_minor: Mapped[int] = mapped_column(BigInteger)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
