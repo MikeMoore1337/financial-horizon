@@ -31,12 +31,17 @@ def migrate_online():
         poolclass=pool.NullPool,
         connect_args={"options": "-csearch_path=finance,pg_catalog -cstatement_timeout=30000"},
     )
-    with engine.connect() as connection:
+    # Alembic creates its own version table *before* invoking revision upgrade().
+    # Provision the empty schema first, in the very same transaction, so a
+    # failed initial migration also rolls back its schema and version table.
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE SCHEMA IF NOT EXISTS finance")
+        connection.exec_driver_sql("REVOKE ALL ON SCHEMA finance FROM PUBLIC")
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
             version_table_schema="finance",
-            transaction_per_migration=True,
+            transaction_per_migration=False,
             compare_type=True,
         )
         with context.begin_transaction():
