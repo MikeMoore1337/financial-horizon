@@ -16,7 +16,7 @@ function element(name){
  };
 }
 
-async function boot({initialSignedIn=false,sessionReadable=true,hash="",search="",supportsChange=false,supportsOthers=false}={}){
+async function boot({initialSignedIn=false,sessionReadable=true,hash="",search="",supportsChange=false,supportsOthers=false,emailConfigAvailable=true,oauthOnly=false}={}){
  const selectors=[
   "#auth-feedback","#auth-submit","#form-heading","#form-description",
   "#email-label","#email","#password-label","#password","#oauth-login",
@@ -35,10 +35,10 @@ async function boot({initialSignedIn=false,sessionReadable=true,hash="",search="
  let signedIn=initialSignedIn,email="user@example.com";
  const fetch=async (url,options={})=>{
   calls.push({url,options});
-  if(url.endsWith("/config"))return {ok:true,json:async()=>({enabled:true,sitekey:"test-site-key",capabilities:{email_change:supportsChange,revoke_other_sessions:supportsOthers}})};
+  if(url.endsWith("/config"))return {ok:emailConfigAvailable,json:async()=>({enabled:true,sitekey:"test-site-key",capabilities:{email_change:supportsChange,revoke_other_sessions:supportsOthers}})};
   if(url.endsWith("/me"))return {
    ok:true,json:async()=>sessionReadable&&signedIn
-    ?{authenticated:true,user:{email,id:"a".repeat(32)}}
+    ?{authenticated:true,user:{email:oauthOnly?null:email,id:"a".repeat(32)}}
     :{authenticated:false,user:null}
   };
   if(url.endsWith("/login")||url.endsWith("/verify")) {
@@ -246,4 +246,34 @@ test('OAuth choices are only visible during the initial login mode',async()=>{
  assert.equal(oauth.hidden,false);
  assert.equal(page.elements['.auth-actions [data-mode="resend"]'].hidden,true);
  assert.equal(page.elements['.auth-actions [data-mode="reset"]'].hidden,false);
+});
+
+
+test('OAuth-only session stays usable when public email registration is canary-disabled',async()=>{
+ const page=await boot({
+  initialSignedIn:true,emailConfigAvailable:false,oauthOnly:true
+ });
+ assert.equal(page.elements['#session-panel'].hidden,false);
+ assert.equal(page.elements['#auth-form'].hidden,true);
+ assert.equal(page.elements['#change-email-panel'].hidden,true);
+ assert.equal(page.elements['#auth-logout-others'].hidden,false);
+ assert.equal(page.elements['#auth-submit'].disabled,true);
+ assert.match(page.elements['#session-email'].textContent,/через внешний сервис/);
+ assert.doesNotMatch(page.elements['#auth-feedback'].textContent,/Регистрация пока не включена/);
+ assert.ok(page.calls.some(call=>call.url.endsWith('/config')));
+ assert.ok(page.calls.some(call=>call.url.endsWith('/me')));
+ await page.elements['#auth-logout'].events.click();
+ assert.equal(page.elements['#session-panel'].hidden,true);
+ assert.equal(page.elements['#auth-form'].hidden,false);
+ assert.match(page.elements['#auth-feedback'].textContent,/Сеанс завершён/);
+});
+
+test('a signed-out visitor cannot access email actions when its canary config is hidden',async()=>{
+ const page=await boot({emailConfigAvailable:false});
+ assert.equal(page.elements['#auth-form'].hidden,false);
+ assert.equal(page.elements['#auth-submit'].disabled,true);
+ assert.equal(page.elements['#session-panel'].hidden,true);
+ assert.match(page.elements['#auth-feedback'].textContent,/Регистрация пока не включена/);
+ assert.ok(page.calls.some(call=>call.url.endsWith('/me')));
+ assert.equal(page.calls.filter(call=>call.url.endsWith('/register')).length,0);
 });

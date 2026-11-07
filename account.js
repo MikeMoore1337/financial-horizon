@@ -183,7 +183,7 @@ async function request(path,body){
 }
 
 async function refreshSession(){
- if(!config.enabled)return false;
+ // A valid OAuth session must be readable even if email registration is canary-only.
  try{
   const response=await fetch('./api/auth/email/me',{cache:'no-store',credentials:'same-origin'});
   if(!response.ok)return false;
@@ -252,6 +252,7 @@ async function logout(){
   $("#change-email-password").value="";
   await refreshSession();
   activate('login');
+  window.dispatchEvent?.(new Event('fh:auth-session-change'));
   feedback('Сеанс завершён. Локальная бухгалтерия сохранена.','success');
  }catch(error){
   feedback(error instanceof Error?error.message:'Не удалось выйти','error');
@@ -354,27 +355,37 @@ async function init(){
    feedback('Не удалось войти через выбранный сервис. Повторите попытку.','error');
   }
  }
+ let emailConfigAvailable=false;
  try{
   const res=await fetch("./api/auth/email/config",{cache:"no-store",credentials:"same-origin"});
   if(!res.ok)throw Error("disabled");
   config=await res.json();
   if(!config.enabled||!config.sitekey)throw Error("disabled");
-  $("#auth-logout-others").hidden=config.capabilities?.revoke_other_sessions!==true;
-  updateButton();await challengeFor(mode);
-  const authenticated=await refreshSession();
-  if(changeToken){
-   if(authenticated){
-    try{await confirmEmailChange();}catch(error){
-     feedback(error instanceof Error?error.message:"Не удалось подтвердить новый email","error");
-    }
-   }else{
-    feedback("Для подтверждения нового адреса сначала войдите в существующий аккаунт по старому email. После входа подтверждение продолжится автоматически.","info");
-   }
-  }
- }catch{
-  config={enabled:false,sitekey:""};
-  feedback("Регистрация пока не включена. Можно пользоваться бухгалтерией без аккаунта.","info");
+  emailConfigAvailable=true;
   updateButton();
+  await challengeFor(mode);
+ }catch{
+  // Public email registration can remain a private canary while OAuth is enabled.
+  config={enabled:false,sitekey:""};
+  updateButton();
+ }
+ // This shared session endpoint must be publicly routed separately from registration.
+ const authenticated=await refreshSession();
+ // No account identity must depend on the Turnstile/registration configuration.
+ $("#auth-logout-others").hidden=!authenticated||(
+  emailConfigAvailable&&config.capabilities?.revoke_other_sessions!==true
+ );
+ if(!emailConfigAvailable&&!authenticated&&!['failed','denied','linked'].includes(oauthStatus)){
+  feedback("Регистрация пока не включена. Можно пользоваться бухгалтерией без аккаунта.","info");
+ }
+ if(changeToken){
+  if(authenticated&&emailConfigAvailable){
+   try{await confirmEmailChange();}catch(error){
+    feedback(error instanceof Error?error.message:"Не удалось подтвердить новый email","error");
+   }
+  }else{
+   feedback("Для подтверждения нового адреса сначала войдите в существующий аккаунт по старому email. После входа подтверждение продолжится автоматически.","info");
+  }
  }
 }
 void init();

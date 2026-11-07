@@ -59,3 +59,40 @@ test('signed-in session never offers another login route',async({page})=>{
  await expect(page.locator('#oauth-login')).toBeHidden();
  await expect(page.locator('.oauth-provider-link')).toHaveCount(0);
 });
+
+
+test('OAuth account and logout remain functional with public email-registration canary closed',async({page})=>{
+ let authenticated=true;
+ await page.route('**/api/auth/email/config',route=>route.fulfill({
+  status:404,contentType:'application/json',body:'{"detail":"Email registration not public"}'
+ }));
+ await page.route('**/api/auth/providers',route=>route.fulfill({
+  status:200,contentType:'application/json',
+  body:JSON.stringify({enabled:true,providers:['telegram','google','yandex','vk']})
+ }));
+ await page.route('**/api/auth/email/me',route=>route.fulfill({
+  status:200,contentType:'application/json',
+  body:JSON.stringify({authenticated,
+    user:authenticated?{id:'c'.repeat(32),email:null}:null})
+ }));
+ await page.route('**/api/auth/email/logout',route=>{
+  authenticated=false;
+  return route.fulfill({
+   status:200,contentType:'application/json',body:'{"ok":true}'
+  });
+ });
+ await page.goto('/account.html');
+ await expect(page.locator('#session-panel')).toBeVisible();
+ await expect(page.locator('#auth-form')).toBeHidden();
+ await expect(page.locator('#change-email-panel')).toBeHidden();
+ await expect(page.locator('#oauth-login')).toBeHidden();
+ await expect(page.locator('#auth-logout-others')).toBeVisible();
+ await expect(page.locator('#session-email')).toContainText('через внешний сервис');
+ await page.locator('#auth-logout').click();
+ await expect(page.locator('#session-panel')).toBeHidden();
+ await expect(page.locator('#auth-form')).toBeVisible();
+ await expect(page.locator('#auth-submit')).toBeDisabled();
+ await expect(page.locator('#oauth-login')).toBeVisible();
+ await expect(page.locator('.oauth-provider-link')).toHaveCount(4);
+ await expect(page.locator('#auth-feedback')).toContainText('Сеанс завершён');
+});
