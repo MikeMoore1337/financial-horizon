@@ -109,5 +109,15 @@ body[data-theme=light] .bottom-nav button:not(.active){color:#41536c}
 /* Read calendar date context without replacing the visible names. */
 .visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 
+/* #44 regression: long unbroken financial names must wrap within cards and table cells. */
+.record-mobile-row strong,.record-mobile-row small,.records-table .record-title,.records-table .record-sub{overflow-wrap:anywhere}
+
 /* Keyboard users must be able to scroll XLSX preview regions. */
 #excel-import-items:focus-visible,#excel-import-warnings:focus-visible{outline:3px solid var(--accent-deep);outline-offset:2px;border-radius:6px}
+
+/* #44: unbroken loan titles must not expand the credit card or detail heading. */
+.loan-card .title,.loan-detail h2{min-width:0;overflow-wrap:anywhere}
+
+/* #44 Linux Chromium: intrinsic loan stat grid widths must not overflow 320px. */
+.loan-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+.loan-stats>div{min-width:0;overflow-wrap:anywhere}
