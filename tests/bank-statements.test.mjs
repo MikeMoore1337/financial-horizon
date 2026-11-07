@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   readBankCsv, readBankStatementFile, suggestColumnMapping, normalizeBankStatement,
   reconcileBankStatement, draftBankImportBatch, draftBankImportUndo,
@@ -273,4 +274,18 @@ test('invalid column mapping retains every row in the preview for manual inspect
   assert.equal(invalid.rows.length, 1);
   assert.equal(invalid.rows[0].operation, null);
   assert.equal(reconcileBankStatement(invalid, []).invalid, 1);
+});
+
+
+test('committed synthetic fixture is read locally without affecting application data', async () => {
+  const bytes = readFileSync(new URL('./fixtures/bank-statements/synthetic.csv', import.meta.url));
+  const table = await readBankStatementFile(bytes, { filename: 'synthetic.csv' });
+  const { mapping } = suggestColumnMapping(table.headers);
+  const preview = await normalizeBankStatement(table, {
+    mapping, accounts, categories: ['Питание', 'Зарплата'],
+  });
+  assert.equal(preview.accepted, 3);
+  assert.equal(preview.outflowCents, 123450);
+  assert.equal(preview.inflowCents, 1500000);
+  assert.equal(preview.transfersCents, 50000);
 });
