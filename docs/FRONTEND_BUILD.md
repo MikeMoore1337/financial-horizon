@@ -32,3 +32,18 @@ Use a temporary symlink plus atomic rename to switch `current` to the new releas
 If postdeployment smoke fails, atomically restore the **previous** static symlink target, and confirm both pages, HTTPS and auth API. Do not delete or rewrite IndexedDB, CacheStorage broadly, auth SQLite or user financial records. The unchanged version-2 finance payload is supported by both builds. As with any Service Worker update, allow the browser to fetch and activate the previous `/sw.js` on its next online visit. Confirm both upgrade and rollback paths against synthetic browser profiles before releasing.
 
 The old release must stay on disk until the rollback window is closed. A clean Git checkout and green CI alone do not prove production rollout.
+
+## Verifying an exact production release
+
+The historical production smoke script previously compared pre-Vite JavaScript sources with published bytes. That is invalid once Vite bundles and hashes the entry points. The updated smoke verifies **every file** in the built `dist/`, the immutable checkout SHA, and read-only HTTPS/CSP/auth/manifest responses. From a **clean checkout of the exact deployed merge SHA**, run:
+
+```sh
+npm ci
+npm run build
+npm run test:build
+node tests/e2e/production-smoke.mjs https://fin-horizon.mikemoore.top <40-character-merge-SHA>
+```
+
+The smoke performs only public GET requests and does not read financial records or credentials. It must not be treated as a replacement for real browser/IndexedDB/PWA E2E. The deployed release directory or signed deployment receipt must independently identify the same commit.
+
+**HTML cache-control is a release safety condition:** both `/index.html` and `/account.html` must be served with `Cache-Control: no-store` or `no-cache` so an outdated account page cannot reference JavaScript hashes removed in the next release. `/sw.js` and `/manifest.webmanifest` must also be revalidated. The production Caddy site uses a static-shell matcher containing all four routes; any alternative Nginx deployment must preserve equivalent policies and existing CSP. Never cache `/api/` or session cookies.
