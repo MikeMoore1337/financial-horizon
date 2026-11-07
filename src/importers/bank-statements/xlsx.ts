@@ -20,6 +20,7 @@ interface XlsxResult {
   warnings: ImportWarning[];
   sheetName: string;
   dateSystem: '1900' | '1904';
+  headerRowNumber: number;
 }
 
 function bad(message: string): never { throw new Error(message); }
@@ -204,7 +205,7 @@ function sheetRows(doc: Document, strings: string[]): { rows: BankTableRow[]; wa
 /** Reads saved scalar cell values only. No workbook automation or formula evaluation. */
 export async function readBankXlsx(
   data: Uint8Array | ArrayBuffer,
-  options: { sheetName?: string } = {},
+  options: { sheetName?: string; headerRowNumber?: number } = {},
 ): Promise<XlsxResult> {
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
   const entries = extractEntries(bytes);
@@ -232,12 +233,23 @@ export async function readBankXlsx(
   if (!sheetXml) bad('Лист XLSX отсутствует');
   const parsed = sheetRows(sheetXml, strings);
   if (parsed.rows.length < 2) bad('XLSX должен содержать заголовок и операции');
-  const [header, ...rows] = parsed.rows;
+  const requested = options.headerRowNumber;
+  if (requested !== undefined && (!Number.isInteger(requested) || requested < 1 || requested > 100)) {
+    bad('Некорректный номер строки заголовка XLSX');
+  }
+  const sorted = [...parsed.rows].sort((a, b) => a.rowNumber - b.rowNumber);
+  const headerIndex = requested === undefined ? 0 : sorted.findIndex(r => r.rowNumber === requested);
+  if (headerIndex < 0 || headerIndex >= sorted.length - 1) bad('Строка заголовка XLSX не найдена');
+  const header = sorted[headerIndex];
   if (!header) bad('Отсутствует заголовок XLSX');
   const headers = header.cells.map(x => x === undefined || x === null ? '' : String(x));
+  const rows = sorted.slice(headerIndex + 1);
+  const warnings = [...parsed.warnings];
+  if (headerIndex > 0) warnings.push({ code: 'SKIPPED_PREAMBLE', severity: 'info',
+    row: header.rowNumber, message: 'Строки перед выбранным заголовком пропущены' });
   const date1904 = child(workbook, 'workbookPr')?.getAttribute('date1904');
   return {
-    headers, rows, warnings: parsed.warnings,
+    headers, rows, warnings, headerRowNumber: header.rowNumber,
     sheetName: sheet.getAttribute('name') || 'Лист',
     dateSystem: date1904 === '1' || date1904 === 'true' ? '1904' : '1900',
   };

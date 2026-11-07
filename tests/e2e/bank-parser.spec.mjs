@@ -121,3 +121,25 @@ test('1904 XLSX date system is converted without shifting account transactions',
   expect(result).toEqual({ dateSystem: '1904', date: '2026-11-07', accepted: 3, rejected: 1 });
   watcher.assertClean();
 });
+
+
+test('browser can choose a bank XLSX header after a two-row report preamble', async ({ page }, testInfo) => {
+  const watcher = await setup(page, testInfo);
+  const encoded = makeFixture(testInfo, '--preamble');
+  const result = await page.evaluate(async ({ encoded, accounts }) => {
+    const mod = await import('/__bank-parser/index.ts');
+    const table = await mod.readBankStatementFile(
+      Uint8Array.from(atob(encoded), c => c.charCodeAt(0)),
+      { filename: 'synthetic-preamble.xlsx', headerRowNumber: 3 },
+    );
+    const { mapping } = mod.suggestColumnMapping(table.headers);
+    const preview = await mod.normalizeBankStatement(table, { mapping, accounts });
+    return { row: table.headerRowNumber, accepted: preview.accepted,
+      expense: preview.outflowCents, warnings: table.warnings.map(w => w.code) };
+  }, { encoded, accounts });
+  expect(result.row).toBe(3);
+  expect(result.accepted).toBe(1);
+  expect(result.expense).toBe(5000);
+  expect(result.warnings).toContain('SKIPPED_PREAMBLE');
+  watcher.assertClean();
+});

@@ -14,6 +14,7 @@ export interface ParsedCsv {
   headers: string[];
   rows: BankTableRow[];
   warnings: ImportWarning[];
+  headerRowNumber: number;
 }
 
 function fail(message: string): never {
@@ -131,7 +132,7 @@ function parseDelimited(text: string, delimiter: CsvDelimiter): BankTableRow[] {
 /** RFC-4180 quoting + CSV dialect/encoding detection; returns data only. */
 export function readBankCsv(
   data: Uint8Array | ArrayBuffer,
-  options: { encoding?: CsvEncoding; delimiter?: CsvDelimiter } = {},
+  options: { encoding?: CsvEncoding; delimiter?: CsvDelimiter; headerRowNumber?: number } = {},
 ): ParsedCsv {
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
   const { text, encoding } = decode(bytes, options.encoding || 'auto');
@@ -139,10 +140,21 @@ export function readBankCsv(
   const delimiter = options.delimiter || detectDelimiter(content);
   const rows = parseDelimited(content, delimiter);
   if (rows.length < 2) fail('CSV должен содержать заголовок и хотя бы одну строку');
-  const headerRow = rows.shift();
+  const requested = options.headerRowNumber;
+  if (requested !== undefined && (!Number.isInteger(requested) || requested < 1 || requested > 100)) {
+    fail('Некорректный номер строки заголовка CSV');
+  }
+  const headerIndex = requested === undefined ? 0 : rows.findIndex(r => r.rowNumber === requested);
+  if (headerIndex < 0 || headerIndex >= rows.length - 1) fail('Строка заголовка CSV не найдена');
+  const headerRow = rows[headerIndex];
   if (!headerRow) fail('В CSV отсутствует заголовок');
   const headers = headerRow.cells.map(x => String(x || ''));
+  rows.splice(0, headerIndex + 1);
   const warnings: ImportWarning[] = [];
+  if (headerIndex > 0) {
+    warnings.push({ code: 'SKIPPED_PREAMBLE', severity: 'info',
+      message: 'Строки перед выбранным заголовком пропущены', row: headerRow.rowNumber });
+  }
   if (new Set(headers.map(h => h.toLocaleLowerCase('ru-RU'))).size < headers.length) {
     warnings.push({ code: 'DUPLICATE_HEADER', severity: 'warning', message: 'Повторяющиеся названия колонок' });
   }
@@ -154,5 +166,5 @@ export function readBankCsv(
       });
     }
   }
-  return { encoding, delimiter, headers, rows, warnings };
+  return { encoding, delimiter, headers, rows, warnings, headerRowNumber: headerRow.rowNumber };
 }

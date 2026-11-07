@@ -16,24 +16,26 @@ are deliberately left unchanged.
    never send its bytes to a server, analytics, crash reporter or third party.
 2. readBankStatementFile recognizes CSV/XLSX, enforces format limits, returns
    file digest, headers, rows and warnings. Use filename only as text.
-3. suggestColumnMapping proposes indexes; the user explicitly reviews
+3. Optional headerRowNumber (1-100) skips an introductory bank report preamble,
+   retaining the original physical row numbers for every imported operation.
+4. suggestColumnMapping proposes indexes; the user explicitly reviews
    mappings, account aliases, direction, date order, number format and target
    account for transfers. Positive transfers cannot be accepted unless the
    user explicitly selects transferDirection. In signed-source mode, the
    account of a positive row is the recipient and targetAccount is the other
    owned account (source); normalization swaps the two for the ledger.
-4. normalizeBankStatement creates integer RUB cents, safe ISO dates,
+5. normalizeBankStatement creates integer RUB cents, safe ISO dates,
    source keys, row-level errors and P&L totals. It **does not** mutate state.
    Unknown account/category and ambiguous amounts/dates block that row.
-5. reconcileBankStatement compares a **scope-restricted** ledger snapshot:
+6. reconcileBankStatement compares a **scope-restricted** ledger snapshot:
    sourceKey or matching bank external ID is an exact duplicate;
    content-only matches and opposite transfer legs are *possible* duplicates.
    Never auto-insert possible duplicates.
-6. After manual confirmation, draftBankImportBatch produces an immutable
+7. After manual confirmation, draftBankImportBatch produces an immutable
    proposal with deterministic batchKey and sourceKeys.
-7. projectAccountBalances checks each affected account with optional
+8. projectAccountBalances checks each affected account with optional
    statement closing balances, without applying any movements.
-8. After successful posting by #33, draftBankImportUndo can propose a
+9. After successful posting by #33, draftBankImportUndo can propose a
    fail-closed rollback only when *all* movements still belong to that batch
    and their essential financial fields are unchanged. An existing payment
    link also blocks an undo proposal. Actual rollback needs another atomic

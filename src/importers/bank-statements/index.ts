@@ -17,6 +17,8 @@ export interface ReadStatementOptions {
   csvEncoding?: CsvEncoding;
   csvDelimiter?: CsvDelimiter;
   sheetName?: string;
+  /** One-based physical row number, allowing bank-generated report preambles. */
+  headerRowNumber?: number;
 }
 
 /**
@@ -42,15 +44,16 @@ export async function readBankStatementFile(
   }
   const fileDigest = await sha256(bytes);
   if (format === 'xlsx') {
-    const parsed = await readBankXlsx(bytes, { sheetName: options.sheetName });
+    const parsed = await readBankXlsx(bytes, { sheetName: options.sheetName, headerRowNumber: options.headerRowNumber });
     return { format, fileDigest, filename, ...parsed };
   }
   const parsed = readBankCsv(bytes, {
     encoding: options.csvEncoding,
     delimiter: options.csvDelimiter,
+    headerRowNumber: options.headerRowNumber,
   });
   return {
     format, fileDigest, filename, headers: parsed.headers,
-    rows: parsed.rows, warnings: parsed.warnings,
+    rows: parsed.rows, warnings: parsed.warnings, headerRowNumber: parsed.headerRowNumber,
   };
 }

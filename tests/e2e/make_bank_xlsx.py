@@ -34,7 +34,7 @@ def date_serial(when: date) -> str:
 
 def main() -> None:
     if len(sys.argv) not in (2, 3):
-        raise SystemExit("usage: make_bank_xlsx.py OUTPUT [--bomb|--doctype|--external|--corrupt|--duplicate-row|--traversal|--encrypted-flag|--too-many-rows|--1904]")
+        raise SystemExit("usage: make_bank_xlsx.py OUTPUT [--bomb|--doctype|--external|--corrupt|--duplicate-row|--traversal|--encrypted-flag|--too-many-rows|--1904|--preamble]")
     path = Path(sys.argv[1])
     variant = sys.argv[2] if len(sys.argv) == 3 else ""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -74,6 +74,16 @@ def main() -> None:
             "Накопительный", "перевод", "", "SYN-004",
         ], numeric={1}),
     ]
+    if variant == "--preamble":
+        rows = [
+            row(1, ["Синтетическая банковская выписка"]),
+            row(2, ["Отчёт за ноябрь"]),
+            row(3, HEADERS),
+            row(4, [
+                date_serial(date(2026, 11, 7)), "-50.00",
+                "Тестовая операция", "Основной", "", "расход", "Питание", "PM-1",
+            ], numeric={0, 1}),
+        ]
     if variant == "--duplicate-row":
         rows.append(rows[1])
     if variant == "--too-many-rows":

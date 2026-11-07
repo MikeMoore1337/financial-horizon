@@ -462,3 +462,21 @@ test('a transfer appearing in both own-account bank statements is never silently
   assert.equal(partial.ready, 1);
   assert.equal(partial.possibleDuplicates, 1);
 });
+
+
+test('CSV metadata preamble can be skipped by choosing a physical header row', async () => {
+  const raw = 'Синтетическая выписка\nПериод ноябрь 2026\n' +
+    base + '07.11.2026;-50,00;Покупка;Основной;;расход;Питание;PM-1\n';
+  const table = await readBankStatementFile(input(raw), {
+    filename: 'preamble.csv', headerRowNumber: 3,
+  });
+  assert.equal(table.headerRowNumber, 3);
+  assert.deepEqual(table.rows.map(x => x.rowNumber), [4]);
+  assert.ok(table.warnings.some(x => x.code === 'SKIPPED_PREAMBLE'));
+  const { mapping } = suggestColumnMapping(table.headers);
+  const preview = await normalizeBankStatement(table, { mapping, accounts, categories: ['Питание'] });
+  assert.equal(preview.accepted, 1);
+  assert.equal(preview.outflowCents, 5000);
+  await assert.rejects(readBankStatementFile(input(raw), { headerRowNumber: 100 }), /заголовка/);
+  await assert.rejects(readBankStatementFile(input(raw), { headerRowNumber: 0 }), /заголовка/);
+});
