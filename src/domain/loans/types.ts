@@ -35,11 +35,16 @@ export interface RateChangeEvent extends BaseEvent {
   type: 'rate-change';
   annualRateMicroPercent: number;
 }
+/** A confirmed contractual installment change. Not a payment transaction. */
+export interface PaymentChangeEvent extends BaseEvent {
+  type: 'payment-change';
+  paymentCents: number;
+}
 export interface DueDateChangeEvent extends BaseEvent {
   type: 'due-date-change';
   dayOfMonth: number; // Takes effect from the following calendar month.
 }
-export type LoanEvent = PaymentEvent | RateChangeEvent | DueDateChangeEvent;
+export type LoanEvent = PaymentEvent | RateChangeEvent | DueDateChangeEvent | PaymentChangeEvent;
 
 export interface LoanRow {
   period: number;
@@ -64,6 +69,7 @@ export interface LoanHistoryRecord {
   balanceCents: number;
   unpaidInterestCents: number;
   annualRateMicroPercent?: number;
+  scheduledPaymentCents?: number;
   dayOfMonth?: number;
 }
 export interface LoanResult {

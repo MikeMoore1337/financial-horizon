@@ -259,3 +259,41 @@ test('rate change effective on due date updates the due amount before any paymen
   assert.equal(changed.complete, true);
   assert.equal(changed.rows[1].balanceCents, 0);
 });
+
+
+test('explicit contractual installment change applies on due day without booking cash movement', () => {
+  const change = { id:'contract-amendment', type:'payment-change',
+    date:'2026-03-01', paymentCents:30_000 };
+  const planned = calculateLoan(terms, [change], { mode:'plan' });
+  assert.deepEqual(planned.rows.map(r=>r.plannedPaymentCents),
+    [25_000,30_000,30_000,30_000]);
+  assert.deepEqual(planned.rows.map(r=>r.amountCents),
+    [25_000,30_000,30_000,15_000]);
+  assert.equal(planned.complete, true);
+  const actual = calculateLoan(terms, [change], { mode:'actual', asOfDate:'2026-03-01' });
+  assert.deepEqual(actual.rows.map(r=>r.plannedPaymentCents), [25_000, 30_000]);
+  assert.deepEqual(actual.rows.map(r=>r.amountCents), [0, 0]);
+  assert.equal(actual.principalBalanceCents, terms.principalCents);
+  assert.equal(actual.history[0]?.scheduledPaymentCents, 30_000);
+  const future = calculateLoan(terms, [change], { mode:'actual', asOfDate:'2026-02-01' });
+  const unchanged = calculateLoan(terms, [], { mode:'actual', asOfDate:'2026-02-01' });
+  assert.deepEqual(future, unchanged);
+  const voided = calculateLoan(terms, [{...change, voidedAt:'2026-04-01T00:00:00Z'}],
+    { mode:'plan' });
+  assert.deepEqual(voided, calculateLoan(terms, [], {mode:'plan'}));
+});
+
+test('payment-change is validated and explicit contractual amount overrides same-day rate change', () => {
+  const common = { id:'amend',date:'2026-02-01',type:'payment-change' };
+  for (const paymentCents of [0,-1,1.1,Number.MAX_SAFE_INTEGER]) {
+    assert.throws(()=>calculateLoan(terms,[{...common,paymentCents}],{mode:'plan'}),RangeError);
+  }
+  assert.throws(()=>calculateLoan({...terms,scheduleType:'differentiated'},
+    [{...common,paymentCents:25_000}],{mode:'plan'}),RangeError);
+  const simultaneous = calculateLoan({...terms,annualRateMicroPercent:12_000_000}, [
+    {id:'rate',date:'2026-02-01',type:'rate-change',annualRateMicroPercent:13_000_000},
+    {...common,paymentCents:35_000},
+  ],{mode:'plan'});
+  assert.equal(simultaneous.rows[0].plannedPaymentCents, 35_000);
+  assert.equal(simultaneous.history.find(x=>x.type==='payment-change')?.scheduledPaymentCents,35_000);
+});

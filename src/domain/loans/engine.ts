@@ -76,6 +76,9 @@ function validate(terms: LoanTerms, events: readonly LoanEvent[], options: LoanR
       assertRate(event.annualRateMicroPercent);
       if (!event.voidedAt && rateDates.has(event.date)) throw new RangeError('Two active rate changes on the same date');
       if (!event.voidedAt) rateDates.add(event.date);
+    } else if (event.type === 'payment-change') {
+      if (terms.scheduleType !== 'annuity') throw new RangeError('payment-change requires annuity');
+      assertMoney(event.paymentCents, 'payment-change.paymentCents', true);
     } else if (event.type === 'due-date-change') {
       if (!Number.isInteger(event.dayOfMonth) || event.dayOfMonth < 1 || event.dayOfMonth > 31) {
         throw new RangeError('dayOfMonth must be 1-31');
@@ -171,8 +174,11 @@ function minimumInstallment(state: Ledger, futureDues: readonly string[], terms:
 }
 
 function sortedEvents(events: readonly LoanEvent[], options: LoanRunOptions): LoanEvent[] {
+  // Contract changes are applied before actual cash movements on the same
+  // date; an explicit installment override wins over automatic repricing.
   const precedence = (e: LoanEvent): number => e.type === 'rate-change' ? 0 :
-    e.type === 'payment' && e.paymentKind === 'regular' ? 1 : 2;
+    e.type === 'due-date-change' ? 1 : e.type === 'payment-change' ? 2 :
+      e.type === 'payment' && e.paymentKind === 'regular' ? 3 : 4;
   return events.filter(e => !e.voidedAt &&
     (options.mode !== 'plan' || e.type !== 'payment') &&
     (options.mode !== 'actual' || e.date <= options.asOfDate! ) &&
@@ -247,6 +253,16 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
       history.push({ id: event.id, date: event.date, type: event.type,
         balanceCents: state.balance, unpaidInterestCents: state.unpaid,
         annualRateMicroPercent: state.rate });
+    } else if (event.type === 'payment-change') {
+      // Explicit contractual amount, not a cash receipt. It applies to the
+      // current unpaid installment, including a change on the due date.
+      scheduled = event.paymentCents;
+      if (currentUnprocessedDue !== null && event.date <= currentUnprocessedDue) {
+        currentDuePlannedPayment = scheduled;
+      }
+      history.push({ id: event.id, date: event.date, type: event.type,
+        balanceCents: state.balance, unpaidInterestCents: state.unpaid,
+        scheduledPaymentCents: scheduled });
     } else if (event.type === 'due-date-change') {
       appliedDueChanges.push(event);
       if (terms.scheduleType === 'annuity' && (terms.dueDateChangePolicy ?? 'keep-payment') === 'recalculate') {
