@@ -113,7 +113,7 @@ python3 -m http.server 8765 --bind 127.0.0.1 --directory dist
 
 | Уровень | Реализация |
 | --- | --- |
-| Интерфейс | Vite 8, TypeScript 6, React 19 («Обзор», «Календарь», «Обязательства»; поэтапная миграция), HTML/CSS и существующие ES-модули |
+| Интерфейс | Vite 8, TypeScript 6, React 19 (все пять основных разделов; поэтапная миграция оболочки/форм), HTML/CSS и существующие ES-модули |
 | Данные | IndexedDB, версионируемые миграции и защита от конфликтов записи |
 | Резервирование | Web Crypto API, AES-256-GCM, PBKDF2-SHA256 |
 | Офлайн | Web App Manifest и Service Worker |
@@ -127,6 +127,9 @@ python3 -m http.server 8765 --bind 127.0.0.1 --directory dist
 index.html / app.js / styles.css   Точка входа и оболочка
 src/react/Calendar.tsx             React-календарь (этап #72)
 src/react/Overview.tsx             React-обзор (этап #72)
+src/react/Obligations.tsx          React-обязательства
+src/react/Loans.tsx                React-кредиты
+src/react/Settings.tsx             React-настройки
 src/react/ScreenRoot.tsx           Единый React root для перенесённых экранов
 legacy/app.js                      Совместимость со старыми установленными PWA
 finance.js / ledger-operations.js  Финансовые расчёты и операции

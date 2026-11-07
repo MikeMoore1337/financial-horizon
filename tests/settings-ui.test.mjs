@@ -4,59 +4,63 @@ import {readFileSync} from 'node:fs';
 
 const read=name=>readFileSync(new URL('../'+name,import.meta.url),'utf8');
 const app=read('app.js');
+const settings=read('src/react/Settings.tsx');
 const css=read('styles.css');
 const html=read('index.html');
-const start=app.indexOf('function renderSettings()');
-const settings=app.slice(start,app.indexOf('function openDialog(',start));
 
-test('settings omit duplicate account/theme controls but retain header controls',()=>{
- assert.ok(settings.startsWith('function renderSettings()'));
- assert.doesNotMatch(settings,/id="account-entry"|id="account-session"|id="account-session-email"|id="account-logout-settings"|data-action="theme"|<h2>Оформление<\/h2>|<h2>Аккаунт<\/h2>/);
+test('React Settings avoids duplicated account/theme controls and retains header access',()=>{
+ assert.match(settings,/export function Settings\(/);
+ assert.doesNotMatch(settings,/id="account-entry"|id="account-session"|id="account-logout-settings"|data-action="theme"|<h2>Оформление|<h2>Аккаунт/);
  assert.match(html,/id="account-logout-toolbar"[^>]*data-action="account-logout"/);
  assert.match(html,/id="theme-toggle"/);
  assert.doesNotMatch(settings,/Hermes VPS|MikeMoore|Вариант А|YFC/);
+ assert.doesNotMatch(settings,/dangerouslySetInnerHTML|innerHTML/);
 });
 
-test('reference composition is six cards in three rows plus full-width installation',()=>{
+test('approved seven-card Settings layout remains with responsive CSS',()=>{
  for(const id of ['security','backup','import','categories','archive','history','install'])
-  assert.ok(settings.includes('data-settings-card="'+id+'"'),id);
- assert.equal((settings.match(/class="surface settings-card(?:\s|")/g)||[]).length,7);
+  assert.ok(settings.includes('<SettingsCard id="'+id+'"'),id);
+ assert.equal((settings.match(/<SettingsCard id="/g)||[]).length,7);
+ assert.ok(settings.includes('settings-install'));
  assert.ok(css.includes('.settings-grid{display:grid;'));
  assert.ok(css.includes('grid-template-columns:repeat(2,minmax(0,1fr))'));
  assert.ok(css.includes('.settings-install{grid-column:1/-1}'));
  assert.ok(css.includes('.settings-grid{grid-template-columns:1fr}'));
- for (const symbol of ['shield','sheet','tag','archive','database','smartphone'])
+ for(const symbol of ['shield','sheet','tag','archive','database','smartphone'])
   assert.ok(html.includes('id="ico-'+symbol+'"'),symbol);
 });
 
-test('actions, local persistence feedback and activity log stay available',()=>{
- for (const name of ['persist','backup','restore','excel-import','sample','clear','install','edit-category','delete-category','restore-item']) {
-  assert.ok(settings.includes("action('"+name+"'") || settings.includes('data-action="'+name+'"'),name);
- }
- assert.ok(settings.includes('id="storage-status"'));
- assert.ok(settings.includes('id="category-form"'));
- assert.ok(settings.includes('<details class="settings-history">'));
- assert.match(settings,/escapeHtml\(x\.title\)/);
- assert.match(settings,/escapeHtml\(x\.description\)/);
- assert.match(app,/syncAccountControls\(\);\s*if\(ui\.view==='settings'\)void renderStorageStatus\(\)/);
+test('actions, account-safe status, category form and activity log remain available',()=>{
+ for(const name of ['persist','backup','restore','excel-import','sample','clear','install','edit-category','delete-category','restore-item'])
+  assert.ok(settings.includes('data-action="'+name+'"'),name);
+ assert.match(settings,/id="storage-status"/);
+ assert.match(settings,/role="status"/);
+ assert.match(settings,/id="category-form"/);
+ assert.match(settings,/<details className="settings-history">/);
+ assert.match(settings,/\{item\.title\}/);
+ assert.match(settings,/\{item\.description\}/);
+ for(const view of ['calendar','overview','obligations','loans','settings'])
+  assert.match(app,new RegExp("screenRoot\\.render\\(\\{view:'"+view+"'"),'React must render '+view+' on navigation');
+ assert.match(app,/storageMessage:storageStatusMessage/);
+ assert.match(app,/async function renderStorageStatus\(\)/);
+ assert.doesNotMatch(app,/\$\('#storage-status'\)\.textContent\s*=/,
+   'React exclusively owns the storage status DOM node');
+ assert.match(app,/if\(form\.isConnected\)form\.reset\(\)/);
 });
 
-test('versioned app shell is consistent across both PWA pages',()=>{
- const sw=read('sw.js');
- const account=read('account.html');
- for(const p of ['styles.css?rev=auth-theme-v28','app.js?rev=auth-theme-v26']) {
-  assert.ok(sw.includes(p),p);
-  assert.ok(html.includes(p),p);
+test('original PWA shell and revisioned assets remain compatible with older installations',()=>{
+ const sw=read('sw.js'),account=read('account.html');
+ for(const resource of ['styles.css?rev=auth-theme-v28','app.js?rev=auth-theme-v26']){
+  assert.ok(sw.includes(resource),resource);
+  assert.ok(html.includes(resource),resource);
  }
  assert.ok(account.includes('styles.css?rev=auth-theme-v28'));
  assert.ok(sw.includes('financial-horizon-shell-v25-theme-auth'));
 });
 
-test('settings primary actions inherit the common income-button palette in both themes',()=>{
- const css=read('styles.css');
- const section=settings.slice(settings.indexOf('data-settings-card="backup"'),settings.indexOf('data-settings-card="import"'));
- assert.match(section,/action\('backup',[^\n]*'button-primary'\)/);
- assert.match(settings,/<button class="button-primary" type="submit">Добавить<\/button>/);
+test('approved primary button palettes in light/dark remain unchanged',()=>{
+ assert.match(settings,/className="button-primary" data-action="backup"/);
+ assert.match(settings,/className="button-primary" type="submit">\s*Добавить/);
  assert.doesNotMatch(settings,/settings-cta|settings-highlight/);
  assert.doesNotMatch(css,/--settings-highlight|\.settings-grid \.settings-cta/);
  assert.match(css,/\.button-primary\{background:var\(--accent\);color:var\(--onaccent\);border:1px solid transparent\}/);
