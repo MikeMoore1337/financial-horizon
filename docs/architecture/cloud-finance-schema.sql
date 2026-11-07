@@ -1,4 +1,6 @@
 -- Financial Horizon #65: reference PostgreSQL schema, NOT an Alembic migration.
+-- Issue #66/#33 addendum: accounts.kind required and opening_minor has NO
+-- server default. The executable version remains Alembic 0001_initial.
 -- Implementation / exact DDL + DB invariants belong to #66/#67.
 -- Never apply this file to production or to the existing auth SQLite.
 -- PostgreSQL runtime role must NOT be owner, superuser or BYPASSRLS.
@@ -23,8 +25,11 @@ CREATE TABLE accounts (
   profile_id uuid NOT NULL REFERENCES finance_profiles(id) ON DELETE RESTRICT,
   id uuid NOT NULL,
   name varchar(160) NOT NULL CHECK (length(btrim(name)) > 0),
+  kind varchar(16) NOT NULL
+    CHECK (kind IN ('bank','card','cash','savings','other')),
   currency char(3) NOT NULL DEFAULT 'RUB' CHECK (currency = 'RUB'),
-  opening_minor bigint NOT NULL DEFAULT 0
+  -- Explicit opening balance, including zero, is required (issue #33).
+  opening_minor bigint NOT NULL
     CHECK (opening_minor BETWEEN -1000000000000 AND 1000000000000),
   entity_revision bigint NOT NULL DEFAULT 1 CHECK (entity_revision > 0),
   archived_at timestamptz,
