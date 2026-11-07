@@ -143,3 +143,43 @@ test('browser can choose a bank XLSX header after a two-row report preamble', as
   expect(result.warnings).toContain('SKIPPED_PREAMBLE');
   watcher.assertClean();
 });
+
+
+test('real browser File API keeps CSV bytes local and renders hostile descriptions as text', async ({ page }, testInfo) => {
+  const watcher = await setup(page, testInfo);
+  const result = await page.evaluate(async () => {
+    const mod = await import('/__bank-parser/index.ts');
+    const malicious = '<img src=x onerror=window.__bankXss=1>';
+    const raw = 'Дата;Сумма;Описание;Счёт;Тип;ID\n' +
+      '07.11.2026;-99,50;' + malicious + ';Основной;расход;SEC-01\n' +
+      '77.11.2026;-10;Sensitive private account name;Основной;расход;SEC-02\n';
+    const file = new File([new TextEncoder().encode(raw)], 'synthetic-security.csv', { type: 'text/csv' });
+    const table = await mod.readBankStatementFile(await file.arrayBuffer(), { filename: file.name });
+    const { mapping } = mod.suggestColumnMapping(table.headers);
+    const preview = await mod.normalizeBankStatement(table, {
+      mapping, accounts: [{ id: 'checking', name: 'Основной', currency: 'RUB' }],
+    });
+    const reconciled = mod.reconcileBankStatement(preview, []);
+    const batch = await mod.draftBankImportBatch(reconciled, [preview.rows[0].operation.sourceKey]);
+    const summary = mod.summarizeBankImportAudit(reconciled, batch);
+    const view = document.querySelector('#preview');
+    view.textContent = preview.rows[0].operation.description;
+    return {
+      format: table.format, accepted: preview.accepted, rejected: preview.rejected,
+      summary: JSON.stringify(summary), previewText: view.textContent,
+      imageCount: document.querySelectorAll('img').length, injected: Boolean(window.__bankXss),
+      overflow: document.documentElement.scrollWidth > innerWidth,
+    };
+  });
+  expect(result.format).toBe('csv');
+  expect(result.accepted).toBe(1);
+  expect(result.rejected).toBe(1);
+  expect(result.previewText).toContain('<img');
+  expect(result.imageCount).toBe(0);
+  expect(result.injected).toBe(false);
+  expect(result.summary).not.toContain('SEC-01');
+  expect(result.summary).not.toContain('Sensitive');
+  expect(result.summary).not.toContain('Основной');
+  expect(result.overflow).toBe(false);
+  watcher.assertClean();
+});
