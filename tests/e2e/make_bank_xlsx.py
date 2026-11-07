@@ -34,7 +34,7 @@ def date_serial(when: date) -> str:
 
 def main() -> None:
     if len(sys.argv) not in (2, 3):
-        raise SystemExit("usage: make_bank_xlsx.py OUTPUT [--bomb|--doctype|--external|--corrupt|--duplicate-row]")
+        raise SystemExit("usage: make_bank_xlsx.py OUTPUT [--bomb|--doctype|--external|--corrupt|--duplicate-row|--traversal|--encrypted-flag|--too-many-rows|--1904]")
     path = Path(sys.argv[1])
     variant = sys.argv[2] if len(sys.argv) == 3 else ""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -44,6 +44,8 @@ def main() -> None:
         ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
         '<sheets><sheet name="Выписка" sheetId="1" r:id="rId1"/></sheets></workbook>'
     )
+    if variant == "--1904":
+        workbook = workbook.replace("<sheets>", '<workbookPr date1904="1"/><sheets>')
     relationships = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
@@ -54,7 +56,8 @@ def main() -> None:
     rows = [
         row(1, HEADERS),
         row(2, [
-            date_serial(date(2026, 11, 7)), "-1234.50",
+            (str((date(2026, 11, 7) - date(1904, 1, 1)).days) if variant == "--1904"
+             else date_serial(date(2026, 11, 7))), "-1234.50",
             "Синтетическая покупка", "Основной", "", "расход", "Питание", "SYN-001",
         ], numeric={0, 1}),
         row(3, [
@@ -73,6 +76,8 @@ def main() -> None:
     ]
     if variant == "--duplicate-row":
         rows.append(rows[1])
+    if variant == "--too-many-rows":
+        rows.append(row(10002, ["11.11.2026", "1", "Слишком много строк", "Основной"]))
     worksheet = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
@@ -88,6 +93,17 @@ def main() -> None:
             zf.writestr("xl/externalLinks/externalLink1.xml", "<externalLink/>")
         if variant == "--bomb":
             zf.writestr("xl/worksheets/bomb.xml", "A" * 8_000_001)
+        if variant == "--traversal":
+            zf.writestr("../outside.xml", "<x/>")
+    if variant == "--encrypted-flag":
+        buf = bytearray(path.read_bytes())
+        for signature, delta in ((b"PK\x03\x04", 6), (b"PK\x01\x02", 8)):
+            offset = buf.find(signature)
+            if offset < 0:
+                raise RuntimeError("Expected ZIP structure")
+            flags = int.from_bytes(buf[offset + delta:offset + delta + 2], "little")
+            buf[offset + delta:offset + delta + 2] = (flags | 1).to_bytes(2, "little")
+        path.write_bytes(buf)
     if variant == "--corrupt":
         buf = bytearray(path.read_bytes())
         # Corrupt compressed bytes while keeping central directory intact.

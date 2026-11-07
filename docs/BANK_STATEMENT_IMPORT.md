@@ -18,7 +18,10 @@ are deliberately left unchanged.
    file digest, headers, rows and warnings. Use filename only as text.
 3. suggestColumnMapping proposes indexes; the user explicitly reviews
    mappings, account aliases, direction, date order, number format and target
-   account for transfers.
+   account for transfers. Positive transfers cannot be accepted unless the
+   user explicitly selects transferDirection. In signed-source mode, the
+   account of a positive row is the recipient and targetAccount is the other
+   owned account (source); normalization swaps the two for the ledger.
 4. normalizeBankStatement creates integer RUB cents, safe ISO dates,
    source keys, row-level errors and P&L totals. It **does not** mutate state.
    Unknown account/category and ambiguous amounts/dates block that row.
@@ -31,7 +34,10 @@ are deliberately left unchanged.
 7. projectAccountBalances checks each affected account with optional
    statement closing balances, without applying any movements.
 8. After successful posting by #33, draftBankImportUndo can propose a
-   fail-closed rollback only when *all* movements still belong to that batch.
+   fail-closed rollback only when *all* movements still belong to that batch
+   and their essential financial fields are unchanged. An existing payment
+   link also blocks an undo proposal. Actual rollback needs another atomic
+   #33 revision check and audit trail, and is not implemented here.
 
 ## Required #33 integration contract (NOT IMPLEMENTED)
 
@@ -62,7 +68,8 @@ are deliberately left unchanged.
 
 ## Limits and threat boundaries
 
-- CSV: 4 MB, 10,000 data rows, 64 columns, 16 KiB per cell.
+- CSV: 4 MB, 10,000 data rows, 64 columns, 16 KiB per cell. Reject over-limit
+  data before computing any SHA-256 digest.
   UTF-8, Windows-1251/1252, IBM866, UTF-16 LE/BE. Auto mode tests UTF-8
   then Windows-1251; other encodings require explicit selection.
 - XLSX: 6 MB archive, 256 ZIP members, 8 MB per part, 24 MB total declared

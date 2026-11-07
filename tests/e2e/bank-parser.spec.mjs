@@ -88,9 +88,9 @@ test('native browser safely parses a synthetic XLSX, skips formulas and balances
   watcher.assertClean();
 });
 
-test('native browser rejects bomb, DTD, external parts and corrupt ZIP', async ({ page }, testInfo) => {
+test('native browser rejects bombs, DTD, unsafe paths, encryption, duplicate rows and corruption', async ({ page }, testInfo) => {
   const watcher = await setup(page, testInfo);
-  for (const suffix of ['--bomb', '--doctype', '--external', '--corrupt', '--duplicate-row']) {
+  for (const suffix of ['--bomb', '--doctype', '--external', '--corrupt', '--duplicate-row', '--traversal', '--encrypted-flag', '--too-many-rows']) {
     const encoded = makeFixture(testInfo, suffix);
     const outcome = await page.evaluate(async encoded => {
       const mod = await import('/__bank-parser/index.ts');
@@ -103,5 +103,21 @@ test('native browser rejects bomb, DTD, external parts and corrupt ZIP', async (
     }, encoded);
     expect(outcome, suffix).not.toBe('ACCEPTED');
   }
+  watcher.assertClean();
+});
+
+test('1904 XLSX date system is converted without shifting account transactions', async ({ page }, testInfo) => {
+  const watcher = await setup(page, testInfo);
+  const encoded = makeFixture(testInfo, '--1904');
+  const result = await page.evaluate(async ({ encoded, accounts }) => {
+    const mod = await import('/__bank-parser/index.ts');
+    const bytes = Uint8Array.from(atob(encoded), x => x.charCodeAt(0));
+    const table = await mod.readBankStatementFile(bytes, { filename: 'synthetic.xlsx' });
+    const { mapping } = mod.suggestColumnMapping(table.headers);
+    const preview = await mod.normalizeBankStatement(table, { mapping, accounts });
+    return { dateSystem: table.dateSystem, date: preview.rows[0].operation?.date,
+      accepted: preview.accepted, rejected: preview.rejected };
+  }, { encoded, accounts });
+  expect(result).toEqual({ dateSystem: '1904', date: '2026-11-07', accepted: 3, rejected: 1 });
   watcher.assertClean();
 });
