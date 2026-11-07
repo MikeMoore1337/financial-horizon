@@ -3,7 +3,7 @@
  * Validate after deserializing an untrusted cache/snapshot and before/after
  * local command simulation. Authoritative SQL/RLS checks remain in #66/#67.
  */
-import { MAX_MINOR } from './ledger.ts';
+import { MAX_MINOR } from './money.ts';
 import type { LedgerState, LedgerPosting, LedgerTransaction } from './ledger.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -126,7 +126,8 @@ export function assertLedgerState(state: LedgerState): void {
     const pair = postings.get(tx.id) ?? [];
     if (tx.kind === 'transfer') {
       if (pair.length !== 2 || safeAdd(pair[0]!.signedMinor, pair[1]!.signedMinor) !== 0
-          || pair[0]!.signedMinor * pair[1]!.signedMinor >= 0) throw new Error('Перевод не сбалансирован');
+          || !((pair[0]!.signedMinor < 0 && pair[1]!.signedMinor > 0)
+            || (pair[0]!.signedMinor > 0 && pair[1]!.signedMinor < 0))) throw new Error('Перевод не сбалансирован');
     } else if (tx.kind === 'reversal') {
       if (reversed.has(tx.reversedTransactionId!)) throw new Error('Повторная отмена операции');
       reversed.add(tx.reversedTransactionId!);
