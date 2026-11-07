@@ -23,6 +23,7 @@ test('full settlement on the scheduled due date is retained as the last factual 
   });
   assert.equal(result.complete, true);
   assert.equal(result.paidOffDate, '2026-02-01');
+  assert.equal(result.actualOpenPeriod, null); // No duplication of the closed installment.
   assert.deepEqual(result.rows.map(row => ({
     date: row.date, amountCents: row.amountCents,
     principalCents: row.principalCents, balanceCents: row.balanceCents,
@@ -119,4 +120,42 @@ test('bank allocation gap remains visible instead of rejecting fee-bearing sched
   assert.equal(result.rows[0].bankUnallocatedCents, 50);
   assert.equal(result.rows[0].amountDeltaCents, -50);
   assert.equal(result.exactMatch, false);
+});
+
+test('same-rate change effective on the installment date includes today in annuity recalculation', () => {
+  const contract = { ...terms, termMonths: 2, annualRateMicroPercent: 12_000_000 };
+  const original = calculateLoan(contract, [], { mode: 'plan' });
+  const repriced = calculateLoan(contract, [{
+    id: 'same-rate-on-due', type: 'rate-change', date: '2026-02-01',
+    annualRateMicroPercent: 12_000_000,
+  }], { mode: 'plan' });
+  assert.equal(original.rows.length, 2);
+  assert.deepEqual(repriced.rows, original.rows);
+  assert.equal(repriced.paidOffDate, original.paidOffDate);
+  assert.equal(repriced.scheduledPaymentCents, original.scheduledPaymentCents);
+});
+
+test('future due-date change cannot alter an actual snapshot before the event occurs', () => {
+  const contract = { ...terms, termMonths: 2, annualRateMicroPercent: 12_000_000 };
+  const asOfDate = '2026-02-01';
+  const initial = calculateLoan(contract, [], { mode: 'actual', asOfDate });
+  const withFuture = calculateLoan(contract, [{
+    id: 'reschedule-march', type: 'due-date-change',
+    date: '2026-02-10', dayOfMonth: 28,
+  }], { mode: 'actual', asOfDate });
+  assert.equal(initial.rows.length, 1);
+  assert.deepEqual(withFuture, initial);
+  assert.equal(initial.nextDueDate, '2026-03-01');
+});
+
+test('no paid-on-due amounts leak into an actual open period, in both factual and forecast views', () => {
+  const payment = pay('2026-02-01', 100_000);
+  for (const mode of ['actual', 'forecast']) {
+    const result = calculateLoan(terms, [payment], { mode, asOfDate: '2026-02-02' });
+    assert.equal(result.complete, true, mode);
+    assert.equal(result.rows.length, 1, mode);
+    assert.equal(result.rows[0].amountCents, 100_000, mode);
+    assert.equal(result.actualOpenPeriod, null, mode);
+    assert.equal(result.history.length, 1, mode);
+  }
 });
