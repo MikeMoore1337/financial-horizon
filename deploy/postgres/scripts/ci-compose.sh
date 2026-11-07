@@ -29,8 +29,8 @@ printf '%s' 'CI-only-synthetic-runtime-password-0123456789' > "$FH_FINANCE_SECRE
 pg_image="postgres:17@sha256:5b96f1a16bd9768b060dd2ffe55cb6225c4d9ef4d214a8b21eb08134869a97e4"
 pg_uid="$(docker run --rm --network none "$pg_image" id -u postgres)"
 test "$pg_uid" = "999"
-sudo chown "$pg_uid:$pg_uid" "$FH_FINANCE_SECRETS_DIR/"*
 chmod 400 "$FH_FINANCE_SECRETS_DIR/"*
+sudo chown "$pg_uid:$pg_uid" "$FH_FINANCE_SECRETS_DIR/"*
 docker compose -f deploy/postgres/compose.yml config --quiet
 docker compose -f deploy/postgres/compose.yml up -d --wait --wait-timeout 35 db
 docker compose -f deploy/postgres/compose.yml --profile ops run --rm --build migrator
