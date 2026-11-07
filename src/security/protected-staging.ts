@@ -39,8 +39,17 @@ function validateScope(value: unknown): asserts value is LocalScope {
     throw Error('Некорректный финансовый профиль');
   }
 }
-function sameJSON(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+/** Canonical JSON equivalence: object key order is not data; array order is. */
+export function sameFinancialJSON(a: unknown, b: unknown): boolean {
+  const stable = (input: unknown): string => {
+    const text = JSON.stringify(input);
+    if (text === undefined) throw Error('Недопустимое значение финансового снимка');
+    return JSON.stringify(JSON.parse(text), (_key, value) => {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+      return Object.fromEntries(Object.keys(value).sort().map(key => [key, value[key]]));
+    });
+  };
+  return stable(a) === stable(b);
 }
 function readContext(row: StagedRow, scope: LocalScope): RecordContext {
   if (!row || row.format !== FORMAT || row.version !== VERSION || row.scope !== scope ||
@@ -191,18 +200,18 @@ export async function stageProtectedSnapshot(
   const prior = await readRaw(scope);
   if (prior) {
     const previousContext = readContext(prior.row, scope);
-    if (!sameJSON(previousContext, descriptor)) throw Error('Уже сохранён другой снимок бюджета');
+    if (!sameFinancialJSON(previousContext, descriptor)) throw Error('Уже сохранён другой снимок бюджета');
     const vault = await unlockLocalKeyset(prior.keyset, {passphrase}, scope);
     try {
       const actual = await vault.decrypt(prior.row.record, previousContext);
-      if (!sameJSON(actual, source)) throw Error('Изменились данные после подготовки копии');
+      if (!sameFinancialJSON(actual, source)) throw Error('Изменились данные после подготовки копии');
       return {status: 'already-staged', recoveryKey: null};
     } finally {vault.lock();}
   }
   const {keyset, recoveryKey, vault} = await createLocalKeyset(scope, passphrase);
   try {
     const record = await vault.encrypt(source, descriptor);
-    if (!sameJSON(await vault.decrypt(record, descriptor), source)) {
+    if (!sameFinancialJSON(await vault.decrypt(record, descriptor), source)) {
       throw Error('Не прошла проверка зашифрованной копии');
     }
     const row: StagedRow = {format: FORMAT, version: VERSION, scope, record};

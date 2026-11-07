@@ -128,3 +128,11 @@ test('no network dependency: offline prepare and recovery',async()=>{
   assert.deepEqual((await readStagedSnapshot(userA,{recoveryKey:result.recoveryKey})).state,source);
  }finally{globalThis.fetch=fetch}
 });
+
+test('idempotent retry accepts equivalent data when JSON object keys are reordered',async()=>{
+ const db=fakeIndexedDb();globalThis.indexedDB=db.global;
+ const created=await stageProtectedSnapshot(userA,source,context,pass);
+ assert.equal(created.status,'created');
+ const reordered={entries:source.entries.map(e=>({amountCents:e.amountCents,title:e.title})),revision:source.revision,version:source.version};
+ assert.deepEqual(await stageProtectedSnapshot(userA,reordered,context,pass),{status:'already-staged',recoveryKey:null});
+});

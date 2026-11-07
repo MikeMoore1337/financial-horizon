@@ -53,3 +53,33 @@ test('legacy encrypted backup v1 -> v2 protected staging; original remains uncha
  const persisted=JSON.stringify([...db.tables.values()].map(items=>[...items.values()]));
  for(const entry of legacy.entries){assert.equal(persisted.includes(entry.title),false)}
 });
+
+test('review P1 regression: changing input during asynchronous backup check cannot redirect the account scope',async()=>{
+ const db=mockDb();globalThis.indexedDB=db.indexedDB;
+ const legacy=createSampleState();legacy.version=1;delete legacy.revision;
+ const backupText=await encryptBackup(legacy,backupPassword);
+ const accountA='account:'+'a'.repeat(32),accountB='account:'+'b'.repeat(32);
+ const changing={scope:accountA,source:legacy,backupText,backupPassword,localPassphrase:passphrase,consent};
+ const inflight=stageVerifiedLegacyBackup(changing);
+ changing.scope=accountB;
+ changing.localPassphrase='attacker changed password 2026';
+ changing.backupText='invalid';
+ const result=await inflight;
+ assert.equal(result.status,'created');
+ assert.equal(await readStagedSnapshot(accountB,{passphrase:changing.localPassphrase}),null);
+ assert.equal((await readStagedSnapshot(accountA,{passphrase})).state.version,2);
+ await assert.rejects(()=>readStagedSnapshot(accountA,{passphrase:changing.localPassphrase}),/Неверный ключ/);
+});
+
+test('review P2 regression: equivalent v1 encrypted backup and reordered v2 source match by values',async()=>{
+ const db=mockDb();globalThis.indexedDB=db.indexedDB;
+ const legacy=createSampleState();legacy.version=1;delete legacy.revision;
+ const backupText=await encryptBackup(legacy,backupPassword);
+ // Existing v2 payload can put revision directly after version. The v1 upgrader
+ // appends revision last; object key order must never decide financial equality.
+ const sourceV2={version:2,revision:0,...Object.fromEntries(Object.entries(legacy).filter(([key])=>key!=='version'&&key!=='revision'))};
+ const target='guest:equivalent-v2';
+ const result=await stageVerifiedLegacyBackup({scope:target,source:sourceV2,backupText,backupPassword,localPassphrase:passphrase,consent});
+ assert.equal(result.status,'created');
+ assert.deepEqual((await readStagedSnapshot(target,{passphrase})).state,sourceV2);
+});

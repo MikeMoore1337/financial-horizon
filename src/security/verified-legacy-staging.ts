@@ -5,7 +5,7 @@
  */
 import {decryptBackup} from '../../backup.js';
 import {migrateState} from '../../state-migrations.ts';
-import {stageProtectedSnapshot, type StagingResult} from './protected-staging.ts';
+import {stageProtectedSnapshot, sameFinancialJSON, type StagingResult} from './protected-staging.ts';
 import type {LocalScope} from './local-vault.ts';
 
 export type VerifiedLegacyStagingConsent = Readonly<{
@@ -26,18 +26,23 @@ export async function stageVerifiedLegacyBackup(input: {
       input.consent?.confirmedSeparateStaging !== true) {
     throw Error('Не подтверждены внешняя резервная копия и согласие на перенос');
   }
-  // Freeze mutable caller data before the asynchronous decryption/KDF.
+  // Pin every mutable input field synchronously; never re-read `input` after
+  // the first KDF await. Prevents TOCTOU storage under another account scope.
+  const scope = input.scope;
+  const backupText = input.backupText;
+  const backupPassword = input.backupPassword;
+  const localPassphrase = input.localPassphrase;
   const original = structuredClone(input.source);
   const checkedSource = migrateState(original);
-  const recovered = await decryptBackup(input.backupText, input.backupPassword);
+  const recovered = await decryptBackup(backupText, backupPassword);
   const restored = migrateState(recovered);
-  if (JSON.stringify(checkedSource) !== JSON.stringify(restored)) {
+  if (!sameFinancialJSON(checkedSource, restored)) {
     throw Error('Резервная копия не совпадает с выбранным состоянием');
   }
   // This is an isolated, inactive copy. The original DB is not even opened.
-  return stageProtectedSnapshot(input.scope, checkedSource, {
+  return stageProtectedSnapshot(scope, checkedSource, {
     kind: 'snapshot', recordId: 'state',
     schemaVersion: checkedSource.version,
     revision: checkedSource.revision,
-  }, input.localPassphrase);
+  }, localPassphrase);
 }
