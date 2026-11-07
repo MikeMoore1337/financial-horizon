@@ -19,6 +19,9 @@ cleanup() {
     docker inspect fh-finance-postgres --format 'health={{json .State.Health}}' >&2 || true
   fi
   docker compose -f deploy/postgres/compose.yml --profile ops down --volumes --remove-orphans >/dev/null 2>&1 || true
+  # The disposable bind-mounted data dir belongs to postgres UID 999.
+  # Restore CI runner ownership before removing only this mktemp directory.
+  sudo chown -R "$(id -u):$(id -g)" "$FH_FINANCE_DATA_DIR" >/dev/null 2>&1 || true
   rm -rf "$FH_FINANCE_SECRETS_DIR"
   return "$status"
 }
@@ -32,7 +35,8 @@ pg_image="postgres:17@sha256:5b96f1a16bd9768b060dd2ffe55cb6225c4d9ef4d214a8b21eb
 pg_uid="$(docker run --rm --network none "$pg_image" id -u postgres)"
 test "$pg_uid" = "999"
 chmod 400 "$FH_FINANCE_SECRETS_DIR/"*
-sudo chown "$pg_uid:$pg_uid" "$FH_FINANCE_SECRETS_DIR/"*
+sudo chown "$pg_uid:$pg_uid" "$FH_FINANCE_SECRETS_DIR/"* "$FH_FINANCE_DATA_DIR"
+chmod 700 "$FH_FINANCE_DATA_DIR"
 # This synthetic CI directory is intentionally not encrypted; the production
 # gate MUST refuse it. Never make CI's temporary storage an alternative to LUKS.
 if FH_FINANCE_MAPPER_NAME=fh-finance-pg bash deploy/postgres/scripts/storage-preflight.sh >/dev/null 2>&1; then
