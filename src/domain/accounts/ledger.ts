@@ -66,6 +66,7 @@ interface Occurrence { occurredOn: string; note?: string | null }
 export type LedgerCommand = CommandBase & (
   | { action: 'account.create'; payload: { id: string; name: string; kind: AccountKind; currency: 'RUB'; openingMinor: number } }
   | { action: 'account.archive'; payload: { accountId: string; archivedAt: string } }
+  | { action: 'account.unarchive'; payload: { accountId: string } }
   | { action: 'transaction.record'; payload: Occurrence & { id: string; accountId: string; kind: 'income' | 'expense' | 'adjustment'; signedMinor: number } }
   | { action: 'account.transfer'; payload: Occurrence & { id: string; fromAccountId: string; toAccountId: string; amountMinor: number } }
   | { action: 'payment.record'; payload: Occurrence & { id: string; accountId: string; amountMinor: number; link: { settlementId: string } | { loanPaymentId: string } } }
@@ -232,9 +233,21 @@ export function applyLedgerCommand(source: LedgerState, command: LedgerCommand, 
       affectedId = a.id;
       break;
     }
+    case 'account.unarchive': {
+      const payload = command.payload;
+      const a = accountForWrite(state, payload.accountId, command, true);
+      if (a.archivedAt === null) throw new Error('Счёт не архивирован');
+      a.archivedAt = null;
+      a.entityRevision++;
+      affectedId = a.id;
+      break;
+    }
     case 'transaction.record': {
       const payload = command.payload;
       const a = accountForWrite(state, payload.accountId, command);
+      if (payload.kind !== 'income' && payload.kind !== 'expense' && payload.kind !== 'adjustment') {
+        throw new TypeError('Неизвестный вид фактической операции');
+      }
       integer(payload.signedMinor, -MAX_MINOR);
       if (payload.signedMinor === 0 || (payload.kind === 'income' && payload.signedMinor < 0) || (payload.kind === 'expense' && payload.signedMinor > 0)) {
         throw new RangeError('Неверный знак фактической операции');
