@@ -25,26 +25,41 @@ export function reconcileBankStatement(
   const rows: ReconciledBankRow[] = preview.rows.map(row => {
     const op = row.operation;
     if (!op) return { ...row, status: 'invalid', existingIds: [] };
-    const matches = active.filter(x =>
-      x.sourceKey === op.sourceKey ||
-      (Boolean(op.externalId) && x.externalId === op.externalId && x.accountId === op.accountId),
-    );
-    const exact = matches.filter(x =>
-      x.sourceKey === op.sourceKey ||
-      (x.fingerprint === op.fingerprint && x.kind === op.kind &&
-        x.amountCents === op.amountCents && x.date === op.date),
-    );
-    if (exact.length) return {
-      ...row, status: 'duplicate', existingIds: exact.map(x => x.id),
+    const sourceMatches = active.filter(x => x.sourceKey === op.sourceKey);
+    if (sourceMatches.length) return {
+      ...row, status: 'duplicate', existingIds: sourceMatches.map(x => x.id),
     };
+    const bankIdMatches = op.externalId ? active.filter(x =>
+      x.externalId === op.externalId && x.accountId === op.accountId) : [];
+    if (bankIdMatches.length) {
+      const changed = bankIdMatches.some(x => x.fingerprint && x.fingerprint !== op.fingerprint);
+      return {
+        ...row, status: changed ? 'invalid' : 'duplicate',
+        existingIds: bankIdMatches.map(x => x.id),
+        warnings: changed ? [...row.warnings, {
+          code: 'EXTERNAL_ID_CONFLICT', severity: 'error', row: row.rowNumber,
+          message: 'Идентификатор банка уже используется другой операцией',
+        } as const] : row.warnings,
+      };
+    }
+    if (op.externalId && previous.some(x => x.externalId === op.externalId &&
+      x.accountId === op.accountId)) {
+      return {
+        ...row, status: 'invalid', existingIds: [],
+        warnings: [...row.warnings, {
+          code: 'DUPLICATE_EXTERNAL_ID', severity: 'error', row: row.rowNumber,
+          message: 'Одинаковый идентификатор банка в пределах выписки',
+        }],
+      };
+    }
     const suspicious = active.filter(x =>
       x.fingerprint === op.fingerprint || possibleTransfer(x, op),
     );
     const repeatInFile = previous.some(x => x.fingerprint === op.fingerprint || sameTransfer(x, op));
     previous.push(op);
-    if (matches.length || suspicious.length || repeatInFile) return {
+    if (suspicious.length || repeatInFile) return {
       ...row, status: 'possible-duplicate',
-      existingIds: [...new Set([...matches, ...suspicious].map(x => x.id))],
+      existingIds: [...new Set(suspicious.map(x => x.id))],
     };
     return { ...row, status: 'ready', existingIds: [] };
   });
