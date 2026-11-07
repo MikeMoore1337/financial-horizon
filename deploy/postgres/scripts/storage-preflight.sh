@@ -28,4 +28,15 @@ crypt_device="$(lsblk -dn -o MAJ:MIN "$mapper" | tr -d '[:space:]')"
   fail "Mountpoint must have permissions 0700"
 [[ "$(stat -c '%u' "$FH_FINANCE_DATA_DIR")" = "999" ]] ||
   fail "Mountpoint must be owned by finance PostgreSQL UID 999"
-echo "FINANCE_STORAGE_PRECHECK_PASS: dedicated LUKS2 mount, no schema changes"
+
+# Capacity guard: never consume the host root disk reserve of co-located
+# services merely to provision a new finance cluster. Values are bytes.
+free_data="$(df -B1 --output=avail "$FH_FINANCE_DATA_DIR" | awk 'NR==2 {print $1}')"
+free_root="$(df -B1 --output=avail / | awk 'NR==2 {print $1}')"
+[[ "$free_data" =~ ^[0-9]+$ && "$free_root" =~ ^[0-9]+$ ]] ||
+  fail "Cannot determine storage capacity"
+(( free_data >= 2 * 1024 * 1024 * 1024 )) ||
+  fail "Encrypted financial volume needs at least 2 GiB available"
+(( free_root >= 5 * 1024 * 1024 * 1024 )) ||
+  fail "Host needs at least 5 GiB root reserve for other services"
+echo "FINANCE_STORAGE_PRECHECK_PASS: dedicated LUKS2 mount and disk reserves"
