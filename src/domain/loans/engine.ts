@@ -242,7 +242,7 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
     // Record the installment amount that was due BEFORE any payments on the
     // current due date. Pre-due changes and rate changes effective today can
     // update it, but same-day postpayment reduce-payment must not rewrite it.
-    if (currentUnprocessedDue !== null &&
+    if (terms.scheduleType === 'annuity' && currentUnprocessedDue !== null &&
         (date < currentUnprocessedDue || includeCurrentUnpaidDue)) {
       currentDuePlannedPayment = scheduled;
     }
@@ -284,6 +284,14 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
         balanceCents: state.balance, unpaidInterestCents: state.unpaid,
         dayOfMonth: event.dayOfMonth });
     } else if (event.type === 'payment') {
+      if (terms.scheduleType === 'differentiated' &&
+          event.date === currentUnprocessedDue && currentDuePlannedPayment === null) {
+        // Preserve contractual principal share + all accrued/unpaid interest
+        // BEFORE this due-date payment can extinguish the interest balance.
+        const pending = { ...state };
+        bill(pending, terms);
+        currentDuePlannedPayment = pending.unpaid + Math.min(pending.balance, scheduled);
+      }
       periodInterest += bill(state, terms);
       const paid = settle(state, event.amountCents, true);
       periodAmount += paid.amount;
@@ -319,7 +327,7 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
     const due = dues[i]!;
     if (options.mode === 'actual' && due > asOf!) break;
     currentUnprocessedDue = due;
-    currentDuePlannedPayment = scheduled;
+    currentDuePlannedPayment = terms.scheduleType === 'annuity' ? scheduled : null;
     if (options.mode === 'forecast' && !crossedAsOf && due > asOf!) {
       while (cursor < timeline.length && timeline[cursor]!.date <= asOf!) {
         applyEvent(timeline[cursor]!);
@@ -358,9 +366,9 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
     accrue(state, due, terms);
     periodInterest += bill(state, terms);
     const isProjected = options.mode === 'plan' || (options.mode === 'forecast' && due > asOf!);
-    const plannedPayment = terms.scheduleType === 'annuity'
-      ? (currentDuePlannedPayment ?? scheduled)
-      : state.unpaid + Math.min(state.balance, scheduled);
+    const plannedPayment = currentDuePlannedPayment ??
+      (terms.scheduleType === 'annuity'
+        ? scheduled : state.unpaid + Math.min(state.balance, scheduled));
     if (isProjected) {
       const paid = settle(state, plannedPayment, false);
       periodAmount += paid.amount;

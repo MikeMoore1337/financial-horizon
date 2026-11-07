@@ -326,3 +326,22 @@ test('manual payment change overrides same-day deferred due-date repricing in ev
     assert.equal(result.rows[0].amountCents,0,mode);
   }
 });
+ 
+test('differentiated contractual due includes interest even when paid in full on the due date', () => {
+  const contract = {...terms, scheduleType:'differentiated',
+    annualRateMicroPercent:12_000_000};
+  const planned = calculateLoan(contract, [], {mode:'plan'});
+  const first = planned.rows[0];
+  assert.equal(first.plannedPaymentCents,26_019);
+  assert.equal(first.amountCents,26_019);
+  const regular = pay('2026-02-01',first.amountCents,'diff-first');
+  for (const mode of ['actual','forecast']) {
+    const result = calculateLoan(contract, [regular],{mode,asOfDate:'2026-02-02'});
+    assert.equal(result.rows[0].plannedPaymentCents,26_019,mode);
+    assert.equal(result.rows[0].interestCents,1_019,mode);
+    assert.equal(result.rows[0].amountCents,26_019,mode);
+    assert.equal(result.rows[0].principalCents,25_000,mode);
+    assert.equal(result.rows[0].balanceCents,75_000,mode);
+    assert.equal(result.actualOpenPeriod,null,mode);
+  }
+});
