@@ -247,3 +247,22 @@ test('versioned legacy staging never manufactures opening accounts or erases v1/
   assert.throws(() => planLegacyLedgerImport({ ...v1, version: 3 }), /Неизвестная/);
   assert.throws(() => planLegacyLedgerImport({ ...v2, revision: -1 }), /ревизия/);
 });
+
+test('archived account can be unarchived without losing balance or creating duplicate postings', () => {
+  let s = create(emptyLedger(id(1)), id(2), 1_234);
+  s = apply(s, 'account.archive', { accountId: id(2), archivedAt: '2026-11-07T10:00:00.000Z' }, expectFor(s, id(2)));
+  assert.throws(() => record(s, id(2), 'expense', -1), /недоступен/);
+  const before = accountBalanceMinor(s, id(2));
+  s = apply(s, 'account.unarchive', { accountId: id(2) }, expectFor(s, id(2)));
+  assert.equal(accountBalanceMinor(s, id(2)), before);
+  assert.equal(s.postings.length, 0);
+  s = record(s, id(2), 'expense', -23);
+  assert.equal(accountBalanceMinor(s, id(2)), 1_211);
+});
+
+test('untrusted command cannot bypass posting shape by spoofing transaction kind', () => {
+  const s = create(emptyLedger(id(1)), id(2), 100);
+  assert.throws(() => apply(s, 'transaction.record', {
+    id: unique(), accountId: id(2), kind: 'transfer', signedMinor: -1, occurredOn: '2026-11-07',
+  }, expectFor(s, id(2))), /Неизвестный вид/);
+});
