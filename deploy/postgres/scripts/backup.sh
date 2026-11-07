@@ -39,3 +39,5 @@ for ((i = 3; i < ${#entries[@]}; i++)); do
     rm -- "$candidate"
   fi
 done
+# Caller must know the exact archive when mirroring it to independent storage.
+printf '%s\n' "$file"

@@ -6,7 +6,7 @@ After=docker.service
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/financial-horizon/finance/backup.env
-ExecStart=/opt/financial-horizon-finance/scripts/backup.sh
+ExecStart=/opt/financial-horizon-finance/scripts/backup-and-offsite.sh
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

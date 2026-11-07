@@ -82,6 +82,13 @@ encrypted="$(find "$FH_FINANCE_BACKUP_DIR" -maxdepth 1 -type f \
   -name 'fh-finance-*.pgdump.gpg' -printf '%T@ %p\n' | sort -nr | sed -n '1s/^[^ ]* //p')"
 test -n "$encrypted"
 bash deploy/postgres/scripts/restore-drill.sh "$encrypted"
+# A local snapshot must not be reported as disaster-recovery-ready without
+# a configured, verified independent offsite destination.
+if bash deploy/postgres/scripts/offsite-upload.sh "$encrypted" >/dev/null 2>&1; then
+  echo "ERROR: offsite uploader accepted unconfigured remote storage" >&2
+  exit 1
+fi
+echo "CI_OFFSITE_REQUIRED_FAIL_CLOSED_PASS"
 echo "CI_PRODUCTION_BACKUP_RESTORE_PASS: GPG-encrypted full backup restored in isolated networkless PostgreSQL"
 
 exposed="$(docker inspect fh-finance-postgres --format '{{json .NetworkSettings.Ports}}')"
