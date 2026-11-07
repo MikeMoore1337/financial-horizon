@@ -65,6 +65,7 @@ interface CommandBase {
 interface Occurrence { occurredOn: string; note?: string | null }
 export type LedgerCommand = CommandBase & (
   | { action: 'account.create'; payload: { id: string; name: string; kind: AccountKind; currency: 'RUB'; openingMinor: number } }
+  | { action: 'account.update'; payload: { accountId: string; name: string; kind: AccountKind } }
   | { action: 'account.archive'; payload: { accountId: string; archivedAt: string } }
   | { action: 'account.unarchive'; payload: { accountId: string } }
   | { action: 'transaction.record'; payload: Occurrence & { id: string; accountId: string; kind: 'income' | 'expense' | 'adjustment'; signedMinor: number } }
@@ -228,6 +229,17 @@ export function applyLedgerCommand(source: LedgerState, command: LedgerCommand, 
       if (state.accounts.some(a => a.id === payload.id)) throw new Error('Счёт уже существует');
       state.accounts.push({ id: payload.id, profileId: state.profileId, name: payload.name.trim(), kind: payload.kind, currency: 'RUB', openingMinor: payload.openingMinor, entityRevision: 1, archivedAt: null });
       affectedId = payload.id;
+      break;
+    }
+    case 'account.update': {
+      const payload = command.payload;
+      const account = accountForWrite(state, payload.accountId, command);
+      text(payload.name, 160);
+      if (!KINDS.has(payload.kind)) throw new TypeError('Неверный тип счёта');
+      account.name = payload.name.trim();
+      account.kind = payload.kind;
+      account.entityRevision++;
+      affectedId = account.id;
       break;
     }
     case 'account.archive': {
