@@ -19,7 +19,7 @@ const ALIASES: Readonly<Record<MappableField, readonly string[]>> = {
   category: ['категория', 'category', 'categoryname'],
   currency: ['валюта', 'currency', 'ccy'],
   kind: ['тип', 'типоперации', 'видоперации', 'direction', 'type', 'operationtype'],
-  externalId: ['идентификатор', 'номероперации', 'idоперации', 'transactionid', 'reference', 'operationid', 'externalid'],
+  externalId: ['идентификатор', 'номероперации', 'idоперации', 'id', 'transactionid', 'reference', 'operationid', 'externalid'],
 };
 const CODEC = new TextEncoder();
 function warn(code: string, message: string, severity: ImportWarning['severity'], row?: number, column?: number): ImportWarning {
