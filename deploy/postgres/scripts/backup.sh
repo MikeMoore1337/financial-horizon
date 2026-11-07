@@ -2,7 +2,7 @@
 # Root-owned private backup script. No plaintext dump is written to disk.
 set -euo pipefail
 umask 077
-exec 9>/run/lock/fh-finance-backup.lock
+exec 9>"${FH_FINANCE_BACKUP_LOCK_FILE:-/run/lock/fh-finance-backup.lock}"
 flock -n 9 || exit 1
 : "${FH_FINANCE_GPG_RECIPIENT:?Backup recipient fingerprint required}"
 KEYRING="${FH_FINANCE_GPG_HOME:-/etc/financial-horizon/finance/gnupg}"

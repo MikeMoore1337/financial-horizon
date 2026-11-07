@@ -41,6 +41,27 @@ tables="$(docker exec -u postgres fh-finance-postgres \
   psql -U postgres -d fh_finance -Atc \
   "SELECT count(*) FROM pg_tables WHERE schemaname='finance' AND tablename<>'alembic_version'")"
 test "$tables" = 15
+
+# Exercise the actual production backup and isolated restore scripts with
+# an ephemeral synthetic GPG key. No user or production data is used.
+export FH_FINANCE_GPG_HOME="$FH_FINANCE_SECRETS_DIR/gnupg"
+export FH_FINANCE_BACKUP_DIR="$FH_FINANCE_SECRETS_DIR/backups"
+export FH_FINANCE_BACKUP_LOCK_FILE="$FH_FINANCE_SECRETS_DIR/backup.lock"
+mkdir -m 700 "$FH_FINANCE_GPG_HOME" "$FH_FINANCE_BACKUP_DIR"
+gpg --homedir "$FH_FINANCE_GPG_HOME" --batch --pinentry-mode loopback \
+  --passphrase '' --quick-generate-key \
+  'FH Finance CI-only Backup <synthetic@example.invalid>' rsa3072 default 1d >/dev/null 2>&1
+export FH_FINANCE_GPG_RECIPIENT
+FH_FINANCE_GPG_RECIPIENT="$(gpg --homedir "$FH_FINANCE_GPG_HOME" --batch \
+  --with-colons --list-keys | awk -F: '$1=="fpr"{print $10;exit}')"
+test -n "$FH_FINANCE_GPG_RECIPIENT"
+bash deploy/postgres/scripts/backup.sh
+encrypted="$(find "$FH_FINANCE_BACKUP_DIR" -maxdepth 1 -type f \
+  -name 'fh-finance-*.pgdump.gpg' -print -quit)"
+test -n "$encrypted"
+bash deploy/postgres/scripts/restore-drill.sh "$encrypted"
+echo "CI_PRODUCTION_BACKUP_RESTORE_PASS: GPG-encrypted full backup restored in isolated networkless PostgreSQL"
+
 exposed="$(docker inspect fh-finance-postgres --format '{{json .NetworkSettings.Ports}}')"
 # Published host port appears as an exposed HostPort entry.
 case "$exposed" in
