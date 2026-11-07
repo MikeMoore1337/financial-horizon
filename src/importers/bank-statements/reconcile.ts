@@ -7,13 +7,22 @@ import type {
 
 function sameTransfer(a: NormalizedBankOperation, b: NormalizedBankOperation): boolean {
   if (a.kind !== 'transfer' || b.kind !== 'transfer') return false;
-  return a.date === b.date && a.amountCents === b.amountCents &&
-    a.accountId === b.targetAccountId && b.accountId === a.targetAccountId;
+  return a.date === b.date && a.amountCents === b.amountCents && (
+    (a.accountId === b.accountId && a.targetAccountId === b.targetAccountId) ||
+    (a.accountId === b.targetAccountId && b.accountId === a.targetAccountId)
+  );
 }
 function possibleTransfer(m: ExistingBankMovement, n: NormalizedBankOperation): boolean {
   if (m.kind !== 'transfer' || n.kind !== 'transfer') return false;
-  return m.date === n.date && m.amountCents === n.amountCents &&
-    m.accountId === n.targetAccountId;
+  if (m.date !== n.date || m.amountCents !== n.amountCents) return false;
+  // Same transfer from two different own-account statements may be represented
+  // with different notes, bank IDs or opposite account directions.
+  return (
+    (m.accountId === n.accountId &&
+      (m.targetAccountId === undefined || m.targetAccountId === n.targetAccountId)) ||
+    (m.accountId === n.targetAccountId &&
+      (m.targetAccountId === undefined || m.targetAccountId === n.accountId))
+  );
 }
 
 /** Exact source keys/external IDs are duplicates; fuzzy matching needs user review. */
