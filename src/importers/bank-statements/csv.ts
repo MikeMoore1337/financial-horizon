@@ -79,10 +79,10 @@ function detectDelimiter(text: string): CsvDelimiter {
   return best;
 }
 
-function parseDelimited(text: string, delimiter: CsvDelimiter): BankTableRow[] {
+function parseDelimited(text: string, delimiter: CsvDelimiter, firstLine = 1): BankTableRow[] {
   const rows: BankTableRow[] = [];
   let row: string[] = [], cell = '', quoted = false, afterQuote = false;
-  let line = 1, startLine = 1;
+  let line = firstLine, startLine = firstLine;
   const pushCell = () => {
     if (cell.length > MAX_CELL_LENGTH) fail('Слишком длинная ячейка CSV');
     row.push(cell.trim());
@@ -136,9 +136,12 @@ export function readBankCsv(
 ): ParsedCsv {
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
   const { text, encoding } = decode(bytes, options.encoding || 'auto');
-  const content = text.replace(/^sep=([;,\t|])\r?\n/i, '');
+  const directive = /^sep=([;,\t|])\r?\n/i.exec(text);
+  const content = directive ? text.slice(directive[0].length) : text;
   const delimiter = options.delimiter || detectDelimiter(content);
-  const rows = parseDelimited(content, delimiter);
+  // Keep the physical line numbers from the original statement, even when
+  // Excel's optional sep= directive is present at line 1.
+  const rows = parseDelimited(content, delimiter, directive ? 2 : 1);
   if (rows.length < 2) fail('CSV должен содержать заголовок и хотя бы одну строку');
   const requested = options.headerRowNumber;
   if (requested !== undefined && (!Number.isInteger(requested) || requested < 1 || requested > 100)) {
