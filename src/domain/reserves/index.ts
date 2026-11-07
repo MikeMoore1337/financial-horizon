@@ -387,7 +387,7 @@ export function calculateReserve(
   const slots = installmentsBetween(asOfDate, dueDate, day);
   const schedule: ReserveInstallment[] = [];
   if (def.contributionMode === 'auto') {
-    if (slots.length > 0) {
+    if (fundingGapCents > 0 && slots.length > 0) {
       const standard = Math.floor(fundingGapCents / slots.length);
       slots.forEach((date, index) => {
         const amountCents = index === slots.length - 1
@@ -396,7 +396,7 @@ export function calculateReserve(
         schedule.push({ date, amountCents });
       });
     }
-  } else {
+  } else if (fundingGapCents > 0) {
     let remaining = fundingGapCents;
     for (const date of slots) {
       const amountCents = Math.min(remaining, def.fixedMonthlyCents!);
@@ -420,7 +420,7 @@ export function calculateReserve(
     reservedCents,
     fundingGapCents,
     schedule,
-    nextContribution: schedule[0] ?? null,
+    nextContribution: schedule.find((installment) => installment.amountCents > 0) ?? null,
     projectedShortfallCents,
     immediateFundingRequiredCents: schedule.length === 0 ? fundingGapCents : 0,
     daysUntilDue: ordinal(parseDate(dueDate, 'Дата оплаты')) - ordinal(parseDate(asOfDate, 'Дата расчёта')),
