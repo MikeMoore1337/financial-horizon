@@ -434,3 +434,69 @@ def test_single_provider_identity_per_user_matches_yfc_policy(tmp_path):
     current = browser.get("/api/auth/email/me").json()
     assert current["authenticated"] is True
     assert current["user"]["id"] == user_id
+
+
+def test_oauth_only_account_cannot_invoke_password_based_email_change(tmp_path):
+    """An OAuth-only account has no verified email or password.
+
+    The endpoint must return a controlled denial, never HTTP 500 due to
+    missing email rate-limit key and never create an email-change token.
+    """
+    email, oauth, cfg, app = context(tmp_path)
+    uid, session = oauth.complete_login("telegram", "987654321")
+    browser = client(app)
+    browser.cookies.set(SESSION_COOKIE, session,
+                        domain="127.0.0.1", path="/api/auth")
+    response = browser.post(
+        "/api/auth/email/change/request",
+        headers={"origin": ORIGIN},
+        json={"email": "somewhere@example.test",
+              "password": "not-a-password", "challenge": "test-challenge"}
+    )
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Смена email недоступна для этого аккаунта"}
+    assert browser.get("/api/auth/email/me").json()["user"] == {"id": uid, "email": None}
+    with sqlite3.connect(cfg.database_path) as db:
+        assert db.execute(
+            "SELECT count(*) FROM email_changes WHERE user_id=?", (uid,)
+        ).fetchone()[0] == 0
+    assert email.current(session)["id"] == uid
+
+
+def test_explicit_sqlite_backup_can_be_restored_without_user_id_changes(tmp_path):
+    """Destructive recovery drill on synthetic data only, never live auth storage."""
+    original = tmp_path / "auth.sqlite3"
+    email = EmailStore(original)
+    uid, cookie = create_email_user(email, "restore@example.test")
+    backup_path = tmp_path / "pre-oauth-backup.sqlite3"
+    assert migrate_user_table(original, backup_path) is True
+    oauth = OAuthStore(original)
+    other, other_cookie = oauth.complete_login("google", "new-oauth-subject")
+    assert uid != other
+    assert oauth.current(other_cookie)["id"] == other
+
+    # Simulate offline recovery into an entirely separate SQLite file.
+    # Restoring an old snapshot removes any later-created OAuth users,
+    # so never do this in production without a data-loss assessment.
+    restored_path = tmp_path / "restored-auth.sqlite3"
+    restored_path.write_bytes(backup_path.read_bytes())
+    restored = EmailStore(restored_path)
+    assert restored.current(cookie) == {"id": uid, "email": "restore@example.test"}
+    assert restored.login("restore@example.test", "LongEnoughPassword-12345")
+    with sqlite3.connect(restored_path) as db:
+        assert db.execute("SELECT count(*) FROM users WHERE id=?", (other,)).fetchone()[0] == 0
+        assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_unrecognized_user_table_index_blocks_migration_without_backup(tmp_path):
+    original = tmp_path / "auth.sqlite3"
+    EmailStore(original)
+    with sqlite3.connect(original) as db:
+        db.execute("CREATE INDEX unexpected_users_index ON users(created_at)")
+    backup_path = tmp_path / "never-written-backup.sqlite3"
+    with pytest.raises(ValueError, match="Unexpected users index"):
+        migrate_user_table(original, backup_path)
+    assert not backup_path.exists()
+    with sqlite3.connect(original) as db:
+        assert db.execute("PRAGMA table_info(users)").fetchall()[1][3] == 1
+        assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"

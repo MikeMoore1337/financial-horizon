@@ -256,6 +256,10 @@ def create_app(
         current=store.current(request.cookies.get(SESSION_COOKIE))
         if not current:
             raise HTTPException(status_code=401,detail="Войдите в аккаунт")
+        # OAuth-only accounts have no verified mailbox or password to confirm.
+        # Reject explicitly before the email quota uses current["email"].
+        if not isinstance(current["email"],str) or not current["email"]:
+            raise HTTPException(status_code=403,detail="Смена email недоступна для этого аккаунта")
         try:
             email=normalize_email(payload.email)
         except ValueError:
