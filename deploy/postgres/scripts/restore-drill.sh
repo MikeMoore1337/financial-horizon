@@ -18,7 +18,7 @@ docker run -d --name "$name" --network none \
 # the temporary server ready and make pg_restore race its shutdown.
 ready=false
 for i in $(seq 1 60); do
-  if docker logs "$name" 2>&1 | grep -q 'PostgreSQL init process complete; ready for start up.' &&
+  if docker logs "$name" 2>&1 | grep -F 'PostgreSQL init process complete; ready for start up.' >/dev/null &&
      docker exec "$name" pg_isready -U postgres -d fh_restore >/dev/null 2>&1; then
     ready=true
     break
