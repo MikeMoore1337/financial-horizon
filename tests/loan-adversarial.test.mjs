@@ -305,3 +305,24 @@ test('payment-change is validated and explicit contractual amount overrides same
     {...common,id:'second-change',paymentCents:30_000},
   ], {mode:'plan'}));
 });
+
+test('manual payment change overrides same-day deferred due-date repricing in every mode', () => {
+  const contract = { ...terms, dueDateChangePolicy: 'recalculate' };
+  const changes = [
+    {id:'due-change',type:'due-date-change',date:'2026-02-01',dayOfMonth:28},
+    {id:'explicit-amount',type:'payment-change',date:'2026-02-01',paymentCents:30_000},
+  ];
+  const planned = calculateLoan(contract, changes, {mode:'plan'});
+  assert.equal(planned.scheduledPaymentCents,30_000);
+  assert.deepEqual(planned.rows.map(r=>r.date),
+    ['2026-02-01','2026-03-28','2026-04-28','2026-05-28']);
+  assert.deepEqual(planned.rows.map(r=>r.amountCents),
+    [30_000,30_000,30_000,10_000]);
+  for (const mode of ['actual','forecast']) {
+    const result = calculateLoan(contract, changes,
+      {mode,asOfDate:'2026-02-01'});
+    assert.equal(result.scheduledPaymentCents,30_000,mode);
+    assert.equal(result.rows[0].plannedPaymentCents,30_000,mode);
+    assert.equal(result.rows[0].amountCents,0,mode);
+  }
+});

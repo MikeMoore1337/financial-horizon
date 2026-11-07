@@ -262,6 +262,10 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
       // Explicit contractual amount, not a cash receipt. It applies to the
       // current unpaid installment, including a change on the due date.
       scheduled = event.paymentCents;
+      // A due-day amendment on this same date requested automatic repricing
+      // AFTER today's installment. The later explicit contractual amount
+      // takes precedence and must not be overwritten by that deferred step.
+      if (deferredDueDateReprice === event.date) deferredDueDateReprice = null;
       if (currentUnprocessedDue !== null && event.date <= currentUnprocessedDue) {
         currentDuePlannedPayment = scheduled;
       }
