@@ -413,3 +413,14 @@ test('cannot fund from negative, fractional, infinite or unbounded available acc
     assert.throws(() => assessReserveContribution(100, bad));
   }
 });
+
+
+test('multiple individually valid contributions can exceed single-operation limit safely', () => {
+  const snap = project([
+    event('contribution', 'first', '2026-02-01', { amountCents: 900_000_000_000 }),
+    event('contribution', 'second', '2026-02-02', { amountCents: 900_000_000_000 }),
+  ], '2026-02-02', { openingReservedCents: 900_000_000_000 });
+  assert.equal(snap.reservedCents, 2_700_000_000_000);
+  assert.equal(snap.totalContributedCents, 1_800_000_000_000);
+  assert.equal(snap.fundingGapCents, 0);
+});
