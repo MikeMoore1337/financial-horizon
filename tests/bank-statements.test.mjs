@@ -628,3 +628,24 @@ test('typical bank headings map to correct fields without changing imported amou
   assert.equal(preview.outflowCents, 45025);
   assert.equal(preview.rows[0].operation.externalId, 'TX-ABC');
 });
+
+
+test('separate credit/debit bank columns accept zero in the unused direction only', async () => {
+  const table = await readBankStatementFile(input(
+    'date;income;expense;account;description\n' +
+    '2026-11-07;1200,00;0;Основной;Оклад\n' +
+    '2026-11-08;0,00;300,50;Основной;Еда\n' +
+    '2026-11-09;1,00;2,00;Основной;Повреждённая строка\n' +
+    '2026-11-10;0;0;Основной;Нулевая строка\n' +
+    '2026-11-11;1,00;INVALID;Основной;Повреждённый второй столбец\n',
+  ));
+  const { mapping } = suggestColumnMapping(table.headers);
+  const preview = await normalizeBankStatement(table, { mapping, accounts });
+  assert.equal(preview.accepted, 2);
+  assert.equal(preview.rejected, 3);
+  assert.equal(preview.inflowCents, 120000);
+  assert.equal(preview.outflowCents, 30050);
+  assert.ok(preview.rows[2].warnings.some(x => x.code === 'CONFLICTING_AMOUNT'));
+  assert.ok(preview.rows[3].warnings.some(x => x.code === 'ZERO_AMOUNT'));
+  assert.ok(preview.rows[4].warnings.some(x => x.code === 'INVALID_AMOUNT'));
+});
