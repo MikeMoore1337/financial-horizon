@@ -133,6 +133,9 @@ export function assertLedgerState(state: LedgerState): void {
       reversed.add(tx.reversedTransactionId!);
       const original = transactions.get(tx.reversedTransactionId!);
       if (!original || original.kind === 'reversal') throw new Error('Невозможно отменить несуществующую операцию');
+      // Without an atomically voided loan/settlement fact, a refunded linked
+      // payment would misstate both available cash and the outstanding debt.
+      if (original.kind === 'payment') throw new Error('Связанная оплата отменена без аннулирования факта платежа');
       const sourcePair = postings.get(original.id) ?? [];
       if (!sourcePair.length || sourcePair.length !== pair.length) throw new Error('Неверное число компенсирующих проводок');
       const inverse = new Map(sourcePair.map(item => [item.accountId, -item.signedMinor]));
