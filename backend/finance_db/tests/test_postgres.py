@@ -328,3 +328,36 @@ def test_sqlalchemy_column_parity_and_bigint_monetary_storage():
                         )
     finally:
         engine.dispose()
+
+def test_runtime_cannot_update_tenant_identity(runtime):
+    """A valid profile context does not grant permission to rewrite tenant/UUID keys."""
+    with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+        assert session.execute(text(
+            "SELECT has_column_privilege(current_user,'finance.accounts','id','UPDATE')"
+        )).scalar_one() is False
+        assert session.execute(text(
+            "SELECT has_column_privilege(current_user,'finance.accounts','profile_id','UPDATE')"
+        )).scalar_one() is False
+        assert session.execute(text(
+            "SELECT has_column_privilege(current_user,'finance.accounts','name','UPDATE')"
+        )).scalar_one() is True
+        assert session.execute(text(
+            "SELECT has_column_privilege(current_user,'finance.obligations','profile_id','UPDATE')"
+        )).scalar_one() is False
+        assert session.execute(text(
+            "SELECT has_column_privilege(current_user,'finance.loans','id','UPDATE')"
+        )).scalar_one() is False
+        assert session.execute(text(
+            "SELECT has_column_privilege(current_user,'finance.reserves','id','UPDATE')"
+        )).scalar_one() is False
+
+    with pytest.raises(DBAPIError):
+        with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+            session.execute(text(
+                "UPDATE accounts SET id=:next WHERE profile_id=:profile AND id=:existing RETURNING id"
+            ), {"next":uuid4(), "profile":PROFILE_A, "existing":ACCOUNT_A1})
+
+    with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+        assert session.execute(text(
+            "SELECT count(*) FROM accounts WHERE profile_id=:p AND id=:a"
+        ), {"p":PROFILE_A, "a":ACCOUNT_A1}).scalar_one() == 1
