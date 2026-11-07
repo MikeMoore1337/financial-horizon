@@ -275,7 +275,19 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
       applyEvent(timeline[cursor]!);
       cursor++;
     }
-    if (state.balance === 0 && state.unpaid === 0) break;
+    if (state.balance === 0 && state.unpaid === 0) {
+      // A factual payment exactly on a due date must remain visible as the
+      // final schedule installment. Early midperiod payoff is tracked by
+      // paidOffDate and actualOpenPeriod, not shifted to a later due date.
+      if (paidOffDate === due) {
+        rows.push({ period: i + 1, date: due, kind: 'actual',
+          plannedPaymentCents: scheduled, amountCents: periodAmount,
+          interestCents: periodInterest, interestPaidCents: periodInterestPaid,
+          principalCents: periodPrincipal, balanceCents: 0,
+          unpaidInterestCents: 0, extraPaidCents: periodExtra });
+      }
+      break;
+    }
     accrue(state, due, terms);
     periodInterest += bill(state, terms);
     const isProjected = options.mode === 'plan' || (options.mode === 'forecast' && due > asOf!);
