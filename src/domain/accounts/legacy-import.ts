@@ -1,3 +1,4 @@
+import { validateState } from '../../../finance.js';
 import type { PersistedFinanceState } from '../../types/finance.ts';
 
 /**
@@ -18,8 +19,10 @@ export interface LegacyLedgerImportManifest {
   settlementsCount: number;
   loanPaymentsCount: number;
 }
-export function planLegacyLedgerImport(state: PersistedFinanceState): LegacyLedgerImportManifest {
-  if (!state || (state.version !== 1 && state.version !== 2)) throw new Error('Неизвестная версия финансовой базы');
+export function planLegacyLedgerImport(source: unknown): LegacyLedgerImportManifest {
+  // This is staging metadata only. Reuse #32's runtime validation rather than
+  // treating an arbitrary JSON object as a valid financial snapshot.
+  const state = validateState(source) as PersistedFinanceState;
   if (state.version === 2 && (!Number.isSafeInteger(state.revision) || state.revision < 0)) {
     throw new Error('Некорректная ревизия');
   }
