@@ -105,6 +105,14 @@ test('OpenAPI 3.1 schema, auth, endpoints and refs are internally resolvable',()
   const actions=spec.components.schemas.Command.properties.action.enum;
   for(const action of ['obligation.create','account.transfer','loan.payment.record','reserve.allocate','transaction.reverse'])
     assert.ok(actions.includes(action));
+  const clauses=spec.components.schemas.Command.allOf;
+  assert.equal(clauses.length,actions.length,'every action must bind a payload schema');
+  for(const [i,action] of actions.entries()){
+    assert.equal(clauses[i].if.properties.action.const,action);
+    const ref=clauses[i].then.properties.payload.$ref;
+    assert.ok(ref.startsWith('#/components/schemas/'));
+    assert.ok(spec.components.schemas[ref.split('/').at(-1)]);
+  }
 });
 
 test('synthetic 2 users x 2 devices scenarios reproduce the expected HTTP contract',()=>{
@@ -151,6 +159,11 @@ test('contract includes offline account separation and safe import requirements'
     'command_receipts','change_log','import_batches','import_record_map'])
     assert.ok(sql.includes('CREATE TABLE '+table+' ('),'missing table '+table);
   assert.ok(sql.includes('FORCE ROW LEVEL SECURITY'));
+  const childRlsSection=sql.slice(sql.indexOf('FOREACH tablename IN ARRAY'));
+  for(const name of ['accounts','obligations','loans','reserves','ledger_transactions','ledger_postings',
+    'settlements','loan_payments','ledger_payment_links','reserve_allocations',
+    'command_receipts','change_log','import_batches','import_record_map'])
+    assert.ok(childRlsSection.includes("'" + name + "'"),'missing child RLS '+name);
   assert.ok(sql.includes('UNIQUE') && sql.includes('ON DELETE RESTRICT'));
   assert.ok(adr.includes('IndexedDB') && adr.includes('SQLite') && adr.includes('PostgreSQL'));
   assert.ok(adr.includes('412') && adr.includes('409'));
