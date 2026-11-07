@@ -34,6 +34,10 @@ function validate(terms: LoanTerms, events: readonly LoanEvent[], options: LoanR
   if (terms.rateChangePolicy !== undefined && !['recalculate', 'keep-payment'].includes(terms.rateChangePolicy)) {
     throw new RangeError('Invalid rateChangePolicy');
   }
+  if (terms.dueDateChangePolicy !== undefined &&
+      !['recalculate', 'keep-payment'].includes(terms.dueDateChangePolicy)) {
+    throw new RangeError('Invalid dueDateChangePolicy');
+  }
   const extra = terms.maxExtensionMonths ?? Math.min(240, 1200 - terms.termMonths);
   if (!Number.isInteger(extra) || extra < 0 || terms.termMonths + extra > 1200) {
     throw new RangeError('termMonths + maxExtensionMonths must not exceed 1200');
@@ -190,9 +194,11 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
     balance: terms.principalCents, unpaid: 0, fraction: 0n,
     date: terms.startDate, rate: terms.annualRateMicroPercent,
   };
-  const originalDues = dues.slice(0, terms.termMonths);
+  const initialDues = dueDatesFor(terms, []).slice(0, terms.termMonths);
+  // Historical installment amounts must not depend on future date changes.
+  const appliedDueChanges: DueDateChangeEvent[] = [];
   let scheduled = terms.scheduleType === 'annuity'
-    ? (terms.paymentCents ?? minimumInstallment(state, originalDues, terms))
+    ? (terms.paymentCents ?? minimumInstallment(state, initialDues, terms))
     : Math.ceil(terms.principalCents / terms.termMonths);
   const timeline = sortedEvents(events, options);
   const rows: LoanRow[] = [];
@@ -207,13 +213,15 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
   let periodExtra = 0;
   const asOf = options.asOfDate;
   let currentUnprocessedDue: string | null = null;
+  let deferredDueDateReprice: string | null = null;
 
   function recalculatePayment(date: string, includeCurrentUnpaidDue = false): void {
+    // Reprice using only due-day changes already applied at this event date.
+    // Future events cannot retroactively change historical monthly amounts.
     // Same-day RATE changes precede the scheduled installment, while an
     // extra payment using reduce-payment reprices only FUTURE installments.
-    // Including today's already-paid due date after an extra payment would
-    // artificially reduce the amount and leave debt at the contractual end.
-    const remainingDues = originalDues.filter(d =>
+    const activeDues = dueDatesFor(terms, appliedDueChanges).slice(0, terms.termMonths);
+    const remainingDues = activeDues.filter(d =>
       d > date || (includeCurrentUnpaidDue && d === date && currentUnprocessedDue === date));
     if (!remainingDues.length || (state.balance === 0 && state.unpaid === 0)) return;
     scheduled = terms.scheduleType === 'annuity'
@@ -232,6 +240,13 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
         balanceCents: state.balance, unpaidInterestCents: state.unpaid,
         annualRateMicroPercent: state.rate });
     } else if (event.type === 'due-date-change') {
+      appliedDueChanges.push(event);
+      if (terms.scheduleType === 'annuity' && (terms.dueDateChangePolicy ?? 'keep-payment') === 'recalculate') {
+        // A due-day change takes effect NEXT month. Keep today's already
+        // contracted installment unchanged, then reprice the future dues.
+        if (currentUnprocessedDue === event.date) deferredDueDateReprice = event.date;
+        else recalculatePayment(event.date);
+      }
       history.push({ id: event.id, date: event.date, type: event.type,
         balanceCents: state.balance, unpaidInterestCents: state.unpaid,
         dayOfMonth: event.dayOfMonth });
@@ -329,6 +344,10 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
     periodPrincipal = 0;
     periodExtra = 0;
     currentUnprocessedDue = null;
+    if (deferredDueDateReprice !== null) {
+      recalculatePayment(deferredDueDateReprice);
+      deferredDueDateReprice = null;
+    }
     if (state.balance === 0 && state.unpaid === 0) break;
   }
 
