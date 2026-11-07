@@ -101,7 +101,10 @@ function aadRecord(value: Pick<EncryptedLocalRecordV1, 'scope' | 'keyId' | 'kind
   return encode([RECORD_FORMAT, VERSION, 'AES-256-GCM', value.scope, value.keyId, value.kind, value.recordId, value.schemaVersion, value.revision]);
 }
 async function passwordKey(passphrase: string, salt: Uint8Array<ArrayBuffer>, iterations: number): Promise<CryptoKey> {
-  const material = await webCrypto().subtle.importKey('raw', encoder.encode(passphrase.normalize('NFC')), 'PBKDF2', false, ['deriveKey']);
+  const passwordBytes = encoder.encode(passphrase.normalize('NFC'));
+  let material: CryptoKey;
+  try { material = await webCrypto().subtle.importKey('raw', passwordBytes, 'PBKDF2', false, ['deriveKey']); }
+  finally { passwordBytes.fill(0); }
   return webCrypto().subtle.deriveKey({name: 'PBKDF2', hash: 'SHA-256', salt, iterations}, material, {name: 'AES-GCM', length: 256}, false, ['encrypt', 'decrypt']);
 }
 async function recoveryKey(secret: Uint8Array<ArrayBuffer>, salt: Uint8Array<ArrayBuffer>, scope: LocalScope, keyId: string): Promise<CryptoKey> {
@@ -147,9 +150,14 @@ async function unlockRaw(keyset: LocalKeysetV1, credential: {passphrase: string}
   }
   const slot = keyset[slotName];
   const salt = unb64(slot.salt, 16, 32);
-  const key = slotName === 'passphrase'
-    ? await passwordKey((credential as {passphrase: string}).passphrase, salt, keyset.passphrase.iterations)
-    : await recoveryKey(unb64((credential as {recoveryKey: string}).recoveryKey, 32, 50), salt, keyset.scope, keyset.keyId);
+  let key: CryptoKey;
+  if (slotName === 'passphrase') {
+    key = await passwordKey((credential as {passphrase: string}).passphrase, salt, keyset.passphrase.iterations);
+  } else {
+    const secret = unb64((credential as {recoveryKey: string}).recoveryKey, 32, 50);
+    try { key = await recoveryKey(secret, salt, keyset.scope, keyset.keyId); }
+    finally { secret.fill(0); }
+  }
   try {
     const raw = new Uint8Array(await webCrypto().subtle.decrypt({name: 'AES-GCM', iv: unb64(slot.iv, 12, 24),
       additionalData: aadSlot(keyset.scope, keyset.keyId, slotName, slot.salt, slotName === 'passphrase' ? keyset.passphrase.iterations : null), tagLength: 128}, key, unb64(slot.ciphertext, 48, 80)));
@@ -167,6 +175,12 @@ export class LocalVault {
   readonly scope: LocalScope;
   readonly keyId: string;
   constructor(key: CryptoKey, scope: LocalScope, keyId: string) {
+    scopeValid(scope); keyIdValid(keyId);
+    const algorithm = key.algorithm as AesKeyAlgorithm;
+    if (key.type !== 'secret' || key.extractable || algorithm.name !== 'AES-GCM' || algorithm.length !== 256 ||
+      !key.usages.includes('encrypt') || !key.usages.includes('decrypt')) {
+      throw Error('Допустим только неизвлекаемый ключ AES-256-GCM');
+    }
     this.#key = key;
     this.scope = scope;
     this.keyId = keyId;
@@ -183,7 +197,9 @@ export class LocalVault {
     if (bytes.length > MAX_PLAINTEXT) throw Error('Финансовая запись слишком большая');
     const iv = random(12);
     const header = {format: RECORD_FORMAT, version: VERSION, algorithm: 'AES-256-GCM', scope: this.scope, keyId: this.keyId, kind: context.kind, recordId: context.recordId, schemaVersion: context.schemaVersion, revision: context.revision} as const;
-    const encrypted = await webCrypto().subtle.encrypt({name: 'AES-GCM', iv, additionalData: aadRecord(header), tagLength: 128}, key, bytes);
+    let encrypted: ArrayBuffer;
+    try { encrypted = await webCrypto().subtle.encrypt({name: 'AES-GCM', iv, additionalData: aadRecord(header), tagLength: 128}, key, bytes); }
+    finally { bytes.fill(0); }
     if (this.#generation !== generation) throw Error('Локальный бюджет заблокирован');
     return {...header, iv: b64(iv), ciphertext: b64(new Uint8Array(encrypted))};
   }
@@ -202,8 +218,11 @@ export class LocalVault {
     if (ciphertext.length < 16 || ciphertext.length > MAX_CIPHERTEXT) throw Error('Недопустимый размер шифротекста');
     try {
       const plaintext = await webCrypto().subtle.decrypt({name: 'AES-GCM', iv, additionalData: aadRecord(record), tagLength: 128}, key, ciphertext);
-      if (this.#generation !== generation) throw Error('Локальный бюджет заблокирован');
-      return JSON.parse(decoder.decode(plaintext));
+      const bytes = new Uint8Array(plaintext);
+      try {
+        if (this.#generation !== generation) throw Error('Локальный бюджет заблокирован');
+        return JSON.parse(decoder.decode(bytes));
+      } finally { bytes.fill(0); }
     } catch {
       if (this.#generation !== generation) throw Error('Локальный бюджет заблокирован');
       throw Error('Неверный ключ или повреждённые данные');
