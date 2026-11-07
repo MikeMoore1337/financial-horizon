@@ -79,7 +79,7 @@ test('imbalanced transfer, orphan payment and double-linked fact cannot be accep
     [s => { s.paymentLinks = []; }, /Отсутствует связь/],
     [s => { s.paymentLinks.push(structuredClone(s.paymentLinks[0])); }, /несколько связей/],
     [s => { s.paymentLinks[0].settlementId = uuid(20); }, /неоднозначна/],
-    [s => { s.paymentLinks[0].loanPaymentId = uuid(20); s.paymentLinks[0].settlementId = undefined; }, /Связь|неоднозначна/],
+    [s => { s.paymentLinks[0].loanPaymentId = undefined; s.paymentLinks[0].settlementId = undefined; }, /Связь|неоднозначна/],
   ];
   for (const [mutate, pattern] of mutations) {
     const corrupt = structuredClone(source);
@@ -102,7 +102,7 @@ test('reversal must exactly match original postings and preserve original transa
   tampered.postings.find(p => p.transactionId === uuid(5)).signedMinor = -999;
   assert.throws(() => assertLedgerState(tampered), /компенсация/);
   const missing = structuredClone(s);
-  missing.transactions[2].reversedTransactionId = uuid(19);
+  missing.transactions[1].reversedTransactionId = uuid(19);
   assert.throws(() => assertLedgerState(missing), /несуществующую/);
 });
 
