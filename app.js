@@ -41,12 +41,12 @@ function render(){
  $('#toolbar-title').textContent=titles[ui.view];
  document.querySelectorAll('[data-view]').forEach(el=>{const active=el.dataset.view===ui.view;el.classList.toggle('active',active);el.setAttribute('aria-current',active?'page':'false');});
  const main=$('#main');
- if(ui.view==='calendar'||ui.view==='overview'){
+ if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'){
   if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main);}
   if(ui.view==='calendar'){
    const events=monthEvents(),totals=monthTotals(events);
    screenRoot.render({view:'calendar',props:{events,month:ui.month,selectedDate:ui.selectedDate,currentDate:today(),monthTitle:monthLabel(ui.month),netPlanCents:totals.netPlanCents,netFactCents:totals.netFactCents,formatDate,rubles}});
-  }else{
+  }else if(ui.view==='overview'){
    const currentDate=today(),events=monthEvents(),totals=monthTotals(events);
    const upcoming=events.filter(event=>event.date>=currentDate).slice(0,4);
    const groups=new Map();
@@ -60,10 +60,26 @@ function render(){
    const loanSummary=loan?{id:loan.id,title:loan.title,outstandingCents:snapshot.outstandingCents,monthlyCents:snapshot.monthlyCents,months:snapshot.months,
     percent:Math.max(0,Math.min(100,Math.round((1-snapshot.outstandingCents/loan.openingCents)*100)))}:null;
    screenRoot.render({view:'overview',props:{currentDate,monthTitle:monthLabel(ui.month),hasData:hasData(),totals,categories,upcoming,loan:loanSummary,rubles,formatDate}});
+  }else{
+   const items=state.entries.filter(isActive)
+    .filter(e=>ui.filter==='all'||(ui.filter==='regular'&&e.recurrence!=='once')||
+     (ui.filter==='once'&&e.recurrence==='once')||(ui.filter==='income'&&e.kind==='income'))
+    .sort((a,b)=>a.date.localeCompare(b.date));
+   const rows=items.map(entry=>{
+    const payments=state.settlements.filter(s=>s.entryId===entry.id&&s.occurrence===ui.month&&!s.voidedAt);
+    return {id:entry.id,title:entry.title,kind:entry.kind,category:entry.category,
+     recurrence:entry.recurrence,amountCents:entry.amountCents,
+     date:entry.recurrence==='once'?entry.date:dayInMonth(ui.month,Number(entry.date.slice(-2))),
+     payments,paidCents:payments.reduce((sum,p)=>sum+p.amountCents,0)};
+   });
+   const totals=monthTotals(monthEvents());
+   screenRoot.render({view:'obligations',props:{rows,month:ui.month,monthTitle:monthLabel(ui.month),
+    filter:ui.filter,expandedEntry:ui.expandedEntry,currentDate:today(),
+    expenseCents:totals.expenseCents,expensePaidCents:totals.expensePaidCents,rubles,formatDate}});
   }
  }else{
   if(screenRoot){screenRoot.unmount();screenRoot=null;}
-  const sections={obligations:renderObligations,loans:renderLoans,settings:renderSettings};
+  const sections={loans:renderLoans,settings:renderSettings};
   main.innerHTML=sections[ui.view]();
  }
  syncAccountControls();
@@ -115,29 +131,6 @@ async function logoutEmailAccount(){
 }
 function pageHead(title,subtitle,actions=''){return `<header class="page-header"><div><div class="eyebrow">${formatDate(today())} · Личные финансы</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div><div class="header-tools">${actions}</div></header>`;}
 const action=(type,label,kind='button-primary',props='')=>`<button class="${kind}" data-action="${type}" ${props}>${label}</button>`;
-function entryRecord(entry){
- const date=entry.recurrence==='once'?entry.date:dayInMonth(ui.month,Number(entry.date.slice(-2)));
- const occurrence=ui.month;
- const actual=state.settlements.filter(s=>s.entryId===entry.id&&s.occurrence===occurrence&&!s.voidedAt);
- const status=`<span class="pill ${actual.length?'pill-paid':''}">${actual.length?`Внесено ${rubles(actual.reduce((a,b)=>a+b.amountCents,0))}`:'План'}</span>`;
- const buttons=`<button class="mini-action" data-action="settle" data-id="${escapeHtml(entry.id)}" data-month="${ui.month}" aria-label="Отметить сумму">${svg('check')}</button><button class="mini-action" data-action="edit-entry" data-id="${escapeHtml(entry.id)}" aria-label="Изменить">${svg('edit')}</button><button class="mini-action" data-action="archive-entry" data-id="${escapeHtml(entry.id)}" aria-label="Удалить">${svg('trash')}</button>`;
- const more=ui.expandedEntry===entry.id && actual.length?`<div style="padding:10px 15px;background:var(--soft);border-radius:12px">${actual.map(p=>`<div class="archive-row"><div>${formatDate(p.date)} · ${rubles(p.amountCents)}</div><span>${action('edit-settlement','Изменить','button-text',`data-id="${escapeHtml(p.id)}"`)} ${action('void-settlement','Отменить','button-text',`data-id="${escapeHtml(p.id)}"`)}</span></div>`).join('')}</div>`:'';
- return `<tr><td><div class="record-title">${escapeHtml(entry.title)}</div><div class="record-sub">${escapeHtml(entry.category||'Без категории')} ${entry.recurrence!=='once'?'· '+({monthly:'Каждый месяц',yearly:'Ежегодно'}[entry.recurrence]||''):''}</div></td><td>${formatDate(date)}</td><td>${status}</td><td class="money-cell ${entry.kind==='income'?'pos':''}">${entry.kind==='income'?'+':'−'}${rubles(entry.amountCents)}</td><td class="record-actions">${buttons}</td></tr>${more?`<tr><td colspan="5">${more}</td></tr>`:''}`;
-}
-function mobileEntry(entry){
- const payments=state.settlements.filter(s=>s.entryId===entry.id&&s.occurrence===ui.month&&!s.voidedAt);
- const actual=payments.reduce((a,b)=>a+b.amountCents,0);
- const date=entry.recurrence==='once'?entry.date:dayInMonth(ui.month,Number(entry.date.slice(-2)));
- return `<div class="record-mobile-row"><div class="list-icon">${svg(entry.kind==='income'?'download':'calendar')}</div><div><strong>${escapeHtml(entry.title)}</strong><small>${formatDate(date)} · ${escapeHtml(entry.category)}</small><small>${payments.length?`Факт ${rubles(actual)}`:'Ожидается'}</small></div><div><div class="record-mobile-amount ${entry.kind==='income'?'pos':''}">${entry.kind==='income'?'+':'−'}${rubles(entry.amountCents)}</div><div class="record-mobile-actions"><button class="mini-action" data-action="settle" data-id="${escapeHtml(entry.id)}" data-month="${ui.month}" aria-label="Отметить оплату">${svg('check')}</button><button class="mini-action" data-action="edit-entry" data-id="${escapeHtml(entry.id)}" aria-label="Изменить">${svg('edit')}</button><button class="mini-action" data-action="archive-entry" data-id="${escapeHtml(entry.id)}" aria-label="Удалить">${svg('trash')}</button></div>${payments.length?`<button class="button-text" style="font-size:12px" data-action="expand-entry" data-id="${escapeHtml(entry.id)}">История</button>`:''}</div></div>${ui.expandedEntry===entry.id?payments.map(p=>`<div class="archive-row" style="padding:10px">${rubles(p.amountCents)} · ${formatDate(p.date)}<span>${action('edit-settlement','Править','button-text',`data-id="${escapeHtml(p.id)}"`)}${action('void-settlement','Отмена','button-text',`data-id="${escapeHtml(p.id)}"`)}</span></div>`).join(''):''}`;
-}
-function renderObligations(){
- const items=state.entries.filter(isActive).filter(e=>ui.filter==='all'||(ui.filter==='regular'&&e.recurrence!=='once')||(ui.filter==='once'&&e.recurrence==='once')||(ui.filter==='income'&&e.kind==='income')).sort((a,b)=>a.date.localeCompare(b.date));
- const total=monthTotals(monthEvents());
- return pageHead('Обязательства','Доходы и расходы. Полный учёт запланированных и фактических сумм',`${action('new-entry',`${svg('plus')} Добавить`,'button-primary')}`)+`
- <div class="kpi-grid" style="max-width:760px;margin:0 0 20px"><div class="surface kpi"><div class="kpi-label">Расходы по плану</div><div class="kpi-num">${rubles(total.expenseCents)}</div></div><div class="surface kpi"><div class="kpi-label">Оплачено фактически</div><div class="kpi-num pos">${rubles(total.expensePaidCents)}</div></div></div>
- <div class="filter-bar"><div class="segment">${[['all','Все'],['regular','Регулярные'],['once','Разовые'],['income','Доходы']].map(([key,label])=>`<button class="${ui.filter===key?'selected':''}" data-action="filter" data-filter="${key}" aria-pressed="${ui.filter===key}">${label}</button>`).join('')}</div><span class="small-hint">${items.length} записей · ${monthLabel(ui.month)}</span></div>
- <div class="surface">${items.length?`<table class="records-table"><thead><tr><th>Название</th><th>Дата</th><th>Состояние</th><th style="text-align:right">Сумма</th><th></th></tr></thead><tbody>${items.map(entryRecord).join('')}</tbody></table><div class="records-mobile">${items.map(mobileEntry).join('')}</div>`:`<div class="empty-panel">${svg('list')}<h3>Здесь пока нет записей</h3><p>Добавляйте регулярные платежи, зарплату или разовые расходы. Их можно изменять и архивировать.</p>${action('new-entry','Добавить запись','button-primary')}</div>`}</div><p class="small-hint" style="margin-top:13px">Кредиты учитываются в общем финансовом плане и на странице «Кредиты». Архивирование сохраняет историю.</p>`;
-}
 function renderLoanHistory(loan,snapshot){
  const rows=state.loanPayments.filter(x=>x.loanId===loan.id).sort((a,b)=>b.date.localeCompare(a.date)||b.createdAt.localeCompare(a.createdAt));
  if(!rows.length)return '<p class="small-hint">Фактических платежей пока нет. Они появятся здесь после внесения.</p>';
