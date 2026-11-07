@@ -289,3 +289,19 @@ test('committed synthetic fixture is read locally without affecting application 
   assert.equal(preview.inflowCents, 1500000);
   assert.equal(preview.transfersCents, 50000);
 });
+
+
+test('batch plan is immutable and confirmation digest covers mapped financial details', async () => {
+  const { preview } = await previewOf(base +
+    '07.11.2026;-100;Тест;Основной;;расход;Питание;LOCK-1\n');
+  const op = preview.rows[0].operation;
+  const reconciliation = reconcileBankStatement(preview, []);
+  const plan = await draftBankImportBatch(reconciliation, [op.sourceKey]);
+  const initial = plan.operations[0].amountCents;
+  op.amountCents = 12345;
+  assert.equal(plan.operations[0].amountCents, initial);
+  assert.throws(() => { plan.operations[0].amountCents = 42; }, TypeError);
+  assert.throws(() => { plan.sourceKeys.push('other'); }, TypeError);
+  const changed = await draftBankImportBatch(reconciliation, [op.sourceKey]);
+  assert.notEqual(changed.batchKey, plan.batchKey);
+});
