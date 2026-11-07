@@ -90,7 +90,7 @@ test('native browser safely parses a synthetic XLSX, skips formulas and balances
 
 test('native browser rejects bomb, DTD, external parts and corrupt ZIP', async ({ page }, testInfo) => {
   const watcher = await setup(page, testInfo);
-  for (const suffix of ['--bomb', '--doctype', '--external', '--corrupt']) {
+  for (const suffix of ['--bomb', '--doctype', '--external', '--corrupt', '--duplicate-row']) {
     const encoded = makeFixture(testInfo, suffix);
     const outcome = await page.evaluate(async encoded => {
       const mod = await import('/__bank-parser/index.ts');
