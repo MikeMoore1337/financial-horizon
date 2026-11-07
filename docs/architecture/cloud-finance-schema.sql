@@ -42,7 +42,7 @@ CREATE TABLE obligations (
   amount_minor bigint NOT NULL
     CHECK (amount_minor BETWEEN 0 AND 1000000000000),
   starts_on date NOT NULL,
-  timezone varchar(64) NOT NULL DEFAULT 'Europe/Moscow',
+  timezone varchar(64) NOT NULL DEFAULT 'UTC',
   recurrence_unit varchar(8) NOT NULL DEFAULT 'none'
     CHECK (recurrence_unit IN ('none','month','year')),
   recurrence_every integer NOT NULL DEFAULT 1
