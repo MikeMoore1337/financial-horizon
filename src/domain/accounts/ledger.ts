@@ -133,7 +133,7 @@ export function emptyLedger(profileId: string): LedgerState {
   uuid(profileId);
   return { profileId, revision: 0, accounts: [], transactions: [], postings: [], paymentLinks: [], receipts: [] };
 }
-export function accountBalanceMinor(state: LedgerState, accountId: string): number {
+function accountBalanceUnchecked(state: LedgerState, accountId: string): number {
   const account = state.accounts.find(a => a.id === accountId && a.profileId === state.profileId);
   if (!account) throw new Error('Счёт не найден в профиле');
   integer(account.openingMinor, -MAX_MINOR);
@@ -143,15 +143,23 @@ export function accountBalanceMinor(state: LedgerState, accountId: string): numb
     return add(balance, posting.signedMinor);
   }, account.openingMinor);
 }
+/** A public balance query must fail closed on malformed snapshots. */
+export function accountBalanceMinor(state: LedgerState, accountId: string): number {
+  assertLedgerState(state);
+  return accountBalanceUnchecked(state, accountId);
+}
 export function totalBalanceMinor(state: LedgerState): number {
-  return state.accounts.reduce((total, account) => add(total, accountBalanceMinor(state, account.id)), 0);
+  assertLedgerState(state);
+  return state.accounts.reduce((total, account) => add(total, accountBalanceUnchecked(state, account.id)), 0);
 }
 /** The reserves module (#6) supplies an already validated allocated amount; no double subtraction of planned bills. */
 export function availableBalanceMinor(state: LedgerState, accountId: string, reservedMinor: number): number {
   if (!Number.isSafeInteger(reservedMinor) || reservedMinor < 0) throw new RangeError('Неверная сумма резерва');
-  return add(accountBalanceMinor(state, accountId), -reservedMinor);
+  assertLedgerState(state);
+  return add(accountBalanceUnchecked(state, accountId), -reservedMinor);
 }
 export function monthlyCashFlowMinor(state: LedgerState, month: string): { incomeMinor: number; expenseMinor: number } {
+  assertLedgerState(state);
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new TypeError('Неверный месяц');
   let incomeMinor = 0;
   let expenseMinor = 0;
@@ -187,7 +195,7 @@ function post(state: LedgerState, tx: LedgerTransaction, postings: Array<[Accoun
     integer(amount, -MAX_MINOR);
     if (amount === 0) throw new RangeError('Нулевая проводка запрещена');
     // Check the final balance before mutating anything.
-    add(accountBalanceMinor(state, account.id), amount);
+    add(accountBalanceUnchecked(state, account.id), amount);
   }
   state.transactions.push(tx);
   for (const [account, amount] of postings) {
