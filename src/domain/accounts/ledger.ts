@@ -3,7 +3,9 @@
  * Persistence, session verification, RLS, transaction locks and SHA-256 command
  * receipts belong to finance API #67. Never use this as a client-side authority.
  */
-export const MAX_MINOR = 1_000_000_000_000;
+import { MAX_MINOR } from './money.ts';
+import { assertLedgerState } from './invariants.ts';
+export { MAX_MINOR } from './money.ts';
 export type AccountKind = 'bank' | 'card' | 'cash' | 'savings' | 'other';
 export type TransactionKind = 'income' | 'expense' | 'transfer' | 'adjustment' | 'payment' | 'reversal';
 
@@ -200,6 +202,7 @@ function transaction(state: LedgerState, context: LedgerContext, id: string, kin
 
 /** Atomic as a pure state transition. The server MUST persist all rows, receipt and revision in one DB transaction. */
 export function applyLedgerCommand(source: LedgerState, command: LedgerCommand, context: LedgerContext): AppliedLedgerCommand {
+  assertLedgerState(source);
   uuid(source.profileId);
   if (context.profileId !== source.profileId || !ACTOR_RE.test(context.actorUserId)) throw new Error('Доступ к финансовому профилю запрещён');
   uuid(command.clientMutationId);
@@ -372,5 +375,6 @@ export function applyLedgerCommand(source: LedgerState, command: LedgerCommand, 
   state.revision++;
   const receipt: CommandReceipt = { clientMutationId: command.clientMutationId, requestFingerprint: fingerprint, revision: state.revision, affectedId };
   state.receipts.push(receipt);
+  assertLedgerState(state);
   return { state, receipt, replayed: false };
 }
