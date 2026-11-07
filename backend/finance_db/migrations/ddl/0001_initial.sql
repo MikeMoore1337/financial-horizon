@@ -472,7 +472,7 @@ CREATE CONSTRAINT TRIGGER payment_link_valid
 CREATE FUNCTION finance.guard_obligation_direction()
 RETURNS trigger LANGUAGE plpgsql
 SET search_path = finance, pg_catalog
-AS $
+AS $$
 BEGIN
   IF OLD.direction IS DISTINCT FROM NEW.direction AND EXISTS (
     SELECT 1 FROM finance.settlements s
@@ -482,7 +482,7 @@ BEGIN
       USING ERRCODE='23514';
   END IF;
   RETURN NEW;
-END $;
+END $$;
 CREATE TRIGGER protect_settled_obligation_direction
   BEFORE UPDATE OF direction ON obligations
   FOR EACH ROW EXECUTE FUNCTION finance.guard_obligation_direction();
