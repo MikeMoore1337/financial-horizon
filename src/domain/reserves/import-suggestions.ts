@@ -1,0 +1,80 @@
+/**
+ * Advisory-only parser for free-text XLSX recurrence comments. No storage writes,
+ * automatic expense conversion, balance mutations or inferred due dates.
+ *
+ * The UI must ask the user to confirm a reserve, its amount and next due date.
+ */
+export type ReservePeriodHint =
+  | {
+      readonly status: 'suggestion';
+      readonly periodMonths: number;
+      readonly confirmationRequired: true;
+    }
+  | {
+      readonly status: 'invalid';
+      readonly reason: 'out-of-range' | 'ambiguous' | 'oversized';
+      readonly confirmationRequired: true;
+    };
+
+const MAX_NOTE_LENGTH = 2_000;
+const MONTHS_MAX = 60;
+
+function extractValues(text: string, re: RegExp, factor: number, result: number[]): void {
+  for (const match of text.matchAll(re)) {
+    const count = Number(match[1]);
+    result.push(count * factor);
+  }
+}
+
+/**
+ * Recognizes unambiguous Russian frequency phrases in imported spreadsheets.
+ * Returns null for unrelated notes. Never guesses a payment date or transfers
+ * the parsed payment into a new reserve automatically.
+ */
+export function parseReservePeriodHint(note: unknown): ReservePeriodHint | null {
+  if (typeof note !== 'string' || !note.trim()) return null;
+  const normalized = note
+    .normalize('NFKC')
+    .toLocaleLowerCase('ru-RU')
+    .replace(/[\u00a0\u202f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (normalized.length > MAX_NOTE_LENGTH) {
+    return { status: 'invalid', reason: 'oversized', confirmationRequired: true };
+  }
+
+  const values: number[] = [];
+  // Match only self-contained expressions; unrelated numbers such as "2026" in
+  // a note must not be interpreted as a frequency.
+  extractValues(
+    normalized,
+    /(?:^|[^\p{L}\p{N}])(?:раз\s+в|каждые|каждый)\s+(\d+)\s*мес(?:\.|яц(?:ев|а)?)?(?!\p{L})/gu,
+    1,
+    values,
+  );
+  extractValues(
+    normalized,
+    /(?:^|[^\p{L}\p{N}])(?:раз\s+в|каждые|каждый)\s+(\d+)\s*(?:год(?:а|ов)?|лет)(?!\p{L})/gu,
+    12,
+    values,
+  );
+
+  const aliases: readonly [RegExp, number][] = [
+    [/(?:^|[^\p{L}\p{N}])ежегодно(?!\p{L})/gu, 12],
+    [/(?:^|[^\p{L}\p{N}])(?:раз\s+в\s+год|каждый\s+год)(?!\p{L})/gu, 12],
+    [/(?:^|[^\p{L}\p{N}])(?:раз\s+в\s+полгода|каждые\s+полгода)(?!\p{L})/gu, 6],
+    [/(?:^|[^\p{L}\p{N}])(?:раз\s+в\s+квартал|каждый\s+квартал)(?!\p{L})/gu, 3],
+    [/(?:^|[^\p{L}\p{N}])(?:ежемесячно|раз\s+в\s+месяц|каждый\s+месяц)(?!\p{L})/gu, 1],
+  ];
+  for (const [re, months] of aliases) {
+    for (const _match of normalized.matchAll(re)) values.push(months);
+  }
+  if (values.length === 0) return null;
+  if (values.some((months) => !Number.isSafeInteger(months) || months < 1 || months > MONTHS_MAX)) {
+    return { status: 'invalid', reason: 'out-of-range', confirmationRequired: true };
+  }
+  if (new Set(values).size !== 1) {
+    return { status: 'invalid', reason: 'ambiguous', confirmationRequired: true };
+  }
+  return { status: 'suggestion', periodMonths: values[0]!, confirmationRequired: true };
+}
