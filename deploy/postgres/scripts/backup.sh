@@ -17,9 +17,9 @@ file="$BACKUP_DIR/fh-finance-$stamp.pgdump.gpg"
 temp="$file.partial"
 test ! -e "$file" && test ! -e "$temp"
 trap 'rm -f "$temp"' EXIT
+# Preserve object ownership AND GRANT/REVOKE; otherwise a restored migrator
+# cannot own or evolve the recovered schema.
 docker exec -u postgres fh-finance-postgres \
-  # Preserve object ownership AND GRANT/REVOKE; otherwise a restored migrator
-  # cannot own or evolve the recovered schema.
   pg_dump -U postgres --format=custom --dbname=fh_finance \
   | gpg --homedir "$KEYRING" --batch --no-tty --trust-model always \
     --recipient "$FH_FINANCE_GPG_RECIPIENT" --encrypt --output "$temp"
