@@ -54,7 +54,7 @@ function validateCommon(input: CommandPreconditions, requiredIds: readonly strin
   }
   if (!input.expectedEntityRevisions || Array.isArray(input.expectedEntityRevisions)
       || typeof input.expectedEntityRevisions !== 'object') throw new TypeError('Нет ревизий сущностей');
-  const revisions: Record<string, number> = Object.create(null) as Record<string, number>;
+  const revisions: Record<string, number> = {}; // UUID-only keys exclude prototype property injection.
   for (const [id, revision] of Object.entries(input.expectedEntityRevisions)) {
     requireUUID(id);
     if (!Number.isSafeInteger(revision) || revision < 1) throw new RangeError('Неверная ревизия сущности');
