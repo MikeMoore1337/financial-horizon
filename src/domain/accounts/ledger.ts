@@ -71,6 +71,12 @@ export type LedgerCommand = CommandBase & (
   | { action: 'account.transfer'; payload: Occurrence & { id: string; fromAccountId: string; toAccountId: string; amountMinor: number } }
   | { action: 'payment.record'; payload: Occurrence & { id: string; accountId: string; amountMinor: number; link: { settlementId: string } | { loanPaymentId: string } } }
   | { action: 'transaction.reverse'; payload: { id: string; transactionId: string; occurredOn: string; reason: string } }
+  | { action: 'transaction.correct'; payload: {
+      originalTransactionId: string; reversalId: string; reason: string; occurredOn: string;
+      replacement:
+        | (Occurrence & { id: string; kind: 'income' | 'expense' | 'adjustment'; accountId: string; signedMinor: number })
+        | (Occurrence & { id: string; kind: 'transfer'; fromAccountId: string; toAccountId: string; amountMinor: number });
+    } }
 );
 export interface AppliedLedgerCommand {
   state: LedgerState;
@@ -300,6 +306,50 @@ export function applyLedgerCommand(source: LedgerState, command: LedgerCommand, 
       post(state, transaction(state, context, payload.id, 'reversal', payload.occurredOn, payload.reason, original.id), inverse);
       original.entityRevision++;
       affectedId = payload.id;
+      break;
+    }
+    case 'transaction.correct': {
+      // Pure atomic correction: both compensating and replacement rows succeed,
+      // or the original source remains untouched. Server persistence needs one SQL commit.
+      const payload = command.payload;
+      text(payload.reason, 500);
+      const original = state.transactions.find(t => t.id === payload.originalTransactionId && t.profileId === state.profileId);
+      if (!original || original.kind === 'reversal' || original.kind === 'payment') {
+        throw new Error('Исправление этой операции недоступно');
+      }
+      if (command.expectedEntityRevisions[original.id] !== original.entityRevision) {
+        throw new Error('Конфликт ревизии исходной операции');
+      }
+      if (state.transactions.some(t => t.reversedTransactionId === original.id)) throw new Error('Операция уже отменена');
+      const existing = state.postings.filter(p => p.transactionId === original.id && p.profileId === state.profileId);
+      if (existing.length !== (original.kind === 'transfer' ? 2 : 1)) {
+        throw new Error('Исходные проводки повреждены');
+      }
+      // Verify ALL involved entity revisions before posting the reversal.
+      const oldAccounts = existing.map(p => [accountForWrite(state, p.accountId, command, true), -p.signedMinor] as [Account, number]);
+      const next = payload.replacement;
+      let replacementAccounts: Array<[Account, number]>;
+      if (next.kind === 'transfer') {
+        if (original.kind !== 'transfer') throw new Error('Нельзя менять форму операции при исправлении');
+        if (next.fromAccountId === next.toAccountId) throw new Error('Перевод на тот же счёт запрещён');
+        integer(next.amountMinor, 1);
+        replacementAccounts = [
+          [accountForWrite(state, next.fromAccountId, command), -next.amountMinor],
+          [accountForWrite(state, next.toAccountId, command), next.amountMinor],
+        ];
+      } else if (next.kind === 'income' || next.kind === 'expense' || next.kind === 'adjustment') {
+        if (original.kind === 'transfer') throw new Error('Нельзя менять форму операции при исправлении');
+        integer(next.signedMinor, -MAX_MINOR);
+        if (next.signedMinor === 0 || (next.kind === 'income' && next.signedMinor < 0)
+          || (next.kind === 'expense' && next.signedMinor > 0)) throw new RangeError('Неверный знак исправления');
+        replacementAccounts = [[accountForWrite(state, next.accountId, command), next.signedMinor]];
+      } else {
+        throw new TypeError('Неизвестная форма исправления');
+      }
+      post(state, transaction(state, context, payload.reversalId, 'reversal', payload.occurredOn, payload.reason, original.id), oldAccounts);
+      post(state, transaction(state, context, next.id, next.kind, next.occurredOn, next.note), replacementAccounts);
+      original.entityRevision++;
+      affectedId = next.id;
       break;
     }
     default: {
