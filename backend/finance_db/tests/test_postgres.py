@@ -291,3 +291,40 @@ def test_failing_ledger_commit_rolls_back_profile_revision_and_receipt(runtime):
             text("SELECT count(*) FROM ledger_transactions WHERE id=:t"),
             {"t": transaction_id},
         ).scalar_one() == 0
+
+
+def test_sqlalchemy_column_parity_and_bigint_monetary_storage():
+    """Detect drift between reviewed SQL migration and SQLAlchemy 2 mappings."""
+    from sqlalchemy import BigInteger
+
+    engine = create_engine(os.environ["FH_FINANCE_MIGRATION_URL"])
+    try:
+        with engine.connect() as c:
+            for table in Base.metadata.tables.values():
+                actual = {
+                    name: data_type
+                    for name, data_type in c.execute(
+                        text("""
+                            SELECT column_name, data_type
+                            FROM information_schema.columns
+                            WHERE table_schema='finance' AND table_name=:name
+                        """),
+                        {"name": table.name},
+                    )
+                }
+                declared = set(table.columns.keys())
+                assert declared == set(actual), (
+                    table.name,
+                    "only_orm", sorted(declared - set(actual)),
+                    "only_sql", sorted(set(actual) - declared),
+                )
+                for column in table.columns:
+                    if column.name.endswith("_minor"):
+                        assert isinstance(column.type, BigInteger), (
+                            table.name, column.name, "ORM must use BIGINT"
+                        )
+                        assert actual[column.name] == "bigint", (
+                            table.name, column.name, "PostgreSQL must use BIGINT"
+                        )
+    finally:
+        engine.dispose()
