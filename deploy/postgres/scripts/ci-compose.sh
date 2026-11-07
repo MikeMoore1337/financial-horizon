@@ -44,6 +44,13 @@ if FH_FINANCE_MAPPER_NAME=fh-finance-pg bash deploy/postgres/scripts/storage-pre
   exit 1
 fi
 echo "CI_UNENCRYPTED_STORAGE_REJECTED_PASS"
+# The release wrapper must reject a synthetic runner lacking GitHub approvals,
+# an encrypted production volume and externally provisioned recovery secrets.
+if bash deploy/postgres/scripts/production-deploy.sh >/dev/null 2>&1; then
+  echo "ERROR: production deploy bypassed security preconditions" >&2
+  exit 1
+fi
+echo "CI_PRODUCTION_DEPLOY_REQUIRES_APPROVAL_PASS"
 docker compose -f deploy/postgres/compose.yml config --quiet
 docker compose -f deploy/postgres/compose.yml up -d --wait --wait-timeout 35 db
 docker compose -f deploy/postgres/compose.yml --profile ops run --rm --build migrator

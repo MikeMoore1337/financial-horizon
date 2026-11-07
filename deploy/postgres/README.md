@@ -50,10 +50,18 @@ Auth SQLite и существующая IndexedDB не изменяются.
    Без подтверждения mountpoint, LUKS2 и имени отдельного устройства
    **стартовать DB запрещено**. Проверить Compose:
    docker compose -f deploy/postgres/compose.yml config --quiet
-6. После завершения security gates и независимого review, из checkout
-   **проверенного SHA**, выполнить создание пустой финансовой БД:
-   docker compose -f deploy/postgres/compose.yml up -d db
-   docker compose -f deploy/postgres/compose.yml --profile ops run --build --rm migrator
+6. **Для первого production bootstrap используйте только**
+   `deploy/postgres/scripts/production-deploy.sh` из чистого checkout
+   слитого `main` с точным merge SHA и указанным reviewed PR HEAD.
+   Задайте FH_FINANCE_APPROVED_SHA (merge commit) и
+   FH_FINANCE_REVIEWED_HEAD_SHA (commit независимого APPROVED) через
+   авторизованный операторский сеанс. Скрипт проверяет GitHub PR #79,
+   независимый APPROVED на точном HEAD, 4/4 CI PASS для PR и main,
+   фактический LUKS2, secrets и настройки offsite; без любого gate
+   **отказывается запускаться**. После миграции проверяет RLS/порты
+   и создаёт первую зашифрованную внешнюю резервную копию. Никакого
+   автоматического включения финансового API/синхронизации нет.
+   Прямая команда `docker compose up db` для производства запрещена.
 7. Сверить finance.alembic_version = 0001_initial, pg_class с
    relrowsecurity=true/relforcerowsecurity=true для каждой финансовой
    таблицы, runtime-роли и GRANT, отсутствие published ports.
@@ -151,3 +159,16 @@ FH_FINANCE_DATA_DIR, Docker create_host_path=false. Скрипт storage-preflig
 созданы, поскольку отдельно сохраняемый recovery key/провайдерская attestation
 не предоставлены и нельзя генерировать ключ на незашифрованный корневой диск.
 
+
+
+## Точный SHA и независимая приёмка (автоматизированный gate)
+
+Скрипт production-deploy.sh требует отдельный GitHub `APPROVED` от пользователя,
+не являющегося автором PR #79, на точном HEAD. Для продакшена нужен завершённый
+GitHub merge commit именно этого PR, отдельно проверяются 4/4 PASS GitHub Actions
+для reviewed HEAD и для main push merge SHA. Доступ к публичному GitHub API
+идёт без токенов; сетевой сбой, пропущенный review или CI приводит к NO_GO.
+В первый запуск запрещено переиспользовать существующий PostgreSQL-контейнер.
+Скрипт не завершает эксплуатационную приёмку: после него требуется реальное
+восстановление на доверенном независимом узле, измерение RPO/RTO, включение
+проверенного резервного таймера и внешних уведомлений об ошибках.
