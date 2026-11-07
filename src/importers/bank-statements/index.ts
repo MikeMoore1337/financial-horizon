@@ -32,7 +32,7 @@ export async function readBankStatementFile(
     throw new Error('Макросы и старые форматы Excel не поддерживаются. Используйте .xlsx или .csv');
   }
   const zip = bytes[0] === 0x50 && bytes[1] === 0x4b;
-  const format = options.format || (zip ? 'xlsx' : 'csv');
+  const format = options.format || (/\.xlsx$/i.test(filename) ? 'xlsx' : zip ? 'xlsx' : 'csv');
   if (format === 'xlsx' && !zip) throw new Error('Файл не является XLSX-архивом');
   if (format === 'csv' && zip) throw new Error('ZIP-архив нельзя обработать как CSV');
   const fileDigest = await sha256(bytes);
