@@ -27,7 +27,9 @@ cleanup() {
 }
 trap cleanup EXIT
 printf '%s' 'CI-only-synthetic-admin-password-0123456789' > "$FH_FINANCE_SECRETS_DIR/admin_password"
-printf '%s' 'CI-only-synthetic-migrator-password-0123456789' > "$FH_FINANCE_SECRETS_DIR/migrator_password"
+# A quote in the synthetic password proves SQL quoting is correct without
+# ever placing the password on the psql process command line.
+printf '%s' "CI-only-synthetic-migrator-pa'ssword-0123456789" > "$FH_FINANCE_SECRETS_DIR/migrator_password"
 printf '%s' 'CI-only-synthetic-runtime-password-0123456789' > "$FH_FINANCE_SECRETS_DIR/runtime_password"
 # File-backed Compose secrets preserve host file ownership/mode. The PG entrypoint
 # runs init scripts as the postgres UID, and migrator uses the same restricted UID.
@@ -51,6 +53,13 @@ if bash deploy/postgres/scripts/production-deploy.sh >/dev/null 2>&1; then
   exit 1
 fi
 echo "CI_PRODUCTION_DEPLOY_REQUIRES_APPROVAL_PASS"
+# Fail CI if passwords are again handed to psql via argv.
+if grep -E 'psql.*-v[[:space:]]+(migration_password|runtime_password)' \
+    deploy/postgres/init/10-roles.sh >/dev/null; then
+  echo "ERROR: PostgreSQL bootstrap leaked password through psql arguments" >&2
+  exit 1
+fi
+echo "CI_NO_PSQL_PASSWORD_ARGV_PASS"
 docker compose -f deploy/postgres/compose.yml config --quiet
 docker compose -f deploy/postgres/compose.yml up -d --wait --wait-timeout 35 db
 docker compose -f deploy/postgres/compose.yml --profile ops run --rm --build migrator
