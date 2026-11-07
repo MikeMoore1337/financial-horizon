@@ -44,4 +44,18 @@ for (const file of ['manifest.webmanifest', 'theme-bootstrap.js', 'finance.js'])
 for (const file of ['backend', '.env', '.github', 'tests', '.vite']) {
   assert.equal(existsSync(new URL(file, root)), false, 'Private source exposed: ' + file);
 }
-console.log('PASS: Vite multi-page/CSP/hashed JS+CSS/PWA legacy/build privacy');
+assert.equal(
+  read('app.js'),
+  readFileSync(new URL('../legacy/app.js', import.meta.url), 'utf8'),
+  'Old PWA entry must remain functional',
+);
+assert.doesNotMatch(
+  read('app.js'),
+  /src\/react\/|react-dom/,
+  'Legacy entry cannot load TSX or React',
+);
+assert.ok(
+  scripts.some((name) => read('assets/built/' + name).includes('react')),
+  'React must be bundled in the Vite entry',
+);
+console.log('PASS: Vite React/multi-page/CSP/hashed JS+CSS/PWA legacy/build privacy');

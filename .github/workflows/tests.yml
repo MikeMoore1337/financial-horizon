@@ -26,6 +26,7 @@ jobs:
       - run: npm run build
       - run: npm run test:build
       - run: npm test
+      - run: npm run test:component
       - run: node --check app.js && node --check account.js && node --check sw.js && node --check tests/e2e/production-smoke.mjs
       - run: npm run audit:deps
 

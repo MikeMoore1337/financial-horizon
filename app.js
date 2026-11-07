@@ -5,6 +5,7 @@ import {parseSchedule} from './schedule.js';
 import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.js';
 import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
+import {createCalendarRoot} from './src/react/Calendar.tsx';
 
 const $=sel=>document.querySelector(sel);
 const svg=name=>`<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-${name}"></use></svg>`;
@@ -17,6 +18,7 @@ let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),
 const emailSession=createEmailSession();
 let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
 const GUEST_MODE_KEY='fh-guest-session-v2';
+let calendarRoot=null;
 const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
 const monthEvents=()=>getMonthEvents(state,ui.month);
 function toast(message,kind='success'){$('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('visible'),3800);$('#save-indicator').textContent=kind==='error'?'Ошибка':'Сохранено на устройстве';}
@@ -29,8 +31,23 @@ function stampFormRevision(form){form.dataset.stateRevision=String(state.revisio
 function revisionForForm(form){const revision=Number(form.dataset.stateRevision);if(!Number.isSafeInteger(revision)||revision<0)throw Error('Не удалось определить версию записи. Откройте форму повторно.');return revision;}
 function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#172336':'#ffffff';$('#theme-toggle').innerHTML=svg(mode==='dark'?'sun':'moon');$('#theme-toggle').setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}
 function navigation(view){ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings'&&!guestMode)void refreshEmailSession();}
-function render(){if(!state)return;$('#toolbar-title').textContent=titles[ui.view];document.querySelectorAll('[data-view]').forEach(el=>{const active=el.dataset.view===ui.view;el.classList.toggle('active',active);el.setAttribute('aria-current',active?'page':'false');});
- const sections={overview:renderOverview,calendar:renderCalendar,obligations:renderObligations,loans:renderLoans,settings:renderSettings};$('#main').innerHTML=sections[ui.view]();syncAccountControls();if(ui.view==='settings')void renderStorageStatus();}
+function render(){
+ if(!state)return;
+ $('#toolbar-title').textContent=titles[ui.view];
+ document.querySelectorAll('[data-view]').forEach(el=>{const active=el.dataset.view===ui.view;el.classList.toggle('active',active);el.setAttribute('aria-current',active?'page':'false');});
+ const main=$('#main');
+ if(ui.view==='calendar'){
+  if(!calendarRoot){main.replaceChildren();calendarRoot=createCalendarRoot(main);}
+  const events=monthEvents(),totals=monthTotals(events);
+  calendarRoot.render({events,month:ui.month,selectedDate:ui.selectedDate,currentDate:today(),monthTitle:monthLabel(ui.month),netPlanCents:totals.netPlanCents,netFactCents:totals.netFactCents,formatDate,rubles});
+ }else{
+  if(calendarRoot){calendarRoot.unmount();calendarRoot=null;}
+  const sections={overview:renderOverview,obligations:renderObligations,loans:renderLoans,settings:renderSettings};
+  main.innerHTML=sections[ui.view]();
+ }
+ syncAccountControls();
+ if(ui.view==='settings')void renderStorageStatus();
+}
 function syncAccountControls(){
  const signedIn=Boolean(emailSession.email);
  const toolbarButton=$('#account-logout-toolbar');
@@ -98,18 +115,6 @@ function renderOverview(){
  <div class="section-title"><h2>Распределение платежей</h2><button class="button-text" data-view="obligations">Все записи ${svg('chevron')}</button></div><div class="surface">${categoryRows.length?categoryRows.map(([name,sum])=>`<div class="allocation-row"><div class="allocation-label"><span>${escapeHtml(name)}</span><strong>${rubles(sum)}</strong></div><div class="progress-track"><div class="progress-fill" style="width:${Math.max(2,Math.round(sum/max*100))}%"></div></div></div>`).join(''):'<p class="small-hint">Добавьте расходы для построения распределения.</p>'}</div></div>
  <div class="overview-column"><div class="section-title" style="margin-top:0"><h2>Ближайшие события</h2><button class="button-text" data-view="calendar">Календарь ${svg('chevron')}</button></div><div class="surface plain-list">${upcoming.length?upcoming.map(e=>moneyRow(e)).join(''):'<div class="empty-mini">В этом месяце больше нет запланированных событий.</div>'}</div>
  <div class="section-title"><h2>${loan?'Кредитный горизонт':'Кредиты'}</h2><button class="button-text" data-view="loans">Подробнее ${svg('chevron')}</button></div><div class="surface loan-spotlight">${loan?`<div class="small-hint">Осталось выплатить · ${escapeHtml(loan.title)}</div><div class="loan-balance">${rubles(snapshot.outstandingCents)}</div><div class="progress-track"><div class="progress-fill" style="width:${Math.max(0,Math.min(100,Math.round((1-snapshot.outstandingCents/loan.openingCents)*100)))}%"></div></div><p class="small-hint" style="margin:10px 0">Ориентировочный срок: ${snapshot.months===null?'не рассчитывается':`${snapshot.months} мес.`}. Платёж: ${rubles(snapshot.monthlyCents)}</p>${action('pay',`${svg('plus')} Внести платёж`,'button-primary',`data-id="${escapeHtml(loan.id)}"`)}`:`<p class="small-hint">Кредитов пока нет.</p>${action('new-loan','Добавить кредит','button-primary')}`}</div></div></div>`;
-}
-function renderCalendar(){
- const events=monthEvents(),totals=monthTotals(events);const [year,mon]=ui.month.split('-').map(Number);
- const first=new Date(year,mon-1,1,12);const start=(first.getDay()+6)%7;const end=new Date(year,mon,0).getDate();const selected=monthKey(ui.selectedDate)===ui.month?ui.selectedDate:dayInMonth(ui.month,1);
- const selectedEvents=events.filter(e=>e.date===selected);
- const header=`<div class="month-controls"><button data-action="prev-month" aria-label="Предыдущий месяц">${svg('chevron')}</button><strong>${monthLabel(ui.month)}</strong><button data-action="next-month" aria-label="Следующий месяц">${svg('chevron')}</button></div>`;
- const heads=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(x=>`<div class="cal-head">${x}</div>`).join('');
- const blanks=Array.from({length:start},()=>'<div class="cal-blank"></div>').join('');
- const days=Array.from({length:end},(_,i)=>{const d=dayInMonth(ui.month,i+1);const todays=events.filter(e=>e.date===d);return `<button class="cal-day ${d===selected?'selected':''} ${d===today()?'today':''}" data-action="select-day" data-date="${d}" aria-labelledby="calendar-day-number-${d} calendar-day-summary-${d}" aria-describedby="calendar-day-description-${d}" aria-pressed="${d===selected}"><span class="cal-number" id="calendar-day-number-${d}">${i+1}</span><span class="cal-tokens">${todays.slice(0,4).map(e=>`<i class="${e.kind==='income'?'income':'expense'}"></i>`).join('')}</span> <span class="cal-summ" id="calendar-day-summary-${d}">${todays.slice(0,2).map(e=>`<span>${escapeHtml(e.title)}</span>`).join('')}</span><span class="visually-hidden" id="calendar-day-description-${d}">${formatDate(d)}; ${todays.length} событий</span></button>`}).join('');
- return pageHead('Календарь платежей','Поступления, регулярные обязательства и даты оплаты в едином календаре',`${action('new-entry',`${svg('plus')} Запись`,'button-primary')}`)+`
- <div class="cal-layout"><div><div class="surface"><div class="filter-bar">${header}<span class="pill">${events.length} событий</span></div><div class="calendar-grid">${heads}${blanks}${days}</div><div class="calendar-legend"><span><i></i>Поступления</span><span><i></i>Платежи</span></div></div></div>
- <div><div class="surface"><h2 class="cal-selected-title">${formatDate(selected)}</h2><div class="small-hint" style="margin-bottom:12px">Нажмите на дату, чтобы увидеть обязательства и отметить оплату</div><div class="plain-list">${selectedEvents.length?selectedEvents.map(e=>moneyRow(e)).join(''):'<div class="empty-mini">В этот день ничего не запланировано.</div>'}</div></div><div class="surface" style="margin-top:13px"><div class="kpi-label">Плановый итог месяца</div><div class="amount-medium">${rubles(totals.netPlanCents)}</div><div class="small-hint" style="margin-top:8px">Подтверждённый поток: ${rubles(totals.netFactCents)}. Суммы не включают начальный остаток на счетах.</div></div></div></div>`;
 }
 function entryRecord(entry){
  const date=entry.recurrence==='once'?entry.date:dayInMonth(ui.month,Number(entry.date.slice(-2)));
@@ -376,7 +381,7 @@ async function previewExcelImport(file){
  $('#excel-import-confirm').disabled=!diff.entries.length&&!diff.loans.length;
  openDialog('#excel-import-dialog');
 }
-function onErrorNoStorage(error){$('#main').innerHTML=`<section class="surface empty-panel"><h1>Хранилище недоступно</h1><p>${escapeHtml(error.message)}</p><p>Финансовые данные не будут незаметно записаны в ненадёжное временное хранилище. Откройте приложение в обычном окне Safari или другого браузера и разрешите сохранение данных.</p></section>`;}
+function onErrorNoStorage(error){if(calendarRoot){calendarRoot.unmount();calendarRoot=null;}$('#main').innerHTML=`<section class="surface empty-panel"><h1>Хранилище недоступно</h1><p>${escapeHtml(error.message)}</p><p>Финансовые данные не будут незаметно записаны в ненадёжное временное хранилище. Откройте приложение в обычном окне Safari или другого браузера и разрешите сохранение данных.</p></section>`;}
 async function saveEntry(form){
  const id=formValue(form,'id'),title=formValue(form,'title').trim(),amountCents=cents(formValue(form,'amount'));
  const kind=formValue(form,'kind'),date=formValue(form,'date'),recurrence=formValue(form,'recurrence'),category=formValue(form,'category');
@@ -489,6 +494,7 @@ function bindEvents(){
   // A restored page from back/forward cache must re-validate authorization
   // before it can show any finance records.
   state=null;
+  if(calendarRoot){calendarRoot.unmount();calendarRoot=null;}
   $('#main').textContent='Проверяем доступ к бухгалтерии…';
   void (async()=>{
    if(!await refreshEmailSession())return;
