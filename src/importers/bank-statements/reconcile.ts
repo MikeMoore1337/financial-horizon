@@ -123,7 +123,8 @@ export async function draftBankImportBatch(
   const operations: NormalizedBankOperation[] = [];
   for (const sourceKey of confirmedSourceKeys) {
     const candidate = index.get(sourceKey);
-    if (!candidate?.operation || !['ready', 'possible-duplicate'].includes(candidate.status)) {
+    if (!candidate?.operation || !['ready', 'possible-duplicate'].includes(candidate.status) ||
+        candidate.warnings.some(w => w.severity === 'error')) {
       throw new Error('Нельзя проводить неизвестную, ошибочную или уже учтённую операцию');
     }
     if (candidate.status === 'possible-duplicate' && !allow.has(sourceKey)) {
@@ -211,7 +212,8 @@ export function projectAccountBalances(
     if (!Number.isSafeInteger(position.delta)) throw new Error('Переполнение финансового остатка');
   };
   for (const op of plan.operations) {
-    if (!Number.isSafeInteger(op.amountCents) || op.amountCents <= 0) {
+    if (!Number.isSafeInteger(op.amountCents) || op.amountCents <= 0 ||
+        op.amountCents > 1_000_000_000_000) {
       throw new Error('Некорректная сумма для проведения');
     }
     add(op.accountId, op.kind === 'income' ? op.amountCents : -op.amountCents);
