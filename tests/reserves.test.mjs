@@ -408,10 +408,18 @@ test('canceling an unreferenced cycle close returns to paid previous cycle', () 
   assert.equal(snap.overdue, false);
 });
 
-test('cannot fund from negative, fractional, infinite or unbounded available account amounts', () => {
-  for (const bad of [-1, 0.001, Infinity, NaN, 1_000_000_000_001]) {
+test('signed available account balances from #33 produce correct shortfalls', () => {
+  assert.deepEqual(assessReserveContribution(100, -500), { canFund: false, shortfallCents: 600 });
+  assert.deepEqual(assessReserveContribution(100, 0), { canFund: false, shortfallCents: 100 });
+  assert.deepEqual(assessReserveContribution(100, 101), { canFund: true, shortfallCents: 0 });
+  assert.deepEqual(assessReserveContribution(100, 1_500_000_000_000), { canFund: true, shortfallCents: 0 });
+});
+
+test('reject fractional, infinite, NaN and unsafe available balances', () => {
+  for (const bad of [0.001, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(() => assessReserveContribution(100, bad));
   }
+  assert.throws(() => assessReserveContribution(1_000_000_000_000, -Number.MAX_SAFE_INTEGER));
 });
 
 test('multiple individually valid contributions can exceed single-operation limit safely', () => {
