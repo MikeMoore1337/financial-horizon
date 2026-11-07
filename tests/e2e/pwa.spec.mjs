@@ -1,6 +1,37 @@
 import {test,expect} from '@playwright/test';
 import {observe,visitGuest,addEntry,scopedState} from './helpers.mjs';
 
+async function updateWorkerAndWaitForControl(page){
+ // A populated precache does not prove activation. Old SW may still control
+ // requests while the new worker deletes the previous shell cache.
+ await page.evaluate(async()=>{
+  const reg=await navigator.serviceWorker.ready;
+  const previous=navigator.serviceWorker.controller;
+  if(!previous)throw new Error('Expected a controlling Service Worker before update');
+  let timeout,handler;
+  const takeover=new Promise((resolve,reject)=>{
+   handler=()=>{
+    if(navigator.serviceWorker.controller===previous)return;
+    clearTimeout(timeout);
+    navigator.serviceWorker.removeEventListener('controllerchange',handler);
+    resolve();
+   };
+   timeout=setTimeout(()=>{
+    navigator.serviceWorker.removeEventListener('controllerchange',handler);
+    reject(new Error('New Service Worker did not take control'));
+   },15000);
+   navigator.serviceWorker.addEventListener('controllerchange',handler);
+  });
+  try {
+   await reg.update();
+   await takeover;
+  }finally{
+   clearTimeout(timeout);
+   navigator.serviceWorker.removeEventListener('controllerchange',handler);
+  }
+ });
+}
+
 test('native Service Worker shell works offline and recovers online',async({page,context})=>{
  const watcher=await observe(context,page);
  await visitGuest(page);
@@ -49,11 +80,11 @@ test('installed legacy v25 Service Worker upgrades to Vite shell without losing 
  try{
   const legacy=await request.post('/__e2e__/sw-version/legacy');
   expect(legacy.ok()).toBe(true);
-  await page.evaluate(async()=>{const reg=await navigator.serviceWorker.ready;await reg.update();});
+  await updateWorkerAndWaitForControl(page);
   await expect.poll(()=>page.evaluate(async()=> (await caches.keys()).some(k=>k.includes('financial-horizon-shell-v25-theme-auth'))),{timeout:20000}).toBe(true);
   const newer=await request.post('/__e2e__/sw-version/vite');
   expect(newer.ok()).toBe(true);
-  await page.evaluate(async()=>{const reg=await navigator.serviceWorker.ready;await reg.update();});
+  await updateWorkerAndWaitForControl(page);
   await expect.poll(()=>page.evaluate(async()=> (await caches.keys()).some(k=>k.startsWith('financial-horizon-shell-vite-'))),{timeout:20000}).toBe(true);
   await page.reload();
   await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
