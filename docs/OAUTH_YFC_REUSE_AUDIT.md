@@ -19,7 +19,7 @@ Financial Horizon сохраняет отдельную собственную S
 | `services/oauth_transactions.py` | Одноразовый `state`, TTL, browser marker, purpose=login/link, verifier и nonce | `fh_auth/store.py` содержит собственные SQLite-транзакции |
 | `models/auth_identity.py`, `services/auth_identities.py` | Уникальность пары `(provider,subject)` **и** пары `(user_id,provider)`; запрет конфликта при привязке | Добавлен уникальный индекс `oauth_identities_one_provider_per_user`; тест на попытку вторичного link и сохранение первой сессии |
 | `services/auth_redirects.py`, `api/v1/auth.py` | Константные callback paths и обобщённые ошибки без кодов/токенов | FH использует строго `/api/auth/oauth/{provider}/callback` и безопасные локальные редиректы |
-| `frontend/src/features/auth/OAuthButtons.tsx` | Порядок Telegram, Google, Яндекс, VK; вывод кнопок только настроенных провайдеров | `auth-ui.js` держит этот порядок, остаётся **не подключённым** до визуального approval |
+| `frontend/src/features/auth/OAuthButtons.tsx` | Порядок Telegram, Google, Яндекс, VK; вывод кнопок только настроенных провайдеров | `auth-ui.js` сохраняет порядок; его адаптер подключён к `account.html` по утверждённому варианту C, но server feature flag OFF |
 | `backend/tests/test_vk_oauth.py` | Проверять повторный/wrong `state`, отсутствие `device_id`, JSON payload и конфликт идентичностей | Синтетические тесты `test_provider_exchange.py` / `test_social_auth.py` |
 | `backend/tests/test_telegram_oauth_proxy.py` | Не наследовать окружение proxy, изолировать сетевые ошибки Telegram, не писать прокси-секреты в логи | FH использует `httpx(trust_env=False)`; необходимости копировать сетевой proxy YFC нет |
 
