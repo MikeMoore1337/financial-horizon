@@ -15,7 +15,7 @@
 <link rel="icon" type="image/svg+xml" href="./assets/brand/favicon.svg">
 <link rel="icon" type="image/png" sizes="32x32" href="./assets/brand/favicon-32.png">
 <link rel="icon" type="image/x-icon" href="./assets/brand/favicon.ico">
-<link rel="stylesheet" href="./styles.css?rev=auth-theme-v27">
+<link rel="stylesheet" href="./styles.css?rev=auth-theme-v28">
 <title>Финансовый горизонт</title>
 </head>
 <body data-theme="light">
@@ -59,7 +59,7 @@
   <div class="work-area">
     <header class="toolbar">
       <div class="toolbar-leading"><button class="tool-icon hamburger" id="menu-toggle" aria-label="Открыть меню"><svg><use href="#ico-menu"/></svg></button><span class="crumb">Личные финансы</span><span class="crumb-slash">/</span><span id="toolbar-title">Обзор</span></div>
-      <div class="toolbar-actions"><span class="local-chip"><span class="privacy-dot"></span> Локально</span><button class="tool-icon" id="theme-toggle" aria-label="Переключить тему" title="Переключить тему"><svg><use href="#ico-moon"/></svg></button><a class="tool-icon toolbar-account" href="./account.html" id="account-entry-toolbar" aria-label="Управление аккаунтом" title="Управление аккаунтом" hidden><span class="lucide-user-icon" aria-hidden="true"></span></a><button type="button" class="button-secondary toolbar-logout" id="account-logout-toolbar" data-action="account-logout" aria-label="Выйти из аккаунта" title="Выйти из аккаунта" hidden><span class="lucide-logout-icon" aria-hidden="true"></span><span class="toolbar-logout-label">Выйти</span></button><button class="button-primary toolbar-add" id="top-add"><svg><use href="#ico-plus"/></svg><span>Добавить</span></button></div>
+      <div class="toolbar-actions"><span class="local-chip"><span class="privacy-dot"></span> Локально</span><button class="tool-icon" id="theme-toggle" aria-label="Переключить тему" title="Переключить тему"><svg><use href="#ico-moon"/></svg></button><a class="tool-icon toolbar-account" href="./account.html" id="account-entry-toolbar" aria-label="Управление аккаунтом" title="Управление аккаунтом" hidden><span class="lucide-user-icon" aria-hidden="true"></span></a><button type="button" class="button-secondary toolbar-logout" id="account-logout-toolbar" data-action="account-logout" aria-label="Выйти из аккаунта" title="Выйти из аккаунта" hidden><span class="lucide-logout-icon" aria-hidden="true"></span><span class="toolbar-logout-label">Выйти</span></button><button class="button-primary toolbar-add" id="top-add" aria-label="Добавить запись"><svg aria-hidden="true" focusable="false"><use href="#ico-plus"/></svg><span>Добавить</span></button></div>
     </header>
     <main class="page" id="main"><div class="loading">Проверяем доступ к бухгалтерии…</div></main>
     <footer class="footer"><span>Данные остаются в этом браузере. Делайте резервные копии.</span><span id="save-indicator" role="status" aria-live="polite">Локальная база</span></footer>
@@ -119,8 +119,8 @@
   <div class="dialog-head"><div><span class="eyebrow">Только локально</span><h2 id="excel-import-heading">Предпросмотр импорта Excel</h2></div><button type="button" class="tool-icon" data-action="cancel-excel-import" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-close"/></svg></button></div>
   <p class="form-note">Ничего ещё не сохранено. Проверьте суммы, график кредитов и предупреждения. При подтверждении данные будут добавлены в текущую бухгалтерию, без удаления существующих записей.</p>
   <section id="excel-import-summary" class="excel-import-summary" aria-live="polite"></section>
-  <div class="excel-import-list"><h3>Подготовленные записи</h3><div id="excel-import-items"></div></div>
-  <div class="excel-import-list"><h3>Требует проверки</h3><div id="excel-import-warnings"></div></div>
+  <div class="excel-import-list"><h3 id="excel-import-items-heading">Подготовленные записи</h3><div id="excel-import-items" tabindex="0" role="region" aria-labelledby="excel-import-items-heading"></div></div>
+  <div class="excel-import-list"><h3 id="excel-import-warnings-heading">Требует проверки</h3><div id="excel-import-warnings" tabindex="0" role="region" aria-labelledby="excel-import-warnings-heading"></div></div>
   <div class="dialog-actions"><button type="button" class="button-secondary" data-action="cancel-excel-import">Отмена</button><button type="button" id="excel-import-confirm" class="button-primary" data-action="confirm-excel-import">Добавить записи</button></div>
  </div>
 </dialog>
@@ -128,5 +128,5 @@
 <input type="file" id="restore-file" accept=".json,application/json" hidden>
 <input type="file" id="schedule-file" accept=".csv,text/csv" hidden>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<script type="module" src="./app.js?rev=auth-theme-v25"></script>
+<script type="module" src="./app.js?rev=auth-theme-v26"></script>
 </body></html>
