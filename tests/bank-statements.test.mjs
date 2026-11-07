@@ -428,3 +428,37 @@ test('pre-hash file size guard rejects excessively large CSV and XLSX inputs', a
   );
   await assert.rejects(readBankStatementFile(new Uint8Array(0)), /пуст/);
 });
+
+
+test('a transfer appearing in both own-account bank statements is never silently posted twice', async () => {
+  const exported = await previewOf(base +
+    '07.11.2026;-500,00;Отправлено;Основной;Накопительный;перевод;;OUT-123\n');
+  const outgoing = exported.preview.rows[0].operation;
+  const imported = await previewOf(base +
+    '07.11.2026;500,00;Получено;Накопительный;Основной;перевод;;IN-789\n', {
+      transferDirection: 'signed-source',
+    });
+  const incoming = imported.preview.rows[0].operation;
+  assert.equal(incoming.accountId, outgoing.accountId);
+  assert.equal(incoming.targetAccountId, outgoing.targetAccountId);
+  assert.notEqual(incoming.fingerprint, outgoing.fingerprint);
+  const existing = [{
+    id: 'record-1', accountId: outgoing.accountId,
+    targetAccountId: outgoing.targetAccountId,
+    date: outgoing.date, amountCents: outgoing.amountCents, kind: 'transfer',
+    description: outgoing.description, externalId: outgoing.externalId,
+    sourceKey: outgoing.sourceKey, fingerprint: outgoing.fingerprint,
+  }];
+  const reconciliation = reconcileBankStatement(imported.preview, existing);
+  assert.equal(reconciliation.possibleDuplicates, 1);
+  await assert.rejects(
+    draftBankImportBatch(reconciliation, [incoming.sourceKey]),
+    /подтверждения/,
+  );
+  const sameStatement = await previewOf(base +
+    '07.11.2026;-500,00;Отправлено;Основной;Накопительный;перевод;;OUT-123\n' +
+    '07.11.2026;-500,00;Отправлено ещё;Основной;Накопительный;перевод;;OUT-124\n');
+  const partial = reconcileBankStatement(sameStatement.preview, []);
+  assert.equal(partial.ready, 1);
+  assert.equal(partial.possibleDuplicates, 1);
+});
