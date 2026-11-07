@@ -456,3 +456,27 @@ test('tiny goal defers the first nonzero automatic installment until the final s
   assert.equal(snap.nextContribution.date, '2026-04-30');
   assert.equal(snap.nextContribution.amountCents, 1);
 });
+
+test('due date can be today: immediate funding, same-day payment, next cycle', () => {
+  const sameDayDefinition = definition({
+    openedOn: '2026-01-31',
+    firstDueDate: '2026-01-31',
+    periodMonths: 12,
+  });
+  const initial = calculateReserve(sameDayDefinition, [], '2026-01-31');
+  assert.equal(initial.daysUntilDue, 0);
+  assert.equal(initial.overdue, false);
+  assert.deepEqual(initial.schedule, []);
+  assert.equal(initial.immediateFundingRequiredCents, 2_400_000);
+  const actions = [
+    event('payment', 'paid-today', '2026-01-31', {
+      amountCents: 2_400_000,
+      reservedUsedCents: 0,
+    }),
+    event('cycle_close', 'closed-today', '2026-01-31'),
+  ];
+  const closed = calculateReserve(sameDayDefinition, actions, '2026-01-31');
+  assert.equal(closed.cycleNumber, 2);
+  assert.equal(closed.dueDate, '2027-01-31');
+  assert.equal(closed.totalPaidCents, 2_400_000);
+});
