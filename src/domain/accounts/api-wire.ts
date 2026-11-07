@@ -24,6 +24,10 @@ export interface TransferInput extends CommandPreconditions {
 export interface ReversalInput extends CommandPreconditions {
   transactionId: string;
   reason: string;
+  /** Local UI hint, never trusted by the server or serialized into payload. */
+  transactionKind: 'income' | 'expense' | 'transfer' | 'adjustment';
+  /** Accounts from the original posted transaction; their versions must be supplied. */
+  postingAccountIds: readonly string[];
 }
 
 export type WireCommand = {
@@ -114,7 +118,18 @@ export function encodeReversal(input: ReversalInput): FinanceCommandEnvelope {
   if (typeof input.reason !== 'string' || !input.reason.trim() || input.reason.length > 500) {
     throw new TypeError('Укажите причину отмены');
   }
-  const revisions = validateCommon(input, [input.transactionId]);
+  if (!['income', 'expense', 'transfer', 'adjustment'].includes(input.transactionKind)) {
+    throw new Error('Отмена связанной оплаты требует атомарного аннулирования факта платежа');
+  }
+  const expectedCount = input.transactionKind === 'transfer' ? 2 : 1;
+  if (!Array.isArray(input.postingAccountIds) || input.postingAccountIds.length !== expectedCount) {
+    throw new TypeError('Не указаны все счета исходных проводок');
+  }
+  for (const id of input.postingAccountIds) requireUUID(id);
+  if (new Set(input.postingAccountIds).size !== expectedCount) {
+    throw new TypeError('Исходные счета повторяются');
+  }
+  const revisions = validateCommon(input, [input.transactionId, ...input.postingAccountIds]);
   return envelope(input, revisions, 'transaction.reverse', Object.freeze({
     transaction_id: input.transactionId,
     reason: input.reason,
