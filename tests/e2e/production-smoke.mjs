@@ -3,7 +3,7 @@
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {existsSync,readFileSync,readdirSync} from 'node:fs';
-import {dirname,join,relative,sep} from 'node:path';
+import {join,relative,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 const [site,commit,...options]=process.argv.slice(2);
