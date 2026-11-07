@@ -23,5 +23,9 @@ gpg --batch --yes --pinentry-mode loopback --passphrase 'CI-ONLY-NOT-A-REAL-SECR
 tables="$(docker exec "$pg" psql -U postgres -d fh_finance_ci_restore -Atc \
   "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname='finance' AND tablename <> 'alembic_version'")"
 test "$tables" = 15
+# pg_amcheck requires amcheck in the target DB. Install in disposable restore DB,
+# never in source or production data.
+docker exec "$pg" psql -v ON_ERROR_STOP=1 -U postgres -d fh_finance_ci_restore \
+  -c 'CREATE EXTENSION IF NOT EXISTS amcheck' >/dev/null
 docker exec "$pg" pg_amcheck -U postgres -d fh_finance_ci_restore --no-dependent-indexes >/dev/null
 echo "CI_ENCRYPTED_RESTORE_PASS: 15 tables, temporary restored database"

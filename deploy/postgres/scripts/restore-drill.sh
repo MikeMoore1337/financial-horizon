@@ -24,5 +24,9 @@ gpg --homedir "$FH_FINANCE_GPG_HOME" --batch --no-tty --decrypt "$1" \
 count="$(docker exec "$name" psql -U postgres -d fh_restore -Atc \
   "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname='finance' AND tablename <> 'alembic_version'")"
 test "$count" -eq 15
+# pg_amcheck requires amcheck in the target DB. Install in disposable restore DB,
+# never in source or production data.
+docker exec "$name" psql -v ON_ERROR_STOP=1 -U postgres -d fh_restore \
+  -c 'CREATE EXTENSION IF NOT EXISTS amcheck' >/dev/null
 docker exec "$name" pg_amcheck -U postgres -d fh_restore --no-dependent-indexes >/dev/null
 printf 'RESTORE_DRILL_PASS: %s finance tables, no ports, disposable volume\n' "$count"
