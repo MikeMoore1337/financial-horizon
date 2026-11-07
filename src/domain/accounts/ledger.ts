@@ -92,7 +92,7 @@ function integer(value: number, min: number, max = MAX_MINOR): void {
 }
 function add(left: number, right: number): number {
   const result = left + right;
-  if (!Number.isSafeInteger(result) || Math.abs(result) > MAX_MINOR) {
+  if (!Number.isSafeInteger(result)) {
     throw new RangeError('Остаток превышает допустимый предел');
   }
   return result;
@@ -111,7 +111,7 @@ function checkedRevision(value: number): void {
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (value !== null && typeof value === 'object') {
-    const entries = Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b));
+    const entries = Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
     return `{${entries.map(([key, val]) => `${JSON.stringify(key)}:${canonical(val)}`).join(',')}}`;
   }
   if (typeof value === 'number' && !Number.isFinite(value)) throw new TypeError('Неверное число в команде');
@@ -139,7 +139,7 @@ export function totalBalanceMinor(state: LedgerState): number {
 }
 /** The reserves module (#6) supplies an already validated allocated amount; no double subtraction of planned bills. */
 export function availableBalanceMinor(state: LedgerState, accountId: string, reservedMinor: number): number {
-  integer(reservedMinor, 0);
+  if (!Number.isSafeInteger(reservedMinor) || reservedMinor < 0) throw new RangeError('Неверная сумма резерва');
   return add(accountBalanceMinor(state, accountId), -reservedMinor);
 }
 export function monthlyCashFlowMinor(state: LedgerState, month: string): { incomeMinor: number; expenseMinor: number } {
@@ -227,7 +227,10 @@ export function applyLedgerCommand(source: LedgerState, command: LedgerCommand, 
     case 'account.archive': {
       const payload = command.payload;
       const a = accountForWrite(state, payload.accountId, command);
-      if (!Number.isFinite(Date.parse(payload.archivedAt))) throw new TypeError('Неверная дата архивации');
+      if (typeof payload.archivedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(payload.archivedAt)
+        || !Number.isFinite(Date.parse(payload.archivedAt)) || new Date(payload.archivedAt).toISOString() !== payload.archivedAt) {
+        throw new TypeError('Неверная дата архивации');
+      }
       a.archivedAt = payload.archivedAt;
       a.entityRevision++;
       affectedId = a.id;
