@@ -1,5 +1,5 @@
 import {test,expect} from '@playwright/test';
-import {observe,visitGuest,addEntry,scopedState} from './helpers.mjs';
+import {observe,visitGuest,addEntry,scopedState,updateWorkerAndWaitForControl} from './helpers.mjs';
 
 test('native Service Worker shell works offline and recovers online',async({page,context})=>{
  const watcher=await observe(context,page);
@@ -49,11 +49,11 @@ test('installed legacy v25 Service Worker upgrades to Vite shell without losing 
  try{
   const legacy=await request.post('/__e2e__/sw-version/legacy');
   expect(legacy.ok()).toBe(true);
-  await page.evaluate(async()=>{const reg=await navigator.serviceWorker.ready;await reg.update();});
+  await updateWorkerAndWaitForControl(page);
   await expect.poll(()=>page.evaluate(async()=> (await caches.keys()).some(k=>k.includes('financial-horizon-shell-v25-theme-auth'))),{timeout:20000}).toBe(true);
   const newer=await request.post('/__e2e__/sw-version/vite');
   expect(newer.ok()).toBe(true);
-  await page.evaluate(async()=>{const reg=await navigator.serviceWorker.ready;await reg.update();});
+  await updateWorkerAndWaitForControl(page);
   await expect.poll(()=>page.evaluate(async()=> (await caches.keys()).some(k=>k.startsWith('financial-horizon-shell-vite-'))),{timeout:20000}).toBe(true);
   await page.reload();
   await expect(page.locator('#toolbar-title')).toHaveText('Обзор');

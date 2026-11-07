@@ -115,3 +115,34 @@ export async function logoutViaUi(page){
 export async function currentUser(page){
  return page.evaluate(async()=> (await (await fetch('/api/auth/email/me',{credentials:'same-origin',cache:'no-store'})).json()).user);
 }
+
+export async function updateWorkerAndWaitForControl(page){
+ // A populated precache does not prove activation. Old SW may still control
+ // requests while the new worker deletes the previous shell cache.
+ await page.evaluate(async()=>{
+  const reg=await navigator.serviceWorker.ready;
+  const previous=navigator.serviceWorker.controller;
+  if(!previous)throw new Error('Expected a controlling Service Worker before update');
+  let timeout,handler;
+  const takeover=new Promise((resolve,reject)=>{
+   handler=()=>{
+    if(navigator.serviceWorker.controller===previous)return;
+    clearTimeout(timeout);
+    navigator.serviceWorker.removeEventListener('controllerchange',handler);
+    resolve();
+   };
+   timeout=setTimeout(()=>{
+    navigator.serviceWorker.removeEventListener('controllerchange',handler);
+    reject(new Error('New Service Worker did not take control'));
+   },15000);
+   navigator.serviceWorker.addEventListener('controllerchange',handler);
+  });
+  try {
+   await reg.update();
+   await takeover;
+  }finally{
+   clearTimeout(timeout);
+   navigator.serviceWorker.removeEventListener('controllerchange',handler);
+  }
+ });
+}
