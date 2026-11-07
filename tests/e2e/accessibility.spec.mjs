@@ -177,6 +177,24 @@ test('long unbroken loan and category labels do not overflow the page',async({pa
      titleWithinCard:!!label&&!!card&&label.getBoundingClientRect().right<=card.getBoundingClientRect().right+1,
     };
    });
+   if(state.document>state.viewport+1){
+    const diagnostic=await page.evaluate(()=>{
+     const vw=document.documentElement.clientWidth;
+     return [...document.querySelectorAll('body *')].map(el=>{
+      const rect=el.getBoundingClientRect(),style=getComputedStyle(el);
+      return {
+       tag:el.tagName,cls:String(el.className||'').slice(0,80),
+       text:el.innerText?.slice(0,60),
+       left:+rect.left.toFixed(2),right:+rect.right.toFixed(2),
+       width:+rect.width.toFixed(2),scroll:el.scrollWidth,
+       overflow:style.overflowX,display:style.display,
+       position:style.position
+      };
+     }).filter(x=>x.right>vw+0.7)
+       .sort((a,b)=>b.right-a.right).slice(0,25);
+    });
+    console.log('ISSUE44_REFLOW_DIAG',JSON.stringify({engine:process.platform,width,theme,state,diagnostic}));
+   }
    expect(state.document,'Loan title overflow at '+width+'px in '+theme).toBeLessThanOrEqual(state.viewport+1);
    expect(state.titleVisible).toBe(true);
    expect(state.titleWithinCard).toBe(true);
