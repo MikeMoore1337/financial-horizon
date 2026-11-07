@@ -49,12 +49,14 @@ mkdir -m 700 "$base/data"
 sudo mount -o nodev,nosuid,noatime "/dev/mapper/$mapper" "$base/data"
 sudo chown 999:999 "$base/data"
 sudo chmod 700 "$base/data"
-FH_FINANCE_DATA_DIR="$base/data" FH_FINANCE_MAPPER_NAME="$mapper" \
+# Production preflight runs as root. cryptsetup status cannot be queried
+# by an unprivileged runner, so the test must exercise the same privilege level.
+sudo env FH_FINANCE_DATA_DIR="$base/data" FH_FINANCE_MAPPER_NAME="$mapper" \
   bash deploy/postgres/scripts/storage-preflight.sh
 sudo umount "$base/data"
 
 # The same directory without its encrypted mount must fail closed.
-if FH_FINANCE_DATA_DIR="$base/data" FH_FINANCE_MAPPER_NAME="$mapper" \
+if sudo env FH_FINANCE_DATA_DIR="$base/data" FH_FINANCE_MAPPER_NAME="$mapper" \
   bash deploy/postgres/scripts/storage-preflight.sh >/dev/null 2>&1; then
   echo "CI_LUKS_TEST_FAILED: plain directory was accepted" >&2
   exit 1
