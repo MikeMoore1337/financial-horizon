@@ -7,7 +7,7 @@ Auth SQLite и существующая IndexedDB не изменяются.
 ## Границы инфраструктуры
 
 - PostgreSQL 17 с закреплённым digest официального образа; отдельный кластер,
-  отдельный Docker volume fh_finance_pgdata, приватная internal-сеть, без ports.
+  отдельный bind mount на **LUKS2-шифрованном устройстве**, приватная internal-сеть, без ports.
 - Отсутствуют финансовый API, регистрация и публичная синхронизация.
 - Роли fh_finance_migrator (DDL) и fh_finance_runtime (DML); runtime без
   SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB, DELETE, TRUNCATE и CREATE.
@@ -36,15 +36,28 @@ Auth SQLite и существующая IndexedDB не изменяются.
    без финансовой БД. Мигратор запускается с тем же UID 999 и читает
    только отдельно подключённый миграционный secret. Не заменять это
    правами 0644/0444. Файлы и значения не передавать в git/issue/CI.
-4. Проверить compose-файл командой:
+4. Подготовить отдельное зашифрованное LUKS2-устройство (или подтверждённый
+   эквивалент), **не на диске другой БД**. Его ключ восстановления хранить
+   только вне VPS, с отдельной проверенной копией. Не создавать LUKS
+   автоматически из этого репозитория: опасность уничтожения существующего
+   тома и компрометации ключа. На VPS монтировать разблокированный mapper
+   строго в каталог финансовой БД, назначить UID/GID 999:999, права 0700.
+   Проверить независимое offsite-хранилище резервных копий и возможность
+   восстановления приватным ключом на доверенном устройстве.
+5. Установить FH_FINANCE_DATA_DIR в точный абсолютный путь mountpoint,
+   FH_FINANCE_MAPPER_NAME в имя выделенного LUKS2 mapper. Проверить:
+   bash deploy/postgres/scripts/storage-preflight.sh
+   Без подтверждения mountpoint, LUKS2 и имени отдельного устройства
+   **стартовать DB запрещено**. Проверить Compose:
    docker compose -f deploy/postgres/compose.yml config --quiet
-5. Для пустой новой базы применить:
+6. После завершения security gates и независимого review, из checkout
+   **проверенного SHA**, выполнить создание пустой финансовой БД:
    docker compose -f deploy/postgres/compose.yml up -d db
    docker compose -f deploy/postgres/compose.yml --profile ops run --build --rm migrator
-6. Сверить finance.alembic_version = 0001_initial, pg_class с
+7. Сверить finance.alembic_version = 0001_initial, pg_class с
    relrowsecurity=true/relforcerowsecurity=true для каждой финансовой
    таблицы, runtime-роли и GRANT, отсутствие published ports.
-7. Проверить, что auth SQLite, страницы и текущие auth endpoints неизменны.
+8. Проверить, что auth SQLite, страницы и текущие auth endpoints неизменны.
 
 Запрещено: docker compose down -v, alembic stamp вместо upgrade,
 применение reference SQL напрямую, изменение БД других сервисов.
@@ -91,3 +104,20 @@ idempotency receipts и не выполнять DROP SCHEMA на production.
 CI backup/restore с синтетическими данными не заменяет фактический
 production backup/restore. Без подтверждённого независимого review,
 backup, инвентаризации шифрования и restore Issue #66 не закрывать.
+
+
+## Обязательная защита физического хранения (новый блокер)
+
+Compose не создаёт произвольный Docker volume и не подставляет незашифрованный
+host-путь автоматически. Источник bind-mount берётся из обязательной переменной
+FH_FINANCE_DATA_DIR, Docker create_host_path=false. Скрипт storage-preflight.sh
+проверяет именно смонтированный каталог и сопоставляет его физический MAJ:MIN
+с выделенным активным LUKS2 mapper. Имя задаётся FH_FINANCE_MAPPER_NAME.
+Отсутствие разблокированного encrypted mount запрещает запуск. В CI негативный
+тест подтверждает, что обычный временный каталог отвергается.
+
+Это **защитный барьер перед развёртыванием**, а не выполненная настройка
+шифрования на VPS: реальный контейнер на VPS и защищённое устройство ещё не
+созданы, поскольку отдельно сохраняемый recovery key/провайдерская attestation
+не предоставлены и нельзя генерировать ключ на незашифрованный корневой диск.
+

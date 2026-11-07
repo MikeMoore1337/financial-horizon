@@ -32,7 +32,13 @@ services:
       - -c
       - log_min_duration_statement=-1
     volumes:
-      - fh_finance_pgdata:/var/lib/postgresql/data
+      # A bind mount is mandatory. Deploy preflight verifies its backing block
+      # device is a dedicated unlocked LUKS2 mapper, never plain host ext4.
+      - type: bind
+        source: ${FH_FINANCE_DATA_DIR:?FH_FINANCE_DATA_DIR must be set to a mounted encrypted volume}
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
       - ./init/10-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
     secrets: [admin_password, migrator_password, runtime_password]
     networks: [finance_private]
@@ -73,9 +79,6 @@ services:
 networks:
   finance_private:
     internal: true
-volumes:
-  fh_finance_pgdata:
-    name: fh_finance_pgdata
 secrets:
   admin_password:
     file: ${FH_FINANCE_SECRETS_DIR:-/etc/financial-horizon/finance/secrets}/admin_password

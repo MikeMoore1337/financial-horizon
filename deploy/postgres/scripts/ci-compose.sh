@@ -8,6 +8,8 @@ fi
 umask 077
 export FH_FINANCE_SECRETS_DIR
 FH_FINANCE_SECRETS_DIR="$(mktemp -d)"
+export FH_FINANCE_DATA_DIR="$FH_FINANCE_SECRETS_DIR/data"
+mkdir -m 700 "$FH_FINANCE_DATA_DIR"
 cleanup() {
   local status=$?
   if [ "$status" -ne 0 ]; then
@@ -31,6 +33,13 @@ pg_uid="$(docker run --rm --network none "$pg_image" id -u postgres)"
 test "$pg_uid" = "999"
 chmod 400 "$FH_FINANCE_SECRETS_DIR/"*
 sudo chown "$pg_uid:$pg_uid" "$FH_FINANCE_SECRETS_DIR/"*
+# This synthetic CI directory is intentionally not encrypted; the production
+# gate MUST refuse it. Never make CI's temporary storage an alternative to LUKS.
+if FH_FINANCE_MAPPER_NAME=fh-finance-pg bash deploy/postgres/scripts/storage-preflight.sh >/dev/null 2>&1; then
+  echo "ERROR: production preflight accepted unencrypted CI storage" >&2
+  exit 1
+fi
+echo "CI_UNENCRYPTED_STORAGE_REJECTED_PASS"
 docker compose -f deploy/postgres/compose.yml config --quiet
 docker compose -f deploy/postgres/compose.yml up -d --wait --wait-timeout 35 db
 docker compose -f deploy/postgres/compose.yml --profile ops run --rm --build migrator
