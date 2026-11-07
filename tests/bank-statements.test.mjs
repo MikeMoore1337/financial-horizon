@@ -228,3 +228,49 @@ test('mapping is strict; mixed amount columns and reused fields never produce op
   assert.equal(bad.rejected, 1);
   assert.ok(bad.warnings.some(x => x.code === 'REUSED_COLUMN'));
 });
+
+
+test('conflicting bank external IDs are blocked, including inside the same file', async () => {
+  const { preview } = await previewOf(base +
+    '07.11.2026;-100;А;Основной;;расход;Питание;BANK-7\n' +
+    '08.11.2026;-200;Б;Основной;;расход;Питание;BANK-7\n');
+  const within = reconcileBankStatement(preview, []);
+  assert.equal(within.ready, 1);
+  assert.equal(within.invalid, 1);
+  assert.ok(within.rows[1].warnings.some(x => x.code === 'DUPLICATE_EXTERNAL_ID'));
+  const first = operationAt(preview, 0);
+  const other = operationAt(preview, 1);
+  const saved = [{
+    id: 'saved-1', accountId: first.accountId, kind: first.kind,
+    date: first.date, description: first.description, amountCents: first.amountCents,
+    externalId: first.externalId, fingerprint: first.fingerprint,
+  }];
+  const different = reconcileBankStatement({
+    ...preview, rows: [{ rowNumber: other.sourceRow, operation: other, warnings: [] }],
+  }, saved);
+  assert.equal(different.invalid, 1);
+  assert.ok(different.rows[0].warnings.some(x => x.code === 'EXTERNAL_ID_CONFLICT'));
+  await assert.rejects(draftBankImportBatch(different, [other.sourceKey]));
+});
+
+test('invalid grouping and wrong CSV column width block rows without silent realignment', async () => {
+  const malformed = await previewOf(base +
+    '07.11.2026;1 2 3;Некорректно;Основной;;доход;Зарплата;G1\n' +
+    '08.11.2026;100;Некорректно;Основной;;доход;Зарплата;G2;extra\n');
+  assert.equal(malformed.preview.accepted, 0);
+  assert.equal(malformed.preview.rejected, 2);
+  assert.ok(malformed.preview.rows[0].warnings.some(x => x.code === 'INVALID_AMOUNT'));
+  assert.ok(malformed.preview.rows[1].warnings.some(x => x.code === 'ROW_WIDTH'));
+  assert.equal(malformed.table.warnings.some(x => x.code === 'ROW_WIDTH'), true);
+});
+
+test('invalid column mapping retains every row in the preview for manual inspection', async () => {
+  const { table } = await previewOf(base +
+    '07.11.2026;100;Тест;Основной;;доход;Зарплата;A1\n');
+  const invalid = await normalizeBankStatement(table, {
+    mapping: { amount: 1 }, accounts,
+  });
+  assert.equal(invalid.rows.length, 1);
+  assert.equal(invalid.rows[0].operation, null);
+  assert.equal(reconcileBankStatement(invalid, []).invalid, 1);
+});
