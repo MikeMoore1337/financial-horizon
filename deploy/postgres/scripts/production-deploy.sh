@@ -52,18 +52,10 @@ if pr.get("head", {}).get("sha") != reviewed:
 reviews = api("pulls/79/reviews?per_page=100")
 if len(reviews) >= 100:
     denied("Review pagination not exhausted")
-latest = {}
-for item in reviews:
-    author = item.get("user") or {}
-    username = author.get("login")
-    if (username and username != "MikeMoore1337"
-            and item.get("author_association") in ("COLLABORATOR", "MEMBER", "OWNER")):
-        latest[username] = item
-if any(r.get("state") == "CHANGES_REQUESTED" for r in latest.values()):
-    denied("An independent reviewer has unresolved requested changes")
-if not any(r.get("state") == "APPROVED" and r.get("commit_id") == reviewed
-           for r in latest.values()):
-    denied("No independent APPROVED review for the exact financial PR HEAD")
+from backend.finance_db.release_review import independent_review_gate
+rejection = independent_review_gate(reviews, reviewed_head=reviewed)
+if rejection is not None:
+    denied(rejection)
 
 required = {"finance-postgres", "app-tests", "email-auth-tests", "e2e-real-browser"}
 for sha, event in ((reviewed, "pull_request"), (prod, "push")):
