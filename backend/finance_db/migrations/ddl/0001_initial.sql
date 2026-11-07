@@ -370,17 +370,19 @@ BEGIN
     END IF;
     IF v_count <> 1 OR
        (v_kind='income' AND v_min <= 0) OR
-       (v_kind IN ('expense','payment') AND v_max >= 0) OR
+       -- Linked payments may be inflows or outflows. Their exact signed
+       -- amount is validated by the deferred payment-link trigger.
+       (v_kind='expense' AND v_max >= 0) OR
        v_kind NOT IN ('income','expense','payment','adjustment') THEN
       RAISE EXCEPTION 'incorrect ledger posting shape' USING ERRCODE='23514';
     END IF;
-    -- An unlinked payment is an untraceable debit. Require exactly one
+    -- An unlinked payment is an untraceable financial movement. Require exactly one
     -- settlement or loan payment link in the same committed transaction.
     IF v_kind='payment' AND (
       SELECT count(*) FROM finance.ledger_payment_links
       WHERE profile_id=v_profile AND transaction_id=v_transaction
     ) <> 1 THEN
-      RAISE EXCEPTION 'payment debit requires an atomic payment link' USING ERRCODE='23514';
+      RAISE EXCEPTION 'payment transaction requires an atomic payment link' USING ERRCODE='23514';
     END IF;
   END IF;
   RETURN NULL;
@@ -424,6 +426,8 @@ AS $$
 DECLARE
   v_kind text;
   v_amount bigint;
+  v_direction text;
+  v_expected bigint;
   v_posting bigint;
   v_count integer;
 BEGIN
@@ -433,17 +437,28 @@ BEGIN
     RAISE EXCEPTION 'payment link requires payment ledger kind' USING ERRCODE='23514';
   END IF;
   IF NEW.settlement_id IS NOT NULL THEN
-    SELECT amount_minor INTO v_amount FROM finance.settlements
-      WHERE profile_id=NEW.profile_id AND id=NEW.settlement_id AND voided_at IS NULL;
+    SELECT s.amount_minor,o.direction INTO v_amount,v_direction
+      FROM finance.settlements s
+      JOIN finance.obligations o
+        ON o.profile_id=s.profile_id AND o.id=s.obligation_id
+     WHERE s.profile_id=NEW.profile_id AND s.id=NEW.settlement_id
+       AND s.voided_at IS NULL;
   ELSE
     SELECT amount_minor INTO v_amount FROM finance.loan_payments
       WHERE profile_id=NEW.profile_id AND id=NEW.loan_payment_id AND voided_at IS NULL;
+    v_direction := 'expense'; -- loan repayment is always an outflow
   END IF;
+  IF v_amount IS NULL OR v_direction NOT IN ('income','expense') THEN
+    RAISE EXCEPTION 'payment link has no valid obligation or loan payment'
+      USING ERRCODE='23514';
+  END IF;
+  v_expected := CASE WHEN v_direction='income' THEN v_amount ELSE -v_amount END;
   SELECT count(*),sum(signed_minor) INTO v_count,v_posting
     FROM finance.ledger_postings
     WHERE profile_id=NEW.profile_id AND transaction_id=NEW.transaction_id;
-  IF v_amount IS NULL OR v_count <> 1 OR v_posting <> -v_amount THEN
-    RAISE EXCEPTION 'payment link amount does not match debit' USING ERRCODE='23514';
+  IF v_count <> 1 OR v_posting IS DISTINCT FROM v_expected THEN
+    RAISE EXCEPTION 'payment link amount or signed direction does not match posting'
+      USING ERRCODE='23514';
   END IF;
   RETURN NULL;
 END $$;
@@ -451,6 +466,27 @@ CREATE CONSTRAINT TRIGGER payment_link_valid
   AFTER INSERT ON ledger_payment_links
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION finance.check_payment_link();
+
+-- Once a settlement exists, changing obligation direction would reinterpret
+-- historical positive/negative payments without changing immutable postings.
+CREATE FUNCTION finance.guard_obligation_direction()
+RETURNS trigger LANGUAGE plpgsql
+SET search_path = finance, pg_catalog
+AS $
+BEGIN
+  IF OLD.direction IS DISTINCT FROM NEW.direction AND EXISTS (
+    SELECT 1 FROM finance.settlements s
+      WHERE s.profile_id=OLD.profile_id AND s.obligation_id=OLD.id
+  ) THEN
+    RAISE EXCEPTION 'settled obligation direction is immutable'
+      USING ERRCODE='23514';
+  END IF;
+  RETURN NEW;
+END $;
+CREATE TRIGGER protect_settled_obligation_direction
+  BEFORE UPDATE OF direction ON obligations
+  FOR EACH ROW EXECUTE FUNCTION finance.guard_obligation_direction();
+REVOKE ALL ON FUNCTION finance.guard_obligation_direction() FROM PUBLIC;
 
 -- Audit and journal are append-only even if a privileged grant is accidentally
 -- broadened later. Corrections require a compensating transaction.

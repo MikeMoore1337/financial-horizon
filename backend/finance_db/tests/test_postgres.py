@@ -425,3 +425,80 @@ def test_opening_balance_is_immutable_after_account_creation(runtime):
         assert session.execute(text(
             "SELECT signed_minor FROM ledger_postings WHERE transaction_id=:t"
         ), {"t": tx}).scalar_one() == 1234
+
+
+def test_income_settlement_requires_positive_payment_and_expense_requires_negative(runtime):
+    """A received income is credited, and an outgoing obligation is debited."""
+    def post_settlement(direction: str, signed_minor: int):
+        oid, sid, tx = uuid4(), uuid4(), uuid4()
+        with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+            session.execute(text("""
+                INSERT INTO obligations(profile_id,id,title,direction,amount_minor,starts_on)
+                VALUES (:p,:oid,'Synthetic signed obligation',:direction,175,current_date)
+            """), {"p": PROFILE_A, "oid": oid, "direction": direction})
+            session.execute(text("""
+                INSERT INTO settlements(profile_id,id,obligation_id,occurrence_on,paid_on,amount_minor)
+                VALUES (:p,:sid,:oid,current_date,current_date,175)
+            """), {"p": PROFILE_A, "sid": sid, "oid": oid})
+            insert_ledger(session, tx, "payment", [(ACCOUNT_A1, signed_minor)])
+            session.execute(text("""
+                INSERT INTO ledger_payment_links(profile_id,transaction_id,settlement_id)
+                VALUES (:p,:tx,:sid)
+            """), {"p": PROFILE_A, "tx": tx, "sid": sid})
+        return oid, sid, tx
+
+    income_oid, _, income_tx = post_settlement("income", 175)
+    _, _, expense_tx = post_settlement("expense", -175)
+
+    with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+        assert session.execute(text(
+            "SELECT signed_minor FROM ledger_postings WHERE transaction_id=:tx"
+        ), {"tx": income_tx}).scalar_one() == 175
+        assert session.execute(text(
+            "SELECT signed_minor FROM ledger_postings WHERE transaction_id=:tx"
+        ), {"tx": expense_tx}).scalar_one() == -175
+
+    # Rewriting direction after a settlement would invalidate historical flow.
+    with pytest.raises(DBAPIError):
+        with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+            session.execute(text(
+                "UPDATE obligations SET direction='expense' WHERE profile_id=:p AND id=:oid"
+            ), {"p": PROFILE_A, "oid": income_oid})
+
+    with pytest.raises(IntegrityError):
+        post_settlement("income", -175)
+    with pytest.raises(IntegrityError):
+        post_settlement("expense", 175)
+
+
+def test_loan_payment_is_always_negative(runtime):
+    """Credits to a loan repayment account cannot masquerade as repayment."""
+    lid = uuid4()
+    with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+        session.execute(text("""
+            INSERT INTO loans(profile_id,id,title,opening_minor,payment_minor,
+                              apr_basis_points,term_months,due_day,as_of_date)
+            VALUES (:p,:loan,'Synthetic loan',10000,100,1500,12,15,current_date)
+        """), {"p": PROFILE_A, "loan": lid})
+
+    def record_loan_payment(signed: int):
+        pay_id, tx = uuid4(), uuid4()
+        with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+            session.execute(text("""
+                INSERT INTO loan_payments(profile_id,id,loan_id,paid_on,amount_minor,strategy)
+                VALUES (:p,:pay,:loan,current_date,100,'term')
+            """), {"p": PROFILE_A, "pay": pay_id, "loan": lid})
+            insert_ledger(session, tx, "payment", [(ACCOUNT_A1, signed)])
+            session.execute(text("""
+                INSERT INTO ledger_payment_links(profile_id,transaction_id,loan_payment_id)
+                VALUES (:p,:tx,:pay)
+            """), {"p": PROFILE_A, "tx": tx, "pay": pay_id})
+        return tx
+
+    good = record_loan_payment(-100)
+    with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+        assert session.execute(text(
+            "SELECT signed_minor FROM ledger_postings WHERE transaction_id=:tx"
+        ), {"tx": good}).scalar_one() == -100
+    with pytest.raises(IntegrityError):
+        record_loan_payment(100)
