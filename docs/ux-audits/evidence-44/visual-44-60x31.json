@@ -1,0 +1,736 @@
+{
+  "sourceSha": "ea1127bde8f1f263fbc3223d8d8c8e7e01f9d009",
+  "kind": "browser-only candidate, no source edit",
+  "states": [
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "overview",
+      "viewport": 320,
+      "scrollWidth": 320,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "calendar",
+      "viewport": 320,
+      "scrollWidth": 320,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "obligations",
+      "viewport": 320,
+      "scrollWidth": 320,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": true
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "loans",
+      "viewport": 320,
+      "scrollWidth": 320,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "settings",
+      "viewport": 320,
+      "scrollWidth": 320,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "overview",
+      "viewport": 320,
+      "scrollWidth": 320,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "calendar",
+      "viewport": 320,
+      "scrollWidth": 320,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "obligations",
+      "viewport": 320,
+      "scrollWidth": 320,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": true
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "loans",
+      "viewport": 320,
+      "scrollWidth": 320,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "settings",
+      "viewport": 320,
+      "scrollWidth": 320,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "view": "overview",
+      "viewport": 360,
+      "scrollWidth": 360,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "view": "calendar",
+      "viewport": 360,
+      "scrollWidth": 360,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "view": "obligations",
+      "viewport": 360,
+      "scrollWidth": 360,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": true
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "view": "loans",
+      "viewport": 360,
+      "scrollWidth": 360,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 360,
+      "theme": "light",
+      "view": "settings",
+      "viewport": 360,
+      "scrollWidth": 360,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "view": "overview",
+      "viewport": 360,
+      "scrollWidth": 360,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "view": "calendar",
+      "viewport": 360,
+      "scrollWidth": 360,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "view": "obligations",
+      "viewport": 360,
+      "scrollWidth": 360,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": true
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "view": "loans",
+      "viewport": 360,
+      "scrollWidth": 360,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 360,
+      "theme": "dark",
+      "view": "settings",
+      "viewport": 360,
+      "scrollWidth": 360,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "overview",
+      "viewport": 393,
+      "scrollWidth": 393,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "calendar",
+      "viewport": 393,
+      "scrollWidth": 393,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "obligations",
+      "viewport": 393,
+      "scrollWidth": 393,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": true
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "loans",
+      "viewport": 393,
+      "scrollWidth": 393,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "settings",
+      "viewport": 393,
+      "scrollWidth": 393,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "overview",
+      "viewport": 393,
+      "scrollWidth": 393,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "calendar",
+      "viewport": 393,
+      "scrollWidth": 393,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "obligations",
+      "viewport": 393,
+      "scrollWidth": 393,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": true
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "loans",
+      "viewport": 393,
+      "scrollWidth": 393,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "settings",
+      "viewport": 393,
+      "scrollWidth": 393,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "overview",
+      "viewport": 768,
+      "scrollWidth": 768,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "calendar",
+      "viewport": 768,
+      "scrollWidth": 768,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "obligations",
+      "viewport": 768,
+      "scrollWidth": 768,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": true
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "loans",
+      "viewport": 768,
+      "scrollWidth": 768,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "settings",
+      "viewport": 768,
+      "scrollWidth": 768,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "overview",
+      "viewport": 768,
+      "scrollWidth": 768,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "calendar",
+      "viewport": 768,
+      "scrollWidth": 768,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "obligations",
+      "viewport": 768,
+      "scrollWidth": 768,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": true
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "loans",
+      "viewport": 768,
+      "scrollWidth": 768,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "settings",
+      "viewport": 768,
+      "scrollWidth": 768,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "overview",
+      "viewport": 1440,
+      "scrollWidth": 1440,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "calendar",
+      "viewport": 1440,
+      "scrollWidth": 1440,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "obligations",
+      "viewport": 1440,
+      "scrollWidth": 1440,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": false
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "loans",
+      "viewport": 1440,
+      "scrollWidth": 1440,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "settings",
+      "viewport": 1440,
+      "scrollWidth": 1440,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "overview",
+      "viewport": 1440,
+      "scrollWidth": 1440,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "calendar",
+      "viewport": 1440,
+      "scrollWidth": 1440,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "obligations",
+      "viewport": 1440,
+      "scrollWidth": 1440,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": false
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "loans",
+      "viewport": 1440,
+      "scrollWidth": 1440,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "settings",
+      "viewport": 1440,
+      "scrollWidth": 1440,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 2560,
+      "theme": "light",
+      "view": "overview",
+      "viewport": 2560,
+      "scrollWidth": 2560,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 2560,
+      "theme": "light",
+      "view": "calendar",
+      "viewport": 2560,
+      "scrollWidth": 2560,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 2560,
+      "theme": "light",
+      "view": "obligations",
+      "viewport": 2560,
+      "scrollWidth": 2560,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": false
+    },
+    {
+      "width": 2560,
+      "theme": "light",
+      "view": "loans",
+      "viewport": 2560,
+      "scrollWidth": 2560,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 2560,
+      "theme": "light",
+      "view": "settings",
+      "viewport": 2560,
+      "scrollWidth": 2560,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 2560,
+      "theme": "dark",
+      "view": "overview",
+      "viewport": 2560,
+      "scrollWidth": 2560,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 2560,
+      "theme": "dark",
+      "view": "calendar",
+      "viewport": 2560,
+      "scrollWidth": 2560,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 2560,
+      "theme": "dark",
+      "view": "obligations",
+      "viewport": 2560,
+      "scrollWidth": 2560,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": false
+    },
+    {
+      "width": 2560,
+      "theme": "dark",
+      "view": "loans",
+      "viewport": 2560,
+      "scrollWidth": 2560,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    },
+    {
+      "width": 2560,
+      "theme": "dark",
+      "view": "settings",
+      "viewport": 2560,
+      "scrollWidth": 2560,
+      "ariaName": "Добавить запись",
+      "visibleMobileRecords": 0
+    }
+  ],
+  "axe": [
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "overview",
+      "issues": []
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "calendar",
+      "issues": []
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "obligations",
+      "issues": []
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "loans",
+      "issues": []
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "settings",
+      "issues": []
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "overview",
+      "issues": []
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "calendar",
+      "issues": []
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "obligations",
+      "issues": []
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "loans",
+      "issues": []
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "settings",
+      "issues": []
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "overview",
+      "issues": []
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "calendar",
+      "issues": []
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "obligations",
+      "issues": []
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "loans",
+      "issues": []
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "settings",
+      "issues": []
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "overview",
+      "issues": []
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "calendar",
+      "issues": []
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "obligations",
+      "issues": []
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "loans",
+      "issues": []
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "settings",
+      "issues": []
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "overview",
+      "issues": []
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "calendar",
+      "issues": []
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "obligations",
+      "issues": []
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "loans",
+      "issues": []
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "settings",
+      "issues": []
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "overview",
+      "issues": []
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "calendar",
+      "issues": []
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "obligations",
+      "issues": []
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "loans",
+      "issues": []
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "settings",
+      "issues": []
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "auth-reset",
+      "issues": []
+    }
+  ],
+  "scenarios": [],
+  "pageErrors": []
+}

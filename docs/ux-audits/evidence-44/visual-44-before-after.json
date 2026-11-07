@@ -1,0 +1,508 @@
+{
+  "source": "ea1127bde8f1f263fbc3223d8d8c8e7e01f9d009",
+  "context": "in-memory-only proposal, no source edits",
+  "css": "\nbody[data-theme=light]{--accent:#2870eb;--green:#0d8461}\nbody[data-theme=light] .bottom-nav button:not(.active){color:#41536c}\n@media (min-width:761px) and (max-width:1150px) {\n  .records-table{display:none}\n  .records-mobile{display:block}\n  .record-mobile-row{display:flex;align-items:center;gap:10px;padding:15px 2px;border-bottom:1px solid var(--line)}\n  .record-mobile-row:last-child{border-bottom:0}\n  .record-mobile-row>div:nth-child(2){min-width:0;flex:1}\n  .record-mobile-row strong{font-size:14px}\n  .record-mobile-row small{font-size:12px;color:var(--sub);display:block;margin-top:7px}\n  .record-mobile-amount{font-size:14px;font-weight:760;text-align:right;white-space:nowrap}\n  .record-mobile-actions{display:flex;gap:4px;margin-top:5px;justify-content:flex-end}\n}\n",
+  "scenarios": [
+    {
+      "id": "768-light-obligations",
+      "before": {
+        "metric": {
+          "width": 768,
+          "scrollWidth": 819,
+          "heading": "Обязательства",
+          "recordRows": 5,
+          "tableShown": true,
+          "addLabel": null,
+          "accent": "#3078fa",
+          "green": "#0e8965",
+          "dockRect": null
+        },
+        "axe": {
+          "scope": "768-light-obligations-before",
+          "violations": [
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "nodes": 4,
+              "targets": [
+                [
+                  "#top-add > span"
+                ],
+                [
+                  "button[data-action=\"new-entry\"]"
+                ],
+                [
+                  "tr:nth-child(2) > .money-cell.pos"
+                ],
+                [
+                  "tr:nth-child(5) > .money-cell.pos"
+                ]
+              ]
+            }
+          ]
+        }
+      },
+      "after": {
+        "metric": {
+          "width": 768,
+          "scrollWidth": 768,
+          "heading": "Обязательства",
+          "recordRows": 5,
+          "tableShown": false,
+          "addLabel": "Добавить запись",
+          "accent": "#2870eb",
+          "green": "#0d8461",
+          "dockRect": null
+        },
+        "axe": {
+          "scope": "768-light-obligations-proposal",
+          "violations": []
+        }
+      }
+    },
+    {
+      "id": "768-dark-obligations",
+      "before": {
+        "metric": {
+          "width": 768,
+          "scrollWidth": 819,
+          "heading": "Обязательства",
+          "recordRows": 5,
+          "tableShown": true,
+          "addLabel": null,
+          "accent": "#6c9dff",
+          "green": "#66d9af",
+          "dockRect": null
+        },
+        "axe": {
+          "scope": "768-dark-obligations-before",
+          "violations": []
+        }
+      },
+      "after": {
+        "metric": {
+          "width": 768,
+          "scrollWidth": 768,
+          "heading": "Обязательства",
+          "recordRows": 5,
+          "tableShown": false,
+          "addLabel": "Добавить запись",
+          "accent": "#6c9dff",
+          "green": "#66d9af",
+          "dockRect": null
+        },
+        "axe": {
+          "scope": "768-dark-obligations-proposal",
+          "violations": []
+        }
+      }
+    },
+    {
+      "id": "393-light-overview",
+      "before": {
+        "metric": {
+          "width": 393,
+          "scrollWidth": 393,
+          "heading": "Обзор месяца",
+          "recordRows": 0,
+          "tableShown": false,
+          "addLabel": null,
+          "accent": "#3078fa",
+          "green": "#0e8965",
+          "dockRect": {
+            "bottom": 948,
+            "left": 10,
+            "right": 383
+          }
+        },
+        "axe": {
+          "scope": "393-light-overview-before",
+          "violations": [
+            {
+              "id": "button-name",
+              "impact": "critical",
+              "nodes": 1,
+              "targets": [
+                [
+                  "#top-add"
+                ]
+              ]
+            },
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "nodes": 2,
+              "targets": [
+                [
+                  ".list-row-right > .pos"
+                ],
+                [
+                  ".button-primary[data-action=\"pay\"][data-id=\"s-mortgage\"]"
+                ]
+              ]
+            }
+          ]
+        }
+      },
+      "after": {
+        "metric": {
+          "width": 393,
+          "scrollWidth": 393,
+          "heading": "Обзор месяца",
+          "recordRows": 0,
+          "tableShown": false,
+          "addLabel": "Добавить запись",
+          "accent": "#2870eb",
+          "green": "#0d8461",
+          "dockRect": {
+            "bottom": 948,
+            "left": 10,
+            "right": 383
+          }
+        },
+        "axe": {
+          "scope": "393-light-overview-proposal",
+          "violations": []
+        }
+      }
+    },
+    {
+      "id": "393-dark-overview",
+      "before": {
+        "metric": {
+          "width": 393,
+          "scrollWidth": 393,
+          "heading": "Обзор месяца",
+          "recordRows": 0,
+          "tableShown": false,
+          "addLabel": null,
+          "accent": "#6c9dff",
+          "green": "#66d9af",
+          "dockRect": {
+            "bottom": 948,
+            "left": 10,
+            "right": 383
+          }
+        },
+        "axe": {
+          "scope": "393-dark-overview-before",
+          "violations": [
+            {
+              "id": "button-name",
+              "impact": "critical",
+              "nodes": 1,
+              "targets": [
+                [
+                  "#top-add"
+                ]
+              ]
+            }
+          ]
+        }
+      },
+      "after": {
+        "metric": {
+          "width": 393,
+          "scrollWidth": 393,
+          "heading": "Обзор месяца",
+          "recordRows": 0,
+          "tableShown": false,
+          "addLabel": "Добавить запись",
+          "accent": "#6c9dff",
+          "green": "#66d9af",
+          "dockRect": {
+            "bottom": 948,
+            "left": 10,
+            "right": 383
+          }
+        },
+        "axe": {
+          "scope": "393-dark-overview-proposal",
+          "violations": []
+        }
+      }
+    },
+    {
+      "id": "320-light-obligations",
+      "before": {
+        "metric": {
+          "width": 320,
+          "scrollWidth": 320,
+          "heading": "Обязательства",
+          "recordRows": 5,
+          "tableShown": false,
+          "addLabel": null,
+          "accent": "#3078fa",
+          "green": "#0e8965",
+          "dockRect": {
+            "bottom": 948,
+            "left": 10,
+            "right": 310
+          }
+        },
+        "axe": {
+          "scope": "320-light-obligations-before",
+          "violations": [
+            {
+              "id": "button-name",
+              "impact": "critical",
+              "nodes": 1,
+              "targets": [
+                [
+                  "#top-add"
+                ]
+              ]
+            },
+            {
+              "id": "color-contrast",
+              "impact": "serious",
+              "nodes": 4,
+              "targets": [
+                [
+                  "button[data-action=\"new-entry\"]"
+                ],
+                [
+                  ".kpi-num.pos"
+                ],
+                [
+                  ".record-mobile-row:nth-child(2) > div:nth-child(3) > .record-mobile-amount.pos"
+                ],
+                [
+                  ".record-mobile-row:nth-child(5) > div:nth-child(3) > .record-mobile-amount.pos"
+                ]
+              ]
+            }
+          ]
+        }
+      },
+      "after": {
+        "metric": {
+          "width": 320,
+          "scrollWidth": 320,
+          "heading": "Обязательства",
+          "recordRows": 5,
+          "tableShown": false,
+          "addLabel": "Добавить запись",
+          "accent": "#2870eb",
+          "green": "#0d8461",
+          "dockRect": {
+            "bottom": 948,
+            "left": 10,
+            "right": 310
+          }
+        },
+        "axe": {
+          "scope": "320-light-obligations-proposal",
+          "violations": []
+        }
+      }
+    },
+    {
+      "id": "320-dark-obligations",
+      "before": {
+        "metric": {
+          "width": 320,
+          "scrollWidth": 320,
+          "heading": "Обязательства",
+          "recordRows": 5,
+          "tableShown": false,
+          "addLabel": null,
+          "accent": "#6c9dff",
+          "green": "#66d9af",
+          "dockRect": {
+            "bottom": 948,
+            "left": 10,
+            "right": 310
+          }
+        },
+        "axe": {
+          "scope": "320-dark-obligations-before",
+          "violations": [
+            {
+              "id": "button-name",
+              "impact": "critical",
+              "nodes": 1,
+              "targets": [
+                [
+                  "#top-add"
+                ]
+              ]
+            }
+          ]
+        }
+      },
+      "after": {
+        "metric": {
+          "width": 320,
+          "scrollWidth": 320,
+          "heading": "Обязательства",
+          "recordRows": 5,
+          "tableShown": false,
+          "addLabel": "Добавить запись",
+          "accent": "#6c9dff",
+          "green": "#66d9af",
+          "dockRect": {
+            "bottom": 948,
+            "left": 10,
+            "right": 310
+          }
+        },
+        "axe": {
+          "scope": "320-dark-obligations-proposal",
+          "violations": []
+        }
+      }
+    },
+    {
+      "id": "calendar-1440",
+      "before": {
+        "scope": "calendar-before",
+        "violations": [
+          {
+            "id": "color-contrast",
+            "impact": "serious",
+            "nodes": 3,
+            "targets": [
+              [
+                "#top-add > span"
+              ],
+              [
+                "button[data-action=\"new-entry\"]"
+              ],
+              [
+                ".pos"
+              ]
+            ]
+          },
+          {
+            "id": "label-content-name-mismatch",
+            "impact": "serious",
+            "nodes": 6,
+            "targets": [
+              [
+                "button[data-date=\"2026-11-10\"]"
+              ],
+              [
+                ".selected"
+              ],
+              [
+                "button[data-date=\"2026-11-16\"]"
+              ],
+              [
+                "button[data-date=\"2026-11-20\"]"
+              ],
+              [
+                "button[data-date=\"2026-11-22\"]"
+              ],
+              [
+                "button[data-date=\"2026-11-30\"]"
+              ]
+            ]
+          }
+        ]
+      },
+      "after": {
+        "scope": "calendar-proposal",
+        "violations": [
+          {
+            "id": "color-contrast",
+            "impact": "serious",
+            "nodes": 3,
+            "targets": [
+              [
+                "#top-add > span"
+              ],
+              [
+                "button[data-action=\"new-entry\"]"
+              ],
+              [
+                ".pos"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "excel-393",
+      "before": {
+        "scope": "excel-before",
+        "violations": [
+          {
+            "id": "color-contrast",
+            "impact": "serious",
+            "nodes": 1,
+            "targets": [
+              [
+                "#excel-import-confirm"
+              ]
+            ]
+          },
+          {
+            "id": "scrollable-region-focusable",
+            "impact": "serious",
+            "nodes": 1,
+            "targets": [
+              [
+                "#excel-import-items"
+              ]
+            ]
+          }
+        ]
+      },
+      "after": {
+        "scope": "excel-proposal",
+        "violations": [
+          {
+            "id": "color-contrast",
+            "impact": "serious",
+            "nodes": 1,
+            "targets": [
+              [
+                "#excel-import-confirm"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "reset-393",
+      "before": {
+        "scope": "reset-before",
+        "violations": [
+          {
+            "id": "aria-prohibited-attr",
+            "impact": "serious",
+            "nodes": 1,
+            "targets": [
+              [
+                "#turnstile-container"
+              ]
+            ]
+          }
+        ]
+      },
+      "after": {
+        "scope": "reset-proposal",
+        "violations": []
+      }
+    }
+  ],
+  "screenshots": [
+    "BEFORE-768-light-obligations.png",
+    "PROPOSAL-768-light-obligations.png",
+    "BEFORE-768-dark-obligations.png",
+    "PROPOSAL-768-dark-obligations.png",
+    "BEFORE-393-light-overview.png",
+    "PROPOSAL-393-light-overview.png",
+    "BEFORE-393-dark-overview.png",
+    "PROPOSAL-393-dark-overview.png",
+    "BEFORE-320-light-obligations.png",
+    "PROPOSAL-320-light-obligations.png",
+    "BEFORE-320-dark-obligations.png",
+    "PROPOSAL-320-dark-obligations.png",
+    "PROPOSAL-excel-393.png"
+  ],
+  "errors": []
+}
