@@ -19,6 +19,7 @@
   },
   "include": [
     "src/types/**/*.ts",
+    "src/domain/reserves/**/*.ts",
     "state-migrations.ts",
     "src/react/**/*.tsx",
     "tests/react/**/*.tsx"
