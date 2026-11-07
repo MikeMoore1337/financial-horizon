@@ -1,5 +1,5 @@
 import { assertMoney, calendarDays, parseDate } from './math.ts';
-import type { BankScheduleRow, LoanRow, ScheduleDifference, ScheduleReconciliation } from './types.ts';
+import type { BankScheduleRow, LoanResult, LoanRow, ScheduleDifference, ScheduleReconciliation } from './types.ts';
 
 function validateSchedule(rows: readonly BankScheduleRow[], name: string): void {
   if (!Array.isArray(rows) || rows.length > 1500) throw new RangeError(`${name}: expected <=1500 rows`);
@@ -17,6 +17,10 @@ function validateSchedule(rows: readonly BankScheduleRow[], name: string): void 
   }
 }
 
+function isLoanResult(value: readonly (LoanRow | BankScheduleRow)[] | LoanResult): value is LoanResult {
+  return !Array.isArray(value);
+}
+
 function closureDate(rows: readonly BankScheduleRow[]): string | null {
   const last = rows[rows.length - 1];
   return last?.balanceCents === 0 && !('unpaidInterestCents' in last && last.unpaidInterestCents !== 0)
@@ -28,15 +32,16 @@ function closureDate(rows: readonly BankScheduleRow[]): string | null {
  * Missing bank columns remain null, NEVER incorrectly treated as zero.
  */
 export function reconcileLoanSchedule(
-  calculated: readonly (LoanRow | BankScheduleRow)[],
+  calculated: readonly (LoanRow | BankScheduleRow)[] | LoanResult,
   imported: readonly BankScheduleRow[],
 ): ScheduleReconciliation {
-  validateSchedule(calculated, 'calculated');
+  const calculatedRows = isLoanResult(calculated) ? calculated.rows : calculated;
+  validateSchedule(calculatedRows, 'calculated');
   validateSchedule(imported, 'imported');
   const rows: ScheduleDifference[] = [];
-  const max = Math.max(calculated.length, imported.length);
+  const max = Math.max(calculatedRows.length, imported.length);
   for (let i = 0; i < max; i++) {
-    const ours = calculated[i] ?? null;
+    const ours = calculatedRows[i] ?? null;
     const bank = imported[i] ?? null;
     const delta = (field: 'amountCents' | 'interestCents' | 'principalCents' | 'balanceCents') =>
       ours && bank && ours[field] != null && bank[field] != null
@@ -65,7 +70,8 @@ export function reconcileLoanSchedule(
           .some(value => value !== null && value !== 0),
     });
   }
-  const calculatedClosureDate = closureDate(calculated);
+  const calculatedClosureDate = isLoanResult(calculated)
+    ? calculated.paidOffDate : closureDate(calculatedRows);
   const importedClosureDate = closureDate(imported);
   const closureDateDifferenceDays = calculatedClosureDate && importedClosureDate
     ? calendarDays(importedClosureDate, calculatedClosureDate) : null;
