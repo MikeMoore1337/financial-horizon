@@ -1,0 +1,13 @@
+[Unit]
+Description=Encrypted Financial Horizon PostgreSQL backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/financial-horizon/finance/backup.env
+ExecStart=/opt/financial-horizon-finance/scripts/backup.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
