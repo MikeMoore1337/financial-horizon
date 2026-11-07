@@ -208,11 +208,13 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
   const asOf = options.asOfDate;
   let currentUnprocessedDue: string | null = null;
 
-  function recalculatePayment(date: string): void {
-    // Events are replayed BEFORE the due installment on the same day. A
-    // rate change effective today must include that still-unpaid installment.
+  function recalculatePayment(date: string, includeCurrentUnpaidDue = false): void {
+    // Same-day RATE changes precede the scheduled installment, while an
+    // extra payment using reduce-payment reprices only FUTURE installments.
+    // Including today's already-paid due date after an extra payment would
+    // artificially reduce the amount and leave debt at the contractual end.
     const remainingDues = originalDues.filter(d =>
-      d > date || (d === date && currentUnprocessedDue === date));
+      d > date || (includeCurrentUnpaidDue && d === date && currentUnprocessedDue === date));
     if (!remainingDues.length || (state.balance === 0 && state.unpaid === 0)) return;
     scheduled = terms.scheduleType === 'annuity'
       ? minimumInstallment(state, remainingDues, terms)
@@ -224,7 +226,7 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
     if (event.type === 'rate-change') {
       state.rate = event.annualRateMicroPercent;
       if (terms.scheduleType === 'annuity' && (terms.rateChangePolicy ?? 'recalculate') === 'recalculate') {
-        recalculatePayment(event.date);
+        recalculatePayment(event.date, true);
       }
       history.push({ id: event.id, date: event.date, type: event.type,
         balanceCents: state.balance, unpaidInterestCents: state.unpaid,
