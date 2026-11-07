@@ -1,0 +1,124 @@
+/** Pure, local-only parsing contract. No state, network, DOM, or database writes. */
+export type BankCell = string | number | null;
+export type BankFormat = 'csv' | 'xlsx';
+export type DateOrder = 'DMY' | 'MDY';
+export type NumberFormat = 'auto' | 'comma-decimal' | 'dot-decimal';
+export type BankKind = 'income' | 'expense' | 'transfer';
+export type WarningSeverity = 'info' | 'warning' | 'error';
+
+export interface ImportWarning {
+  code: string;
+  message: string;
+  severity: WarningSeverity;
+  row?: number;
+  column?: number;
+}
+
+export interface BankTableRow {
+  /** Physical CSV line or one-based XLSX row, including the header. */
+  rowNumber: number;
+  cells: BankCell[];
+}
+
+export interface BankStatementTable {
+  format: BankFormat;
+  fileDigest: string;
+  filename: string;
+  headers: string[];
+  rows: BankTableRow[];
+  warnings: ImportWarning[];
+  sheetName?: string;
+  dateSystem?: '1900' | '1904';
+}
+
+export type MappableField =
+  | 'date' | 'amount' | 'income' | 'expense' | 'description'
+  | 'account' | 'targetAccount' | 'category' | 'currency'
+  | 'kind' | 'externalId';
+export type ColumnMapping = Partial<Record<MappableField, number>>;
+
+export interface KnownBankAccount {
+  id: string;
+  name: string;
+  aliases?: readonly string[];
+  currency: 'RUB';
+}
+
+export interface BankImportOptions {
+  mapping: ColumnMapping;
+  accounts: readonly KnownBankAccount[];
+  categories?: readonly string[];
+  defaultAccountId?: string;
+  dateOrder?: DateOrder;
+  numberFormat?: NumberFormat;
+  /** Explicitly map CSV descriptions to a category, never silently create one. */
+  categoryAliases?: Readonly<Record<string, string>>;
+}
+
+export interface NormalizedBankOperation {
+  sourceRow: number;
+  sourceKey: string;
+  fingerprint: string;
+  externalId: string | null;
+  date: string;
+  amountCents: number;
+  kind: BankKind;
+  description: string;
+  accountId: string;
+  targetAccountId: string | null;
+  category: string | null;
+  currency: 'RUB';
+}
+
+export interface OperationPreview {
+  rowNumber: number;
+  operation: NormalizedBankOperation | null;
+  warnings: ImportWarning[];
+}
+
+export interface BankImportPreview {
+  fileDigest: string;
+  mapping: ColumnMapping;
+  rows: OperationPreview[];
+  warnings: ImportWarning[];
+  accepted: number;
+  rejected: number;
+  inflowCents: number;
+  outflowCents: number;
+  /** Transfers are not an income or expense and are excluded from totals. */
+  transfersCents: number;
+}
+
+export type MatchStatus = 'ready' | 'duplicate' | 'possible-duplicate' | 'invalid';
+export interface ExistingBankMovement {
+  id: string;
+  sourceKey?: string | null;
+  fingerprint?: string | null;
+  externalId?: string | null;
+  accountId: string;
+  date: string;
+  amountCents: number;
+  kind: BankKind;
+  description: string;
+  voidedAt?: string | null;
+}
+
+export interface ReconciledBankRow extends OperationPreview {
+  status: MatchStatus;
+  existingIds: string[];
+}
+export interface ReconciliationResult {
+  rows: ReconciledBankRow[];
+  ready: number;
+  duplicates: number;
+  possibleDuplicates: number;
+  invalid: number;
+}
+
+export interface ImportBatchPlan {
+  /** Stable for the same file and confirmed row selection; not a database commit. */
+  batchKey: string;
+  sourceKeys: string[];
+  operations: NormalizedBankOperation[];
+  expectedOperationCount: number;
+}
