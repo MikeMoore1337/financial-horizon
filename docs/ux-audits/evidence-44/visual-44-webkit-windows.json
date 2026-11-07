@@ -1,0 +1,1397 @@
+{
+  "sourceSha": "ea1127bde8f1f263fbc3223d8d8c8e7e01f9d009",
+  "engine": "Playwright WebKit 27.2 on Windows - NOT Safari",
+  "baseline": [
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "overview",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "calendar",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "obligations",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "loans",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "settings",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "overview",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "calendar",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "obligations",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "loans",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "settings",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "overview",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "calendar",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "obligations",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "loans",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "settings",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "overview",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "calendar",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "obligations",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "loans",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "settings",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "overview",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "calendar",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "obligations",
+      "vw": 768,
+      "sw": 819,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "loans",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "settings",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "overview",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "calendar",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "obligations",
+      "vw": 768,
+      "sw": 819,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "loans",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "settings",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "overview",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "calendar",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "obligations",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "loans",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "settings",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "overview",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "calendar",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "obligations",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "loans",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "settings",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    }
+  ],
+  "candidate": [
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "overview",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "calendar",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "obligations",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "loans",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "view": "settings",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "overview",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "calendar",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "obligations",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "loans",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "view": "settings",
+      "vw": 320,
+      "sw": 320,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "overview",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "calendar",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "obligations",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "loans",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "settings",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "overview",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "calendar",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "obligations",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "loans",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "settings",
+      "vw": 393,
+      "sw": 393,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "overview",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "calendar",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "obligations",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "loans",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "settings",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "overview",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "calendar",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "obligations",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "loans",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "settings",
+      "vw": 768,
+      "sw": 768,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "overview",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "calendar",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "obligations",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "loans",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 1440,
+      "theme": "light",
+      "view": "settings",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "meta": "#ffffff"
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "overview",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "calendar",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "obligations",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "loans",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    },
+    {
+      "width": 1440,
+      "theme": "dark",
+      "view": "settings",
+      "vw": 1440,
+      "sw": 1440,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "meta": "#172336"
+    }
+  ],
+  "axe": [
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "overview",
+      "label": "baseline",
+      "violations": [
+        {
+          "id": "button-name",
+          "count": 1,
+          "targets": [
+            [
+              "#top-add"
+            ]
+          ]
+        },
+        {
+          "id": "color-contrast",
+          "count": 2,
+          "targets": [
+            [
+              ".list-row-right > .pos"
+            ],
+            [
+              ".button-primary[data-action=\"pay\"][data-id=\"s-mortgage\"]"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "calendar",
+      "label": "baseline",
+      "violations": [
+        {
+          "id": "button-name",
+          "count": 1,
+          "targets": [
+            [
+              "#top-add"
+            ]
+          ]
+        },
+        {
+          "id": "color-contrast",
+          "count": 2,
+          "targets": [
+            [
+              "button[data-action=\"new-entry\"]"
+            ],
+            [
+              ".pos"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "obligations",
+      "label": "baseline",
+      "violations": [
+        {
+          "id": "button-name",
+          "count": 1,
+          "targets": [
+            [
+              "#top-add"
+            ]
+          ]
+        },
+        {
+          "id": "color-contrast",
+          "count": 3,
+          "targets": [
+            [
+              "button[data-action=\"new-entry\"]"
+            ],
+            [
+              ".record-mobile-row:nth-child(2) > div:nth-child(3) > .record-mobile-amount.pos"
+            ],
+            [
+              ".record-mobile-row:nth-child(5) > div:nth-child(3) > .record-mobile-amount.pos"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "loans",
+      "label": "baseline",
+      "violations": [
+        {
+          "id": "button-name",
+          "count": 1,
+          "targets": [
+            [
+              "#top-add"
+            ]
+          ]
+        },
+        {
+          "id": "color-contrast",
+          "count": 4,
+          "targets": [
+            [
+              "button[data-action=\"new-loan\"]"
+            ],
+            [
+              "button[data-action=\"pay\"]"
+            ],
+            [
+              ".bottom-nav > button[data-view=\"overview\"][aria-current=\"false\"] > span"
+            ],
+            [
+              ".bottom-nav > button[data-view=\"calendar\"][aria-current=\"false\"] > span"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "settings",
+      "label": "baseline",
+      "violations": [
+        {
+          "id": "button-name",
+          "count": 1,
+          "targets": [
+            [
+              "#top-add"
+            ]
+          ]
+        },
+        {
+          "id": "color-contrast",
+          "count": 2,
+          "targets": [
+            [
+              "button[data-action=\"backup\"]"
+            ],
+            [
+              "#category-form > .button-primary[type=\"submit\"]"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "overview",
+      "label": "baseline",
+      "violations": [
+        {
+          "id": "button-name",
+          "count": 1,
+          "targets": [
+            [
+              "#top-add"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "calendar",
+      "label": "baseline",
+      "violations": [
+        {
+          "id": "button-name",
+          "count": 1,
+          "targets": [
+            [
+              "#top-add"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "obligations",
+      "label": "baseline",
+      "violations": [
+        {
+          "id": "button-name",
+          "count": 1,
+          "targets": [
+            [
+              "#top-add"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "loans",
+      "label": "baseline",
+      "violations": [
+        {
+          "id": "button-name",
+          "count": 1,
+          "targets": [
+            [
+              "#top-add"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "settings",
+      "label": "baseline",
+      "violations": [
+        {
+          "id": "button-name",
+          "count": 1,
+          "targets": [
+            [
+              "#top-add"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "overview",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "calendar",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "obligations",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "loans",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 393,
+      "theme": "light",
+      "view": "settings",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "overview",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "calendar",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "obligations",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "loans",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 393,
+      "theme": "dark",
+      "view": "settings",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "overview",
+      "label": "baseline",
+      "violations": [
+        {
+          "id": "color-contrast",
+          "count": 3,
+          "targets": [
+            [
+              "#top-add > span"
+            ],
+            [
+              ".list-row-right > .pos"
+            ],
+            [
+              ".button-primary[data-action=\"pay\"][data-id=\"s-mortgage\"]"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "calendar",
+      "label": "baseline",
+      "violations": [
+        {
+          "id": "color-contrast",
+          "count": 3,
+          "targets": [
+            [
+              "#top-add > span"
+            ],
+            [
+              "button[data-action=\"new-entry\"]"
+            ],
+            [
+              ".pos"
+            ]
+          ]
+        },
+        {
+          "id": "label-content-name-mismatch",
+          "count": 6,
+          "targets": [
+            [
+              "button[data-date=\"2026-11-10\"]"
+            ],
+            [
+              ".selected"
+            ],
+            [
+              "button[data-date=\"2026-11-16\"]"
+            ],
+            [
+              "button[data-date=\"2026-11-20\"]"
+            ],
+            [
+              "button[data-date=\"2026-11-22\"]"
+            ],
+            [
+              "button[data-date=\"2026-11-30\"]"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "obligations",
+      "label": "baseline",
+      "violations": [
+        {
+          "id": "color-contrast",
+          "count": 4,
+          "targets": [
+            [
+              "#top-add > span"
+            ],
+            [
+              "button[data-action=\"new-entry\"]"
+            ],
+            [
+              "tr:nth-child(2) > .money-cell.pos"
+            ],
+            [
+              "tr:nth-child(5) > .money-cell.pos"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "loans",
+      "label": "baseline",
+      "violations": [
+        {
+          "id": "color-contrast",
+          "count": 3,
+          "targets": [
+            [
+              "#top-add > span"
+            ],
+            [
+              "button[data-action=\"new-loan\"]"
+            ],
+            [
+              "button[data-action=\"pay\"]"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "settings",
+      "label": "baseline",
+      "violations": [
+        {
+          "id": "color-contrast",
+          "count": 3,
+          "targets": [
+            [
+              "#top-add > span"
+            ],
+            [
+              "button[data-action=\"backup\"]"
+            ],
+            [
+              "#category-form > .button-primary[type=\"submit\"]"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "overview",
+      "label": "baseline",
+      "violations": []
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "calendar",
+      "label": "baseline",
+      "violations": [
+        {
+          "id": "label-content-name-mismatch",
+          "count": 6,
+          "targets": [
+            [
+              "button[data-date=\"2026-11-10\"]"
+            ],
+            [
+              ".selected"
+            ],
+            [
+              "button[data-date=\"2026-11-16\"]"
+            ],
+            [
+              "button[data-date=\"2026-11-20\"]"
+            ],
+            [
+              "button[data-date=\"2026-11-22\"]"
+            ],
+            [
+              "button[data-date=\"2026-11-30\"]"
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "obligations",
+      "label": "baseline",
+      "violations": []
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "loans",
+      "label": "baseline",
+      "violations": []
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "settings",
+      "label": "baseline",
+      "violations": []
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "overview",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "calendar",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "obligations",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "loans",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 768,
+      "theme": "light",
+      "view": "settings",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "overview",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "calendar",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "obligations",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "loans",
+      "label": "candidate",
+      "violations": []
+    },
+    {
+      "width": 768,
+      "theme": "dark",
+      "view": "settings",
+      "label": "candidate",
+      "violations": []
+    }
+  ],
+  "errors": [],
+  "screenshots": [
+    "WEBKIT-BEFORE-768-light.png",
+    "WEBKIT-PROPOSAL-768-light.png"
+  ],
+  "webkitVersion": "27.2"
+}
