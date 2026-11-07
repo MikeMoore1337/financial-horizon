@@ -414,7 +414,6 @@ test('cannot fund from negative, fractional, infinite or unbounded available acc
   }
 });
 
-
 test('multiple individually valid contributions can exceed single-operation limit safely', () => {
   const snap = project([
     event('contribution', 'first', '2026-02-01', { amountCents: 900_000_000_000 }),
