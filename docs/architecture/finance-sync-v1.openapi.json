@@ -1,0 +1,1113 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Financial Horizon finance sync API (design-only)",
+    "version": "1.0.0-draft",
+    "description": "Issue #65: не реализовано. Данные приватны; auth SQLite и finance PostgreSQL независимы. Все ответы no-store. Все изменения только через commands; snapshot read-only."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Same-origin only; no cross-project dependency"
+    }
+  ],
+  "security": [
+    {
+      "cookieAuth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "sync"
+    },
+    {
+      "name": "import",
+      "description": "Future milestone #69, not live"
+    }
+  ],
+  "paths": {
+    "/api/finance/v1/state": {
+      "get": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "Consistent server snapshot of the authenticated profile",
+        "responses": {
+          "200": {
+            "description": "Снимок R из одной DB-транзакции",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Snapshot"
+                },
+                "example": {
+                  "schema_version": 1,
+                  "profile_id": "00000000-0000-4000-8000-000000000001",
+                  "revision": 7,
+                  "currency": "RUB",
+                  "entities": [],
+                  "server_at": "2026-11-07T07:00:00Z"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Strong entity tag; treat as opaque, never synthesize on client",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "\"fh.1.7.0ce5\""
+              },
+              "Cache-Control": {
+                "description": "Ответы не должны попадать в публичный кеш",
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Сеанс отсутствует/истёк",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "База временно недоступна",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/finance/v1/changes": {
+      "get": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "Committed revision-ordered deltas; never split a revision across pages",
+        "parameters": [
+          {
+            "name": "since_revision",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Revision"
+            }
+          },
+          {
+            "name": "limit_revisions",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Целые ревизии без разрывов",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Delta"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Ответы не должны попадать в публичный кеш",
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Сеанс истёк",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Курсор устарел: snapshot_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "code": "snapshot_required",
+                  "message": "Перезагрузите снимок"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Временная недоступность",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/finance/v1/commands": {
+      "post": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "Exactly-once effect per profile/client_mutation_id, not exactly-once delivery",
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "Strong ETag from last snapshot/ack. If false => 412 per RFC 9110.",
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "pattern": "^\"[^\"]+\"$"
+            },
+            "example": "\"fh.1.7.0ce5\""
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Must equal request client_mutation_id UUID; no TTL dedupe while profile exists",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "example": "11111111-1111-4111-8111-111111111111"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Command"
+              },
+              "example": {
+                "schema_version": 1,
+                "client_mutation_id": "11111111-1111-4111-8111-111111111111",
+                "base_revision": 7,
+                "action": "account.transfer",
+                "expected_entity_revisions": {
+                  "00000000-0000-4000-8000-000000000101": 3,
+                  "00000000-0000-4000-8000-000000000102": 4
+                },
+                "payload": {
+                  "from_account_id": "00000000-0000-4000-8000-000000000101",
+                  "to_account_id": "00000000-0000-4000-8000-000000000102",
+                  "amount_minor": 25000,
+                  "occurred_on": "2026-11-07"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "ACK также при безопасном повторе того же запроса",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAck"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Strong entity tag; treat as opaque, never synthesize on client",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "\"fh.1.7.0ce5\""
+              },
+              "Cache-Control": {
+                "description": "Ответы не должны попадать в публичный кеш",
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Первое выполнение",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAck"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Strong entity tag; treat as opaque, never synthesize on client",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "\"fh.1.7.0ce5\""
+              },
+              "Cache-Control": {
+                "description": "Ответы не должны попадать в публичный кеш",
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Сеанс отсутствует/истёк",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Нет прав на профиль",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Содержательный конфликт или повторное использование ключа",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "semantic_conflict": {
+                    "value": {
+                      "code": "semantic_conflict",
+                      "message": "Запись изменена на другом устройстве",
+                      "server_revision": 8,
+                      "conflicting_entity_ids": [
+                        "00000000-0000-4000-8000-000000000101"
+                      ]
+                    }
+                  },
+                  "key_reuse": {
+                    "value": {
+                      "code": "idempotency_key_reuse",
+                      "message": "Другая команда с этим идентификатором уже существует"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "If-Match устарел",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "code": "stale_revision",
+                  "message": "Снимок устарел",
+                  "server_revision": 8
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Некорректная финансовая команда",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Обязателен If-Match",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Сервис недоступен; retry exact same command only",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/finance/v1/imports": {
+      "post": {
+        "tags": [
+          "import"
+        ],
+        "summary": "Start staged import only after verified local encrypted backup + explicit user consent",
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "source_sha256",
+                  "source_schema_version",
+                  "base_revision",
+                  "consent_confirmed"
+                ],
+                "properties": {
+                  "source_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "source_schema_version": {
+                    "type": "integer",
+                    "enum": [
+                      1,
+                      2
+                    ]
+                  },
+                  "base_revision": {
+                    "$ref": "#/components/schemas/Revision"
+                  },
+                  "consent_confirmed": {
+                    "type": "boolean",
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Staged batch ID, no financial rows committed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "batch_id",
+                    "status"
+                  ],
+                  "properties": {
+                    "batch_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "const": "staged"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Не авторизован",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Существующий облачный профиль/импорт конфликтует",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Revision mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "If-Match required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/finance/v1/imports/{batch_id}/commit": {
+      "post": {
+        "tags": [
+          "import"
+        ],
+        "summary": "Atomic commit of separately staged/validated records; #69 defines chunk endpoint and detailed mapping",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "confirmed",
+                  "duplicate_policy",
+                  "base_revision"
+                ],
+                "properties": {
+                  "confirmed": {
+                    "const": true,
+                    "type": "boolean"
+                  },
+                  "duplicate_policy": {
+                    "enum": [
+                      "skip_exact",
+                      "cancel"
+                    ]
+                  },
+                  "base_revision": {
+                    "$ref": "#/components/schemas/Revision"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Atomically committed import at next revision; no overwrite",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "revision",
+                    "imported_count",
+                    "skipped_count"
+                  ],
+                  "properties": {
+                    "revision": {
+                      "$ref": "#/components/schemas/Revision"
+                    },
+                    "imported_count": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "skipped_count": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Сеанс отсутствует",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Облачный бюджет/дубликаты конфликтуют",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Revision mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "If-Match required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "cookieAuth": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "fh_email_session",
+        "description": "HttpOnly Secure SameSite cookie, checked via trusted auth adapter; no JS token"
+      }
+    },
+    "schemas": {
+      "Money": {
+        "type": "integer",
+        "format": "int64",
+        "minimum": -1000000000000,
+        "maximum": 1000000000000,
+        "description": "Точное целое число минимальных единиц RUB (копейки); JS Number.isSafeInteger, без float"
+      },
+      "Revision": {
+        "type": "integer",
+        "format": "int64",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "Entity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "entity_revision",
+          "kind",
+          "data"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "account",
+              "obligation",
+              "loan",
+              "reserve",
+              "transaction",
+              "settlement",
+              "loan_payment"
+            ]
+          },
+          "data": {
+            "type": "object",
+            "description": "Версионированный DTO, поля и ограничения по kind; неизвестную будущую schema_version отвергать"
+          }
+        }
+      },
+      "Snapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "profile_id",
+          "revision",
+          "currency",
+          "entities",
+          "server_at"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "profile_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "currency": {
+            "type": "string",
+            "const": "RUB"
+          },
+          "entities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Entity"
+            }
+          },
+          "server_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Change": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revision",
+          "ordinal",
+          "kind",
+          "entity_id",
+          "entity_revision",
+          "payload"
+        ],
+        "properties": {
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "ordinal": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "upsert",
+              "tombstone",
+              "ledger_posted"
+            ]
+          },
+          "entity_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "payload": {
+            "type": "object"
+          }
+        }
+      },
+      "Delta": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "from_revision",
+          "to_revision",
+          "next_since_revision",
+          "has_more",
+          "changes"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "from_revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "to_revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "next_since_revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Change"
+            }
+          }
+        }
+      },
+      "Command": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "client_mutation_id",
+          "base_revision",
+          "action",
+          "expected_entity_revisions",
+          "payload"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "client_mutation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "base_revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "obligation.create",
+              "account.transfer",
+              "loan.payment.record",
+              "reserve.allocate",
+              "transaction.reverse"
+            ]
+          },
+          "expected_entity_revisions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "Map entity UUID -> expected version; must include each dependent existing entity"
+          },
+          "payload": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "title",
+                  "direction",
+                  "amount_minor",
+                  "starts_on",
+                  "timezone",
+                  "recurrence_unit",
+                  "recurrence_every"
+                ],
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160
+                  },
+                  "direction": {
+                    "enum": [
+                      "income",
+                      "expense"
+                    ]
+                  },
+                  "amount_minor": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000000000000
+                  },
+                  "starts_on": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "recurrence_unit": {
+                    "enum": [
+                      "none",
+                      "month",
+                      "year"
+                    ]
+                  },
+                  "recurrence_every": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 120
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "from_account_id",
+                  "to_account_id",
+                  "amount_minor",
+                  "occurred_on"
+                ],
+                "properties": {
+                  "from_account_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "to_account_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "amount_minor": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000000
+                  },
+                  "occurred_on": {
+                    "type": "string",
+                    "format": "date"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "loan_id",
+                  "amount_minor",
+                  "paid_on",
+                  "strategy"
+                ],
+                "properties": {
+                  "loan_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "amount_minor": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000000000000
+                  },
+                  "paid_on": {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  "strategy": {
+                    "enum": [
+                      "term",
+                      "amount"
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "reserve_id",
+                  "account_id",
+                  "delta_minor"
+                ],
+                "properties": {
+                  "reserve_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "account_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "delta_minor": {
+                    "type": "integer",
+                    "minimum": -1000000000000,
+                    "maximum": 1000000000000,
+                    "not": {
+                      "const": 0
+                    }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "transaction_id",
+                  "reason"
+                ],
+                "properties": {
+                  "transaction_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  }
+                }
+              }
+            ],
+            "description": "Сервер выбирает конкретную схему строго по action, не только по форме payload"
+          }
+        }
+      },
+      "CommandAck": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "client_mutation_id",
+          "revision",
+          "replayed",
+          "changes"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "client_mutation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Change"
+            }
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "unauthenticated",
+              "forbidden",
+              "precondition_required",
+              "stale_revision",
+              "semantic_conflict",
+              "idempotency_key_reuse",
+              "snapshot_required",
+              "invalid_command",
+              "rate_limited",
+              "service_unavailable"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "server_revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "conflicting_entity_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      }
+    }
+  }
+}
