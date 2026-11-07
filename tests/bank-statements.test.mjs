@@ -691,3 +691,16 @@ test('audit receipt limits error row detail to 200 and counts all omitted errors
   assert.equal(summary.warningCounts.find(x => x.code === 'BAD_ROW').count, 205);
   assert.equal(JSON.stringify(summary).includes('Sensitive'), false);
 });
+
+
+test('a proposed ready operation with an error warning is blocked at confirmation', async () => {
+  const { preview } = await previewOf(base +
+    '07.11.2026;-100,00;Проверка;Основной;;расход;Питание;ERR-WARNING\n');
+  const reconciled = reconcileBankStatement(preview, []);
+  const key = preview.rows[0].operation.sourceKey;
+  await assert.rejects(draftBankImportBatch({
+    ...reconciled, rows: [{ ...reconciled.rows[0], warnings: [{
+      code: 'INVALID_ACCOUNT', severity: 'error', message: 'Должен быть отказ',
+    }] }],
+  }, [key]), /Нельзя проводить/);
+});
