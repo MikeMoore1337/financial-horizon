@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { build } from 'esbuild';
+import ts from 'typescript';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -7,7 +7,6 @@ import { resolve } from 'node:path';
 const PYTHON = process.env.FH_E2E_PYTHON || (process.platform === 'win32' ? 'py' : 'python3');
 const PYTHON_PREFIX = process.platform === 'win32' && !process.env.FH_E2E_PYTHON ? ['-3'] : [];
 const fixtureScript = resolve('tests/e2e/make_bank_xlsx.py');
-const parserEntrypoint = resolve('src/importers/bank-statements/index.ts');
 const accounts = [
   { id: 'checking', name: 'Основной', currency: 'RUB' },
   { id: 'savings', name: 'Накопительный', currency: 'RUB' },
@@ -20,17 +19,21 @@ async function setup(page, testInfo) {
     if (!request.url().startsWith('http://127.0.0.1:8791/')) external.push(request.url());
     if (request.method() !== 'GET') posts.push(request.url());
   });
-  const bundle = await build({
-    entryPoints: [parserEntrypoint], bundle: true, write: false,
-    platform: 'browser', format: 'esm', target: ['es2022'],
-  });
-  const source = bundle.outputFiles[0].text;
+  const moduleSource = new Map(
+    ['index.ts', 'csv.ts', 'xlsx.ts', 'normalize.ts', 'reconcile.ts', 'types.ts']
+      .map(name => [name, ts.transpileModule(
+        readFileSync(resolve('src/importers/bank-statements', name), 'utf8'),
+        { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } },
+      ).outputText]),
+  );
   await page.route('**/__bank-parser-harness', route => route.fulfill({
     contentType: 'text/html', body: '<!doctype html><html lang="ru"><meta charset="utf-8"><body><div id="preview"></div></body></html>',
   }));
-  await page.route('**/__bank-parser-module.js', route => route.fulfill({
-    contentType: 'text/javascript', body: source,
-  }));
+  await page.route('**/__bank-parser/*.ts', route => {
+    const name = new URL(route.request().url()).pathname.split('/').pop();
+    const body = moduleSource.get(name);
+    return body ? route.fulfill({ contentType: 'text/javascript', body }) : route.abort();
+  });
   await page.goto('http://127.0.0.1:8791/__bank-parser-harness');
   return {
     assertClean() {
@@ -51,7 +54,7 @@ test('native browser safely parses a synthetic XLSX, skips formulas and balances
   const watcher = await setup(page, testInfo);
   const encoded = makeFixture(testInfo);
   const result = await page.evaluate(async ({ encoded, accounts }) => {
-    const mod = await import('/__bank-parser-module.js');
+    const mod = await import('/__bank-parser/index.ts');
     const bytes = Uint8Array.from(atob(encoded), x => x.charCodeAt(0));
     const table = await mod.readBankStatementFile(bytes, { filename: 'synthetic.xlsx' });
     const { mapping } = mod.suggestColumnMapping(table.headers);
@@ -90,7 +93,7 @@ test('native browser rejects bomb, DTD, external parts and corrupt ZIP', async (
   for (const suffix of ['--bomb', '--doctype', '--external', '--corrupt']) {
     const encoded = makeFixture(testInfo, suffix);
     const outcome = await page.evaluate(async encoded => {
-      const mod = await import('/__bank-parser-module.js');
+      const mod = await import('/__bank-parser/index.ts');
       try {
         await mod.readBankStatementFile(Uint8Array.from(atob(encoded), c => c.charCodeAt(0)), {
           filename: 'synthetic.xlsx',
