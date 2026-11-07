@@ -108,11 +108,12 @@ try{
 for(const file of ['index.html','account.html','sw.js','manifest.webmanifest']){
  try{
   const responseHeaders=headers.get(file);
-  if(!responseHeaders?.get('cache-control')?.includes('no-store'))
-   throw Error('missing Cache-Control: no-store; stale HTML can load deleted hashed bundles');
+  const caching=responseHeaders?.get('cache-control')||'';
+  if(!caching.includes('no-store')&&!caching.includes('no-cache'))
+   throw Error('missing Cache-Control: no-store/no-cache; stale HTML can load deleted hashed bundles');
   if(file==='account.html'&&!responseHeaders.get('content-security-policy')?.includes("script-src 'self'"))
    throw Error('account CSP missing');
-  console.log('PASS '+file+' no-store');
+  console.log('PASS '+file+' revalidated HTML/SW cache policy');
  }catch(error){failures++;console.error('FAIL '+file+' headers: '+error.message);}
 }
 try{
