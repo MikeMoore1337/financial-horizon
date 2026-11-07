@@ -5,6 +5,17 @@ import type {
   ReconciliationResult, NormalizedBankOperation,
 } from './types.ts';
 
+function matchesFinancialFields(saved: ExistingBankMovement, current: NormalizedBankOperation): boolean {
+  return saved.accountId === current.accountId &&
+    saved.date === current.date &&
+    saved.amountCents === current.amountCents &&
+    saved.kind === current.kind &&
+    (saved.targetAccountId === undefined ||
+      saved.targetAccountId === current.targetAccountId) &&
+    (saved.category === undefined || saved.category === current.category) &&
+    (saved.currency === undefined || saved.currency === current.currency);
+}
+
 function sameTransfer(a: NormalizedBankOperation, b: NormalizedBankOperation): boolean {
   if (a.kind !== 'transfer' || b.kind !== 'transfer') return false;
   return a.date === b.date && a.amountCents === b.amountCents && (
@@ -36,8 +47,10 @@ export function reconcileBankStatement(
     if (!op) return { ...row, status: 'invalid', existingIds: [] };
     const sourceMatches = active.filter(x => x.sourceKey === op.sourceKey);
     if (sourceMatches.length) {
-      const differs = sourceMatches.some(x => x.fingerprint &&
-        x.fingerprint !== op.fingerprint);
+      const differs = sourceMatches.length !== 1 || sourceMatches.some(x =>
+        !matchesFinancialFields(x, op) ||
+        (x.externalId !== undefined && x.externalId !== null && op.externalId &&
+          x.externalId !== op.externalId));
       return {
         ...row, status: differs ? 'invalid' : 'duplicate',
         existingIds: sourceMatches.map(x => x.id),
@@ -50,7 +63,8 @@ export function reconcileBankStatement(
     const bankIdMatches = op.externalId ? active.filter(x =>
       x.externalId === op.externalId && x.accountId === op.accountId) : [];
     if (bankIdMatches.length) {
-      const changed = bankIdMatches.some(x => x.fingerprint && x.fingerprint !== op.fingerprint);
+      const changed = bankIdMatches.length !== 1 ||
+        bankIdMatches.some(x => !matchesFinancialFields(x, op));
       return {
         ...row, status: changed ? 'invalid' : 'duplicate',
         existingIds: bankIdMatches.map(x => x.id),
@@ -101,11 +115,15 @@ export async function draftBankImportBatch(
   }
   const allow = new Set(explicitlyAcceptedPossibleDuplicates);
   if (allow.size !== explicitlyAcceptedPossibleDuplicates.length) throw new Error('Повторный выбор исключения');
-  const index = new Map(reconciliation.rows.filter(x => x.operation).map(x => [x.operation!.sourceKey, x]));
+  const presentRows = reconciliation.rows.filter(x => x.operation);
+  const index = new Map(presentRows.map(x => [x.operation!.sourceKey, x]));
+  if (index.size !== presentRows.length) {
+    throw new Error('Повторяющиеся исходные ключи в партии импорта');
+  }
   const operations: NormalizedBankOperation[] = [];
   for (const sourceKey of confirmedSourceKeys) {
     const candidate = index.get(sourceKey);
-    if (!candidate?.operation || candidate.status === 'duplicate' || candidate.status === 'invalid') {
+    if (!candidate?.operation || !['ready', 'possible-duplicate'].includes(candidate.status)) {
       throw new Error('Нельзя проводить неизвестную, ошибочную или уже учтённую операцию');
     }
     if (candidate.status === 'possible-duplicate' && !allow.has(sourceKey)) {
@@ -121,12 +139,14 @@ export async function draftBankImportBatch(
   }
   const sorted = [...operations].sort((a, b) => a.sourceKey.localeCompare(b.sourceKey));
   const sourceKeys = Object.freeze(sorted.map(x => x.sourceKey));
-  const confirmation = sorted.map(op => [
-    op.sourceKey, op.accountId, op.targetAccountId || '', op.date,
-    op.kind, op.amountCents, op.category || '', op.externalId || '', op.description,
-  ].join('\u001f')).join('\u001e');
+  // Length-aware JSON encoding prevents separator injection/collisions when
+  // a bank description contains ASCII record/unit separators.
+  const confirmation = JSON.stringify(sorted.map(op => [
+    op.sourceKey, op.accountId, op.targetAccountId, op.date,
+    op.kind, op.amountCents, op.category, op.externalId, op.description,
+  ]));
   return Object.freeze({
-    batchKey: await sha256('bank-import-v1\u001e' + confirmation),
+    batchKey: await sha256('bank-import-v2:' + confirmation),
     sourceKeys, operations: Object.freeze(operations), expectedOperationCount: operations.length,
     journal: Object.freeze(operations.map(op => Object.freeze({
       type: 'planned' as const, sourceKey: op.sourceKey, sourceRow: op.sourceRow,
