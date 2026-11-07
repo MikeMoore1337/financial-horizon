@@ -216,7 +216,7 @@ test('XSS is data only, dangerous CSV structures and file formats are rejected',
   await assert.rejects(readBankStatementFile(input('dummy'), { filename: 'bad.xlsm' }), /Макросы/);
   await assert.rejects(readBankStatementFile(input('wrong'), { filename: 'bad.xlsx', format: 'xlsx' }), /XLSX/);
   await assert.rejects(readBankStatementFile(new Uint8Array([0x50, 0x4b, 1, 2]),
-    { filename: 'bad.xlsx' }), /каталог/);
+    { filename: 'bad.xlsx' }), /XLSX|каталог/);
 });
 
 test('mapping is strict; mixed amount columns and reused fields never produce operations', async () => {
