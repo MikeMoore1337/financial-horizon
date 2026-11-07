@@ -431,3 +431,27 @@ test('multiple individually valid contributions can exceed single-operation limi
   assert.equal(snap.totalContributedCents, 1_800_000_000_000);
   assert.equal(snap.fundingGapCents, 0);
 });
+
+
+test('fully funded cycle has no pending payments or zero-value next contribution', () => {
+  const funded = project([], '2026-01-31', { openingReservedCents: 2_400_000 });
+  assert.equal(funded.fundingGapCents, 0);
+  assert.deepEqual(funded.schedule, []);
+  assert.equal(funded.nextContribution, null);
+  const paid = project([
+    event('payment', 'early-full', '2026-02-01', { amountCents: 2_400_000, reservedUsedCents: 0 }),
+  ], '2026-02-01');
+  assert.equal(paid.cyclePaid, true);
+  assert.deepEqual(paid.schedule, []);
+  assert.equal(paid.nextContribution, null);
+});
+
+test('tiny goal defers the first nonzero automatic installment until the final slot', () => {
+  const snap = project([], '2026-01-31', {
+    periodMonths: 3,
+    firstDueDate: '2026-04-30',
+    targetCents: 1,
+  });
+  assert.equal(snap.nextContribution.date, '2026-04-30');
+  assert.equal(snap.nextContribution.amountCents, 1);
+});
