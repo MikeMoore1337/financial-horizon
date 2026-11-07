@@ -34,7 +34,7 @@ def date_serial(when: date) -> str:
 
 def main() -> None:
     if len(sys.argv) not in (2, 3):
-        raise SystemExit("usage: make_bank_xlsx.py OUTPUT [--bomb|--doctype|--external|--corrupt]")
+        raise SystemExit("usage: make_bank_xlsx.py OUTPUT [--bomb|--doctype|--external|--corrupt|--duplicate-row]")
     path = Path(sys.argv[1])
     variant = sys.argv[2] if len(sys.argv) == 3 else ""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -71,6 +71,8 @@ def main() -> None:
             "Накопительный", "перевод", "", "SYN-004",
         ], numeric={1}),
     ]
+    if variant == "--duplicate-row":
+        rows.append(rows[1])
     worksheet = (
         '<?xml version="1.0" encoding="UTF-8"?>'
         '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
