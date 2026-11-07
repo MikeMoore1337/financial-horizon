@@ -54,7 +54,8 @@ latest = {}
 for item in reviews:
     author = item.get("user") or {}
     username = author.get("login")
-    if username and username != "MikeMoore1337":
+    if (username and username != "MikeMoore1337"
+            and item.get("author_association") in ("COLLABORATOR", "MEMBER", "OWNER")):
         latest[username] = item
 if not any(r.get("state") == "APPROVED" and r.get("commit_id") == reviewed
            for r in latest.values()):
@@ -85,6 +86,12 @@ PY
 
 : "${FH_FINANCE_DATA_DIR:?Encrypted mount path required}"
 : "${FH_FINANCE_MAPPER_NAME:?LUKS2 mapper name required}"
+[[ "$FH_FINANCE_DATA_DIR" = /srv/financial-horizon-finance/pgdata ]] ||
+  deny "Only dedicated Financial Horizon data path is permitted"
+[[ "$FH_FINANCE_MAPPER_NAME" = fh-finance-pg ]] ||
+  deny "Only the dedicated Financial Horizon LUKS2 mapper is permitted"
+[[ "${FH_FINANCE_SECRETS_DIR:-/etc/financial-horizon/finance/secrets}" = /etc/financial-horizon/finance/secrets ]] ||
+  deny "Finance secrets cannot be drawn from an unrelated project"
 bash "$root/deploy/postgres/scripts/storage-preflight.sh" ||
   deny "Dedicated encrypted storage gate failed"
 
