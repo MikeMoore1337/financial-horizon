@@ -51,9 +51,11 @@ mkdir -m 700 "$FH_FINANCE_GPG_HOME" "$FH_FINANCE_BACKUP_DIR"
 gpg --homedir "$FH_FINANCE_GPG_HOME" --batch --pinentry-mode loopback \
   --passphrase '' --quick-generate-key \
   'FH Finance CI-only Backup <synthetic@example.invalid>' rsa3072 encr 1d >/dev/null 2>&1
+# Consume the complete GPG listing: awk's early exit can SIGPIPE gpg under
+# `set -o pipefail`, creating an intermittent false CI failure.
 export FH_FINANCE_GPG_RECIPIENT
 FH_FINANCE_GPG_RECIPIENT="$(gpg --homedir "$FH_FINANCE_GPG_HOME" --batch \
-  --with-colons --list-keys | awk -F: '$1=="fpr"{print $10;exit}')"
+  --with-colons --list-keys | awk -F: '$1=="fpr" && !found {print $10; found=1}')"
 test -n "$FH_FINANCE_GPG_RECIPIENT"
 # The CI key has encryption capability; verify GPG can encrypt a message.
 # The actual backup.sh invocation below is the definitive compatibility check.
