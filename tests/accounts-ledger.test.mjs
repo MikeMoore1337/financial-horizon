@@ -153,13 +153,18 @@ test('transfer reversal restores both balances and keeps total assets unchanged'
   assert.equal(s.postings.length, 4);
 });
 
-test('reversal of paid fact preserves link tombstone so new mutation cannot double-charge', () => {
-  let s = create(emptyLedger(id(1)), id(2), 10_000);
-  s = pay(s, id(2), 5_000, { settlementId: id(3) }, id(4));
-  s = reverse(s, id(4), id(5));
-  assert.equal(accountBalanceMinor(s, id(2)), 10_000);
-  assert.equal(s.paymentLinks.length, 1);
-  assert.throws(() => pay(s, id(2), 5_000, { settlementId: id(3) }), /уже проведена/);
+test('standalone reversal of a linked payment is rejected until fact void and ledger reversal can commit together', () => {
+  for (const link of [{ settlementId: id(3) }, { loanPaymentId: id(6) }]) {
+    let s = create(emptyLedger(id(1)), id(2), 10_000);
+    s = pay(s, id(2), 5_000, link, id(4));
+    const before = structuredClone(s);
+    assert.throws(() => reverse(s, id(4), id(5)), /Отмена оплаты требует/);
+    assert.deepEqual(s, before, 'failed reversal must preserve payment fact and original debit');
+    assert.equal(accountBalanceMinor(s, id(2)), 5_000);
+    assert.equal(s.paymentLinks.length, 1);
+    assert.equal(s.transactions.length, 1);
+    assert.throws(() => pay(s, id(2), 5_000, link), /уже проведена/);
+  }
 });
 
 test('negative and zero balances, explicit reserves and overflow thresholds', () => {
