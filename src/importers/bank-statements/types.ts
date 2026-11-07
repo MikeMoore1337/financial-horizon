@@ -101,6 +101,7 @@ export interface ExistingBankMovement {
   kind: BankKind;
   description: string;
   voidedAt?: string | null;
+  importBatchKey?: string | null;
 }
 
 export interface ReconciledBankRow extends OperationPreview {
@@ -121,4 +122,25 @@ export interface ImportBatchPlan {
   sourceKeys: string[];
   operations: NormalizedBankOperation[];
   expectedOperationCount: number;
+  journal: { type: 'planned'; sourceKey: string; sourceRow: number }[];
+}
+
+export interface ImportUndoPlan {
+  batchKey: string;
+  movementIds: string[];
+  expectedOperationCount: number;
+}
+
+export interface AccountBalanceSnapshot {
+  accountId: string;
+  currentCents: number;
+  statementClosingCents?: number;
+}
+
+export interface AccountBalanceProjection {
+  accountId: string;
+  currentCents: number;
+  deltaCents: number;
+  projectedCents: number;
+  discrepancyCents: number | null;
 }
