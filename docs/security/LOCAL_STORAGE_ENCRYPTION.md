@@ -1,0 +1,62 @@
+# Local finance encryption v1 - Financial Horizon #34
+
+**Status: cryptographic foundation only; NO storage/UI integration, migration, feature flag, or production encryption.**
+
+This specification is coordinated with [ADR-0065](../architecture/ADR-0065-cloud-finance-sync.md), #33 (ledger), #66 (PostgreSQL), #68 (offline sync), and #72 (React). It does not change the existing `financial-horizon-browser-v1` database, the v1 backup file format, or any running user account. **Do not close #34 or describe production IndexedDB as encrypted on the basis of this module.**
+
+## Threat model and honest guarantees
+
+| Threat | Protection / limitation |
+| --- | --- |
+| Offline theft/copy of **new encrypted records + key envelopes**, without the passphrase or independent recovery key | AES-256-GCM confidentiality and integrity; recovery key is random 256-bit; guessing a weak user passphrase remains an offline attack (PBKDF2 only slows it). |
+| Different account in the same browser | Separate random DEKs for `account:<32-hex-user-id>` and `guest:<namespace>`. Scope, record identity and schema/revision are bound into authenticated metadata. This is not server authorization. |
+| Ciphertext/metadata modification | AES-GCM 128-bit tag; strict format, canonical base64url, size and KDF limits, verified expected metadata. Fails closed. |
+| Browser restart, no network | With a previously persisted encrypted key envelope, local encrypted records, and the passphrase or recovery key, unlocking requires no backend. This is implemented in the **standalone module**, not yet in a real PWA. |
+| Stolen unlocked session, XSS, malicious extensions, compromised OS/browser, injected JavaScript, screen capture or memory inspection | **Not protected.** JavaScript executing in the origin can read finances while unlocked or intercept a passphrase. Non-extractable Web Crypto keys are not an XSS boundary. `lock()` drops the reference but cannot guarantee physical erasure of strings, OS memory or previously rendered DOM. |
+| Deletion, storage eviction, partial writes, corrupt media, lost keys, weak password, ciphertext replay/rollback | Encryption does not create backup/recovery. A valid older ciphertext remains authentic; anti-rollback requires atomic revision checkpoints and the #68 server reconciliation. Losing both credentials for this keyset permanently prevents local decryption. |
+| Cloud backend / finance API / database operators | **Not E2EE.** ADR #65 processes financial data on a trusted FastAPI/PostgreSQL server. Local encryption only protects encrypted device records; the cloud requires separate encryption/access/retention controls. |
+| Legacy plaintext IndexedDB, browser/network cache, exports, imported spreadsheets, crash traces, SW, browser autofill, unencrypted device backups | **Not protected by this module.** Legacy data must remain accessible until independently backed up and migration is proven; it must never silently be advertised as encrypted. |
+
+## Key lifecycle and encryption format
+
+- **Authentication session:** independent `fh_email_session` cookie / future OAuth. Never fed to the KDF; login/reset password does not silently unlock or regenerate local encryption keys.
+- **Data encryption key (DEK):** random 32-byte per-scope AES-256-GCM key, created with `crypto.getRandomValues`, imported for use as **non-extractable** `CryptoKey`. The temporary raw key is zero-filled after importing and wrapping; JavaScript memory erasure is best-effort only.
+- **Passphrase KEK:** separate user-supplied passphrase, minimum 12 characters, NFC-normalized; PBKDF2-HMAC-SHA256 with 600,000 iterations, fresh 16-byte salt, deriving AES-256-GCM. Derivation cost and possible parameter upgrades require device testing. Do not silently reuse the account login password.
+- **Recovery KEK:** 32 random bytes displayed once as base64url (43 chars), never sent to server or automatically stored. A separate HKDF-SHA256 with fresh 16-byte salt and domain-separated context derives another AES-256-GCM wrapping key. Both wrappers independently encrypt the same DEK with unique 12-byte nonces and 128-bit authentication tags.
+- **Keyset v1 (`financial-horizon.local-keyset`):** `{format,version:1,scope,keyId,passphrase:{kdf,iterations,salt,iv,ciphertext},recovery:{kdf,salt,iv,ciphertext}}`. It may be persisted in the future **without** the passphrase, recovery secret, or unwrapped CryptoKey. Unknown fields, weak KDF parameters, invalid base64url and unsupported versions are rejected. Scope/keyId/slot/KDF salt/iterations are authenticated as AES-GCM additional data.
+- **Record v1 (`financial-horizon.local-record`):** `{format,version:1,algorithm:'AES-256-GCM',scope,keyId,kind,recordId,schemaVersion,revision,iv,ciphertext}`; each call uses a fresh random 96-bit IV and authenticates header fields through AAD; the entire JSON financial payload stays in ciphertext. `scope`, opaque `recordId`, `kind`, revision, ciphertext lengths and `keyId` remain visible. Do **not** place titles, amounts, notes, email addresses, or personally identifying descriptors in record IDs or metadata. Context is supplied again by trusted caller on decrypt; untrusted record metadata cannot select the expected owner/scope.
+- **Lock:** the in-memory vault drops its key on `lock()`; future operations and pending operations which finish after a lock fail closed. Callers must also clear application memory, UI/DOM, history state and queues on logout, account switch, idle lock and tab lifecycle; no local keys in logs, `localStorage`, code, URL, HTTP headers, or analytics.
+- **Passphrase change:** `changeLocalPassphrase` decrypts the existing DEK with a verified old passphrase **or** recovery key, rewraps it and leaves the recovery slot/ciphertext unchanged. New passphrase activation must persist the *new envelope atomically* before treating the operation as complete. This is not tied to server-side password reset.
+
+Web Crypto uses AES-GCM 256-bit with 128-bit tags. Wrapped keys are 32-byte plaintext + 16-byte tag. Unsupported browser/opaque errors fail closed. Plaintext JSON max is 4,000,000 UTF-8 bytes per record. This module does not depend on external KDF packages or paid APIs.
+
+## Proposed unlocking UX - **awaiting owner approval, not implemented**
+
+1. After account authentication (or guest selection), detect whether that **specific** scope has an encrypted local keyset. Do not infer local unlock from a server cookie, and never show previous-user data before unlock.
+2. First opt-in: explain local encryption and offline access, ask for a **separate** passphrase; create keyset; display recovery key **once**, require acknowledgment of safe offline storage; then verify separately encrypted backup and user consent before any actual migration. If canceled, leave original storage unchanged.
+3. Returning unlock: enter local passphrase, or choose recovery key. The recovery key can reset the local passphrase; the server's reset-password email **cannot** recover this DEK. If credentials are absent, show locked status and safe backup/restore options; never wipe local records automatically.
+4. Logout/account switch/manual lock: invalidate the active vault, remove financial view state, stop pending work and isolate the scope. Offline unlock may be permitted only for a *previously provisioned* scope on that device and must not imply a valid server session or permission to sync.
+5. Avoid indefinitely cached unlocked state. Idle timeout, multi-tab coordination and cross-tab revocation are **future integration responsibilities**, not delivered by this PR.
+
+## Controlled migration design - **not yet implemented**
+
+The current IndexedDB database has **structural schema v1** and **financial payload v1/v2**. Its `finance` object store contains legacy keys `state`, `guest-state-v2`, `account-state-v2:<userId>`, and `legacy-account-claim-v2`. `state-migrations.ts` upgrades financial payloads to v2; `backup.js` independently encrypts backup **format v1** with PBKDF2-SHA256 310,000 iterations. Keep both working.
+
+The future #34/#68 integration must introduce **a separate encrypted database/store namespace**, never overwrite the original v1 database in place or claim that old records are gone. Use an explicit, crash-restartable process:
+
+1. **PREFLIGHT:** identify exact authenticated vs guest scope, freeze writes across tabs, capture source revision and all pending offline operations, check storage quota/eviction, and verify `validateState`. Prevent a previous user's scope from becoming another user's import by implicit login.
+2. **BACKUP_VERIFIED:** user intentionally creates an **independent encrypted v1 backup** using `backup.js`; decrypt and validate it again in an isolated roundtrip, with integrity/count/amount checks. Preserve the backup **outside the DB being modified**. Abort on any mismatch.
+3. **PREPARED:** encrypt a complete, schema-versioned snapshot and pending outbox under the scope DEK, verify decrypt/financial invariants in memory, then atomically persist the encrypted candidate and a migration journal in the **new** database. Store no intermediate plaintext in the new database. A crash or quota error before this transaction commits leaves old records unchanged.
+4. **VERIFIED:** reopen the new database in a fresh context, re-unlock with valid credentials, decrypt and compare original record counts, IDs, amounts, revisions and pending outbox. Commit a durable verification marker with source revision, destination revision, keyId and checkpoint; no plaintext hash fingerprints or sensitive logging. A repeated attempt must be idempotent and cannot abandon newer original writes.
+5. **CUTOVER:** with a fresh owner confirmation and consistent cross-tab fence, atomically change the active scope pointer. Only after successfully reading/writing/restarting from the new store can the app enable it for this scope. If anything fails, retain original readable data and restore from verified independent backup as needed. Cloud outbox replay needs #68 idempotency/revision checks.
+6. **CLEANUP:** deleting plaintext source keys, old IDB backing files, or uploaded legacy artifacts is a **separate, explicit, irreversible-for-old-clients user decision** after verified backup and rollback drill. Browsers may retain obsolete database file pages; application-level deletion cannot guarantee secure physical erasure. Don't automatically mark #34 done merely because the new format exists.
+
+Rollback before cleanup can point back to the unchanged old database **only after checking for post-cutover changes**; do not silently discard updates made in the encrypted store. Old clients cannot read encrypted state, so pin safe compatible deployment builds and keep a decrypt-and-export recovery path. Do not turn on cloud finance synchronization during local migration or send local plaintext without informed consent.
+
+## Test / release gates
+
+**Implemented in this isolated PR:** Node-based positive and adversarial AES-GCM tests; wrong password/recovery, damaged ciphertext/IV, altered authenticated metadata, KDF downgrade, extra-field rejection, cross-account/guest isolation, passphrase reset, lock/restart with re-provisioned key, no-network operation, no plaintext in keyset/encrypted record, simulated interruption before commit; v1 backup decryption → v1/v2 migration → encrypted new snapshot (compatibility test). Dedicated TypeScript check.
+
+**NOT VERIFIED / BLOCKED until integration with #33, #66, #68:** real IndexedDB/Chromium/WebKit and installed PWA encryption; multi-tab/logout/idle policies and physical key lifecycle; restart in Safari/iOS/desktop; offline queued operations after refresh; atomic migration and interrupted **IndexedDB transaction**; migrated DB plaintext scan (including old source), recovered browser profile, independent encrypted backup stored outside IndexedDB; cross-device consent, audit and account switch; migration rollback with new writes; production deployment with exact SHA, monitoring and verified restore.
+
+**Release rules:** keep standalone code dormant during review; no import into `app.js`/React/storage/SW, no feature flag to activate encrypted storage. Independent security reviewer must review the **exact final SHA** and threat model; verify on real browsers and production-like synthetic data. Production deployment requires explicit approval, exact SHA, verified backup/rollback and post-deploy proof. Only then may Issue #34 be closed.
