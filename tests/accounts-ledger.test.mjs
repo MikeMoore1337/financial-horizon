@@ -343,3 +343,24 @@ test('failed correction never leaves a partial reversal and rejects linked payme
     replacement: { id: id(10), kind: 'expense', accountId: id(2), signedMinor: -3_000, occurredOn: '2026-11-07' },
   }, expectFor(s, id(2), id(8))), /недоступно/);
 });
+
+test('account name/type updates preserve real balance and reject stale entity revisions', () => {
+  let s = create(emptyLedger(id(1)), id(2), 2_000);
+  s = record(s, id(2), 'expense', -500);
+  const previous = structuredClone(s);
+  s = apply(s, 'account.update', { accountId: id(2), name: '  Основная карта  ', kind: 'card' }, expectFor(s, id(2)));
+  assert.equal(s.accounts[0].name, 'Основная карта');
+  assert.equal(s.accounts[0].kind, 'card');
+  assert.equal(accountBalanceMinor(s, id(2)), 1_500);
+  assert.equal(s.postings.length, previous.postings.length);
+  assert.equal(previous.accounts[0].kind, 'bank');
+  assert.throws(() => apply(s, 'account.update', { accountId: id(2), name: 'Старый запрос', kind: 'cash' }, expectFor(previous, id(2))), /Конфликт/);
+});
+
+test('account update refuses invalid metadata or updates to archived accounts', () => {
+  let s = create(emptyLedger(id(1)), id(2), 100);
+  assert.throws(() => apply(s, 'account.update', { accountId: id(2), name: '   ', kind: 'card' }, expectFor(s, id(2))), /текст/);
+  assert.throws(() => apply(s, 'account.update', { accountId: id(2), name: 'Счёт', kind: 'crypto' }, expectFor(s, id(2))), /тип/);
+  s = apply(s, 'account.archive', { accountId: id(2), archivedAt: '2026-11-07T10:00:00.000Z' }, expectFor(s, id(2)));
+  assert.throws(() => apply(s, 'account.update', { accountId: id(2), name: 'Счёт', kind: 'bank' }, expectFor(s, id(2))), /недоступен/);
+});
