@@ -142,7 +142,8 @@ test('fixed contributions cap at remaining gap and never force overfunding', () 
     contributionMode: 'fixed',
     fixedMonthlyCents: 60,
   });
-  assert.deepEqual(snap.schedule.map((x) => x.amountCents).slice(0, 3), [60, 40, 0]);
+  assert.deepEqual(snap.schedule.map((x) => x.amountCents), [60, 40]);
+  assert.deepEqual(snap.nextContribution, { date: '2026-02-28', amountCents: 60 });
   assert.equal(snap.projectedShortfallCents, 0);
 });
 
