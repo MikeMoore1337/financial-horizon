@@ -43,6 +43,8 @@ test('Russian bank CSV importer preserves amounts and reconciliation reports per
   const calculated = calculateLoan(terms, [], { mode: 'plan' });
   const result = reconcileLoanSchedule(calculated.rows, imported);
   assert.equal(result.exactMatch, true);
+  assert.equal(result.comparisonComplete, true);
+  assert.equal(result.matchingKnownFields, true);
   assert.equal(result.mismatchedRows, 0);
   assert.equal(result.closureDateDifferenceDays, 0);
 });
@@ -51,7 +53,10 @@ test('CSV with absent optional columns does not invent interest or principal del
   const csv = 'Date;Payment;Balance\n2026-02-01;5074,10;5027,82\n2026-03-01;5074,10;0\n';
   const imported = parseSchedule(csv);
   const result = reconcileLoanSchedule(calculateLoan(terms, [], { mode: 'plan' }).rows, imported);
-  assert.equal(result.exactMatch, true);
+  assert.equal(result.matchingKnownFields, true);
+  assert.equal(result.comparisonComplete, false);
+  assert.equal(result.exactMatch, false);
+  assert.deepEqual(result.rows[0].missingFields, ['interestCents', 'principalCents']);
   assert.ok(result.rows.every(r => r.interestDeltaCents === null && r.principalDeltaCents === null));
 });
 
