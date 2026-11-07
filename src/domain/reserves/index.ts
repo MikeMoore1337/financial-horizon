@@ -440,9 +440,17 @@ export function assessReserveContribution(amountCents: number, unreservedAvailab
   readonly shortfallCents: number;
 } {
   money(amountCents, 'Запрашиваемое пополнение', true);
-  money(unreservedAvailableCents, 'Доступные незарезервированные средства');
+  // #33 permits explicitly overdrawn accounts and signed available balances.
+  // The preview must report their deficit rather than reject them as corrupt data.
+  if (!Number.isSafeInteger(unreservedAvailableCents)) {
+    throw new RangeError('Доступная сумма должна быть целым числом копеек');
+  }
+  const shortfallCents = Math.max(0, amountCents - unreservedAvailableCents);
+  if (!Number.isSafeInteger(shortfallCents)) {
+    throw new RangeError('Дефицит превышает допустимый диапазон копеек');
+  }
   return {
     canFund: amountCents <= unreservedAvailableCents,
-    shortfallCents: Math.max(0, amountCents - unreservedAvailableCents),
+    shortfallCents,
   };
 }
