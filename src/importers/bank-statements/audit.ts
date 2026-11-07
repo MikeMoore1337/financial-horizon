@@ -22,7 +22,9 @@ export function summarizeBankImportAudit(
   let ready = 0, duplicate = 0, possibleDuplicate = 0, invalid = 0;
   const selected = new Set(batch?.sourceKeys || []);
   if (batch && (batch.sourceKeys.length !== batch.expectedOperationCount ||
-      new Set(batch.sourceKeys).size !== selected.size)) {
+      batch.operations.length !== batch.expectedOperationCount ||
+      new Set(batch.sourceKeys).size !== batch.sourceKeys.length ||
+      batch.operations.some(op => !selected.has(op.sourceKey)))) {
     throw new Error('Некорректная импортная партия для журнала');
   }
   for (const row of reconciliation.rows) {
