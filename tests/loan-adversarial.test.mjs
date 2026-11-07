@@ -30,7 +30,7 @@ test('full settlement on the scheduled due date is retained as the last factual 
     { date: '2026-02-01', amountCents: 100_000,
       principalCents: 100_000, balanceCents: 0 },
   ]);
-  const compared = reconcileLoanSchedule(result.rows, [{
+  const compared = reconcileLoanSchedule(result, [{
     date: '2026-02-01', amountCents: 100_000, interestCents: 0,
     principalCents: 100_000, balanceCents: 0,
   }]);
@@ -45,6 +45,14 @@ test('full early settlement is never falsely dated as the next scheduled install
   assert.equal(result.paidOffDate, '2026-01-10');
   assert.equal(result.rows.length, 0);
   assert.equal(result.actualOpenPeriod?.amountCents, 100_000);
+  const comparison = reconcileLoanSchedule(result, [{
+    date: '2026-01-10', amountCents: 100_000, interestCents: 0,
+    principalCents: 100_000, balanceCents: 0,
+  }]);
+  assert.equal(comparison.calculatedClosureDate, '2026-01-10');
+  assert.equal(comparison.importedClosureDate, '2026-01-10');
+  assert.equal(comparison.closureDateDifferenceDays, 0);
+  assert.equal(comparison.exactMatch, false); // No matching installment row for an extra payment.
 });
 
 test('stable, deterministic, seeded amortization conservation across 100 synthetic cases', () => {
