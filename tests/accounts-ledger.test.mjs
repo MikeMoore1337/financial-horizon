@@ -284,3 +284,62 @@ test('archivedAt rejects non-ISO timestamps rather than trusting Date.parse coer
     assert.throws(() => apply(s, 'account.archive', { accountId: id(2), archivedAt }, expectFor(s, id(2))), /Неверная дата/);
   }
 });
+
+test('single-command correction writes compensation and replacement atomically with one revision', () => {
+  let state = create(emptyLedger(id(1)), id(2), 10_000);
+  state = record(state, id(2), 'expense', -500, id(3));
+  const beforeRevision = state.revision;
+  const c = command(state, 'transaction.correct', {
+    originalTransactionId: id(3), reversalId: id(4), reason: 'Уточнена сумма',
+    occurredOn: '2026-11-07',
+    replacement: { id: id(5), kind: 'expense', accountId: id(2), signedMinor: -700, occurredOn: '2026-11-07' },
+  }, expectFor(state, id(3), id(2)), id(6));
+  const applied = applyLedgerCommand(state, c, context(state.profileId));
+  assert.equal(applied.state.revision, beforeRevision + 1);
+  assert.equal(applied.state.transactions.length, 3);
+  assert.equal(applied.state.postings.length, 3);
+  assert.deepEqual(applied.state.postings.map(p => p.signedMinor), [-500, 500, -700]);
+  assert.equal(applied.state.transactions[1].reversedTransactionId, id(3));
+  assert.equal(accountBalanceMinor(applied.state, id(2)), 9_300);
+  assert.equal(monthlyCashFlowMinor(applied.state, '2026-11').expenseMinor, 700);
+  assert.equal(applyLedgerCommand(applied.state, c, context(state.profileId)).replayed, true);
+  assert.throws(() => applyLedgerCommand(applied.state, { ...c, clientMutationId: unique(), baseRevision: applied.state.revision }, context(state.profileId)), /отменена|Конфликт/);
+  assert.equal(accountBalanceMinor(state, id(2)), 9_500);
+});
+
+test('transfer correction keeps two accounts balanced and the aggregate sum constant', () => {
+  let s = create(emptyLedger(id(1)), id(2), 20_000);
+  s = create(s, id(3), 5_000);
+  s = transfer(s, id(2), id(3), 500, id(4));
+  s = apply(s, 'transaction.correct', {
+    originalTransactionId: id(4), reversalId: id(5), reason: 'Исправлен перевод', occurredOn: '2026-11-07',
+    replacement: {
+      id: id(6), kind: 'transfer', fromAccountId: id(2), toAccountId: id(3),
+      amountMinor: 800, occurredOn: '2026-11-07',
+    },
+  }, expectFor(s, id(2), id(3), id(4)));
+  assert.equal(accountBalanceMinor(s, id(2)), 19_200);
+  assert.equal(accountBalanceMinor(s, id(3)), 5_800);
+  assert.equal(totalBalanceMinor(s), 25_000);
+  assert.equal(s.transactions.length, 3);
+  assert.equal(s.postings.length, 6);
+  assert.deepEqual(monthlyCashFlowMinor(s, '2026-11'), { incomeMinor: 0, expenseMinor: 0 });
+});
+
+test('failed correction never leaves a partial reversal and rejects linked payment edits', () => {
+  let s = create(emptyLedger(id(1)), id(2), 10_000);
+  s = record(s, id(2), 'expense', -500, id(3));
+  const prior = structuredClone(s);
+  for (const signedMinor of [0, 1, 1.1, MAX_MINOR + 1]) {
+    assert.throws(() => apply(s, 'transaction.correct', {
+      originalTransactionId: id(3), reversalId: id(4), reason: 'Тест', occurredOn: '2026-11-07',
+      replacement: { id: id(5), kind: 'expense', accountId: id(2), signedMinor, occurredOn: '2026-11-07' },
+    }, expectFor(s, id(2), id(3))));
+  }
+  assert.deepEqual(s, prior, 'source must not contain the temporary reversal after errors');
+  s = pay(s, id(2), 2_000, { loanPaymentId: id(7) }, id(8));
+  assert.throws(() => apply(s, 'transaction.correct', {
+    originalTransactionId: id(8), reversalId: id(9), reason: 'Нельзя без изменения факта', occurredOn: '2026-11-07',
+    replacement: { id: id(10), kind: 'expense', accountId: id(2), signedMinor: -3_000, occurredOn: '2026-11-07' },
+  }, expectFor(s, id(2), id(8))), /недоступно/);
+});
