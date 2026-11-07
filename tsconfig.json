@@ -21,7 +21,8 @@
     "src/types/**/*.ts",
     "state-migrations.ts",
     "src/react/**/*.tsx",
-    "tests/react/**/*.tsx"
+    "tests/react/**/*.tsx",
+    "src/domain/accounts/**/*.ts"
   ],
   "exclude": ["dist", "node_modules", "backend", "tests"]
 }
