@@ -145,8 +145,12 @@ async function unlockRaw(keyset: LocalKeysetV1, credential: {passphrase: string}
     throw Error('Требуется один локальный ключ разблокирования');
   }
   const slotName = 'passphrase' in credential ? 'passphrase' : 'recovery';
-  if (slotName === 'passphrase' && typeof (credential as {passphrase: string}).passphrase !== 'string') {
-    throw Error('Неверный ключ или повреждённые данные');
+  if (slotName === 'passphrase') {
+    const supplied = (credential as {passphrase: string}).passphrase;
+    // Reject oversized/unusable inputs before running an expensive PBKDF2 derivation.
+    if (typeof supplied !== 'string' || supplied.length > 1024 || supplied.normalize('NFC').length < 12) {
+      throw Error('Неверный ключ или повреждённые данные');
+    }
   }
   const slot = keyset[slotName];
   const salt = unb64(slot.salt, 16, 32);
@@ -184,6 +188,9 @@ export class LocalVault {
     this.#key = key;
     this.scope = scope;
     this.keyId = keyId;
+    // `readonly` has no runtime meaning in JavaScript; isolate the scope binding.
+    // Private #key/#generation fields remain mutable so lock() still works.
+    Object.freeze(this);
   }
   get unlocked(): boolean { return this.#key !== null; }
   lock(): void { this.#generation++; this.#key = null; }
@@ -194,12 +201,14 @@ export class LocalVault {
     const plain = JSON.stringify(value);
     if (typeof plain !== 'string') throw Error('Нельзя зашифровать пустое значение');
     const bytes = encoder.encode(plain);
-    if (bytes.length > MAX_PLAINTEXT) throw Error('Финансовая запись слишком большая');
-    const iv = random(12);
-    const header = {format: RECORD_FORMAT, version: VERSION, algorithm: 'AES-256-GCM', scope: this.scope, keyId: this.keyId, kind: context.kind, recordId: context.recordId, schemaVersion: context.schemaVersion, revision: context.revision} as const;
+    let iv: Uint8Array<ArrayBuffer>;
     let encrypted: ArrayBuffer;
-    try { encrypted = await webCrypto().subtle.encrypt({name: 'AES-GCM', iv, additionalData: aadRecord(header), tagLength: 128}, key, bytes); }
-    finally { bytes.fill(0); }
+    const header = {format: RECORD_FORMAT, version: VERSION, algorithm: 'AES-256-GCM', scope: this.scope, keyId: this.keyId, kind: context.kind, recordId: context.recordId, schemaVersion: context.schemaVersion, revision: context.revision} as const;
+    try {
+      if (bytes.length > MAX_PLAINTEXT) throw Error('Финансовая запись слишком большая');
+      iv = random(12);
+      encrypted = await webCrypto().subtle.encrypt({name: 'AES-GCM', iv, additionalData: aadRecord(header), tagLength: 128}, key, bytes);
+    } finally { bytes.fill(0); }
     if (this.#generation !== generation) throw Error('Локальный бюджет заблокирован');
     return {...header, iv: b64(iv), ciphertext: b64(new Uint8Array(encrypted))};
   }

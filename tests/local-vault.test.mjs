@@ -178,3 +178,22 @@ test('pending encryption and decryption reject results if lock occurs mid-operat
   other.lock();
   await assert.rejects(inflightDecrypt, /заблокирован/);
 });
+
+
+test('vault scope and keyId are immutable in JavaScript but lock remains usable', async () => {
+  const {vault, keyset} = await createLocalKeyset(user1, pass);
+  assert.ok(Object.isFrozen(vault), 'runtime scope identity must not be reassigned');
+  assert.throws(() => { vault.scope = user2; }, TypeError);
+  assert.throws(() => { vault.keyId = keyset.keyId + 'A'; }, TypeError);
+  assert.equal(vault.scope, user1);
+  const record = await vault.encrypt(finance, context);
+  assert.deepEqual(await vault.decrypt(record, context), finance);
+  vault.lock();
+  await assert.rejects(() => vault.decrypt(record, context), /заблокирован/);
+});
+
+test('unlock rejects oversize and too-short passphrases before KDF work', async () => {
+  const {keyset} = await createLocalKeyset(user1, pass);
+  await assert.rejects(() => unlockLocalKeyset(keyset, {passphrase: 'x'.repeat(1025)}, user1), /Неверный ключ/);
+  await assert.rejects(() => unlockLocalKeyset(keyset, {passphrase: 'short'}, user1), /Неверный ключ/);
+});
