@@ -108,10 +108,12 @@ for secret in admin_password migrator_password runtime_password; do
     [[ "$(stat -c %u "$path")" = 999 ]] || deny "Secret must belong to PostgreSQL UID 999"
     [[ "$(wc -c < "$path")" -ge 32 ]] || deny "Secret is too short"
 done
-[[ -f /etc/financial-horizon/finance/backup.env ]] ||
+backup_env=/etc/financial-horizon/finance/backup.env
+[[ -f "$backup_env" && ! -L "$backup_env" ]] ||
   deny "Encrypted backup and offsite settings missing"
-[[ "$(stat -c %a /etc/financial-horizon/finance/backup.env)" = 600 ]] ||
-  deny "Offsite configuration file must be mode 0600"
+[[ "$(stat -c %a "$backup_env")" = 600 &&
+   "$(stat -c %u "$backup_env")" = 0 ]] ||
+  deny "Offsite configuration must be root-owned and mode 0600"
 # Source only the root-protected reviewed deployment environment.
 set -a
 source /etc/financial-horizon/finance/backup.env
@@ -121,10 +123,14 @@ for var in FH_FINANCE_GPG_RECIPIENT FH_FINANCE_GPG_HOME FH_FINANCE_BACKUP_DIR \
            FH_FINANCE_OFFSITE_SSH_KEY FH_FINANCE_OFFSITE_KNOWN_HOSTS; do
     [[ -n "${!var:-}" ]] || deny "Mandatory backup/offsite setting missing: $var"
 done
-[[ -d "$FH_FINANCE_GPG_HOME" && -d "$FH_FINANCE_BACKUP_DIR" ]] ||
+[[ -d "$FH_FINANCE_GPG_HOME" && ! -L "$FH_FINANCE_GPG_HOME" &&
+   -d "$FH_FINANCE_BACKUP_DIR" && ! -L "$FH_FINANCE_BACKUP_DIR" ]] ||
   deny "GPG keyring or private encrypted backup directory missing"
-[[ "$(stat -c %a "$FH_FINANCE_BACKUP_DIR")" = 700 ]] ||
-  deny "Backup directory must be 0700"
+for protected_dir in "$FH_FINANCE_GPG_HOME" "$FH_FINANCE_BACKUP_DIR"; do
+  [[ "$(stat -c %a "$protected_dir")" = 700 &&
+     "$(stat -c %u "$protected_dir")" = 0 ]] ||
+    deny "Protected backup directories must be root-owned and mode 0700"
+done
 gpg --homedir "$FH_FINANCE_GPG_HOME" --batch --list-keys "$FH_FINANCE_GPG_RECIPIENT" >/dev/null ||
   deny "Public backup encryption key is not provisioned"
 
@@ -147,6 +153,17 @@ rls="$(docker exec -u postgres fh-finance-postgres psql -U postgres -d fh_financ
   WHERE n.nspname='finance' AND c.relkind='r' AND c.relname<>'alembic_version'
     AND c.relrowsecurity AND c.relforcerowsecurity")"
 [[ "$rls" = 15 ]] || deny "FORCE RLS incomplete"
+least_privilege="$(docker exec -u postgres fh-finance-postgres psql -U postgres -d fh_finance -Atc "
+  SELECT NOT rolsuper AND NOT rolbypassrls AND NOT rolcreatedb
+     AND NOT rolcreaterole AND rolcanlogin
+  FROM pg_roles WHERE rolname='fh_finance_runtime'")"
+[[ "$least_privilege" = t ]] || deny "Finance runtime role is privileged"
+runtime_grants="$(docker exec -u postgres fh-finance-postgres psql -U postgres -d fh_finance -Atc "
+  SELECT NOT has_schema_privilege('fh_finance_runtime', 'finance', 'CREATE')
+     AND NOT has_table_privilege('fh_finance_runtime','finance.ledger_transactions','DELETE')
+     AND NOT has_column_privilege('fh_finance_runtime','finance.accounts','profile_id','UPDATE')
+     AND NOT has_column_privilege('fh_finance_runtime','finance.accounts','id','UPDATE')")"
+[[ "$runtime_grants" = t ]] || deny "Finance runtime DDL/DELETE/tenant UPDATE permission leak"
 [[ -z "$(docker port fh-finance-postgres)" ]] ||
   deny "Unexpected PostgreSQL public port"
 
