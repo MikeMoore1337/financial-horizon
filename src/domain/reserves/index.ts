@@ -400,6 +400,7 @@ export function calculateReserve(
     let remaining = fundingGapCents;
     for (const date of slots) {
       const amountCents = Math.min(remaining, def.fixedMonthlyCents!);
+      if (amountCents === 0) break; // Fully funded: no phantom zero contributions.
       schedule.push({ date, amountCents });
       remaining -= amountCents;
     }
