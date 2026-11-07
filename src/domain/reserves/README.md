@@ -44,6 +44,24 @@ kopecks, nonnegative and bounded; never convert to floating-point rubles for mat
 `assessReserveContribution(amountCents, unreservedAvailableCents)` is only a
 **preview**, not an authorization to transfer or spend.
 
+## Advisory XLSX recurrence recognition
+
+`parseReservePeriodHint(note)` in `import-suggestions.ts` is **independent**
+of the existing XLSX importer. It recognizes Russian annotations such as
+`раз в 3 мес`, `ежегодно`, `каждые 2 года`, and validates 1..60 months.
+It returns a `suggestion` with `confirmationRequired: true` or an
+`invalid` status for conflicting/out-of-range notes; unrelated descriptions
+return `null`.
+
+**It does not create a reserve, alter an existing imported expense, infer
+a payment date, move money, or write any finance state.** The eventual
+`excel-import.js` integration must present a read-only suggestion with the
+original row and require explicit user confirmation for amount, account,
+next due date, and how to treat the old one-time expense. The imported row
+must not become a duplicate obligation when confirmed. This connection
+remains blocked until the agreed #33 ledger/persistence contract and the
+separate approved UI implementation.
+
 ## Required integration gate with #33
 
 Do **not** independently write to `finance.js`, `ledger-operations.js`, `storage.js`,
