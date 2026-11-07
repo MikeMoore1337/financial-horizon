@@ -11,9 +11,11 @@ test -d "$KEYRING"
 test -d "$BACKUP_DIR"
 test "$(stat -c %a "$BACKUP_DIR")" = "700"
 docker inspect -f '{{.State.Running}}' fh-finance-postgres | grep -qx true
-stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+# Nanoseconds prevent same-second collisions on consecutive backups.
+stamp="$(date -u +%Y%m%dT%H%M%S%NZ)"
 file="$BACKUP_DIR/fh-finance-$stamp.pgdump.gpg"
 temp="$file.partial"
+test ! -e "$file" && test ! -e "$temp"
 trap 'rm -f "$temp"' EXIT
 docker exec -u postgres fh-finance-postgres \
   pg_dump -U postgres --format=custom --no-owner --no-acl --dbname=fh_finance \
@@ -21,8 +23,19 @@ docker exec -u postgres fh-finance-postgres \
     --recipient "$FH_FINANCE_GPG_RECIPIENT" --encrypt --output "$temp"
 test -s "$temp"
 chmod 600 "$temp"
-mv -n "$temp" "$file"
+mv --no-clobber "$temp" "$file"
+# GNU mv --no-clobber may return success without moving on collisions.
+test ! -e "$temp" && test -s "$file"
 trap - EXIT
-# Do not remove the last known-good encrypted backup.
-find "$BACKUP_DIR" -maxdepth 1 -type f -name 'fh-finance-*.pgdump.gpg' -mtime +30 -print0 \
-  | xargs -0 -r rm --
+
+# Retain the three newest archives regardless of age; prune the rest only
+# after 30 days. An older verified recovery point is never replaced silently.
+mapfile -d '' -t entries < <(
+  find "$BACKUP_DIR" -maxdepth 1 -type f -name 'fh-finance-*.pgdump.gpg' -printf '%T@ %p\0' | sort -z -nr
+)
+for ((i = 3; i < ${#entries[@]}; i++)); do
+  candidate="${entries[$i]#* }"
+  if test -f "$candidate" && test -n "$(find "$candidate" -mtime +30 -print -quit)"; then
+    rm -- "$candidate"
+  fi
+done

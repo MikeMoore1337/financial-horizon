@@ -73,8 +73,13 @@ test -n "$FH_FINANCE_GPG_RECIPIENT"
 # The CI key has encryption capability; verify GPG can encrypt a message.
 # The actual backup.sh invocation below is the definitive compatibility check.
 bash deploy/postgres/scripts/backup.sh
+# Repeated backups cannot collide, overwrite or leave partial files.
+bash deploy/postgres/scripts/backup.sh
+actual_archives="$(find "$FH_FINANCE_BACKUP_DIR" -maxdepth 1 -name 'fh-finance-*.pgdump.gpg' -type f | wc -l)"
+test "$actual_archives" -eq 2
+test -z "$(find "$FH_FINANCE_BACKUP_DIR" -maxdepth 1 -name '*.partial' -print -quit)"
 encrypted="$(find "$FH_FINANCE_BACKUP_DIR" -maxdepth 1 -type f \
-  -name 'fh-finance-*.pgdump.gpg' -print -quit)"
+  -name 'fh-finance-*.pgdump.gpg' -printf '%T@ %p\n' | sort -nr | sed -n '1s/^[^ ]* //p')"
 test -n "$encrypted"
 bash deploy/postgres/scripts/restore-drill.sh "$encrypted"
 echo "CI_PRODUCTION_BACKUP_RESTORE_PASS: GPG-encrypted full backup restored in isolated networkless PostgreSQL"
