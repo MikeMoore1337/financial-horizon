@@ -5,12 +5,14 @@ import { Calendar, type CalendarProps } from './Calendar';
 import { Overview, type OverviewProps } from './Overview';
 import { Obligations, type ObligationsProps } from './Obligations';
 import { Loans, type LoansProps } from './Loans';
+import { Settings, type SettingsProps } from './Settings';
 
 export type ScreenView =
   | { view: 'calendar'; props: CalendarProps }
   | { view: 'overview'; props: OverviewProps }
   | { view: 'obligations'; props: ObligationsProps }
-  | { view: 'loans'; props: LoansProps };
+  | { view: 'loans'; props: LoansProps }
+  | { view: 'settings'; props: SettingsProps };
 
 /** One React owner for any migrated screen, never shared with legacy innerHTML. */
 export function createScreenRoot(host: HTMLElement) {
@@ -27,8 +29,10 @@ export function createScreenRoot(host: HTMLElement) {
               <Overview {...screen.props} />
             ) : screen.view === 'obligations' ? (
               <Obligations {...screen.props} />
-            ) : (
+            ) : screen.view === 'loans' ? (
               <Loans {...screen.props} />
+            ) : (
+              <Settings {...screen.props} />
             )}
           </StrictMode>,
         ),
