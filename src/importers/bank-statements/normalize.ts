@@ -300,9 +300,11 @@ export async function normalizeBankStatement(
       entries.push({ rowNumber: row, operation: null, warnings: issues });
       continue;
     }
-    const fingerprint = await sha256([
-      accountId, date.iso, kind, amountCents, targetId || '', norm(description), 'RUB',
-    ].join('\u001f'));
+    // JSON preserves field boundaries even when a bank-provided description
+    // contains control characters such as U+001F (unit separator).
+    const fingerprint = await sha256(JSON.stringify([
+      accountId, date.iso, kind, amountCents, targetId, norm(description), 'RUB',
+    ]));
     const sourceKey = await sha256(table.fileDigest + '\u001f' + row);
     if (sourceKeys.has(fingerprint)) note('REPEATED_CONTENT', 'Совпадающая операция внутри файла - требуется сверка');
     else sourceKeys.set(fingerprint, row);
