@@ -237,16 +237,26 @@ export async function normalizeBankStatement(
       const debit = parseMoney(get(source.cells, 'expense'), options.numberFormat || 'auto');
       const inPresent = credit.issue !== 'EMPTY_AMOUNT';
       const outPresent = debit.issue !== 'EMPTY_AMOUNT';
-      if (inPresent && outPresent) err('CONFLICTING_AMOUNT', 'Заполнены и приход, и расход');
-      else if (inPresent && !credit.issue) {
-        if (credit.negative) err('NEGATIVE_SPLIT_AMOUNT', 'Приход не может быть отрицательным');
-        amountCents = credit.cents; isNegative = false;
-      } else if (outPresent && !debit.issue) {
-        if (debit.negative) err('NEGATIVE_SPLIT_AMOUNT', 'Расход в отдельной колонке должен быть положительным');
-        amountCents = debit.cents; isNegative = true;
+      if (inPresent && credit.issue) err(credit.issue, 'Неверная сумма поступления', 'income');
+      if (outPresent && debit.issue) err(debit.issue, 'Неверная сумма расхода', 'expense');
+      if (inPresent && credit.negative) {
+        err('NEGATIVE_SPLIT_AMOUNT', 'Приход не может быть отрицательным', 'income');
       }
-      else err(credit.issue && inPresent ? credit.issue : debit.issue && outPresent ? debit.issue : 'EMPTY_AMOUNT',
-        'Отсутствует или неверна сумма');
+      if (outPresent && debit.negative) {
+        err('NEGATIVE_SPLIT_AMOUNT', 'Расход в отдельной колонке должен быть положительным', 'expense');
+      }
+      const positiveIncome = !credit.issue && credit.cents !== null && credit.cents > 0;
+      const positiveExpense = !debit.issue && debit.cents !== null && debit.cents > 0;
+      if (positiveIncome && positiveExpense) {
+        err('CONFLICTING_AMOUNT', 'Одновременно указаны положительные приход и расход');
+      } else if (positiveIncome) {
+        amountCents = credit.cents; isNegative = false;
+      } else if (positiveExpense) {
+        amountCents = debit.cents; isNegative = true;
+      } else {
+        err(inPresent || outPresent ? 'ZERO_AMOUNT' : 'EMPTY_AMOUNT',
+          'В колонках прихода и расхода нет ненулевой суммы');
+      }
     }
     if (amountCents === 0) err('ZERO_AMOUNT', 'Нулевая операция не проводится');
     const rawKind = text(get(source.cells, 'kind'));
