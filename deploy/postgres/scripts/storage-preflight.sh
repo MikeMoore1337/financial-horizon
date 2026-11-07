@@ -20,7 +20,9 @@ cryptsetup status "$FH_FINANCE_MAPPER_NAME" >/dev/null 2>&1 ||
   fail "Dedicated LUKS mapper is not active"
 crypttype="$(cryptsetup status "$FH_FINANCE_MAPPER_NAME" | sed -n 's/^ *type: *//p' | head -n 1)"
 [[ "$crypttype" = "LUKS2" ]] || fail "Only LUKS2 encrypted storage is accepted"
-mounted_device="$(findmnt -n -o MAJ:MIN --mountpoint "$FH_FINANCE_DATA_DIR")"
+# findmnt pads output columns on some util-linux versions; normalize both
+# sides before comparing the actual block device major/minor numbers.
+mounted_device="$(findmnt -n -o MAJ:MIN --mountpoint "$FH_FINANCE_DATA_DIR" | tr -d '[:space:]')"
 crypt_device="$(lsblk -dn -o MAJ:MIN "$mapper" | tr -d '[:space:]')"
 [[ -n "$mounted_device" && "$mounted_device" = "$crypt_device" ]] ||
   fail "Mounted device does not match dedicated LUKS2 mapper"
