@@ -27,7 +27,7 @@ function invoke({email='test@example.com',logout,initialBusy=false}={}){
   busy:false,
   activeUserId:'a'.repeat(32),
   authBroadcast:null,
-  calendarRoot:{unmount:()=>events.push('react-unmount')},
+  screenRoot:{unmount:()=>events.push('react-unmount')},
   $:()=>({replaceChildren:()=>events.push('ledger-cleared')}),
   GUEST_MODE_KEY:'fh-guest-session-v2',
   sessionStorage:{removeItem:key=>events.push('storage-remove:'+key)},

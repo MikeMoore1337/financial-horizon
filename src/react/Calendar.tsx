@@ -1,7 +1,3 @@
-import { StrictMode } from 'react';
-import { flushSync } from 'react-dom';
-import { createRoot } from 'react-dom/client';
-
 export interface CalendarEvent {
   id: string;
   title: string;
@@ -25,7 +21,7 @@ export interface CalendarProps {
   rubles: (cents: number) => string;
 }
 
-function Icon({ name }: { name: string }) {
+export function Icon({ name }: { name: string }) {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       <use href={'#ico-' + name} />
@@ -33,7 +29,7 @@ function Icon({ name }: { name: string }) {
   );
 }
 
-function EventRow({
+export function EventRow({
   event,
   rubles,
   formatDate,
@@ -229,24 +225,4 @@ export function Calendar({
       </div>
     </>
   );
-}
-
-/** React owns only #main while Calendar is visible. StrictMode effects cannot write to storage. */
-export function createCalendarRoot(host: HTMLElement) {
-  const root = createRoot(host);
-  return {
-    render(props: CalendarProps) {
-      // Preserve focus timing of the pre-React calendar's keyboard navigation.
-      flushSync(() =>
-        root.render(
-          <StrictMode>
-            <Calendar {...props} />
-          </StrictMode>,
-        ),
-      );
-    },
-    unmount() {
-      root.unmount();
-    },
-  };
 }
