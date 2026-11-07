@@ -26,9 +26,18 @@ export function reconcileBankStatement(
     const op = row.operation;
     if (!op) return { ...row, status: 'invalid', existingIds: [] };
     const sourceMatches = active.filter(x => x.sourceKey === op.sourceKey);
-    if (sourceMatches.length) return {
-      ...row, status: 'duplicate', existingIds: sourceMatches.map(x => x.id),
-    };
+    if (sourceMatches.length) {
+      const differs = sourceMatches.some(x => x.fingerprint &&
+        x.fingerprint !== op.fingerprint);
+      return {
+        ...row, status: differs ? 'invalid' : 'duplicate',
+        existingIds: sourceMatches.map(x => x.id),
+        warnings: differs ? [...row.warnings, {
+          code: 'SOURCE_KEY_CONFLICT', severity: 'error', row: row.rowNumber,
+          message: 'Та же строка уже проведена с другим сопоставлением колонок',
+        } as const] : row.warnings,
+      };
+    }
     const bankIdMatches = op.externalId ? active.filter(x =>
       x.externalId === op.externalId && x.accountId === op.accountId) : [];
     if (bankIdMatches.length) {
@@ -125,6 +134,23 @@ export function draftBankImportUndo(
       new Set(owned.map(x => x.sourceKey)).size !== owned.length ||
       batch.sourceKeys.some(key => !owned.some(x => x.sourceKey === key))) {
     throw new Error('Невозможно безопасно отменить частично изменённую партию');
+  }
+  // A mismatch can indicate manual edits, newly linked payments or a stale
+  // snapshot. This only verifies the proposal; #33 must repeat it atomically.
+  for (const operation of batch.operations) {
+    const record = owned.find(x => x.sourceKey === operation.sourceKey);
+    if (!record || record.linkedPaymentId ||
+        record.fingerprint !== operation.fingerprint ||
+        record.accountId !== operation.accountId ||
+        (record.targetAccountId ?? null) !== operation.targetAccountId ||
+        record.date !== operation.date || record.kind !== operation.kind ||
+        record.amountCents !== operation.amountCents ||
+        record.description !== operation.description ||
+        (record.category ?? null) !== operation.category ||
+        (record.externalId ?? null) !== operation.externalId ||
+        (record.currency ?? 'RUB') !== operation.currency) {
+      throw new Error('Партия изменена или связана с оплатой; требуется ручная сверка');
+    }
   }
   return {
     batchKey: batch.batchKey,
