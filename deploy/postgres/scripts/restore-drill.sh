@@ -33,13 +33,24 @@ fi
 # external to pg_dump and must be provisioned before restoring table ACLs.
 # The disposable role has no password; --network none prevents remote login.
 docker exec "$name" psql -v ON_ERROR_STOP=1 -U postgres -d fh_restore \
+  -c 'CREATE ROLE fh_finance_migrator LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOINHERIT' >/dev/null
+docker exec "$name" psql -v ON_ERROR_STOP=1 -U postgres -d fh_restore \
   -c 'CREATE ROLE fh_finance_runtime LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOINHERIT' >/dev/null
 gpg --homedir "$FH_FINANCE_GPG_HOME" --batch --no-tty --decrypt "$1" \
-  | docker exec -i "$name" pg_restore -U postgres --exit-on-error --no-owner -d fh_restore
+  | docker exec -i "$name" pg_restore -U postgres --exit-on-error -d fh_restore
 # No financial values or identifiers enter public logs.
 count="$(docker exec "$name" psql -U postgres -d fh_restore -Atc \
   "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname='finance' AND tablename <> 'alembic_version'")"
 test "$count" -eq 15
+# The schema must belong to the unprivileged migrator, not the restoring
+# superuser; otherwise the next Alembic upgrade would fail after disaster
+# recovery even if read-only smoke tests appeared healthy.
+test "$(docker exec "$name" psql -U postgres -d fh_restore -Atc \
+  "SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname='finance'")" = "fh_finance_migrator"
+test "$(docker exec "$name" psql -U postgres -d fh_restore -Atc \
+  "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON c.relnamespace=n.oid
+     WHERE n.nspname='finance' AND c.relkind='r' AND c.relname<>'alembic_version'
+       AND pg_get_userbyid(c.relowner)='fh_finance_migrator'")" = "15"
 # The restored ACL and FORCE RLS must permit only scoped data access.
 # Confirm actual source grant survives backup/restore; local trust is safe only
 # in this isolated disposable --network none container.

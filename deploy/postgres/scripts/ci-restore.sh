@@ -11,7 +11,7 @@ dir="$(mktemp -d)"
 trap 'rm -rf "$dir"' EXIT
 export GNUPGHOME="$dir/gnupg"
 mkdir -m 700 "$GNUPGHOME"
-docker exec "$pg" pg_dump -U postgres -d fh_finance_ci -Fc --no-owner |
+docker exec "$pg" pg_dump -U postgres -d fh_finance_ci -Fc |
   gpg --batch --yes --pinentry-mode loopback --passphrase 'CI-ONLY-NOT-A-REAL-SECRET' \
       --symmetric --cipher-algo AES256 --output "$dir/backup.gpg"
 test -s "$dir/backup.gpg"
@@ -19,10 +19,16 @@ docker exec "$pg" createdb -U postgres fh_finance_ci_restore
 gpg --batch --yes --pinentry-mode loopback --passphrase 'CI-ONLY-NOT-A-REAL-SECRET' \
     --decrypt "$dir/backup.gpg" |
   docker exec -i "$pg" pg_restore -U postgres -d fh_finance_ci_restore \
-    --exit-on-error --no-owner
+    --exit-on-error
 tables="$(docker exec "$pg" psql -U postgres -d fh_finance_ci_restore -Atc \
   "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname='finance' AND tablename <> 'alembic_version'")"
 test "$tables" = 15
+test "$(docker exec "$pg" psql -U postgres -d fh_finance_ci_restore -Atc \
+  "SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname='finance'")" = fh_finance_migrator
+test "$(docker exec "$pg" psql -U postgres -d fh_finance_ci_restore -Atc \
+  "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON c.relnamespace=n.oid
+     WHERE n.nspname='finance' AND c.relkind='r' AND c.relname<>'alembic_version'
+       AND pg_get_userbyid(c.relowner)='fh_finance_migrator'")" = 15
 # Verify the source contains data before relying on fail-closed RLS in restore.
 test "$(docker exec "$pg" psql -U postgres -d fh_finance_ci_restore -Atc \
   "SELECT count(*) FROM finance.finance_profiles")" -eq 2
