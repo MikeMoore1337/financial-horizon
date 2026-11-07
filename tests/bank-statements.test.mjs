@@ -145,7 +145,8 @@ test('manual selection, same-file replay, overlapping exports, possible duplicat
     id: String(i + 1), accountId: x.accountId, date: x.date,
     amountCents: x.amountCents, description: x.description,
     kind: x.kind, sourceKey: x.sourceKey, fingerprint: x.fingerprint,
-    externalId: x.externalId, importBatchKey: batch.batchKey,
+    externalId: x.externalId, targetAccountId: x.targetAccountId,
+    category: x.category, currency: x.currency, importBatchKey: batch.batchKey,
   }));
   const replay = reconcileBankStatement(preview, existing);
   assert.equal(replay.duplicates, 2);
@@ -304,4 +305,92 @@ test('batch plan is immutable and confirmation digest covers mapped financial de
   assert.throws(() => { plan.sourceKeys.push('other'); }, TypeError);
   const changed = await draftBankImportBatch(reconciliation, [op.sourceKey]);
   assert.notEqual(changed.batchKey, plan.batchKey);
+});
+
+
+test('positive transfers are blocked without an explicit direction choice', async () => {
+  const csv = base +
+    '08.11.2026;500,00;Входящий перевод;Накопительный;Основной;перевод;;TR-IN\n';
+  const blocked = (await previewOf(csv)).preview;
+  assert.equal(blocked.rejected, 1);
+  assert.ok(blocked.rows[0].warnings.some(x => x.code === 'TRANSFER_DIRECTION_REQUIRED'));
+  const recognized = (await previewOf(csv, { transferDirection: 'signed-source' })).preview;
+  const operation = recognized.rows[0].operation;
+  assert.equal(recognized.accepted, 1);
+  assert.equal(operation.accountId, 'checking');
+  assert.equal(operation.targetAccountId, 'savings');
+  assert.equal(recognized.inflowCents + recognized.outflowCents, 0);
+  const explicit = (await previewOf(csv, { transferDirection: 'from-to' })).preview;
+  assert.equal(explicit.rows[0].operation.accountId, 'savings');
+  assert.equal(explicit.rows[0].operation.targetAccountId, 'checking');
+});
+
+test('non-transfer with two mapped accounts and negative split amounts fail closed', async () => {
+  const mismapped = (await previewOf(base +
+    '08.11.2026;-300;Не перевод;Основной;Накопительный;расход;;A1\n')).preview;
+  assert.equal(mismapped.accepted, 0);
+  assert.ok(mismapped.rows[0].warnings.some(x => x.code === 'TRANSFER_KIND_REQUIRED'));
+  const split = await readBankStatementFile(input(
+    'Дата;Приход;Расход;Счёт\n' +
+    '08.11.2026;-250;;Основной\n' +
+    '09.11.2026;;-250;Основной\n',
+  ));
+  const { mapping } = suggestColumnMapping(split.headers);
+  const result = await normalizeBankStatement(split, { mapping, accounts });
+  assert.equal(result.rejected, 2);
+  assert.ok(result.rows.every(x => x.warnings.some(w => w.code === 'NEGATIVE_SPLIT_AMOUNT')));
+});
+
+test('tampered transaction snapshots and linked payments prevent a bank batch undo', async () => {
+  const { preview } = await previewOf(base +
+    '07.11.2026;-100,00;Тест;Основной;;расход;Питание;UD-1\n');
+  const op = preview.rows[0].operation;
+  const plan = await draftBankImportBatch(reconcileBankStatement(preview, []), [op.sourceKey]);
+  const record = {
+    id: 'saved', importBatchKey: plan.batchKey, sourceKey: op.sourceKey,
+    fingerprint: op.fingerprint, externalId: op.externalId,
+    accountId: op.accountId, targetAccountId: op.targetAccountId,
+    date: op.date, amountCents: op.amountCents, kind: op.kind,
+    description: op.description, category: op.category, currency: 'RUB',
+  };
+  assert.deepEqual(draftBankImportUndo(plan, [record]).movementIds, ['saved']);
+  for (const modified of [
+    { ...record, amountCents: op.amountCents + 1 },
+    { ...record, description: 'Редактировано' },
+    { ...record, date: '2026-11-09' },
+    { ...record, linkedPaymentId: 'settlement-1' },
+    { ...record, category: 'Другая' },
+    { ...record, fingerprint: 'tampered' },
+  ]) {
+    assert.throws(() => draftBankImportUndo(plan, [modified]), /изменена или связана/);
+  }
+});
+
+test('source key replay with changed column mapping is a hard conflict', async () => {
+  const { preview } = await previewOf(base +
+    '07.11.2026;-100,00;Синтетическая;Основной;;расход;Питание;KEY-1\n');
+  const original = preview.rows[0].operation;
+  const modified = { ...original, amountCents: original.amountCents + 100, fingerprint: 'modified' };
+  const attempt = reconcileBankStatement({
+    ...preview, rows: [{ rowNumber: original.sourceRow, operation: modified, warnings: [] }],
+  }, [{
+    id: 'saved', sourceKey: original.sourceKey, fingerprint: original.fingerprint,
+    accountId: original.accountId, date: original.date,
+    kind: original.kind, description: original.description,
+    amountCents: original.amountCents,
+  }]);
+  assert.equal(attempt.invalid, 1);
+  assert.ok(attempt.rows[0].warnings.some(x => x.code === 'SOURCE_KEY_CONFLICT'));
+});
+
+test('invalid trailing timestamp text or time values do not silently become a valid day', async () => {
+  const value = base +
+    '2026-11-07Tnot-time;-3;A;Основной;;расход;Питание;TS-1\n' +
+    '2026-11-07T25:01:00;-4;B;Основной;;расход;Питание;TS-2\n' +
+    '2026-11-07T13:24:10;-5;C;Основной;;расход;Питание;TS-3\n';
+  const { preview } = await previewOf(value);
+  assert.equal(preview.accepted, 1);
+  assert.equal(preview.rejected, 2);
+  assert.equal(preview.rows[2].operation.date, '2026-11-07');
+  assert.ok(preview.rows[1].warnings.some(x => x.code === 'INVALID_TIME'));
 });
