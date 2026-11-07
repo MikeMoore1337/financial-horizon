@@ -494,3 +494,96 @@ test('CSV parsing exposes detected encoding/delimiter and warns about guessed le
   });
   assert.equal(explicit.warnings.some(x => x.code === 'ENCODING_GUESSED'), false);
 });
+
+
+test('Excel sep directive preserves physical CSV row numbers and source keys', async () => {
+  const csv = 'sep=;\n' + base +
+    '07.11.2026;-10,00;Тест;Основной;;расход;Питание;ROW-3\n';
+  const bytes = input(csv);
+  const parsed = readBankCsv(bytes);
+  assert.equal(parsed.headerRowNumber, 2);
+  assert.equal(parsed.rows[0].rowNumber, 3);
+  const table = await readBankStatementFile(bytes, { filename: 'with-sep.csv' });
+  const { mapping } = suggestColumnMapping(table.headers);
+  const preview = await normalizeBankStatement(table, {
+    mapping, accounts, categories: ['Питание'],
+  });
+  assert.equal(preview.accepted, 1);
+  assert.equal(preview.rows[0].rowNumber, 3);
+  assert.equal(preview.rows[0].operation.sourceRow, 3);
+});
+
+test('bank identity checks actual financial fields, not only stale stored fingerprints', async () => {
+  const { preview } = await previewOf(base +
+    '07.11.2026;-100,00;Покупка;Основной;;расход;Питание;BANK-FIELDS-1\n');
+  const original = preview.rows[0].operation;
+  const saved = {
+    id: 'saved', accountId: original.accountId, date: original.date,
+    amountCents: original.amountCents, kind: original.kind,
+    description: original.description, category: original.category,
+    externalId: original.externalId, sourceKey: original.sourceKey,
+    fingerprint: original.fingerprint,
+  };
+  assert.equal(reconcileBankStatement(preview, [saved]).duplicates, 1);
+  // A stale stored fingerprint must never hide a changed booked amount.
+  const edited = { ...saved, amountCents: original.amountCents + 1 };
+  const conflict = reconcileBankStatement(preview, [edited]);
+  assert.equal(conflict.invalid, 1);
+  assert.ok(conflict.rows[0].warnings.some(x => x.code === 'SOURCE_KEY_CONFLICT'));
+  // A category remap of the same physical row also needs manual reconciliation.
+  const changedCategory = { ...saved, category: 'Другое' };
+  assert.equal(reconcileBankStatement(preview, [changedCategory]).invalid, 1);
+  // Bank statement descriptions often change formatting without changing money.
+  const differentDescription = { ...saved, sourceKey: null, fingerprint: 'legacy-other-note' };
+  assert.equal(reconcileBankStatement(preview, [differentDescription]).duplicates, 1);
+  // A matching bank ID with different booked money is a hard conflict, not replay.
+  const alteredAmount = { ...differentDescription, amountCents: 50000 };
+  const byBankId = reconcileBankStatement(preview, [alteredAmount]);
+  assert.equal(byBankId.invalid, 1);
+  assert.ok(byBankId.rows[0].warnings.some(x => x.code === 'EXTERNAL_ID_CONFLICT'));
+});
+
+test('ambiguous or duplicate source keys in a provided reconciliation cannot be submitted', async () => {
+  const { preview } = await previewOf(base +
+    '07.11.2026;-100,00;Тест;Основной;;расход;Питание;DUP-KEY-1\n');
+  const reconciliation = reconcileBankStatement(preview, []);
+  const candidate = reconciliation.rows[0];
+  const key = candidate.operation.sourceKey;
+  await assert.rejects(draftBankImportBatch({
+    ...reconciliation, rows: [candidate, { ...candidate, rowNumber: 99 }],
+  }, [key]), /Повторяющиеся исходные ключи/);
+  await assert.rejects(draftBankImportBatch({
+    ...reconciliation, rows: [{ ...candidate, status: 'unexpected' }],
+  }, [key]), /Нельзя проводить/);
+});
+
+test('control separators in imported descriptions have unambiguous financial hashes', async () => {
+  const raw = base +
+    '07.11.2026;-100;Тест\u001fразделитель;Основной;;расход;Питание;SEP-A\n' +
+    '07.11.2026;-100;Тест\u001eразделитель;Основной;;расход;Питание;SEP-B\n';
+  const { preview } = await previewOf(raw);
+  assert.equal(preview.accepted, 2);
+  assert.notEqual(preview.rows[0].operation.fingerprint, preview.rows[1].operation.fingerprint);
+  const reconciliation = reconcileBankStatement(preview, []);
+  const a = await draftBankImportBatch(reconciliation, [preview.rows[0].operation.sourceKey]);
+  const b = await draftBankImportBatch(reconciliation, [preview.rows[1].operation.sourceKey]);
+  assert.notEqual(a.batchKey, b.batchKey);
+  assert.equal(a.expectedOperationCount, 1);
+  assert.equal(b.expectedOperationCount, 1);
+});
+
+test('multiple existing ledger rows with the same bank identity are treated as corruption', async () => {
+  const { preview } = await previewOf(base +
+    '07.11.2026;-100;Тест;Основной;;расход;Питание;DUP-LEDGER-ID\n');
+  const op = preview.rows[0].operation;
+  const saved = {
+    accountId: op.accountId, date: op.date, kind: op.kind,
+    amountCents: op.amountCents, description: op.description,
+    sourceKey: op.sourceKey, fingerprint: op.fingerprint, externalId: op.externalId,
+  };
+  const result = reconcileBankStatement(preview, [
+    { id: 'booked-1', ...saved }, { id: 'booked-2', ...saved },
+  ]);
+  assert.equal(result.invalid, 1);
+  assert.equal(result.rows[0].existingIds.length, 2);
+});
