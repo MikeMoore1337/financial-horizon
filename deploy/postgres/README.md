@@ -27,8 +27,15 @@ Auth SQLite и существующая IndexedDB не изменяются.
    ориентировочно 4 GiB RAM и 13 GiB свободного места при первой проверке.
 3. Создать /etc/financial-horizon/finance/secrets с правами 0700.
    Три разных файла admin_password, migrator_password, runtime_password
-   с уникальными значениями не короче 32 символов, права 0600.
-   Файлы и значения никогда не передавать в git/issue/CI.
+   с уникальными значениями не короче 32 символов. Для официального
+   закреплённого PostgreSQL 17 UID пользователя postgres = 999 (проверить
+   на образе до деплоя). Docker Compose file-backed secrets сохраняют
+   права host-bind, поэтому файлы должны принадлежать UID 999, иметь
+   права 0400, а каталог /etc/financial-horizon/finance/secrets
+   принадлежать root и иметь права 0700. Иначе PostgreSQL инициализируется
+   без финансовой БД. Мигратор запускается с тем же UID 999 и читает
+   только отдельно подключённый миграционный secret. Не заменять это
+   правами 0644/0444. Файлы и значения не передавать в git/issue/CI.
 4. Проверить compose-файл командой:
    docker compose -f deploy/postgres/compose.yml config --quiet
 5. Для пустой новой базы применить:
