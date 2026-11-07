@@ -2,7 +2,7 @@ import {test,expect} from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import {execFileSync} from 'node:child_process';
 import {resolve} from 'node:path';
-import {observe,visitGuest,view} from './helpers.mjs';
+import {observe,visitGuest,view,addEntry} from './helpers.mjs';
 
 const tags=['wcag2a','wcag2aa','wcag21a','wcag21aa','wcag22aa'];
 
@@ -117,6 +117,29 @@ test('responsive boundary regression: tablet actions remain visible up to 1150 C
    expect(screen.actionButtons,'Edit, settle and archive actions retained').toBeGreaterThan(0);
   }
   if(width>=1151)expect(screen.table).toBe(true);
+ }
+ watcher.assertClean();
+});
+
+test('long synthetic names wrap without document overflow in both themes and engines',async({page,context})=>{
+ const watcher=await observe(context,page);
+ await visitGuest(page);
+ const title=('СинтетическоеНазваниеБезПробелов').repeat(4).slice(0,100);
+ await addEntry(page,title);
+ for(const theme of ['light','dark']){
+  if((await page.locator('body').getAttribute('data-theme'))!==theme)
+   await page.locator('#theme-toggle').click();
+  for(const width of [320,360,393,760,761,768,820,1024,1150,1151,1440,2560]){
+   await page.setViewportSize({width,height:width<=393?852:960});
+   await view(page,'obligations');
+   const state=await page.evaluate(()=>({
+    viewport:document.documentElement.clientWidth,
+    document:Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),
+    titleVisible:document.querySelector('#main')?.textContent.includes('СинтетическоеНазваниеБезПробелов'),
+   }));
+   expect(state.document,'Long title overflow at '+width+'px in '+theme).toBeLessThanOrEqual(state.viewport+1);
+   expect(state.titleVisible).toBe(true);
+  }
  }
  watcher.assertClean();
 });
