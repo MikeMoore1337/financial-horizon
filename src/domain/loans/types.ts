@@ -15,6 +15,8 @@ export interface LoanTerms {
   scheduleType: ScheduleType;
   paymentCents?: number; // Optional contractual fixed annuity payment.
   rateChangePolicy?: 'recalculate' | 'keep-payment';
+  /** Date-change policy; default keep-payment, optional explicit annuity recalculation. */
+  dueDateChangePolicy?: 'recalculate' | 'keep-payment';
   maxExtensionMonths?: number; // Default 240, max 1200 total scheduled months.
 }
 
