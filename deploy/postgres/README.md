@@ -113,7 +113,11 @@ service возвращает FAIL. Существующая локальная �
 `/etc/financial-horizon/finance/backup.env`:
 `FH_FINANCE_OFFSITE_HOST`, `FH_FINANCE_OFFSITE_USER`,
 `FH_FINANCE_OFFSITE_DIR`, `FH_FINANCE_OFFSITE_SSH_KEY`,
-`FH_FINANCE_OFFSITE_KNOWN_HOSTS`, а также существующие GPG-параметры.
+`FH_FINANCE_OFFSITE_KNOWN_HOSTS`, опционально
+`FH_FINANCE_OFFSITE_PORT` (1-65535, по умолчанию 22), а также
+существующие GPG-параметры. При нестандартном порте запись в
+`known_hosts` должна закреплять `[hostname]:port`, проверять
+отпечаток ключа назначения нужно через независимый доверенный канал.
 Сервер назначения обязан быть отдельным отказным доменом и иметь
 специального пользователя с минимальными правами, заранее созданный
 каталог 0700, ограниченный SSH public-key доступ и проверенный host key.

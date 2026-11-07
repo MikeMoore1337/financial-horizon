@@ -13,6 +13,12 @@ fail() { echo "OFFSITE_BACKUP_NO_GO: $*" >&2; exit 1; }
 : "${FH_FINANCE_OFFSITE_SSH_KEY:?Private SSH identity required}"
 : "${FH_FINANCE_OFFSITE_KNOWN_HOSTS:?Pinned SSH host key file required}"
 
+# Dedicated offsite hosts may use non-default SSH ports. Both ssh and scp
+# accept the shared OpenSSH -o Port= option, avoiding ambiguous -p/-P flags.
+offsite_port="${FH_FINANCE_OFFSITE_PORT:-22}"
+[[ "$offsite_port" =~ ^[1-9][0-9]{0,4}$ ]] && (( 10#$offsite_port <= 65535 )) ||
+  fail "Invalid offsite SSH port"
+
 [[ "$FH_FINANCE_OFFSITE_HOST" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] ||
   fail "Invalid remote hostname"
 case "$FH_FINANCE_OFFSITE_HOST" in
@@ -45,7 +51,7 @@ base="$(basename -- "$archive")"
 
 identity="$FH_FINANCE_OFFSITE_SSH_KEY"
 hostkey="$FH_FINANCE_OFFSITE_KNOWN_HOSTS"
-opts=(-i "$identity" -o IdentitiesOnly=yes -o BatchMode=yes
+opts=(-i "$identity" -o "Port=$offsite_port" -o IdentitiesOnly=yes -o BatchMode=yes
   -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$hostkey"
   -o ConnectTimeout=8 -o ServerAliveInterval=10 -o ServerAliveCountMax=2)
 target="${FH_FINANCE_OFFSITE_USER}@${FH_FINANCE_OFFSITE_HOST}"
