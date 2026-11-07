@@ -396,3 +396,32 @@ def test_account_requires_explicit_opening_balance_and_valid_kind(runtime):
             {"p": PROFILE_A, "a": record_id},
         ).one()
         assert row == ("savings", 0)
+
+
+def test_opening_balance_is_immutable_after_account_creation(runtime):
+    """Opening balance corrections must be auditable ledger adjustments."""
+    with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+        assert session.execute(text(
+            "SELECT has_column_privilege(current_user,'finance.accounts','opening_minor','UPDATE')"
+        )).scalar_one() is False
+        original = session.execute(text(
+            "SELECT opening_minor FROM accounts WHERE profile_id=:p AND id=:a"
+        ), {"p": PROFILE_A, "a": ACCOUNT_A1}).scalar_one()
+
+    with pytest.raises(DBAPIError):
+        with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+            session.execute(text(
+                "UPDATE accounts SET opening_minor=:n WHERE profile_id=:p AND id=:a RETURNING opening_minor"
+            ), {"n": 1234, "p": PROFILE_A, "a": ACCOUNT_A1})
+
+    with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+        assert session.execute(text(
+            "SELECT opening_minor FROM accounts WHERE profile_id=:p AND id=:a"
+        ), {"p": PROFILE_A, "a": ACCOUNT_A1}).scalar_one() == original
+        # The ledger adjustment itself is permitted, and remains append-only.
+        tx = uuid4()
+        insert_ledger(session, tx, "adjustment", [(ACCOUNT_A1, 1234)])
+    with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as session:
+        assert session.execute(text(
+            "SELECT signed_minor FROM ledger_postings WHERE transaction_id=:t"
+        ), {"t": tx}).scalar_one() == 1234

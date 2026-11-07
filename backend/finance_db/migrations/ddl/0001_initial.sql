@@ -484,7 +484,9 @@ GRANT UPDATE (revision,min_available_revision,updated_at) ON finance_profiles TO
 -- Deliberately deny UPDATE on tenant identity (profile_id,id), audit metadata
 -- and ownership; fields not listed here are immutable for the runtime role.
 GRANT SELECT,INSERT ON accounts,obligations,loans,reserves TO fh_finance_runtime;
-GRANT UPDATE (name,kind,opening_minor,entity_revision,archived_at,updated_at)
+-- The opening balance is immutable after account creation; correct balances
+-- with an auditable adjustment transaction, never rewrite historical opening.
+GRANT UPDATE (name,kind,entity_revision,archived_at,updated_at)
   ON accounts TO fh_finance_runtime;
 GRANT UPDATE (title,direction,amount_minor,starts_on,timezone,
               recurrence_unit,recurrence_every,category,

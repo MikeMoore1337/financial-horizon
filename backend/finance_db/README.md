@@ -15,3 +15,12 @@ finance_transaction(engine, verified_user_id, profile_id) binds transaction
 scope with SET LOCAL. The finance API in #67 must first validate the real
 auth SQLite session and authorized profile. RLS does not secure arbitrary
 untrusted SQL able to set session GUCs. There are no HTTP endpoints here.
+
+
+### Неизменяемость начального остатка
+
+`accounts.opening_minor` указывается явно только при создании счёта и не
+может обновляться runtime-ролью. Исправление баланса после создания
+записывается отдельной `adjustment`-проводкой, которая сохраняется в
+неизменяемом финансовом журнале. Тип счёта `kind` допускает изменение
+в пределах доменного CHECK, а tenant/profile ID - никогда.
