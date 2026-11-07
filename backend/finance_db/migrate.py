@@ -1,24 +1,48 @@
-"""One-shot migration entrypoint; password never appears in the URL or CLI."""
+"""One-shot migration using in-memory credentials and one audited transaction.
+
+Never place migration passwords into URLs, environment variables, command-line
+arguments, local .pgpass files or SQL logs. The secret remains in the isolated
+migrator process and is used only to establish a psycopg connection.
+"""
 from __future__ import annotations
+
 import os
 from pathlib import Path
-import subprocess
 
-secret_path = Path(os.environ["FH_FINANCE_PASSWORD_FILE"])
-password = secret_path.read_text(encoding="utf-8").rstrip("\n")
-if len(password) < 32 or "\n" in password or "\r" in password or ":" in password:
-    raise RuntimeError("Invalid database secret")
-pgpass = Path("/tmp/fh-finance.pgpass")
-pgpass.write_text("db:5432:fh_finance:fh_finance_migrator:" + password + "\n", encoding="utf-8")
-pgpass.chmod(0o600)
-env = os.environ.copy()
-env.pop("FH_FINANCE_PASSWORD_FILE", None)
-env["PGPASSFILE"] = str(pgpass)
-try:
-    subprocess.run(
-        ["alembic", "-c", "backend/finance_db/alembic.ini", "upgrade", "head"],
-        env=env,
-        check=True,
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
+from sqlalchemy.pool import NullPool
+
+
+def main() -> None:
+    path = Path(os.environ["FH_FINANCE_PASSWORD_FILE"])
+    password = path.read_text(encoding="utf-8").rstrip("\n")
+    if len(password) < 32 or any(c in password for c in "\n\r:"):
+        raise RuntimeError("Invalid migration secret")
+    raw_url = os.environ["FH_FINANCE_MIGRATION_URL"]
+    if not raw_url.startswith("postgresql+psycopg://"):
+        raise ValueError("Expected a private PostgreSQL/psycopg finance URL")
+    base_url = make_url(raw_url)
+    if base_url.password:
+        raise ValueError("Secrets must not be supplied in URL")
+    # SQLAlchemy URLs mask credentials in diagnostics; the password is never
+    # serialized to a file, process environment, or Alembic configuration.
+    connection_url = base_url.set(password=password)
+    engine = create_engine(
+        connection_url,
+        poolclass=NullPool,
+        connect_args={"options": "-csearch_path=finance,pg_catalog -cstatement_timeout=30000"},
     )
-finally:
-    pgpass.unlink(missing_ok=True)
+    config = Config("backend/finance_db/alembic.ini")
+    try:
+        with engine.begin() as connection:
+            config.attributes["connection"] = connection
+            command.upgrade(config, "head")
+    finally:
+        engine.dispose()
+
+
+if __name__ == "__main__":
+    main()

@@ -25,27 +25,36 @@ def migrate_offline():
     raise RuntimeError("Financial migrations require an actual PostgreSQL transaction")
 
 
+def _migrate_with_connection(connection):
+    # Alembic creates its own version table before invoking revision upgrade.
+    # The schema and migration must share the same transaction.
+    connection.exec_driver_sql("CREATE SCHEMA IF NOT EXISTS finance")
+    connection.exec_driver_sql("REVOKE ALL ON SCHEMA finance FROM PUBLIC")
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        version_table_schema="finance",
+        transaction_per_migration=False,
+        compare_type=True,
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+
 def migrate_online():
+    injected = config.attributes.get("connection")
+    if injected is not None:
+        # The Docker migrator supplies an authenticated connection directly;
+        # Alembic never receives or persists a password string.
+        _migrate_with_connection(injected)
+        return
     engine = create_engine(
         url(),
         poolclass=pool.NullPool,
         connect_args={"options": "-csearch_path=finance,pg_catalog -cstatement_timeout=30000"},
     )
-    # Alembic creates its own version table *before* invoking revision upgrade().
-    # Provision the empty schema first, in the very same transaction, so a
-    # failed initial migration also rolls back its schema and version table.
     with engine.begin() as connection:
-        connection.exec_driver_sql("CREATE SCHEMA IF NOT EXISTS finance")
-        connection.exec_driver_sql("REVOKE ALL ON SCHEMA finance FROM PUBLIC")
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            version_table_schema="finance",
-            transaction_per_migration=False,
-            compare_type=True,
-        )
-        with context.begin_transaction():
-            context.run_migrations()
+        _migrate_with_connection(connection)
     engine.dispose()
 
 

@@ -55,6 +55,10 @@ export FH_FINANCE_GPG_RECIPIENT
 FH_FINANCE_GPG_RECIPIENT="$(gpg --homedir "$FH_FINANCE_GPG_HOME" --batch \
   --with-colons --list-keys | awk -F: '$1=="fpr"{print $10;exit}')"
 test -n "$FH_FINANCE_GPG_RECIPIENT"
+# The primary key created with default usage may be signing-only.
+# Add a genuine encryption subkey instead of weakening GPG recipient checks.
+gpg --homedir "$FH_FINANCE_GPG_HOME" --batch --pinentry-mode loopback \
+  --passphrase '' --quick-add-key "$FH_FINANCE_GPG_RECIPIENT" rsa3072 encr 1d >/dev/null 2>&1
 bash deploy/postgres/scripts/backup.sh
 encrypted="$(find "$FH_FINANCE_BACKUP_DIR" -maxdepth 1 -type f \
   -name 'fh-finance-*.pgdump.gpg' -print -quit)"
