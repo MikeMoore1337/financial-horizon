@@ -73,3 +73,7 @@ test('dialog focus returns to its originating action in WebKit and Chromium',()=
 test('long unbroken financial labels wrap in record cards and table cells',()=>{
  assert.match(css,/\.record-mobile-row strong,\.record-mobile-row small,\.records-table \.record-title,\.records-table \.record-sub\{overflow-wrap:anywhere\}/);
 });
+
+test('long loan names wrap inside credit cards and detail headings',()=>{
+ assert.match(css,/\.loan-card \.title,\.loan-detail h2\{min-width:0;overflow-wrap:anywhere\}/);
+});

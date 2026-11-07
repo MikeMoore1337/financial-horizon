@@ -143,3 +143,53 @@ test('long synthetic names wrap without document overflow in both themes and eng
  }
  watcher.assertClean();
 });
+
+test('long unbroken loan and category labels do not overflow the page',async({page,context})=>{
+ const watcher=await observe(context,page);
+ await visitGuest(page);
+ await view(page,'loans');
+ await page.locator('[data-action="new-loan"]').first().click();
+ const form=page.locator('#loan-form');
+ const title=('СинтетическийКредитБезПробелов').repeat(4).slice(0,100);
+ for(const [name,value] of Object.entries({
+  title,opening:'10000',apr:'0',payment:'1000',term:'10',
+  asOfDate:'2026-11-01',dueDay:'15',
+ }))await form.locator('[name="'+name+'"]').fill(value);
+ await form.locator('button[type="submit"]').click();
+ await expect(page.locator('#loan-dialog')).not.toBeVisible();
+ for(const theme of ['light','dark']){
+  if((await page.locator('body').getAttribute('data-theme'))!==theme)
+   await page.locator('#theme-toggle').click();
+  for(const width of [320,360,393,768,1024,1150,1151,1440,2560]){
+   await page.setViewportSize({width,height:width<=393?852:960});
+   await view(page,'loans');
+   const state=await page.evaluate(()=>{
+    const label=document.querySelector('.loan-card .title');
+    const card=document.querySelector('.loan-card');
+    return {
+     viewport:document.documentElement.clientWidth,
+     document:Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),
+     titleVisible:document.querySelector('#main')?.textContent.includes('СинтетическийКредитБезПробелов'),
+     titleWithinCard:!!label&&!!card&&label.getBoundingClientRect().right<=card.getBoundingClientRect().right+1,
+    };
+   });
+   expect(state.document,'Loan title overflow at '+width+'px in '+theme).toBeLessThanOrEqual(state.viewport+1);
+   expect(state.titleVisible).toBe(true);
+   expect(state.titleWithinCard).toBe(true);
+  }
+ }
+ await view(page,'settings');
+ const category=('КатегорияБезПробелов').repeat(3).slice(0,40);
+ await page.locator('#category-form [name="name"]').fill(category);
+ await page.locator('#category-form button[type="submit"]').click();
+ for(const width of [320,393,768]){
+  await page.setViewportSize({width,height:852});
+  await view(page,'settings');
+  const geometry=await page.evaluate(()=>({
+   viewport:document.documentElement.clientWidth,
+   document:Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),
+  }));
+  expect(geometry.document,'Category overflow at '+width+'px').toBeLessThanOrEqual(geometry.viewport+1);
+ }
+ watcher.assertClean();
+});

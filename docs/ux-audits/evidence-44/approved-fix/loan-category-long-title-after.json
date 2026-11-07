@@ -1,0 +1,321 @@
+{
+  "baseSha": "ee36e033e16b1421fc93204ba18a46e42eb251c9",
+  "data": "synthetic-only",
+  "cases": [
+    {
+      "engine": "Chromium Edge",
+      "theme": "light",
+      "width": 320,
+      "view": "loans",
+      "vw": 320,
+      "sw": 320,
+      "name": true,
+      "titleEl": 213.796875,
+      "container": 304
+    },
+    {
+      "engine": "Chromium Edge",
+      "theme": "light",
+      "width": 360,
+      "view": "loans",
+      "vw": 360,
+      "sw": 360,
+      "name": true,
+      "titleEl": 253.796875,
+      "container": 344
+    },
+    {
+      "engine": "Chromium Edge",
+      "theme": "light",
+      "width": 393,
+      "view": "loans",
+      "vw": 393,
+      "sw": 393,
+      "name": true,
+      "titleEl": 286.796875,
+      "container": 377
+    },
+    {
+      "engine": "Chromium Edge",
+      "theme": "light",
+      "width": 768,
+      "view": "loans",
+      "vw": 768,
+      "sw": 768,
+      "name": true,
+      "titleEl": 657.796875,
+      "container": 748
+    },
+    {
+      "engine": "Chromium Edge",
+      "theme": "light",
+      "width": 1150,
+      "view": "loans",
+      "vw": 1150,
+      "sw": 1150,
+      "name": true,
+      "titleEl": 506.046875,
+      "container": 596.25
+    },
+    {
+      "engine": "Chromium Edge",
+      "theme": "light",
+      "width": 1440,
+      "view": "loans",
+      "vw": 1440,
+      "sw": 1440,
+      "name": true,
+      "titleEl": 621.90625,
+      "container": 712.109375
+    },
+    {
+      "engine": "Chromium Edge",
+      "theme": "dark",
+      "width": 320,
+      "view": "loans",
+      "vw": 320,
+      "sw": 320,
+      "name": true,
+      "titleEl": 213.796875,
+      "container": 304
+    },
+    {
+      "engine": "Chromium Edge",
+      "theme": "dark",
+      "width": 360,
+      "view": "loans",
+      "vw": 360,
+      "sw": 360,
+      "name": true,
+      "titleEl": 253.796875,
+      "container": 344
+    },
+    {
+      "engine": "Chromium Edge",
+      "theme": "dark",
+      "width": 393,
+      "view": "loans",
+      "vw": 393,
+      "sw": 393,
+      "name": true,
+      "titleEl": 286.796875,
+      "container": 377
+    },
+    {
+      "engine": "Chromium Edge",
+      "theme": "dark",
+      "width": 768,
+      "view": "loans",
+      "vw": 768,
+      "sw": 768,
+      "name": true,
+      "titleEl": 657.796875,
+      "container": 748
+    },
+    {
+      "engine": "Chromium Edge",
+      "theme": "dark",
+      "width": 1150,
+      "view": "loans",
+      "vw": 1150,
+      "sw": 1150,
+      "name": true,
+      "titleEl": 506.046875,
+      "container": 596.25
+    },
+    {
+      "engine": "Chromium Edge",
+      "theme": "dark",
+      "width": 1440,
+      "view": "loans",
+      "vw": 1440,
+      "sw": 1440,
+      "name": true,
+      "titleEl": 621.90625,
+      "container": 712.109375
+    },
+    {
+      "engine": "Chromium Edge",
+      "width": 320,
+      "view": "settings-category",
+      "vw": 320,
+      "sw": 320,
+      "catCount": 9
+    },
+    {
+      "engine": "Chromium Edge",
+      "width": 393,
+      "view": "settings-category",
+      "vw": 393,
+      "sw": 393,
+      "catCount": 9
+    },
+    {
+      "engine": "Chromium Edge",
+      "width": 768,
+      "view": "settings-category",
+      "vw": 768,
+      "sw": 768,
+      "catCount": 9
+    },
+    {
+      "engine": "WebKit Windows",
+      "theme": "light",
+      "width": 320,
+      "view": "loans",
+      "vw": 320,
+      "sw": 320,
+      "name": true,
+      "titleEl": 213.796875,
+      "container": 304
+    },
+    {
+      "engine": "WebKit Windows",
+      "theme": "light",
+      "width": 360,
+      "view": "loans",
+      "vw": 360,
+      "sw": 360,
+      "name": true,
+      "titleEl": 253.796875,
+      "container": 344
+    },
+    {
+      "engine": "WebKit Windows",
+      "theme": "light",
+      "width": 393,
+      "view": "loans",
+      "vw": 393,
+      "sw": 393,
+      "name": true,
+      "titleEl": 286.796875,
+      "container": 377
+    },
+    {
+      "engine": "WebKit Windows",
+      "theme": "light",
+      "width": 768,
+      "view": "loans",
+      "vw": 768,
+      "sw": 768,
+      "name": true,
+      "titleEl": 657.796875,
+      "container": 748
+    },
+    {
+      "engine": "WebKit Windows",
+      "theme": "light",
+      "width": 1150,
+      "view": "loans",
+      "vw": 1150,
+      "sw": 1150,
+      "name": true,
+      "titleEl": 506.046875,
+      "container": 596.25
+    },
+    {
+      "engine": "WebKit Windows",
+      "theme": "light",
+      "width": 1440,
+      "view": "loans",
+      "vw": 1440,
+      "sw": 1440,
+      "name": true,
+      "titleEl": 621.90625,
+      "container": 712.109375
+    },
+    {
+      "engine": "WebKit Windows",
+      "theme": "dark",
+      "width": 320,
+      "view": "loans",
+      "vw": 320,
+      "sw": 320,
+      "name": true,
+      "titleEl": 213.796875,
+      "container": 304
+    },
+    {
+      "engine": "WebKit Windows",
+      "theme": "dark",
+      "width": 360,
+      "view": "loans",
+      "vw": 360,
+      "sw": 360,
+      "name": true,
+      "titleEl": 253.796875,
+      "container": 344
+    },
+    {
+      "engine": "WebKit Windows",
+      "theme": "dark",
+      "width": 393,
+      "view": "loans",
+      "vw": 393,
+      "sw": 393,
+      "name": true,
+      "titleEl": 286.796875,
+      "container": 377
+    },
+    {
+      "engine": "WebKit Windows",
+      "theme": "dark",
+      "width": 768,
+      "view": "loans",
+      "vw": 768,
+      "sw": 768,
+      "name": true,
+      "titleEl": 657.796875,
+      "container": 748
+    },
+    {
+      "engine": "WebKit Windows",
+      "theme": "dark",
+      "width": 1150,
+      "view": "loans",
+      "vw": 1150,
+      "sw": 1150,
+      "name": true,
+      "titleEl": 506.046875,
+      "container": 596.25
+    },
+    {
+      "engine": "WebKit Windows",
+      "theme": "dark",
+      "width": 1440,
+      "view": "loans",
+      "vw": 1440,
+      "sw": 1440,
+      "name": true,
+      "titleEl": 621.90625,
+      "container": 712.109375
+    },
+    {
+      "engine": "WebKit Windows",
+      "width": 320,
+      "view": "settings-category",
+      "vw": 320,
+      "sw": 320,
+      "catCount": 9
+    },
+    {
+      "engine": "WebKit Windows",
+      "width": 393,
+      "view": "settings-category",
+      "vw": 393,
+      "sw": 393,
+      "catCount": 9
+    },
+    {
+      "engine": "WebKit Windows",
+      "width": 768,
+      "view": "settings-category",
+      "vw": 768,
+      "sw": 768,
+      "catCount": 9
+    }
+  ],
+  "failures": [],
+  "evidence_kind": "PATCHED_BRANCH_LOCAL_VITE_BUILD",
+  "implementation": "min-width:0;overflow-wrap:anywhere for loan cards/title and detail heading"
+}

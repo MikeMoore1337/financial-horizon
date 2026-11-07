@@ -114,3 +114,6 @@ body[data-theme=light] .bottom-nav button:not(.active){color:#41536c}
 
 /* Keyboard users must be able to scroll XLSX preview regions. */
 #excel-import-items:focus-visible,#excel-import-warnings:focus-visible{outline:3px solid var(--accent-deep);outline-offset:2px;border-radius:6px}
+
+/* #44: unbroken loan titles must not expand the credit card or detail heading. */
+.loan-card .title,.loan-detail h2{min-width:0;overflow-wrap:anywhere}
