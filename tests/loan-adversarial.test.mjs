@@ -159,3 +159,26 @@ test('no paid-on-due amounts leak into an actual open period, in both factual an
     assert.equal(result.history.length, 1, mode);
   }
 });
+
+test('reduce-payment after the regular same-day due installment excludes the already-paid due', () => {
+  const normal = pay('2026-02-01', 25_000, 'normal-february');
+  const extra = {
+    id: 'extra-february', date: '2026-02-01', type: 'payment',
+    paymentKind: 'extra', amountCents: 15_000, strategy: 'reduce-payment',
+  };
+  for (const mode of ['actual', 'forecast']) {
+    const actual = calculateLoan(terms, [normal, extra], {
+      mode, asOfDate: '2026-02-02',
+    });
+    assert.equal(actual.rows[0].amountCents, 40_000, mode);
+    assert.equal(actual.principalBalanceCents, mode === 'actual' ? 60_000 : 0, mode);
+    assert.equal(actual.scheduledPaymentCents, 20_000, mode);
+    assert.equal(actual.actualOpenPeriod, null, mode);
+    if (mode === 'forecast') {
+      assert.equal(actual.complete, true);
+      assert.equal(actual.paidOffDate, '2026-05-01');
+      assert.deepEqual(actual.rows.map(row => row.amountCents),
+        [40_000, 20_000, 20_000, 20_000]);
+    }
+  }
+});
