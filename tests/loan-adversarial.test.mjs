@@ -296,4 +296,12 @@ test('payment-change is validated and explicit contractual amount overrides same
   ],{mode:'plan'});
   assert.equal(simultaneous.rows[0].plannedPaymentCents, 35_000);
   assert.equal(simultaneous.history.find(x=>x.type==='payment-change')?.scheduledPaymentCents,35_000);
+  assert.throws(() => calculateLoan(terms, [
+    {...common,id:'first-change',paymentCents:25_000},
+    {...common,id:'second-change',paymentCents:30_000},
+  ], {mode:'plan'}), RangeError);
+  assert.doesNotThrow(() => calculateLoan(terms, [
+    {...common,id:'first-change',paymentCents:25_000,voidedAt:'2026-02-02'},
+    {...common,id:'second-change',paymentCents:30_000},
+  ], {mode:'plan'}));
 });

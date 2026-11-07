@@ -57,7 +57,14 @@ test('loan domain executes in Chromium and WebKit with exact cents and no Indexe
       annualRateMicroPercent: 9_500_000, dayCount: 'ACT/ACT-ISDA',
     }, [], { mode: 'plan' });
     const benchmarkMs = performance.now() - started;
+    const amended = calculateLoan({ ...terms, principalCents: 100_000,
+      annualRateMicroPercent: 0, termMonths: 4 }, [{
+      id: 'amend-march', type: 'payment-change',
+      date: '2026-03-01', paymentCents: 30_000,
+    }], { mode: 'plan' });
     return {
+      amendedPlannedCents: amended.rows.map(row => row.plannedPaymentCents),
+      amendedPaidCents: amended.rows.map(row => row.amountCents),
       dates: planned.rows.map(row => row.date),
       firstInterest: planned.rows[0].interestCents,
       secondInterest: planned.rows[1].interestCents,
@@ -75,6 +82,8 @@ test('loan domain executes in Chromium and WebKit with exact cents and no Indexe
   expect(result.partialMatch).toBe(true);
   expect(result.partialExact).toBe(false);
   expect(result.bankParityVerified).toBe(false);
+  expect(result.amendedPlannedCents).toEqual([25_000, 30_000, 30_000, 30_000]);
+  expect(result.amendedPaidCents).toEqual([25_000, 30_000, 30_000, 15_000]);
   expect(result.longClosed).toBe(true);
   expect(result.longRows).toBeLessThanOrEqual(360);
   expect(result.benchmarkMs).toBeLessThan(20_000);

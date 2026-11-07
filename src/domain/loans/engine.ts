@@ -52,6 +52,7 @@ function validate(terms: LoanTerms, events: readonly LoanEvent[], options: LoanR
   const ids = new Set<string>();
   const rateDates = new Set<string>();
   const changedMonths = new Set<string>();
+  const paymentChangeDates = new Set<string>();
   for (const event of events) {
     if (!event || typeof event.id !== 'string' || event.id.length === 0 || event.id.length > 128 || ids.has(event.id)) {
       throw new RangeError('Loan event IDs must be unique nonempty strings (max 128)');
@@ -79,6 +80,10 @@ function validate(terms: LoanTerms, events: readonly LoanEvent[], options: LoanR
     } else if (event.type === 'payment-change') {
       if (terms.scheduleType !== 'annuity') throw new RangeError('payment-change requires annuity');
       assertMoney(event.paymentCents, 'payment-change.paymentCents', true);
+      if (!event.voidedAt && paymentChangeDates.has(event.date)) {
+        throw new RangeError('Two active installment changes on the same date');
+      }
+      if (!event.voidedAt) paymentChangeDates.add(event.date);
     } else if (event.type === 'due-date-change') {
       if (!Number.isInteger(event.dayOfMonth) || event.dayOfMonth < 1 || event.dayOfMonth > 31) {
         throw new RangeError('dayOfMonth must be 1-31');
