@@ -189,7 +189,9 @@ test('CSV-compatible synthetic fixture compares dates, interest, principal, bala
   assert.equal(difference.rows[1].dateDifferenceDays, -1);
   assert.equal(difference.rows[1].interestDeltaCents, null);
   assert.equal(difference.closureDateDifferenceDays, -1);
-  assert.throws(() => reconcileLoanSchedule(computed, [{ ...fixture[0], interestCents: 1 }]));
+  const allocationGap = reconcileLoanSchedule(computed, [{ ...fixture[0], interestCents: 1 }]);
+  assert.equal(allocationGap.rows[0].bankUnallocatedCents, -1);
+  assert.equal(allocationGap.rows[0].differs, true);
 });
 
 test('strict validation: dates, values, duplicates, schedules, and illegal operations', () => {
@@ -237,7 +239,9 @@ test('reconciliation tolerates non-amortizing calculated schedule but reports mi
   const unpaid = actual([], '2026-02-01').rows;
   const bank = [{date: '2026-02-01', amountCents: 0, balanceCents: 1_000_000}];
   const comparison = reconcileLoanSchedule(unpaid, bank);
-  assert.equal(comparison.exactMatch, true); // Bank CSV omitted interest column.
+  assert.equal(comparison.matchingKnownFields, true); // Bank CSV omitted interest column.
+  assert.equal(comparison.comparisonComplete, false);
+  assert.equal(comparison.exactMatch, false); // Missing breakdown is not exact bank parity.
   assert.equal(comparison.calculatedClosureDate, null);
 });
 
