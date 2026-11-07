@@ -5,10 +5,12 @@
  */
 declare const centsBrand: unique symbol;
 declare const dateBrand: unique symbol;
+declare const monthBrand: unique symbol;
 declare const identifierBrand: unique symbol;
 
 export type Cents = number & { readonly [centsBrand]: 'integer-minor-units' };
 export type ISODate = string & { readonly [dateBrand]: 'YYYY-MM-DD' };
+export type ISOMonth = string & { readonly [monthBrand]: 'YYYY-MM' };
 export type FinanceId = string & { readonly [identifierBrand]: 'finance-id' };
 export type Recurrence = 'once' | 'monthly' | 'yearly';
 
@@ -20,6 +22,8 @@ export interface FinanceEntry {
   date: ISODate;
   recurrence: Recurrence;
   category: string;
+  createdAt?: string;
+  updatedAt?: string;
   deletedAt?: string | null;
 }
 
@@ -41,6 +45,8 @@ export interface FinanceLoan {
   dueDay: number;
   asOfDate: ISODate;
   schedule?: LoanScheduleRow[];
+  createdAt?: string;
+  updatedAt?: string;
   deletedAt?: string | null;
 }
 
@@ -51,18 +57,24 @@ export interface LoanPayment {
   amountCents: Cents;
   strategy: 'amount' | 'term';
   createdAt: string;
+  updatedAt?: string;
   voidedAt?: string | null;
 }
 
 export interface Settlement {
   id: FinanceId;
   entryId: FinanceId;
-  occurrence: ISODate;
+  occurrence: ISOMonth;
+  date: ISODate;
   amountCents: Cents;
-  deletedAt?: string | null;
+  createdAt: string;
+  updatedAt?: string;
+  voidedAt?: string | null;
 }
 
 export interface AuditRecord {
+  id?: FinanceId;
+  action?: string;
   description: string;
   date: string;
   [key: string]: unknown;
