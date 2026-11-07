@@ -5,6 +5,8 @@ import {
   availableBalanceMinor, totalBalanceMinor, monthlyCashFlowMinor,
 } from '../src/domain/accounts/ledger.ts';
 import { planLegacyLedgerImport } from '../src/domain/accounts/legacy-import.ts';
+import { createSampleState } from '../finance.js';
+import { encryptBackup, decryptBackup } from '../backup.js';
 
 const id = n => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
 const actor = '0123456789abcdef0123456789abcdef';
@@ -233,7 +235,9 @@ test('reload from a serialized snapshot preserves balances and dedup receipts', 
 });
 
 test('versioned legacy staging never manufactures opening accounts or erases v1/v2 records', () => {
-  const v1 = { version: 1, entries: [{ amountCents: 12_300 }], loans: [{}], settlements: [{ amountCents: 123 }], loanPayments: [], categories: [], audit: [], settings: { currency: 'RUB' } };
+  const v1 = createSampleState();
+  v1.version = 1;
+  delete v1.revision;
   const original = structuredClone(v1);
   const manifest1 = planLegacyLedgerImport(v1);
   assert.deepEqual(v1, original);
@@ -244,9 +248,10 @@ test('versioned legacy staging never manufactures opening accounts or erases v1/
   const v2 = { ...v1, version: 2, revision: 42 };
   const manifest2 = planLegacyLedgerImport(v2);
   assert.equal(manifest2.sourceRevision, 42);
-  assert.equal(manifest2.entriesCount, 1);
-  assert.throws(() => planLegacyLedgerImport({ ...v1, version: 3 }), /Неизвестная/);
-  assert.throws(() => planLegacyLedgerImport({ ...v2, revision: -1 }), /ревизия/);
+  assert.equal(manifest2.entriesCount, v1.entries.length);
+  assert.throws(() => planLegacyLedgerImport({ ...v1, version: 3 }), /Неподдерживаемая/);
+  assert.throws(() => planLegacyLedgerImport({ ...v2, revision: -1 }), /счётчик/);
+  assert.throws(() => planLegacyLedgerImport({ ...v1, entries: [{ id: 'invalid', amountCents: 0.25 }] }), /суммы/);
 });
 
 test('archived account can be unarchived without losing balance or creating duplicate postings', () => {
@@ -363,4 +368,22 @@ test('account update refuses invalid metadata or updates to archived accounts', 
   assert.throws(() => apply(s, 'account.update', { accountId: id(2), name: 'Счёт', kind: 'crypto' }, expectFor(s, id(2))), /тип/);
   s = apply(s, 'account.archive', { accountId: id(2), archivedAt: '2026-11-07T10:00:00.000Z' }, expectFor(s, id(2)));
   assert.throws(() => apply(s, 'account.update', { accountId: id(2), name: 'Счёт', kind: 'bank' }, expectFor(s, id(2))), /недоступен/);
+});
+
+test('actual v1 AES-GCM encrypted backup is readable for safe ledger staging only', async () => {
+  const source = createSampleState();
+  source.version = 1;
+  delete source.revision;
+  const before = structuredClone(source);
+  const ciphertext = await encryptBackup(source, 'synthetic-fixture-password-2026');
+  const decrypted = await decryptBackup(ciphertext, 'synthetic-fixture-password-2026');
+  assert.deepEqual(decrypted, source);
+  const manifest = planLegacyLedgerImport(decrypted);
+  assert.equal(manifest.sourceVersion, 1);
+  assert.equal(manifest.entriesCount, source.entries.length);
+  assert.equal(manifest.loansCount, source.loans.length);
+  assert.deepEqual(manifest.plannedAccounts, []);
+  assert.deepEqual(manifest.plannedTransactions, []);
+  assert.equal(manifest.requiresExplicitOpeningBalances, true);
+  assert.deepEqual(source, before);
 });
