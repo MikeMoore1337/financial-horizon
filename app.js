@@ -19,6 +19,11 @@ const emailSession=createEmailSession();
 let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
 const GUEST_MODE_KEY='fh-guest-session-v2';
 let calendarRoot=null;
+function revokeDisplayedLedger(){
+ state=null;
+ if(calendarRoot){calendarRoot.unmount();calendarRoot=null;}
+ $('#main').replaceChildren();
+}
 const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
 const monthEvents=()=>getMonthEvents(state,ui.month);
 function toast(message,kind='success'){$('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('visible'),3800);$('#save-indicator').textContent=kind==='error'?'Ошибка':'Сохранено на устройстве';}
@@ -63,7 +68,7 @@ async function refreshEmailSession(){
  const pending=(async()=>{
   const verified=await emailSession.refresh();
   if(!verified||emailSession.userId!==activeUserId||!emailSession.email){
-   state=null;
+   revokeDisplayedLedger();
    window.location.replace('./account.html');
    return false;
   }
@@ -81,7 +86,7 @@ async function logoutEmailAccount(){
  try{
   if(await pending){
    // Revoke access to the displayed account before leaving the page.
-   state=null;
+   revokeDisplayedLedger();
    try{sessionStorage.removeItem(GUEST_MODE_KEY);}catch{}
    try{authBroadcast?.postMessage({type:'logout',userId:activeUserId});}catch{}
    window.location.replace('./account.html');
@@ -533,7 +538,7 @@ async function init(){
     authBroadcast=new BroadcastChannel('fh-auth-session-v2');
     authBroadcast.onmessage=event=>{
      if(event.data?.type==='logout'&&event.data.userId===activeUserId){
-      state=null;
+      revokeDisplayedLedger();
       window.location.replace('./account.html');
      }
     };
