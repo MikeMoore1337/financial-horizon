@@ -13,11 +13,22 @@ docker run -d --name "$name" --network none \
   --tmpfs /tmp:rw,noexec,nosuid,size=16m \
   --memory 512m --cpus 0.5 --pids-limit 128 \
   -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=fh_restore "$IMAGE" >/dev/null
+# The official image first starts a *temporary* postmaster during initdb,
+# shuts it down and then starts the final service. pg_isready alone can report
+# the temporary server ready and make pg_restore race its shutdown.
+ready=false
 for i in $(seq 1 60); do
-  if docker exec "$name" pg_isready -U postgres -d fh_restore >/dev/null 2>&1; then break; fi
+  if docker logs "$name" 2>&1 | grep -q 'PostgreSQL init process complete; ready for start up.' &&
+     docker exec "$name" pg_isready -U postgres -d fh_restore >/dev/null 2>&1; then
+    ready=true
+    break
+  fi
   sleep 1
 done
-docker exec "$name" pg_isready -U postgres -d fh_restore >/dev/null
+if [ "$ready" != true ]; then
+  echo "Isolated PostgreSQL restore instance did not become ready" >&2
+  exit 1
+fi
 gpg --homedir "$FH_FINANCE_GPG_HOME" --batch --no-tty --decrypt "$1" \
   | docker exec -i "$name" pg_restore -U postgres --exit-on-error --no-owner --no-acl -d fh_restore
 # No financial values or identifiers enter public logs.
