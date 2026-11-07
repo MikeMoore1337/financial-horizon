@@ -9,17 +9,21 @@ const FIELDS: MappableField[] = [
   'targetAccount', 'category', 'currency', 'kind', 'externalId',
 ];
 const ALIASES: Readonly<Record<MappableField, readonly string[]>> = {
-  date: ['дата', 'датаоперации', 'датапроведения', 'дататранзакции', 'date', 'bookingdate', 'transactiondate'],
-  amount: ['сумма', 'суммаоперации', 'amount', 'sum', 'transactionamount'],
-  income: ['приход', 'поступление', 'зачисление', 'credit', 'income', 'deposit'],
-  expense: ['расход', 'списание', 'debit', 'expense', 'withdrawal'],
-  description: ['описание', 'назначение', 'назначениеплатежа', 'детали', 'операция', 'description', 'details', 'merchant', 'memo'],
-  account: ['счет', 'счетоперации', 'карта', 'account', 'accountnumber', 'card'],
+  date: ['дата', 'датаоперации', 'датапроведения', 'дататранзакции', 'датавремяоперации',
+    'date', 'bookingdate', 'transactiondate', 'operationdate', 'posteddate', 'valuedate'],
+  amount: ['сумма', 'суммаоперации', 'суммаввалютесчета', 'суммаввалютеоперации',
+    'amount', 'sum', 'transactionamount', 'amountinaccountcurrency'],
+  income: ['приход', 'поступление', 'зачисление', 'суммаприхода', 'credit', 'income', 'deposit'],
+  expense: ['расход', 'списание', 'суммарасхода', 'debit', 'expense', 'withdrawal'],
+  description: ['описание', 'назначение', 'назначениеплатежа', 'детали', 'операция',
+    'комментарий', 'описаниеоперации', 'description', 'details', 'merchant', 'memo', 'operationdetails'],
+  account: ['счет', 'счетоперации', 'карта', 'номерсчета', 'account', 'accountnumber', 'card'],
   targetAccount: ['счетполучателя', 'счетназначения', 'счетзачисления', 'toaccount', 'targetaccount'],
   category: ['категория', 'category', 'categoryname'],
-  currency: ['валюта', 'currency', 'ccy'],
-  kind: ['тип', 'типоперации', 'видоперации', 'direction', 'type', 'operationtype'],
-  externalId: ['идентификатор', 'номероперации', 'idоперации', 'id', 'transactionid', 'reference', 'operationid', 'externalid'],
+  currency: ['валюта', 'валютаоперации', 'валютасчета', 'currency', 'ccy'],
+  kind: ['тип', 'типоперации', 'видоперации', 'direction', 'type', 'operationtype', 'transactiontype'],
+  externalId: ['идентификатор', 'номероперации', 'idоперации', 'id', 'transactionid',
+    'reference', 'operationid', 'externalid', 'transactionuid', 'referenceid'],
 };
 const CODEC = new TextEncoder();
 // Must match the ledger domain limit from #33, not merely JS Number.MAX_SAFE_INTEGER.
