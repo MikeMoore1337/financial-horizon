@@ -213,6 +213,7 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
   let periodExtra = 0;
   const asOf = options.asOfDate;
   let currentUnprocessedDue: string | null = null;
+  let currentDuePlannedPayment: number | null = null;
   let deferredDueDateReprice: string | null = null;
 
   function recalculatePayment(date: string, includeCurrentUnpaidDue = false): void {
@@ -227,6 +228,13 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
     scheduled = terms.scheduleType === 'annuity'
       ? minimumInstallment(state, remainingDues, terms)
       : Math.ceil(state.balance / remainingDues.length);
+    // Record the installment amount that was due BEFORE any payments on the
+    // current due date. Pre-due changes and rate changes effective today can
+    // update it, but same-day postpayment reduce-payment must not rewrite it.
+    if (currentUnprocessedDue !== null &&
+        (date < currentUnprocessedDue || includeCurrentUnpaidDue)) {
+      currentDuePlannedPayment = scheduled;
+    }
   }
 
   function applyEvent(event: LoanEvent): void {
@@ -286,6 +294,7 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
     const due = dues[i]!;
     if (options.mode === 'actual' && due > asOf!) break;
     currentUnprocessedDue = due;
+    currentDuePlannedPayment = scheduled;
     if (options.mode === 'forecast' && !crossedAsOf && due > asOf!) {
       while (cursor < timeline.length && timeline[cursor]!.date <= asOf!) {
         applyEvent(timeline[cursor]!);
@@ -305,7 +314,7 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
       // paidOffDate and actualOpenPeriod, not shifted to a later due date.
       if (paidOffDate === due) {
         rows.push({ period: i + 1, date: due, kind: 'actual',
-          plannedPaymentCents: scheduled, amountCents: periodAmount,
+          plannedPaymentCents: currentDuePlannedPayment ?? scheduled, amountCents: periodAmount,
           interestCents: periodInterest, interestPaidCents: periodInterestPaid,
           principalCents: periodPrincipal, balanceCents: 0,
           unpaidInterestCents: 0, extraPaidCents: periodExtra });
@@ -318,13 +327,15 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
         periodExtra = 0;
       }
       currentUnprocessedDue = null;
+      currentDuePlannedPayment = null;
       break;
     }
     accrue(state, due, terms);
     periodInterest += bill(state, terms);
     const isProjected = options.mode === 'plan' || (options.mode === 'forecast' && due > asOf!);
-    const plannedPayment = terms.scheduleType === 'annuity' ? scheduled :
-      state.unpaid + Math.min(state.balance, scheduled);
+    const plannedPayment = terms.scheduleType === 'annuity'
+      ? (currentDuePlannedPayment ?? scheduled)
+      : state.unpaid + Math.min(state.balance, scheduled);
     if (isProjected) {
       const paid = settle(state, plannedPayment, false);
       periodAmount += paid.amount;
@@ -344,6 +355,7 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
     periodPrincipal = 0;
     periodExtra = 0;
     currentUnprocessedDue = null;
+    currentDuePlannedPayment = null;
     if (deferredDueDateReprice !== null) {
       recalculatePayment(deferredDueDateReprice);
       deferredDueDateReprice = null;
