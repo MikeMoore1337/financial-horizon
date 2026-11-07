@@ -182,3 +182,65 @@ test('reduce-payment after the regular same-day due installment excludes the alr
     }
   }
 });
+
+test('due-day changes never rewrite already scheduled historical installments', () => {
+  const contract = { ...terms, termMonths: 2, annualRateMicroPercent: 12_000_000 };
+  const baseline = calculateLoan(contract, [], { mode: 'plan' });
+  const change = {
+    id: 'shift-next-month', date: '2026-02-10',
+    type: 'due-date-change', dayOfMonth: 28,
+  };
+  const changed = calculateLoan(contract, [change], { mode: 'plan' });
+  assert.equal(changed.rows[0].plannedPaymentCents, baseline.rows[0].plannedPaymentCents);
+  assert.equal(changed.rows[0].amountCents, baseline.rows[0].amountCents);
+  assert.equal(changed.rows[0].date, '2026-02-01');
+  assert.equal(changed.rows[1].date, '2026-03-28');
+  assert.equal(changed.scheduledPaymentCents, baseline.scheduledPaymentCents);
+  const historical = calculateLoan(contract, [change], {
+    mode: 'actual', asOfDate: '2026-02-20',
+  });
+  assert.equal(historical.rows[0].plannedPaymentCents, baseline.rows[0].plannedPaymentCents);
+  assert.equal(historical.nextDueDate, '2026-03-28');
+});
+
+test('explicit due-date recalculate policy preserves the current due and amortizes on new dates', () => {
+  const contract = {
+    ...terms, termMonths: 2, annualRateMicroPercent: 12_000_000,
+    dueDateChangePolicy: 'recalculate',
+  };
+  const baseline = calculateLoan(contract, [], { mode: 'plan' });
+  const changedBetween = calculateLoan(contract, [{
+    id: 'change-feb-10', type: 'due-date-change',
+    date: '2026-02-10', dayOfMonth: 28,
+  }], { mode: 'plan' });
+  assert.deepEqual(changedBetween.rows.map(row => row.date), ['2026-02-01', '2026-03-28']);
+  assert.equal(changedBetween.rows[0].amountCents, baseline.rows[0].amountCents);
+  assert.equal(changedBetween.rows[1].balanceCents, 0);
+  assert.equal(changedBetween.complete, true);
+  assert.ok(changedBetween.scheduledPaymentCents > baseline.scheduledPaymentCents);
+  const changedOnDue = calculateLoan(contract, [{
+    id: 'change-at-due', type: 'due-date-change',
+    date: '2026-02-01', dayOfMonth: 28,
+  }], { mode: 'plan' });
+  assert.equal(changedOnDue.rows[0].amountCents, baseline.rows[0].amountCents);
+  assert.equal(changedOnDue.rows[0].date, baseline.rows[0].date);
+  assert.equal(changedOnDue.rows[1].date, '2026-03-28');
+  assert.equal(changedOnDue.rows[1].balanceCents, 0);
+});
+
+test('a later date change cannot affect an earlier same-rate repricing event', () => {
+  const contract = { ...terms, termMonths: 2, annualRateMicroPercent: 12_000_000 };
+  const unchanged = calculateLoan(contract, [], { mode: 'plan' });
+  const result = calculateLoan(contract, [
+    { id: 'rate-jan', type: 'rate-change',
+      date: '2026-01-15', annualRateMicroPercent: 12_000_000 },
+    { id: 'day-feb', type: 'due-date-change',
+      date: '2026-02-10', dayOfMonth: 28 },
+  ], { mode: 'plan' });
+  assert.equal(result.rows[0].amountCents, unchanged.rows[0].amountCents);
+  assert.equal(result.rows[0].plannedPaymentCents, unchanged.rows[0].plannedPaymentCents);
+  assert.equal(result.rows[0].date, unchanged.rows[0].date);
+  assert.equal(result.rows[1].date, '2026-03-28');
+  assert.throws(() => calculateLoan({ ...contract, dueDateChangePolicy: 'unknown' },
+    [], { mode: 'plan' }), RangeError);
+});
