@@ -38,7 +38,7 @@ test('actions, local persistence feedback and activity log stay available',()=>{
  assert.ok(settings.includes('<details class="settings-history">'));
  assert.match(settings,/escapeHtml\(x\.title\)/);
  assert.match(settings,/escapeHtml\(x\.description\)/);
- assert.match(app,/syncAccountControls\(\);if\(ui\.view==='settings'\)void renderStorageStatus\(\)/);
+ assert.match(app,/syncAccountControls\(\);\s*if\(ui\.view==='settings'\)void renderStorageStatus\(\)/);
 });
 
 test('versioned app shell is consistent across both PWA pages',()=>{

@@ -6,12 +6,18 @@ const source=readFileSync(new URL('../app.js',import.meta.url),'utf8');
 const start=source.indexOf('async function refreshEmailSession(){');
 const end=source.indexOf('\nasync function logoutEmailAccount(){',start);
 assert.ok(start>0&&end>start);
-const handler=source.slice(start,end);
+const revokeStart=source.indexOf('function revokeDisplayedLedger(){');
+const revokeEnd=source.indexOf('\nconst hasData=',revokeStart);
+assert.ok(revokeStart>=0&&revokeEnd>revokeStart);
+const handler=source.slice(revokeStart,revokeEnd)+'\n'+source.slice(start,end);
 function setup(refresh){
  const events=[],user='a'.repeat(32);
  const session={busy:false,userId:user,email:'qa@example.invalid',refresh};
  const ctx={guestMode:false,activeUserId:user,sessionValidation:null,emailSession:session,
-  state:{entries:[{title:'local'}]},window:{location:{replace:url=>events.push(url)}},
+  state:{entries:[{title:'local'}]},
+  calendarRoot:{unmount:()=>events.push('react-unmount')},
+  $:()=>({replaceChildren:()=>events.push('ledger-cleared')}),
+  window:{location:{replace:url=>events.push(url)}},
   syncAccountControls:()=>events.push('sync')};
  return {check:runInNewContext(handler+'\nrefreshEmailSession',ctx),ctx,events};
 }
@@ -33,13 +39,15 @@ test('expired session hides the old account ledger and opens login',async()=>{
  const s=setup(async()=>false);
  assert.equal(await s.check(),false);
  assert.equal(s.ctx.state,null);
- assert.deepEqual(s.events,['./account.html']);
+ assert.equal(s.ctx.calendarRoot,null);
+ assert.deepEqual(s.events,['react-unmount','ledger-cleared','./account.html']);
 });
 test('a different account cannot re-use previous account data',async()=>{
  const s=setup(async()=>true);s.ctx.emailSession.userId='b'.repeat(32);
  assert.equal(await s.check(),false);
  assert.equal(s.ctx.state,null);
- assert.deepEqual(s.events,['./account.html']);
+ assert.equal(s.ctx.calendarRoot,null);
+ assert.deepEqual(s.events,['react-unmount','ledger-cleared','./account.html']);
 });
 test('guest mode and pending logout must not run a session check',async()=>{
  const s=setup(async()=>{throw Error('Must not run');});

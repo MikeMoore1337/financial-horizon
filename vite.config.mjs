@@ -3,6 +3,7 @@ import { copyFile, mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/p
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const OUTPUT = resolve(ROOT, 'dist');
@@ -27,7 +28,12 @@ const LEGACY_FILES = [
 // installed service workers during the transition. New pages use Vite bundles.
 async function copyLegacyShell() {
   for (const file of LEGACY_FILES) {
-    const source = file === 'state-migrations.js' ? 'legacy/state-migrations.js' : file;
+    const source =
+      file === 'state-migrations.js'
+        ? 'legacy/state-migrations.js'
+        : file === 'app.js'
+          ? 'legacy/app.js'
+          : file;
     await copyFile(join(ROOT, source), join(OUTPUT, file));
   }
   for (const file of await walk(join(ROOT, 'assets'))) {
@@ -128,6 +134,7 @@ export default defineConfig({
     },
   },
   plugins: [
+    react(),
     {
       name: 'financial-horizon-compatible-pwa-shell',
       apply: 'build',

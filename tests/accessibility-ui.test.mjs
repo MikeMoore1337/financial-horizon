@@ -6,6 +6,7 @@ const read=name=>readFileSync(new URL('../'+name,import.meta.url),'utf8');
 const html=read('index.html');
 const account=read('account.html');
 const app=read('app.js');
+const calendar=read('src/react/Calendar.tsx');
 const css=read('styles.css');
 const sw=read('sw.js');
 
@@ -38,11 +39,13 @@ test('approved #44 XLSX preview lists have keyboard focus and accessible region 
 });
 
 test('approved #44 calendar date exposes visible label, full date and selected state',()=>{
- assert.match(app,/aria-labelledby="calendar-day-number-/);
- assert.match(app,/aria-describedby="calendar-day-description-/);
- assert.match(app,/aria-pressed="/);
- assert.match(app,/id="calendar-day-summary-/);
- assert.match(app,/class="visually-hidden" id="calendar-day-description-/);
+ assert.match(calendar,/aria-labelledby=/);
+ assert.match(calendar,/calendar-day-number-/);
+ assert.match(calendar,/aria-describedby=/);
+ assert.match(calendar,/calendar-day-description-/);
+ assert.match(calendar,/aria-pressed=/);
+ assert.match(calendar,/calendar-day-summary-/);
+ assert.match(calendar,/visually-hidden/);
  assert.match(app,/document\.querySelector\('\.cal-day\.selected'\)\?\.focus\(\{preventScroll:true\}\)/);
  assert.doesNotMatch(app,/data-date="\$\{d\}" aria-label=/);
 });

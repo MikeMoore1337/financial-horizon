@@ -25,7 +25,7 @@ A responsive web app and installable PWA - no bank connection or mandatory sign-
     <img src="https://github.com/MikeMoore1337/financial-horizon/actions/workflows/tests.yml/badge.svg?branch=main" alt="GitHub Actions status">
   </a>
   <br>
-  <sub>PWA · IndexedDB · JavaScript · FastAPI · Guest-first</sub>
+  <sub>React 19 · TypeScript · Vite · PWA · IndexedDB · FastAPI</sub>
 </p>
 
 </div>
@@ -95,12 +95,14 @@ Financial Horizon follows a **local-first** model:
 
 ## Quick start
 
-Explore the [live guest experience](https://fin-horizon.mikemoore.top/?guest=1), or serve the source locally:
+Explore the [live guest experience](https://fin-horizon.mikemoore.top/?guest=1), or build and serve the application locally with Vite (serving raw source HTML is no longer supported):
 
 ~~~bash
 git clone https://github.com/MikeMoore1337/financial-horizon.git
 cd financial-horizon
-python3 -m http.server 8765 --bind 127.0.0.1
+npm ci
+npm run build
+python3 -m http.server 8765 --bind 127.0.0.1 --directory dist
 ~~~
 
 Open **http://127.0.0.1:8765/** and choose **«Продолжить без регистрации»** (continue without registering). On Windows, use `py` instead of `python3`. Guest mode does not need the authentication backend. Avoid opening `index.html` directly from a `file://` URL.
@@ -111,7 +113,7 @@ HTTPS is required to install the hosted PWA. Browser profiles, separate browsers
 
 | Layer | Implementation |
 | --- | --- |
-| Frontend | HTML, CSS, JavaScript ES modules; no mandatory frontend build step |
+| Frontend | Vite 8, TypeScript 6, React 19 (Calendar, staged migration), HTML/CSS and existing ES modules |
 | Storage | IndexedDB, versioned migrations, concurrent-write checks |
 | Backup encryption | Web Crypto API, AES-256-GCM, PBKDF2-SHA256 |
 | Offline | Web App Manifest, Service Worker |
@@ -122,7 +124,9 @@ HTTPS is required to install the hosted PWA. Browser profiles, separate browsers
 <summary><strong>Repository layout and test commands</strong></summary>
 
 ~~~text
-index.html / app.js / styles.css   User interface
+index.html / app.js / styles.css   UI entry point and shell
+src/react/Calendar.tsx             React Calendar (stage #72)
+legacy/app.js                      Older installed PWA compatibility
 finance.js / ledger-operations.js  Financial calculations and ledger
 storage.js / state-migrations.js   IndexedDB and migrations
 backup.js / excel-import.js        Encrypted backup and imports
@@ -137,6 +141,11 @@ deploy/                             Deployment configuration example
 
 ~~~bash
 npm ci
+npm run lint
+npm run typecheck
+npm run test:component
+npm run build
+npm run test:build
 npm test
 python3 -m pip install -r backend/requirements-test.txt
 python3 -m pytest -q backend/tests/
