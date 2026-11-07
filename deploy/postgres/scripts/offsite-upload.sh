@@ -26,9 +26,14 @@ esac
 [[ -f "$FH_FINANCE_OFFSITE_SSH_KEY" && ! -L "$FH_FINANCE_OFFSITE_SSH_KEY" &&
    -f "$FH_FINANCE_OFFSITE_KNOWN_HOSTS" && ! -L "$FH_FINANCE_OFFSITE_KNOWN_HOSTS" ]] ||
   fail "Local SSH key/known_hosts files must be regular files"
-[[ "$(stat -c %a "$FH_FINANCE_OFFSITE_SSH_KEY")" = 600 ||
-   "$(stat -c %a "$FH_FINANCE_OFFSITE_SSH_KEY")" = 400 ]] ||
-  fail "SSH identity permissions must be 0600 or 0400"
+[[ "$(stat -c %u "$FH_FINANCE_OFFSITE_SSH_KEY")" = 0 ]] &&
+  [[ "$(stat -c %u "$FH_FINANCE_OFFSITE_KNOWN_HOSTS")" = 0 ]] ||
+  fail "SSH identity and pinned host keys must be root-owned"
+for trusted_file in "$FH_FINANCE_OFFSITE_SSH_KEY" "$FH_FINANCE_OFFSITE_KNOWN_HOSTS"; do
+  [[ "$(stat -c %a "$trusted_file")" = 600 ||
+     "$(stat -c %a "$trusted_file")" = 400 ]] ||
+    fail "SSH identity/host key files must be 0600 or 0400"
+done
 
 backup_dir="$(realpath -- "${FH_FINANCE_BACKUP_DIR:-/var/backups/financial-horizon-finance}")"
 archive="$(realpath -- "$1")"
