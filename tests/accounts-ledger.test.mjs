@@ -172,7 +172,8 @@ test('negative and zero balances, explicit reserves and overflow thresholds', ()
   assert.throws(() => record(s, id(2), 'income', 1.01), RangeError);
   assert.throws(() => record(s, id(2), 'income', MAX_MINOR + 1), RangeError);
   const maxed = create(emptyLedger(id(5)), id(6), MAX_MINOR);
-  assert.throws(() => record(maxed, id(6), 'income', 1), /Остаток/);
+  const increased = record(maxed, id(6), 'income', 1);
+  assert.equal(accountBalanceMinor(increased, id(6)), MAX_MINOR + 1);
 });
 
 test('two concurrent tabs reject stale revisions, leaving confirmed state unchanged', () => {
@@ -265,4 +266,21 @@ test('untrusted command cannot bypass posting shape by spoofing transaction kind
   assert.throws(() => apply(s, 'transaction.record', {
     id: unique(), accountId: id(2), kind: 'transfer', signedMinor: -1, occurredOn: '2026-11-07',
   }, expectFor(s, id(2))), /Неизвестный вид/);
+});
+
+test('aggregate balances and reservations can exceed a single-posting cap while staying safe integers', () => {
+  let s = create(emptyLedger(id(1)), id(2), MAX_MINOR);
+  s = create(s, id(3), MAX_MINOR);
+  assert.equal(totalBalanceMinor(s), MAX_MINOR * 2);
+  assert.equal(availableBalanceMinor(s, id(2), MAX_MINOR + 100), -100);
+  s = record(s, id(2), 'income', MAX_MINOR);
+  assert.equal(accountBalanceMinor(s, id(2)), MAX_MINOR * 2);
+  assert.equal(totalBalanceMinor(s), MAX_MINOR * 3);
+});
+
+test('archivedAt rejects non-ISO timestamps rather than trusting Date.parse coercion', () => {
+  const s = create(emptyLedger(id(1)), id(2), 0);
+  for (const archivedAt of ['2026-11-07', 'not-date', '2026-11-07T10:00:00+00:00']) {
+    assert.throws(() => apply(s, 'account.archive', { accountId: id(2), archivedAt }, expectFor(s, id(2))), /Неверная дата/);
+  }
 });
