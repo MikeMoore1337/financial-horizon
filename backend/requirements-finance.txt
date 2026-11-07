@@ -1,0 +1,5 @@
+# Financial database only. Do not add to the independent auth SQLite service.
+SQLAlchemy>=2.0.44,<2.1
+alembic>=1.16.5,<2
+psycopg[binary]>=3.2.10,<4
+sqlparse>=0.5.3,<1
