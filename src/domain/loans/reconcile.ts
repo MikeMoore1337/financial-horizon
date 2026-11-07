@@ -1,7 +1,7 @@
 import { assertMoney, calendarDays, parseDate } from './math.ts';
 import type { BankScheduleRow, LoanRow, ScheduleDifference, ScheduleReconciliation } from './types.ts';
 
-function validateSchedule(rows: readonly BankScheduleRow[], name: string, requireAllocated = false): void {
+function validateSchedule(rows: readonly BankScheduleRow[], name: string): void {
   if (!Array.isArray(rows) || rows.length > 1500) throw new RangeError(`${name}: expected <=1500 rows`);
   let previous = '';
   for (const row of rows) {
@@ -13,10 +13,6 @@ function validateSchedule(rows: readonly BankScheduleRow[], name: string, requir
     for (const field of ['interestCents', 'principalCents', 'balanceCents'] as const) {
       const value = row[field];
       if (value !== null && value !== undefined) assertMoney(value, `${name}.${field}`);
-    }
-    if (requireAllocated && row.interestCents != null && row.principalCents != null &&
-        row.interestCents + row.principalCents !== row.amountCents) {
-      throw new RangeError(`${name}: amount does not equal interest + principal`);
     }
   }
 }
@@ -36,7 +32,7 @@ export function reconcileLoanSchedule(
   imported: readonly BankScheduleRow[],
 ): ScheduleReconciliation {
   validateSchedule(calculated, 'calculated');
-  validateSchedule(imported, 'imported', true);
+  validateSchedule(imported, 'imported');
   const rows: ScheduleDifference[] = [];
   const max = Math.max(calculated.length, imported.length);
   for (let i = 0; i < max; i++) {
@@ -46,6 +42,10 @@ export function reconcileLoanSchedule(
       ours && bank && ours[field] != null && bank[field] != null
         ? ours[field] - bank[field] : null;
     const dateDifferenceDays = ours && bank ? calendarDays(bank.date, ours.date) : null;
+    const missingFields = (['interestCents', 'principalCents', 'balanceCents'] as const)
+      .filter(field => !ours || !bank || ours[field] == null || bank[field] == null);
+    const bankUnallocatedCents = bank?.interestCents != null && bank.principalCents != null
+      ? bank.amountCents - bank.interestCents - bank.principalCents : null;
     const row = {
       period: i + 1,
       calculated: ours,
@@ -55,11 +55,14 @@ export function reconcileLoanSchedule(
       interestDeltaCents: delta('interestCents'),
       principalDeltaCents: delta('principalCents'),
       balanceDeltaCents: delta('balanceCents'),
+      bankUnallocatedCents,
+      missingFields,
     };
     rows.push({ ...row,
       differs: !ours || !bank || dateDifferenceDays !== 0 ||
         [row.amountDeltaCents, row.interestDeltaCents,
-          row.principalDeltaCents, row.balanceDeltaCents].some(value => value !== null && value !== 0),
+          row.principalDeltaCents, row.balanceDeltaCents, row.bankUnallocatedCents]
+          .some(value => value !== null && value !== 0),
     });
   }
   const calculatedClosureDate = closureDate(calculated);
@@ -67,8 +70,12 @@ export function reconcileLoanSchedule(
   const closureDateDifferenceDays = calculatedClosureDate && importedClosureDate
     ? calendarDays(importedClosureDate, calculatedClosureDate) : null;
   const mismatchedRows = rows.filter(row => row.differs).length;
+  const comparisonComplete = rows.length > 0 && rows.every(row =>
+    row.calculated && row.imported && row.missingFields.length === 0);
+  const matchingKnownFields = rows.length > 0 && mismatchedRows === 0;
   return { rows, mismatchedRows, calculatedClosureDate, importedClosureDate,
-    closureDateDifferenceDays,
-    exactMatch: mismatchedRows === 0 && calculatedClosureDate === importedClosureDate,
+    closureDateDifferenceDays, comparisonComplete, matchingKnownFields,
+    exactMatch: comparisonComplete && matchingKnownFields && calculatedClosureDate !== null &&
+      calculatedClosureDate === importedClosureDate,
   };
 }
