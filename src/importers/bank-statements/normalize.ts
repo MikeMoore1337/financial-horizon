@@ -117,7 +117,15 @@ function parseMoney(value: BankCell | undefined, style: NumberFormat): {
         Math.abs(value100 - rounded) > 0.00001) return { cents: null, negative: false, issue: 'INVALID_AMOUNT' };
     return { cents: rounded, negative: value < 0 };
   }
-  let raw = text(value).replace(/[\u00a0\u202f\s]/g, '').replace(/(?:руб(?:лей|ля|ль)?|RUB|RUR|₽)$/i, '');
+  let raw = text(value).replace(/(?:руб(?:лей|ля|ль)?|RUB|RUR|₽)\s*$/i, '')
+    .trim().replace(/[\u00a0\u202f]/g, ' ');
+  if (/\s/.test(raw)) {
+    const number = raw.replace(/^\((.*)\)$/, '$1').replace(/^[+-]/, '');
+    if (!/^\d{1,3}(?: \d{3})+(?:[.,]\d{1,2})?$/.test(number)) {
+      return { cents: null, negative: false, issue: 'INVALID_AMOUNT' };
+    }
+  }
+  raw = raw.replace(/ /g, '');
   if (!raw) return { cents: null, negative: false, issue: 'EMPTY_AMOUNT' };
   const negative = /^\(.*\)$/.test(raw) || raw.startsWith('-');
   raw = raw.replace(/^\((.*)\)$/, '$1').replace(/^[+-]/, '');
@@ -176,8 +184,15 @@ export async function normalizeBankStatement(
   const { mapping, accounts } = options;
   const warnings = [...table.warnings, ...mappingWarnings(table.headers, mapping)];
   if (warnings.some(w => w.severity === 'error')) {
-    return { fileDigest: table.fileDigest, mapping, rows: [], warnings,
-      accepted: 0, rejected: table.rows.length, inflowCents: 0, outflowCents: 0, transfersCents: 0 };
+    return {
+      fileDigest: table.fileDigest, mapping,
+      rows: table.rows.map(row => ({
+        rowNumber: row.rowNumber, operation: null,
+        warnings: warnings.filter(x => x.severity === 'error').map(x => ({ ...x, row: row.rowNumber })),
+      })),
+      warnings, accepted: 0, rejected: table.rows.length,
+      inflowCents: 0, outflowCents: 0, transfersCents: 0,
+    };
   }
   const entries: OperationPreview[] = [];
   let inflowCents = 0, outflowCents = 0, transfersCents = 0;
@@ -191,6 +206,9 @@ export async function normalizeBankStatement(
     const err = (code: string, message: string, field?: MappableField) =>
       issues.push(warn(code, message, 'error', row, field ? mapping[field] : undefined));
     const note = (code: string, message: string) => issues.push(warn(code, message, 'warning', row));
+    if (source.cells.length !== table.headers.length) {
+      err('ROW_WIDTH', 'Количество колонок не совпадает с заголовком');
+    }
     const date = parseDate(get(source.cells, 'date'), table, options.dateOrder);
     if (!date.iso) err(date.issue || 'INVALID_DATE', 'Дата отсутствует или неоднозначна', 'date');
     let amountCents: number | null = null, isNegative = false;
@@ -271,7 +289,17 @@ export async function normalizeBankStatement(
     else transfersCents += amountCents;
   }
   if (![inflowCents, outflowCents, transfersCents].every(Number.isSafeInteger)) {
-    warnings.push(warn('TOTAL_OVERFLOW', 'Суммарные денежные потоки превышают безопасный диапазон', 'error'));
+    const overflow = warn('TOTAL_OVERFLOW', 'Суммарные денежные потоки превышают безопасный диапазон', 'error');
+    warnings.push(overflow);
+    return {
+      fileDigest: table.fileDigest, mapping, warnings,
+      rows: entries.map(entry => ({
+        ...entry, operation: null,
+        warnings: [...entry.warnings, { ...overflow, row: entry.rowNumber }],
+      })),
+      accepted: 0, rejected: entries.length,
+      inflowCents: 0, outflowCents: 0, transfersCents: 0,
+    };
   }
   return {
     fileDigest: table.fileDigest, mapping, rows: entries, warnings,
