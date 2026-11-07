@@ -118,6 +118,8 @@ jobs:
         run: bash deploy/postgres/scripts/ci-restore.sh
         env:
           FH_FINANCE_CI_POSTGRES_CONTAINER: ${{ job.services.pg.id }}
+      - name: Build and boot isolated production-compose configuration
+        run: bash deploy/postgres/scripts/ci-compose.sh
       - name: Prevent unsafe downgrade on populated financial DB
         run: |
           if alembic -c backend/finance_db/alembic.ini downgrade base; then
