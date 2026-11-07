@@ -61,7 +61,7 @@ test('server-advertised capability gates the account action and leaves settings 
  assert.doesNotMatch(app,/async function revokeOtherEmailSessions/);
  assert.doesNotMatch(app,/id="account-session" hidden/);
  assert.match(index,/id="account-entry-toolbar"/);
- assert.match(sw,/financial-horizon-shell-v25-theme-auth/);
- assert.ok(sw.includes("'./app.js?rev=auth-theme-v25'"));
+ assert.match(sw,/financial-horizon-shell-v26-a11y/);
+ assert.ok(sw.includes("'./app.js?rev=auth-theme-v26'"));
  assert.ok(sw.includes("'./account.js?rev=auth-theme-v25'"));
 });

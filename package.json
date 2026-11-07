@@ -18,6 +18,7 @@
     "audit:deps": "npm audit --audit-level=high"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
     "@playwright/test": "1.65.0",
     "@typescript-eslint/parser": "8.72.1",
     "eslint": "10.14.0",

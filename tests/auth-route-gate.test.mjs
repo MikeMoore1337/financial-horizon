@@ -32,7 +32,7 @@ test('auth API is never intercepted by the PWA cache; account route has its own 
  const sw=get('sw.js');
  assert.match(sw,/url\.pathname\.startsWith\('\/api\/'\)/);
  assert.match(sw,/pathname\.endsWith\('\/account\.html'\)\?'\.\/account\.html':'\.\/index\.html'/);
- assert.match(sw,/financial-horizon-shell-v25-theme-auth/);
+ assert.match(sw,/financial-horizon-shell-v26-a11y/);
  assert.match(sw,/'\.\/storage\.js\?rev=auth-scopes-v18'/);
  assert.match(sw,/'\.\/auth-session\.js\?rev=auth-scopes-v18'/);
  assert.match(sw,/'\.\/account\.js\?rev=auth-theme-v25'/);

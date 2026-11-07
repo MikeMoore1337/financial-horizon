@@ -44,12 +44,12 @@ test('actions, local persistence feedback and activity log stay available',()=>{
 test('versioned app shell is consistent across both PWA pages',()=>{
  const sw=read('sw.js');
  const account=read('account.html');
- for(const p of ['styles.css?rev=auth-theme-v27','app.js?rev=auth-theme-v25']) {
+ for(const p of ['styles.css?rev=auth-theme-v28','app.js?rev=auth-theme-v26']) {
   assert.ok(sw.includes(p),p);
   assert.ok(html.includes(p),p);
  }
- assert.ok(account.includes('styles.css?rev=auth-theme-v27'));
- assert.ok(sw.includes('financial-horizon-shell-v25-theme-auth'));
+ assert.ok(account.includes('styles.css?rev=auth-theme-v28'));
+ assert.ok(sw.includes('financial-horizon-shell-v26-a11y'));
 });
 
 test('settings primary actions inherit the common income-button palette in both themes',()=>{
