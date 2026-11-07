@@ -480,3 +480,17 @@ test('CSV metadata preamble can be skipped by choosing a physical header row', a
   await assert.rejects(readBankStatementFile(input(raw), { headerRowNumber: 100 }), /заголовка/);
   await assert.rejects(readBankStatementFile(input(raw), { headerRowNumber: 0 }), /заголовка/);
 });
+
+
+test('CSV parsing exposes detected encoding/delimiter and warns about guessed legacy encoding', async () => {
+  const old = Buffer.from('c4e0f2e03bd1f3ecece00a30372e31312e323032363b2d31300a', 'hex');
+  const parsed = await readBankStatementFile(old, { filename: 'legacy.csv' });
+  assert.equal(parsed.csvEncoding, 'windows-1251');
+  assert.equal(parsed.csvDelimiter, ';');
+  assert.equal(parsed.headerRowNumber, 1);
+  assert.ok(parsed.warnings.some(x => x.code === 'ENCODING_GUESSED'));
+  const explicit = await readBankStatementFile(old, {
+    filename: 'legacy.csv', csvEncoding: 'windows-1251',
+  });
+  assert.equal(explicit.warnings.some(x => x.code === 'ENCODING_GUESSED'), false);
+});

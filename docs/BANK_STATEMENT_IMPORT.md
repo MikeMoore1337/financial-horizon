@@ -74,6 +74,8 @@ are deliberately left unchanged.
   data before computing any SHA-256 digest.
   UTF-8, Windows-1251/1252, IBM866, UTF-16 LE/BE. Auto mode tests UTF-8
   then Windows-1251; other encodings require explicit selection.
+  The returned table exposes csvEncoding/csvDelimiter; a guessed Windows-1251
+  encoding produces a warning for manual review before confirmation.
 - XLSX: 6 MB archive, 256 ZIP members, 8 MB per part, 24 MB total declared
   uncompressed, 10,000 rows, 120,000 cells. CRC32 validated, streaming
   inflation length-capped. ZIP encryption, zip64, macros, links to external

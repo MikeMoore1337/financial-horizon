@@ -26,6 +26,8 @@ export interface BankStatementTable {
   filename: string;
   headers: string[];
   headerRowNumber: number;
+  csvEncoding?: string;
+  csvDelimiter?: string;
   rows: BankTableRow[];
   warnings: ImportWarning[];
   sheetName?: string;

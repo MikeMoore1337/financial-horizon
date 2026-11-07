@@ -151,6 +151,10 @@ export function readBankCsv(
   const headers = headerRow.cells.map(x => String(x || ''));
   rows.splice(0, headerIndex + 1);
   const warnings: ImportWarning[] = [];
+  if (encoding === 'windows-1251' && (!options.encoding || options.encoding === 'auto')) {
+    warnings.push({ code: 'ENCODING_GUESSED', severity: 'warning',
+      message: 'Предположена кодировка Windows-1251; проверьте кириллицу перед импортом' });
+  }
   if (headerIndex > 0) {
     warnings.push({ code: 'SKIPPED_PREAMBLE', severity: 'info',
       message: 'Строки перед выбранным заголовком пропущены', row: headerRow.rowNumber });

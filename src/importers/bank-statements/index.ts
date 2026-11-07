@@ -55,5 +55,6 @@ export async function readBankStatementFile(
   return {
     format, fileDigest, filename, headers: parsed.headers,
     rows: parsed.rows, warnings: parsed.warnings, headerRowNumber: parsed.headerRowNumber,
+    csvEncoding: parsed.encoding, csvDelimiter: parsed.delimiter,
   };
 }

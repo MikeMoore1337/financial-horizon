@@ -140,6 +140,7 @@ export function draftBankImportUndo(
 ): ImportUndoPlan {
   const owned = existing.filter(x => x.importBatchKey === batch.batchKey && !x.voidedAt);
   if (owned.length !== batch.expectedOperationCount ||
+      new Set(owned.map(x => x.id)).size !== owned.length ||
       new Set(owned.map(x => x.sourceKey)).size !== owned.length ||
       batch.sourceKeys.some(key => !owned.some(x => x.sourceKey === key))) {
     throw new Error('Невозможно безопасно отменить частично изменённую партию');
