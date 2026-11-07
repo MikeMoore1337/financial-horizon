@@ -394,3 +394,37 @@ test('invalid trailing timestamp text or time values do not silently become a va
   assert.equal(preview.rows[2].operation.date, '2026-11-07');
   assert.ok(preview.rows[1].warnings.some(x => x.code === 'INVALID_TIME'));
 });
+
+
+test('IBM866, Windows-1252 and UTF-16BE bank CSV decoding uses explicit encodings or BOM', () => {
+  const ibm866 = Buffer.from('84a0e2a03b91e3acaca00a30372e31312e323032363b2d31300a', 'hex');
+  assert.deepEqual(readBankCsv(ibm866, { encoding: 'ibm866' }).headers, ['Дата', 'Сумма']);
+  const cp1252 = Buffer.from('52e973756de93b416d6f756e740a372e31312e323032363b2d31300a', 'hex');
+  assert.deepEqual(readBankCsv(cp1252, { encoding: 'windows-1252' }).headers, ['Résumé', 'Amount']);
+  const utf16be = Buffer.from(
+    'feff0414043004420430003b04210443043c043c0430000a00300037002e00310031002e0032003000320036003b002d00310030000a',
+    'hex',
+  );
+  assert.deepEqual(readBankCsv(utf16be).headers, ['Дата', 'Сумма']);
+});
+
+test('empty CSV lines are skipped, physical row numbers survive quoted linebreaks', () => {
+  const data = 'Дата;Сумма;Описание\n\n07.11.2026;-100;"Много\nстрок"\n\n08.11.2026;200;Доход\n';
+  const parsed = readBankCsv(input(data));
+  assert.equal(parsed.rows.length, 2);
+  assert.deepEqual(parsed.rows.map(x => x.rowNumber), [3, 6]);
+});
+
+test('pre-hash file size guard rejects excessively large CSV and XLSX inputs', async () => {
+  await assert.rejects(
+    readBankStatementFile(new Uint8Array(4_000_001), { filename: 'oversized.csv' }),
+    /4 МБ/,
+  );
+  const oversizedZip = new Uint8Array(6_000_001);
+  oversizedZip[0] = 0x50; oversizedZip[1] = 0x4b;
+  await assert.rejects(
+    readBankStatementFile(oversizedZip, { filename: 'oversized.xlsx' }),
+    /6 МБ/,
+  );
+  await assert.rejects(readBankStatementFile(new Uint8Array(0)), /пуст/);
+});
