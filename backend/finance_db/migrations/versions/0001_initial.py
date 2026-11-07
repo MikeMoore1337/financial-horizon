@@ -22,7 +22,10 @@ def upgrade() -> None:
     script = Path(__file__).resolve().parents[1] / "ddl" / "0001_initial.sql"
     for statement in sqlparse.split(script.read_text(encoding="utf-8")):
         if statement.strip():
-            bind.exec_driver_sql(statement)
+            # psycopg 3's DB-API parser interprets PostgreSQL format('%I')
+            # in PL/pgSQL DO blocks as a driver placeholder unless escaped.
+            # There are no driver-bound parameters in reviewed migration SQL.
+            bind.exec_driver_sql(statement.replace("%", "%%"))
 
 
 def downgrade() -> None:
