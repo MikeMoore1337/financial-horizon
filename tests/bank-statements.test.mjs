@@ -610,3 +610,21 @@ test('category alias lookup ignores inherited constructor/__proto__ names', asyn
   assert.equal(invalid.rejected, 1);
   assert.ok(invalid.rows[0].warnings.some(x => x.code === 'INVALID_CATEGORY_ALIAS'));
 });
+
+
+test('typical bank headings map to correct fields without changing imported amounts', async () => {
+  const table = await readBankStatementFile(input(
+    'Дата и время операции;Сумма в валюте счёта;Комментарий;Номер счёта;Тип операции;Валюта операции;Transaction UID\n' +
+    '07.11.2026;-450,25;Условная покупка;Основной;расход;RUB;TX-ABC\n',
+  ));
+  const { mapping, warnings } = suggestColumnMapping(table.headers);
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(mapping, {
+    date: 0, amount: 1, description: 2, account: 3,
+    kind: 4, currency: 5, externalId: 6,
+  });
+  const preview = await normalizeBankStatement(table, { mapping, accounts });
+  assert.equal(preview.accepted, 1);
+  assert.equal(preview.outflowCents, 45025);
+  assert.equal(preview.rows[0].operation.externalId, 'TX-ABC');
+});
