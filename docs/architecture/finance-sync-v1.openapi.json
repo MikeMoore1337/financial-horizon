@@ -655,6 +655,252 @@
           }
         }
       }
+    },
+    "/api/finance/v1/imports/{batch_id}": {
+      "get": {
+        "tags": [
+          "import"
+        ],
+        "summary": "Resume interrupted import and query batch status; never exposes other user batches",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized batch status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "batch_id",
+                    "status",
+                    "received_chunks",
+                    "base_revision"
+                  ],
+                  "properties": {
+                    "batch_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "status": {
+                      "enum": [
+                        "staged",
+                        "reviewed",
+                        "committed",
+                        "cancelled"
+                      ]
+                    },
+                    "received_chunks": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "base_revision": {
+                      "$ref": "#/components/schemas/Revision"
+                    },
+                    "committed_revision": {
+                      "$ref": "#/components/schemas/Revision"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Session missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such authorized batch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/finance/v1/imports/{batch_id}/chunks/{index}": {
+      "put": {
+        "tags": [
+          "import"
+        ],
+        "summary": "Stage idempotent bounded chunk. Never commits finance records before explicit confirmation.",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "chunk_sha256",
+                  "records"
+                ],
+                "properties": {
+                  "chunk_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "records": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1000,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "record_type",
+                        "legacy_id",
+                        "data"
+                      ],
+                      "properties": {
+                        "record_type": {
+                          "enum": [
+                            "entry",
+                            "loan",
+                            "settlement",
+                            "loan_payment",
+                            "category"
+                          ]
+                        },
+                        "legacy_id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128
+                        },
+                        "data": {
+                          "type": "object",
+                          "description": "Validated against selected legacy state version and typed domain mapping before commit"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Same chunk already accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Chunk staged, not published",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accepted": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Session missing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Batch not owned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Changed chunk digest or invalid state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Malformed records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -873,169 +1119,92 @@
             "description": "Map entity UUID -> expected version; must include each dependent existing entity"
           },
           "payload": {
-            "oneOf": [
-              {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "title",
-                  "direction",
-                  "amount_minor",
-                  "starts_on",
-                  "timezone",
-                  "recurrence_unit",
-                  "recurrence_every"
-                ],
-                "properties": {
-                  "title": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 160
-                  },
-                  "direction": {
-                    "enum": [
-                      "income",
-                      "expense"
-                    ]
-                  },
-                  "amount_minor": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "maximum": 1000000000000
-                  },
-                  "starts_on": {
-                    "type": "string",
-                    "format": "date"
-                  },
-                  "timezone": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 64
-                  },
-                  "recurrence_unit": {
-                    "enum": [
-                      "none",
-                      "month",
-                      "year"
-                    ]
-                  },
-                  "recurrence_every": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 120
-                  }
-                }
-              },
-              {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "from_account_id",
-                  "to_account_id",
-                  "amount_minor",
-                  "occurred_on"
-                ],
-                "properties": {
-                  "from_account_id": {
-                    "type": "string",
-                    "format": "uuid"
-                  },
-                  "to_account_id": {
-                    "type": "string",
-                    "format": "uuid"
-                  },
-                  "amount_minor": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 1000000000000
-                  },
-                  "occurred_on": {
-                    "type": "string",
-                    "format": "date"
-                  }
-                }
-              },
-              {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "loan_id",
-                  "amount_minor",
-                  "paid_on",
-                  "strategy"
-                ],
-                "properties": {
-                  "loan_id": {
-                    "type": "string",
-                    "format": "uuid"
-                  },
-                  "amount_minor": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 1000000000000
-                  },
-                  "paid_on": {
-                    "type": "string",
-                    "format": "date"
-                  },
-                  "strategy": {
-                    "enum": [
-                      "term",
-                      "amount"
-                    ]
-                  }
-                }
-              },
-              {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "reserve_id",
-                  "account_id",
-                  "delta_minor"
-                ],
-                "properties": {
-                  "reserve_id": {
-                    "type": "string",
-                    "format": "uuid"
-                  },
-                  "account_id": {
-                    "type": "string",
-                    "format": "uuid"
-                  },
-                  "delta_minor": {
-                    "type": "integer",
-                    "minimum": -1000000000000,
-                    "maximum": 1000000000000,
-                    "not": {
-                      "const": 0
-                    }
-                  }
-                }
-              },
-              {
-                "type": "object",
-                "additionalProperties": false,
-                "required": [
-                  "transaction_id",
-                  "reason"
-                ],
-                "properties": {
-                  "transaction_id": {
-                    "type": "string",
-                    "format": "uuid"
-                  },
-                  "reason": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 500
-                  }
+            "type": "object",
+            "description": "Discriminated by action; validated by allOf conditionals, not arbitrary payload"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "obligation.create"
                 }
               }
-            ],
-            "description": "Сервер выбирает конкретную схему строго по action, не только по форме payload"
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/ObligationCreatePayload"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "account.transfer"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/AccountTransferPayload"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "loan.payment.record"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/LoanPaymentPayload"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "reserve.allocate"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/ReserveAllocatePayload"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "transaction.reverse"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/TransactionReversePayload"
+                }
+              }
+            }
           }
-        }
+        ]
       },
       "CommandAck": {
         "type": "object",
@@ -1105,6 +1274,167 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          "min_available_revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        }
+      },
+      "ObligationCreatePayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "direction",
+          "amount_minor",
+          "starts_on",
+          "timezone",
+          "recurrence_unit",
+          "recurrence_every"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "direction": {
+            "enum": [
+              "income",
+              "expense"
+            ]
+          },
+          "amount_minor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000000000
+          },
+          "starts_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "recurrence_unit": {
+            "enum": [
+              "none",
+              "month",
+              "year"
+            ]
+          },
+          "recurrence_every": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 120
+          }
+        }
+      },
+      "AccountTransferPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "from_account_id",
+          "to_account_id",
+          "amount_minor",
+          "occurred_on"
+        ],
+        "properties": {
+          "from_account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "to_account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount_minor": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000000
+          },
+          "occurred_on": {
+            "type": "string",
+            "format": "date"
+          }
+        }
+      },
+      "LoanPaymentPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "loan_id",
+          "amount_minor",
+          "paid_on",
+          "strategy"
+        ],
+        "properties": {
+          "loan_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount_minor": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000000
+          },
+          "paid_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "strategy": {
+            "enum": [
+              "term",
+              "amount"
+            ]
+          }
+        }
+      },
+      "ReserveAllocatePayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reserve_id",
+          "account_id",
+          "delta_minor"
+        ],
+        "properties": {
+          "reserve_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "delta_minor": {
+            "type": "integer",
+            "minimum": -1000000000000,
+            "maximum": 1000000000000,
+            "not": {
+              "const": 0
+            }
+          }
+        }
+      },
+      "TransactionReversePayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "transaction_id",
+          "reason"
+        ],
+        "properties": {
+          "transaction_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
           }
         }
       }
