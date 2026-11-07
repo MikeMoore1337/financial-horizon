@@ -14,8 +14,14 @@
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "types": []
+    "types": [],
+    "jsx": "react-jsx"
   },
-  "include": ["src/types/**/*.ts", "state-migrations.ts"],
+  "include": [
+    "src/types/**/*.ts",
+    "state-migrations.ts",
+    "src/react/**/*.tsx",
+    "tests/react/**/*.tsx"
+  ],
   "exclude": ["dist", "node_modules", "backend", "tests"]
 }

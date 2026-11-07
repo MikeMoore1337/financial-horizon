@@ -8,7 +8,10 @@ const app=get('app.js');
 const start=app.indexOf('async function logoutEmailAccount(){');
 const end=app.indexOf('\nfunction pageHead(',start);
 assert.ok(start>=0&&end>start,'Logout handler must be present in app.js');
-const handler=app.slice(start,end);
+const revokeStart=app.indexOf('function revokeDisplayedLedger(){');
+const revokeEnd=app.indexOf('\nconst hasData=',revokeStart);
+assert.ok(revokeStart>=0&&revokeEnd>revokeStart);
+const handler=app.slice(revokeStart,revokeEnd)+'\n'+app.slice(start,end);
 
 function invoke({email='test@example.com',logout,initialBusy=false}={}){
  const events=[];
@@ -24,6 +27,8 @@ function invoke({email='test@example.com',logout,initialBusy=false}={}){
   busy:false,
   activeUserId:'a'.repeat(32),
   authBroadcast:null,
+  calendarRoot:{unmount:()=>events.push('react-unmount')},
+  $:()=>({replaceChildren:()=>events.push('ledger-cleared')}),
   GUEST_MODE_KEY:'fh-guest-session-v2',
   sessionStorage:{removeItem:key=>events.push('storage-remove:'+key)},
   emailSession:session,
@@ -43,6 +48,9 @@ test('successful logout returns to the login page after server confirmation',asy
  assert.equal(ui.events.filter(x=>x==='logout-request').length,1);
  assert.equal(ui.events.filter(x=>x==='redirect:./account.html').length,1);
  assert.ok(ui.events.indexOf('logout-request')<ui.events.indexOf('redirect:./account.html'));
+ assert.ok(ui.events.indexOf('react-unmount')>ui.events.indexOf('logout-request'));
+ assert.ok(ui.events.indexOf('react-unmount')<ui.events.indexOf('redirect:./account.html'));
+ assert.ok(ui.events.indexOf('ledger-cleared')<ui.events.indexOf('redirect:./account.html'));
  assert.ok(!ui.events.includes('render'),'Do not leave user on the ledger after logout');
 });
 

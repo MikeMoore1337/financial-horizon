@@ -25,7 +25,7 @@
     <img src="https://github.com/MikeMoore1337/financial-horizon/actions/workflows/tests.yml/badge.svg?branch=main" alt="Проверки GitHub Actions">
   </a>
   <br>
-  <sub>PWA · IndexedDB · JavaScript · FastAPI · Без обязательной регистрации</sub>
+  <sub>React 19 · TypeScript · Vite · PWA · IndexedDB · FastAPI</sub>
 </p>
 
 </div>
@@ -95,12 +95,14 @@ Financial Horizon построен по принципу **local-first**:
 
 ## Быстрый старт
 
-Для знакомства с приложением достаточно перейти в [гостевой режим](https://fin-horizon.mikemoore.top/?guest=1). Для запуска исходников локально:
+Для знакомства с приложением достаточно перейти в [гостевой режим](https://fin-horizon.mikemoore.top/?guest=1). Для локального запуска соберите приложение через Vite (прямой запуск исходного `index.html` больше не поддерживается):
 
 ~~~bash
 git clone https://github.com/MikeMoore1337/financial-horizon.git
 cd financial-horizon
-python3 -m http.server 8765 --bind 127.0.0.1
+npm ci
+npm run build
+python3 -m http.server 8765 --bind 127.0.0.1 --directory dist
 ~~~
 
 Откройте **http://127.0.0.1:8765/** и выберите «Продолжить без регистрации». В Windows вместо `python3` можно использовать `py`. Для гостевого режима backend авторизации не требуется. Не открывайте `index.html` через `file://` - используйте локальный HTTP-сервер.
@@ -111,7 +113,7 @@ python3 -m http.server 8765 --bind 127.0.0.1
 
 | Уровень | Реализация |
 | --- | --- |
-| Интерфейс | HTML, CSS, JavaScript (ES-модули), адаптивная PWA без обязательной сборки фронтенда |
+| Интерфейс | Vite 8, TypeScript 6, React 19 (календарь, поэтапная миграция), HTML/CSS и существующие ES-модули |
 | Данные | IndexedDB, версионируемые миграции и защита от конфликтов записи |
 | Резервирование | Web Crypto API, AES-256-GCM, PBKDF2-SHA256 |
 | Офлайн | Web App Manifest и Service Worker |
@@ -122,7 +124,9 @@ python3 -m http.server 8765 --bind 127.0.0.1
 <summary><strong>Структура репозитория и команды проверки</strong></summary>
 
 ~~~text
-index.html / app.js / styles.css   Интерфейс
+index.html / app.js / styles.css   Точка входа и оболочка
+src/react/Calendar.tsx             React-календарь (этап #72)
+legacy/app.js                      Совместимость со старыми установленными PWA
 finance.js / ledger-operations.js  Финансовые расчёты и операции
 storage.js / state-migrations.js   IndexedDB и миграции
 backup.js / excel-import.js        Резервные копии и импорт
@@ -137,6 +141,11 @@ deploy/                             Пример конфигурации раз
 
 ~~~bash
 npm ci
+npm run lint
+npm run typecheck
+npm run test:component
+npm run build
+npm run test:build
 npm test
 python3 -m pip install -r backend/requirements-test.txt
 python3 -m pytest -q backend/tests/

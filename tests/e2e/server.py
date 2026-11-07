@@ -133,7 +133,7 @@ def local_app(directory):
         base = ROOT if legacy_sw["enabled"] and (
             resource in PUBLIC_FILES | LEGACY_FILES
         ) else DIST
-        if legacy_sw["enabled"] and resource == "state-migrations.js":
+        if legacy_sw["enabled"] and resource in {"state-migrations.js", "app.js"}:
             base = ROOT / "legacy"
         target = (base / resource).resolve()
         if not target.is_relative_to(base.resolve()) or not target.is_file():
