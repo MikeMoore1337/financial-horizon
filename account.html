@@ -8,7 +8,7 @@
 <title>Аккаунт - Финансовый горизонт</title>
 <link rel="icon" type="image/svg+xml" href="./assets/brand/favicon.svg">
 <script src="./theme-bootstrap.js?rev=ios27-chrome-v17"></script>
-<link rel="stylesheet" href="./styles.css?rev=auth-theme-v27">
+<link rel="stylesheet" href="./styles.css?rev=auth-theme-v28">
 <link rel="stylesheet" href="./account.css?rev=auth-theme-v25">
 <script type="module" src="./account.js?rev=auth-theme-v25"></script>
 </head>
@@ -36,7 +36,7 @@
       <label class="auth-label" id="password-label">Пароль
         <input type="password" id="password" name="password" minlength="12" maxlength="128" autocomplete="current-password">
       </label>
-      <div id="turnstile-container" aria-label="Защитная проверка" hidden></div>
+      <div id="turnstile-container" role="group" aria-label="Защитная проверка" hidden></div>
       <button type="submit" id="auth-submit" class="button-primary" disabled>Войти</button>
     </form>
     <div class="auth-feedback" id="auth-feedback" role="status" aria-live="polite"></div>
@@ -58,7 +58,7 @@
         <label class="auth-label">Текущий пароль
           <input id="change-email-password" name="current-password" type="password" maxlength="128" autocomplete="current-password" required>
         </label>
-        <div id="change-email-challenge" aria-label="Проверка смены адреса"></div>
+        <div id="change-email-challenge" role="group" aria-label="Проверка смены адреса"></div>
         <button type="submit" id="change-email-submit" class="button-primary" disabled>Отправить подтверждение</button>
       </form>
     </section>

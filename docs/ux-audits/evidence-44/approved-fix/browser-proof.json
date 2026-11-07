@@ -1,0 +1,154 @@
+{
+  "baseline": "228ebd9114af07f40fddb526941858833a6ff7ad",
+  "method": "Vite 8 build preview using real Chromium Edge on local HTTP, synthetic guest-only",
+  "cases": [
+    {
+      "width": 320,
+      "height": 852,
+      "view": "obligations",
+      "theme": "light",
+      "viewport": 320,
+      "documentWidth": 320,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "name": "Добавить запись",
+      "tableVisible": false,
+      "mobileRowsVisible": true,
+      "accent": "#2870eb",
+      "green": "#0d8461",
+      "hashedAssets": [
+        "index-DbO5BpN2.js",
+        "styles-BBi6bYD1.css"
+      ],
+      "file": "obligations-320-light.png"
+    },
+    {
+      "width": 393,
+      "height": 852,
+      "view": "overview",
+      "theme": "light",
+      "viewport": 393,
+      "documentWidth": 393,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "name": "Добавить запись",
+      "tableVisible": null,
+      "mobileRowsVisible": null,
+      "accent": "#2870eb",
+      "green": "#0d8461",
+      "hashedAssets": [
+        "index-DbO5BpN2.js",
+        "styles-BBi6bYD1.css"
+      ],
+      "file": "overview-393-light.png"
+    },
+    {
+      "width": 393,
+      "height": 852,
+      "view": "overview",
+      "theme": "dark",
+      "viewport": 393,
+      "documentWidth": 393,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "name": "Добавить запись",
+      "tableVisible": null,
+      "mobileRowsVisible": null,
+      "accent": "#6c9dff",
+      "green": "#66d9af",
+      "hashedAssets": [
+        "index-DbO5BpN2.js",
+        "styles-BBi6bYD1.css"
+      ],
+      "file": "overview-393-dark.png"
+    },
+    {
+      "width": 768,
+      "height": 950,
+      "view": "obligations",
+      "theme": "light",
+      "viewport": 768,
+      "documentWidth": 768,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "name": "Добавить запись",
+      "tableVisible": false,
+      "mobileRowsVisible": true,
+      "accent": "#2870eb",
+      "green": "#0d8461",
+      "hashedAssets": [
+        "index-DbO5BpN2.js",
+        "styles-BBi6bYD1.css"
+      ],
+      "file": "obligations-768-light.png"
+    },
+    {
+      "width": 768,
+      "height": 950,
+      "view": "obligations",
+      "theme": "dark",
+      "viewport": 768,
+      "documentWidth": 768,
+      "htmlTheme": "dark",
+      "bodyTheme": "dark",
+      "metaTheme": "#172336",
+      "name": "Добавить запись",
+      "tableVisible": false,
+      "mobileRowsVisible": true,
+      "accent": "#6c9dff",
+      "green": "#66d9af",
+      "hashedAssets": [
+        "index-DbO5BpN2.js",
+        "styles-BBi6bYD1.css"
+      ],
+      "file": "obligations-768-dark.png"
+    },
+    {
+      "width": 1150,
+      "height": 950,
+      "view": "obligations",
+      "theme": "light",
+      "viewport": 1150,
+      "documentWidth": 1150,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "name": "Добавить запись",
+      "tableVisible": false,
+      "mobileRowsVisible": true,
+      "accent": "#2870eb",
+      "green": "#0d8461",
+      "hashedAssets": [
+        "index-DbO5BpN2.js",
+        "styles-BBi6bYD1.css"
+      ],
+      "file": "obligations-1150-light.png"
+    },
+    {
+      "width": 1151,
+      "height": 950,
+      "view": "obligations",
+      "theme": "light",
+      "viewport": 1151,
+      "documentWidth": 1151,
+      "htmlTheme": "light",
+      "bodyTheme": "light",
+      "metaTheme": "#ffffff",
+      "name": "Добавить запись",
+      "tableVisible": true,
+      "mobileRowsVisible": false,
+      "accent": "#2870eb",
+      "green": "#0d8461",
+      "hashedAssets": [
+        "index-DbO5BpN2.js",
+        "styles-BBi6bYD1.css"
+      ],
+      "file": "obligations-1151-light.png"
+    }
+  ],
+  "javascriptErrors": []
+}

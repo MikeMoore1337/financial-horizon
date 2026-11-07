@@ -15,7 +15,7 @@ const uuid=()=>crypto.randomUUID();
 const titles={overview:'Обзор',calendar:'Календарь',obligations:'Обязательства',loans:'Кредиты',settings:'Настройки'};
 let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null},passwordMode='export',restoreFile=null,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
 const emailSession=createEmailSession();
-let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null;
+let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
 const GUEST_MODE_KEY='fh-guest-session-v2';
 const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
 const monthEvents=()=>getMonthEvents(state,ui.month);
@@ -106,7 +106,7 @@ function renderCalendar(){
  const header=`<div class="month-controls"><button data-action="prev-month" aria-label="Предыдущий месяц">${svg('chevron')}</button><strong>${monthLabel(ui.month)}</strong><button data-action="next-month" aria-label="Следующий месяц">${svg('chevron')}</button></div>`;
  const heads=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(x=>`<div class="cal-head">${x}</div>`).join('');
  const blanks=Array.from({length:start},()=>'<div class="cal-blank"></div>').join('');
- const days=Array.from({length:end},(_,i)=>{const d=dayInMonth(ui.month,i+1);const todays=events.filter(e=>e.date===d);return `<button class="cal-day ${d===selected?'selected':''} ${d===today()?'today':''}" data-action="select-day" data-date="${d}" aria-label="${formatDate(d)}; ${todays.length} событий"><span class="cal-number">${i+1}</span><span class="cal-tokens">${todays.slice(0,4).map(e=>`<i class="${e.kind==='income'?'income':'expense'}"></i>`).join('')}</span><span class="cal-summ">${todays.slice(0,2).map(e=>`<span>${escapeHtml(e.title)}</span>`).join('')}</span></button>`}).join('');
+ const days=Array.from({length:end},(_,i)=>{const d=dayInMonth(ui.month,i+1);const todays=events.filter(e=>e.date===d);return `<button class="cal-day ${d===selected?'selected':''} ${d===today()?'today':''}" data-action="select-day" data-date="${d}" aria-labelledby="calendar-day-number-${d} calendar-day-summary-${d}" aria-describedby="calendar-day-description-${d}" aria-pressed="${d===selected}"><span class="cal-number" id="calendar-day-number-${d}">${i+1}</span><span class="cal-tokens">${todays.slice(0,4).map(e=>`<i class="${e.kind==='income'?'income':'expense'}"></i>`).join('')}</span> <span class="cal-summ" id="calendar-day-summary-${d}">${todays.slice(0,2).map(e=>`<span>${escapeHtml(e.title)}</span>`).join('')}</span><span class="visually-hidden" id="calendar-day-description-${d}">${formatDate(d)}; ${todays.length} событий</span></button>`}).join('');
  return pageHead('Календарь платежей','Поступления, регулярные обязательства и даты оплаты в едином календаре',`${action('new-entry',`${svg('plus')} Запись`,'button-primary')}`)+`
  <div class="cal-layout"><div><div class="surface"><div class="filter-bar">${header}<span class="pill">${events.length} событий</span></div><div class="calendar-grid">${heads}${blanks}${days}</div><div class="calendar-legend"><span><i></i>Поступления</span><span><i></i>Платежи</span></div></div></div>
  <div><div class="surface"><h2 class="cal-selected-title">${formatDate(selected)}</h2><div class="small-hint" style="margin-bottom:12px">Нажмите на дату, чтобы увидеть обязательства и отметить оплату</div><div class="plain-list">${selectedEvents.length?selectedEvents.map(e=>moneyRow(e)).join(''):'<div class="empty-mini">В этот день ничего не запланировано.</div>'}</div></div><div class="surface" style="margin-top:13px"><div class="kpi-label">Плановый итог месяца</div><div class="amount-medium">${rubles(totals.netPlanCents)}</div><div class="small-hint" style="margin-top:8px">Подтверждённый поток: ${rubles(totals.netFactCents)}. Суммы не включают начальный остаток на счетах.</div></div></div></div>`;
@@ -206,7 +206,15 @@ function renderSettings(){
  </section>
  </div>`;
 }
-function openDialog(sel){const dlg=$(sel);if(!dlg?.open)dlg.showModal();}
+function openDialog(sel){
+ const dlg=$(sel);if(!dlg||dlg.open)return;
+ const focused=document.activeElement;
+ const opener=focused instanceof HTMLElement&&focused!==document.body?focused:lastDialogActivator;
+ if(opener instanceof HTMLElement)dlg.addEventListener('close',()=>{
+  if(opener.isConnected&&!document.querySelector('dialog[open]'))opener.focus({preventScroll:true});
+ },{once:true});
+ dlg.showModal();
+}
 function formValue(form,name){return form.elements.namedItem(name).value;}
 function fillSelect(el,items,selected){el.innerHTML=items.map(x=>`<option value="${escapeHtml(x.id)}" ${x.id===selected?'selected':''}>${escapeHtml(x.title)}</option>`).join('');}
 function openEntry(id=null,kind='expense'){
@@ -273,7 +281,7 @@ async function handleAction(button){
  if(type==='edit-settlement'){const p=state.settlements.find(x=>x.id===id&&!x.voidedAt);if(p)openSettlement(p.entryId,p.occurrence,id);return;}
  if(type==='expand-entry'){ui.expandedEntry=ui.expandedEntry===id?null:id;render();return;}
  if(type==='select-loan'){ui.selectedLoan=id;render();return;}
- if(type==='select-day'){ui.selectedDate=button.dataset.date;render();return;}
+ if(type==='select-day'){ui.selectedDate=button.dataset.date;render();document.querySelector('.cal-day.selected')?.focus({preventScroll:true});return;}
  if(type==='prev-month'||type==='next-month'){ui.month=shiftMonth(ui.month,type==='prev-month'?-1:1);ui.selectedDate=dayInMonth(ui.month,Math.min(Number(ui.selectedDate.slice(-2))||1,28));render();return;}
  if(type==='filter'){ui.filter=button.dataset.filter;render();return;}
  if(type==='theme'){themeSet(button.dataset.theme);render();return;}
@@ -443,6 +451,11 @@ async function onFormSubmit(event){
  }catch(e){fail(e);}
 }
 function bindEvents(){
+ // Safari does not always focus clicked buttons; retain the actual dialog trigger.
+ document.addEventListener('click',event=>{
+  const button=event.target instanceof Element?event.target.closest('button,[role="button"]'):null;
+  if(button)lastDialogActivator=button;
+ },true);
  document.addEventListener('click',async event=>{
   const nav=event.target.closest('[data-view]');if(nav){event.preventDefault();navigation(nav.dataset.view);return;}
   const actionEl=event.target.closest('[data-action]');if(actionEl){event.preventDefault();try{await handleAction(actionEl);}catch(e){fail(e);}return;}
