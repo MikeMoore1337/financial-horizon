@@ -478,7 +478,21 @@ REVOKE ALL ON FUNCTION finance.reject_audit_mutation() FROM PUBLIC;
 GRANT USAGE ON SCHEMA finance TO fh_finance_runtime;
 GRANT SELECT,INSERT ON finance_profiles TO fh_finance_runtime;
 GRANT UPDATE (revision,min_available_revision,updated_at) ON finance_profiles TO fh_finance_runtime;
-GRANT SELECT,INSERT,UPDATE ON accounts,obligations,loans,reserves TO fh_finance_runtime;
+-- Deliberately deny UPDATE on tenant identity (profile_id,id), audit metadata
+-- and ownership; fields not listed here are immutable for the runtime role.
+GRANT SELECT,INSERT ON accounts,obligations,loans,reserves TO fh_finance_runtime;
+GRANT UPDATE (name,opening_minor,entity_revision,archived_at,updated_at)
+  ON accounts TO fh_finance_runtime;
+GRANT UPDATE (title,direction,amount_minor,starts_on,timezone,
+              recurrence_unit,recurrence_every,category,
+              entity_revision,deleted_at,updated_at)
+  ON obligations TO fh_finance_runtime;
+GRANT UPDATE (title,opening_minor,payment_minor,apr_basis_points,term_months,
+              due_day,as_of_date,calculation_version,imported_schedule,
+              entity_revision,deleted_at,updated_at)
+  ON loans TO fh_finance_runtime;
+GRANT UPDATE (title,target_minor,target_on,entity_revision,archived_at,updated_at)
+  ON reserves TO fh_finance_runtime;
 GRANT SELECT,INSERT ON ledger_transactions,ledger_postings,settlements,
   loan_payments,ledger_payment_links,reserve_allocations,command_receipts,
   change_log,import_batches,import_record_map TO fh_finance_runtime;
