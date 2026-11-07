@@ -175,6 +175,7 @@ test('long unbroken loan and category labels do not overflow the page',async({pa
      document:Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),
      titleVisible:document.querySelector('#main')?.textContent.includes('СинтетическийКредитБезПробелов'),
      titleWithinCard:!!label&&!!card&&label.getBoundingClientRect().right<=card.getBoundingClientRect().right+1,
+     maxLoanStatRight:Math.max(...[...document.querySelectorAll('.loan-stats>div')].map(el=>el.getBoundingClientRect().right)),
     };
    });
    if(state.document>state.viewport+1){
@@ -198,6 +199,7 @@ test('long unbroken loan and category labels do not overflow the page',async({pa
    expect(state.document,'Loan title overflow at '+width+'px in '+theme).toBeLessThanOrEqual(state.viewport+1);
    expect(state.titleVisible).toBe(true);
    expect(state.titleWithinCard).toBe(true);
+   expect(state.maxLoanStatRight,'Loan stat grid overflow at '+width+'px').toBeLessThanOrEqual(state.viewport+1);
   }
  }
  await view(page,'settings');
