@@ -41,7 +41,7 @@ function render(){
  $('#toolbar-title').textContent=titles[ui.view];
  document.querySelectorAll('[data-view]').forEach(el=>{const active=el.dataset.view===ui.view;el.classList.toggle('active',active);el.setAttribute('aria-current',active?'page':'false');});
  const main=$('#main');
- if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'){
+ if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'){
   if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main);}
   if(ui.view==='calendar'){
    const events=monthEvents(),totals=monthTotals(events);
@@ -60,7 +60,7 @@ function render(){
    const loanSummary=loan?{id:loan.id,title:loan.title,outstandingCents:snapshot.outstandingCents,monthlyCents:snapshot.monthlyCents,months:snapshot.months,
     percent:Math.max(0,Math.min(100,Math.round((1-snapshot.outstandingCents/loan.openingCents)*100)))}:null;
    screenRoot.render({view:'overview',props:{currentDate,monthTitle:monthLabel(ui.month),hasData:hasData(),totals,categories,upcoming,loan:loanSummary,rubles,formatDate}});
-  }else{
+  }else if(ui.view==='obligations'){
    const items=state.entries.filter(isActive)
     .filter(e=>ui.filter==='all'||(ui.filter==='regular'&&e.recurrence!=='once')||
      (ui.filter==='once'&&e.recurrence==='once')||(ui.filter==='income'&&e.kind==='income'))
@@ -76,10 +76,31 @@ function render(){
    screenRoot.render({view:'obligations',props:{rows,month:ui.month,monthTitle:monthLabel(ui.month),
     filter:ui.filter,expandedEntry:ui.expandedEntry,currentDate:today(),
     expenseCents:totals.expenseCents,expensePaidCents:totals.expensePaidCents,rubles,formatDate}});
+  }else{
+   const loans=state.loans.filter(isActive);
+   if(!loans.find(loan=>loan.id===ui.selectedLoan))ui.selectedLoan=loans[0]?.id||null;
+   const projected=loans.map(loan=>({loan,snapshot:loanLedger(loan,state.loanPayments)}));
+   const summaries=projected.map(({loan,snapshot})=>({
+    id:loan.id,title:loan.title,outstandingCents:snapshot.outstandingCents,
+    monthlyCents:snapshot.monthlyCents,months:snapshot.months,
+    paidPercent:Math.max(0,Math.min(100,Math.round((1-snapshot.outstandingCents/loan.openingCents)*100))),
+   }));
+   const current=projected.find(item=>item.loan.id===ui.selectedLoan);
+   const summary=summaries.find(item=>item.id===ui.selectedLoan);
+   const selected=current&&summary?{
+    ...summary,apr:current.loan.apr,dueDay:current.loan.dueDay,
+    projectedEnd:current.snapshot.projectedEnd,
+    scheduleCount:current.loan.schedule?.length||0,
+    scheduleSource:current.loan.scheduleSource||'CSV',
+    schedule:current.loan.schedule?.slice(0,4)||[],
+    history:state.loanPayments.filter(payment=>payment.loanId===current.loan.id)
+     .sort((a,b)=>b.date.localeCompare(a.date)||b.createdAt.localeCompare(a.createdAt)),
+   }:null;
+   screenRoot.render({view:'loans',props:{loans:summaries,selected,currentDate:today(),rubles,formatDate}});
   }
  }else{
   if(screenRoot){screenRoot.unmount();screenRoot=null;}
-  const sections={loans:renderLoans,settings:renderSettings};
+  const sections={settings:renderSettings};
   main.innerHTML=sections[ui.view]();
  }
  syncAccountControls();
@@ -131,17 +152,6 @@ async function logoutEmailAccount(){
 }
 function pageHead(title,subtitle,actions=''){return `<header class="page-header"><div><div class="eyebrow">${formatDate(today())} · Личные финансы</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div><div class="header-tools">${actions}</div></header>`;}
 const action=(type,label,kind='button-primary',props='')=>`<button class="${kind}" data-action="${type}" ${props}>${label}</button>`;
-function renderLoanHistory(loan,snapshot){
- const rows=state.loanPayments.filter(x=>x.loanId===loan.id).sort((a,b)=>b.date.localeCompare(a.date)||b.createdAt.localeCompare(a.createdAt));
- if(!rows.length)return '<p class="small-hint">Фактических платежей пока нет. Они появятся здесь после внесения.</p>';
- return `<div style="overflow-x:auto"><table class="compact-table"><thead><tr><th>Дата</th><th>Сумма</th><th>Статус</th><th></th></tr></thead><tbody>${rows.map(p=>`<tr><td>${formatDate(p.date)}</td><td>${rubles(p.amountCents)}</td><td>${p.voidedAt?'<span class="pill">Отменён</span>':'<span class="pill pill-paid">Учтён</span>'}</td><td>${p.voidedAt?'':action('void-payment','Отменить','button-text',`data-id="${escapeHtml(p.id)}"`)}</td></tr>`).join('')}</tbody></table></div>`;
-}
-function renderLoans(){
- const loans=state.loans.filter(isActive);if(!loans.find(l=>l.id===ui.selectedLoan))ui.selectedLoan=loans[0]?.id||null;
- const selected=loans.find(l=>l.id===ui.selectedLoan);const snap=selected?loanLedger(selected,state.loanPayments):null;
- return pageHead('Кредиты и ипотека','Остатки долга, реальные платежи и приблизительный прогноз погашения',`${action('new-loan',`${svg('plus')} Кредит`,'button-primary')}`)+`
- ${loans.length?`<div class="loan-grid"><div>${loans.map(l=>{const s=loanLedger(l,state.loanPayments);const paid=Math.max(0,Math.min(100,Math.round((1-s.outstandingCents/l.openingCents)*100)));return `<button class="loan-card ${l.id===ui.selectedLoan?'selected':''}" data-action="select-loan" data-id="${escapeHtml(l.id)}" aria-pressed="${l.id===ui.selectedLoan}"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><span class="title">${escapeHtml(l.title)}</span><span class="pill">${paid}% закрыто</span></div><div class="balance">${rubles(s.outstandingCents)}</div><div class="progress-track"><div class="progress-fill" style="width:${paid}%"></div></div><div class="small-hint" style="margin-top:10px">${rubles(s.monthlyCents)} / мес. · ${s.months??'—'} мес. приблизительно</div></button>`}).join('')}</div><div class="surface loan-detail"><div class="section-title" style="margin-top:0"><h2>${escapeHtml(selected.title)}</h2><span class="pill">${selected.apr}% годовых</span></div><div class="eyebrow">Текущий расчётный долг</div><div class="hero-amount" style="font-size:39px">${rubles(snap.outstandingCents)}</div><div class="loan-stats"><div><span>Плановый платёж</span><strong>${rubles(snap.monthlyCents)}</strong></div><div><span>Осталось ориентировочно</span><strong>${snap.months===null?'Нет расчёта':snap.months+' мес.'}</strong></div><div><span>Предполагаемая дата</span><strong>${snap.projectedEnd?formatDate(snap.projectedEnd):'Не определена'}</strong></div><div><span>День платежа</span><strong>${selected.dueDay}-е число</strong></div></div><div class="loan-actions">${action('pay',`${svg('plus')} Внести платёж`,'button-primary',`data-id="${escapeHtml(selected.id)}"`)}${action('edit-loan',`${svg('edit')} Изменить`,'button-secondary',`data-id="${escapeHtml(selected.id)}"`)}${action('schedule-import','Импорт графика CSV','button-secondary',`data-id="${escapeHtml(selected.id)}"`)}${action('archive-loan','В архив','button-secondary',`data-id="${escapeHtml(selected.id)}"`)}</div><div class="info-card" style="margin-top:14px"><strong style="font-size:13px">Расчёт по аннуитетной модели</strong><p class="small-hint" style="margin:7px 0 0">Не учитывает индивидуальные банковские правила, ежедневные проценты, комиссии и просрочки. Итоговые даты проверяйте по официальному графику.</p></div>${selected.schedule?.length?`<div class="section-title"><h2>Импортированный график</h2>${action('clear-schedule','Удалить график','button-text',`data-id="${escapeHtml(selected.id)}"`)}</div><span class="pill">${selected.schedule.length} строк</span><p class="small-hint">Источник: ${escapeHtml(selected.scheduleSource||'CSV')}. График хранится на устройстве для сверки с прогнозом; автоматически не подменяет факты.</p><div style="overflow:auto"><table class="compact-table"><tr><th>Дата</th><th>Платёж</th><th>Остаток</th></tr>${selected.schedule.slice(0,4).map(r=>`<tr><td>${formatDate(r.date)}</td><td>${rubles(r.amountCents)}</td><td>${rubles(r.balanceCents)}</td></tr>`).join('')}</table></div>`:''}<div class="loan-history"><h3>История оплат</h3>${renderLoanHistory(selected,snap)}</div></div></div>`:`<div class="surface empty-panel">${svg('credit')}<h3>Кредитов пока нет</h3><p>Можно добавить ипотеку, остаток и параметры платежа. График обновится после каждого сохранённого фактического платежа.</p>${action('new-loan','Добавить ипотеку или кредит','button-primary')}</div>`}`;
-}
 function renderSettings(){
  const deleted=[...state.entries.filter(x=>x.deletedAt).map(x=>({...x,entity:'entry'})),...state.loans.filter(x=>x.deletedAt).map(x=>({...x,entity:'loan'}))];
  const panelIcon=name=>'<div class="settings-symbol" aria-hidden="true">'+svg(name)+'</div>';

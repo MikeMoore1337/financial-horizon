@@ -4,11 +4,13 @@ import { flushSync } from 'react-dom';
 import { Calendar, type CalendarProps } from './Calendar';
 import { Overview, type OverviewProps } from './Overview';
 import { Obligations, type ObligationsProps } from './Obligations';
+import { Loans, type LoansProps } from './Loans';
 
 export type ScreenView =
   | { view: 'calendar'; props: CalendarProps }
   | { view: 'overview'; props: OverviewProps }
-  | { view: 'obligations'; props: ObligationsProps };
+  | { view: 'obligations'; props: ObligationsProps }
+  | { view: 'loans'; props: LoansProps };
 
 /** One React owner for any migrated screen, never shared with legacy innerHTML. */
 export function createScreenRoot(host: HTMLElement) {
@@ -23,8 +25,10 @@ export function createScreenRoot(host: HTMLElement) {
               <Calendar {...screen.props} />
             ) : screen.view === 'overview' ? (
               <Overview {...screen.props} />
-            ) : (
+            ) : screen.view === 'obligations' ? (
               <Obligations {...screen.props} />
+            ) : (
+              <Loans {...screen.props} />
             )}
           </StrictMode>,
         ),
