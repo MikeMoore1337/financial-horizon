@@ -145,7 +145,9 @@ function money(value: unknown, name: string, positive = false): asserts value is
 
 function plus(left: number, right: number): number {
   const result = left + right;
-  money(result, 'Суммарная денежная величина');
+  if (!Number.isSafeInteger(result) || result < 0) {
+    throw new RangeError('Сумма выходит за безопасный диапазон целых копеек');
+  }
   return result;
 }
 
