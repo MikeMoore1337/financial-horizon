@@ -101,12 +101,17 @@ secret_dir="${FH_FINANCE_SECRETS_DIR:-/etc/financial-horizon/finance/secrets}"
 [[ -d "$secret_dir" && ! -L "$secret_dir" ]] || deny "Dedicated secrets directory missing"
 [[ "$(stat -c %a "$secret_dir")" = 700 ]] ||
   deny "Secrets directory must be 0700"
+declare -A role_secret_fingerprints=()
 for secret in admin_password migrator_password runtime_password; do
     path="$secret_dir/$secret"
     [[ -f "$path" && ! -L "$path" ]] || deny "Required PostgreSQL secret unavailable"
     [[ "$(stat -c %a "$path")" = 400 ]] || deny "Secret must be mode 0400"
     [[ "$(stat -c %u "$path")" = 999 ]] || deny "Secret must belong to PostgreSQL UID 999"
     [[ "$(wc -c < "$path")" -ge 32 ]] || deny "Secret is too short"
+    digest="$(sha256sum "$path" | cut -d' ' -f1)"
+    [[ ! -v "role_secret_fingerprints[$digest]" ]] ||
+      deny "Distinct PostgreSQL roles must not reuse the same secret"
+    role_secret_fingerprints["$digest"]=1
 done
 backup_env=/etc/financial-horizon/finance/backup.env
 [[ -f "$backup_env" && ! -L "$backup_env" ]] ||
