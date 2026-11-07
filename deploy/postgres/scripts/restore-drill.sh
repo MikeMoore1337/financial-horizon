@@ -29,12 +29,31 @@ if [ "$ready" != true ]; then
   echo "Isolated PostgreSQL restore instance did not become ready" >&2
   exit 1
 fi
+# The dump deliberately preserves GRANT/REVOKE; cluster-level roles are
+# external to pg_dump and must be provisioned before restoring table ACLs.
+# The disposable role has no password; --network none prevents remote login.
+docker exec "$name" psql -v ON_ERROR_STOP=1 -U postgres -d fh_restore \
+  -c 'CREATE ROLE fh_finance_runtime LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOINHERIT' >/dev/null
 gpg --homedir "$FH_FINANCE_GPG_HOME" --batch --no-tty --decrypt "$1" \
-  | docker exec -i "$name" pg_restore -U postgres --exit-on-error --no-owner --no-acl -d fh_restore
+  | docker exec -i "$name" pg_restore -U postgres --exit-on-error --no-owner -d fh_restore
 # No financial values or identifiers enter public logs.
 count="$(docker exec "$name" psql -U postgres -d fh_restore -Atc \
   "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname='finance' AND tablename <> 'alembic_version'")"
 test "$count" -eq 15
+# The restored ACL and FORCE RLS must permit only scoped data access.
+# Confirm actual source grant survives backup/restore; local trust is safe only
+# in this isolated disposable --network none container.
+test "$(docker exec "$name" psql -U fh_finance_runtime -d fh_restore -Atc \
+  "SELECT has_table_privilege(current_user,'finance.accounts','SELECT')")" = "t"
+test "$(docker exec "$name" psql -U fh_finance_runtime -d fh_restore -Atc \
+  "SELECT has_table_privilege(current_user,'finance.ledger_transactions','DELETE')")" = "f"
+test "$(docker exec "$name" psql -U fh_finance_runtime -d fh_restore -Atc \
+  "SELECT count(*) FROM finance.finance_profiles")" = "0"
+test "$(docker exec "$name" psql -U postgres -d fh_restore -Atc \
+  "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+   WHERE n.nspname='finance' AND c.relkind='r'
+     AND c.relname<>'alembic_version'
+     AND c.relrowsecurity AND c.relforcerowsecurity")" = "15"
 # pg_amcheck requires amcheck in the target DB. Install in disposable restore DB,
 # never in source or production data.
 docker exec "$name" psql -v ON_ERROR_STOP=1 -U postgres -d fh_restore \

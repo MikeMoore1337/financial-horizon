@@ -18,7 +18,7 @@ temp="$file.partial"
 test ! -e "$file" && test ! -e "$temp"
 trap 'rm -f "$temp"' EXIT
 docker exec -u postgres fh-finance-postgres \
-  pg_dump -U postgres --format=custom --no-owner --no-acl --dbname=fh_finance \
+  pg_dump -U postgres --format=custom --no-owner --dbname=fh_finance \
   | gpg --homedir "$KEYRING" --batch --no-tty --trust-model always \
     --recipient "$FH_FINANCE_GPG_RECIPIENT" --encrypt --output "$temp"
 test -s "$temp"
