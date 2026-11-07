@@ -107,6 +107,10 @@ export interface ScheduleDifference {
   interestDeltaCents: number | null;
   principalDeltaCents: number | null;
   balanceDeltaCents: number | null;
+  /** Extra amounts or fees that the bank did not allocate to principal/interest. */
+  bankUnallocatedCents: number | null;
+  /** Missing optional bank breakdown fields are not treated as zero. */
+  missingFields: Array<'interestCents' | 'principalCents' | 'balanceCents'>;
   differs: boolean;
 }
 export interface ScheduleReconciliation {
@@ -115,5 +119,10 @@ export interface ScheduleReconciliation {
   calculatedClosureDate: string | null;
   importedClosureDate: string | null;
   closureDateDifferenceDays: number | null;
+  /** True only when every required bank breakdown field is present. */
+  comparisonComplete: boolean;
+  /** Equality of known fields; NOT a claim of a complete bank reconciliation. */
+  matchingKnownFields: boolean;
+  /** Full cent-accurate comparison, with both closure dates known. */
   exactMatch: boolean;
 }
