@@ -113,7 +113,7 @@ HTTPS is required to install the hosted PWA. Browser profiles, separate browsers
 
 | Layer | Implementation |
 | --- | --- |
-| Frontend | Vite 8, TypeScript 6, React 19 (Overview, Calendar and Obligations; staged migration), HTML/CSS and existing ES modules |
+| Frontend | Vite 8, TypeScript 6, React 19 (Overview, Calendar, Obligations and Loans; staged migration), HTML/CSS and existing ES modules |
 | Storage | IndexedDB, versioned migrations, concurrent-write checks |
 | Backup encryption | Web Crypto API, AES-256-GCM, PBKDF2-SHA256 |
 | Offline | Web App Manifest, Service Worker |
