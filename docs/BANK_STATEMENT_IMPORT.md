@@ -33,6 +33,9 @@ are deliberately left unchanged.
    Never auto-insert possible duplicates.
 7. After manual confirmation, draftBankImportBatch produces an immutable
    proposal with deterministic batchKey and sourceKeys.
+7a. summarizeBankImportAudit returns counts and error codes only (no account IDs,
+   notes, bank IDs, amounts, filenames or raw statements); persistence remains
+   the responsibility of an atomic #33/#67 commit/undo receipt.
 8. projectAccountBalances checks each affected account with optional
    statement closing balances, without applying any movements.
 9. After successful posting by #33, draftBankImportUndo can propose a

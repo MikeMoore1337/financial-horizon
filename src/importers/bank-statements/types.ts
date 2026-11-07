@@ -141,6 +141,20 @@ export interface ImportUndoPlan {
   expectedOperationCount: number;
 }
 
+/** A privacy-safe proposal for an import audit, never a persisted event. */
+export interface BankImportAuditSummary {
+  version: 1;
+  reviewedRows: number;
+  ready: number;
+  duplicate: number;
+  possibleDuplicate: number;
+  invalid: number;
+  plannedRows: number;
+  warningCounts: readonly { code: string; count: number }[];
+  errorRows: readonly { rowNumber: number; codes: readonly string[] }[];
+  omittedErrorRows: number;
+}
+
 export interface AccountBalanceSnapshot {
   accountId: string;
   currentCents: number;

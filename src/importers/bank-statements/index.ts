@@ -9,6 +9,7 @@ export { sha256, suggestColumnMapping, normalizeBankStatement } from './normaliz
 export {
   reconcileBankStatement, draftBankImportBatch, draftBankImportUndo, projectAccountBalances,
 } from './reconcile.ts';
+export { summarizeBankImportAudit } from './audit.ts';
 export type * from './types.ts';
 
 export interface ReadStatementOptions {

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import {
   readBankCsv, readBankStatementFile, suggestColumnMapping, normalizeBankStatement,
   reconcileBankStatement, draftBankImportBatch, draftBankImportUndo,
-  projectAccountBalances,
+  projectAccountBalances, summarizeBankImportAudit,
 } from '../src/importers/bank-statements/index.ts';
 
 const encoder = new TextEncoder();
@@ -648,4 +648,46 @@ test('separate credit/debit bank columns accept zero in the unused direction onl
   assert.ok(preview.rows[2].warnings.some(x => x.code === 'CONFLICTING_AMOUNT'));
   assert.ok(preview.rows[3].warnings.some(x => x.code === 'ZERO_AMOUNT'));
   assert.ok(preview.rows[4].warnings.some(x => x.code === 'INVALID_AMOUNT'));
+});
+
+
+test('privacy-safe audit summarizes bank import results without sensitive text, IDs or amounts', async () => {
+  const raw = base +
+    '07.11.2026;-100,00;<img src=x onerror=alert(1)>;Основной;;расход;Питание;BANK-SENSITIVE-1\n' +
+    '99.11.2026;-200,00;PRIVATE_NOTE;Основной;;расход;Питание;BANK-SENSITIVE-2\n';
+  const { preview } = await previewOf(raw);
+  const reconciled = reconcileBankStatement(preview, []);
+  const plan = await draftBankImportBatch(reconciled, [preview.rows[0].operation.sourceKey]);
+  const journal = summarizeBankImportAudit(reconciled, plan);
+  assert.equal(journal.version, 1);
+  assert.equal(journal.reviewedRows, 2);
+  assert.equal(journal.ready, 1);
+  assert.equal(journal.invalid, 1);
+  assert.equal(journal.plannedRows, 1);
+  assert.deepEqual(journal.errorRows.map(x => x.rowNumber), [3]);
+  assert.ok(journal.warningCounts.some(x => x.code === 'INVALID_DATE'));
+  const json = JSON.stringify(journal);
+  for (const secret of ['<img', 'PRIVATE_NOTE', 'BANK-SENSITIVE', 'Основной', '10000', '20000', plan.batchKey, preview.fileDigest]) {
+    assert.equal(json.includes(secret), false, secret);
+  }
+  assert.throws(() => { journal.errorRows.push({ rowNumber: 99, codes: [] }); }, TypeError);
+});
+
+test('audit receipt limits error row detail to 200 and counts all omitted errors', () => {
+  const many = {
+    rows: Array.from({ length: 205 }, (_, i) => ({
+      rowNumber: i + 2,
+      operation: null,
+      status: 'invalid',
+      existingIds: [],
+      warnings: [{ code: 'BAD_ROW', message: 'Sensitive account and amount', severity: 'error' }],
+    })),
+    ready: 0, duplicates: 0, possibleDuplicates: 0, invalid: 205,
+  };
+  const summary = summarizeBankImportAudit(many);
+  assert.equal(summary.invalid, 205);
+  assert.equal(summary.errorRows.length, 200);
+  assert.equal(summary.omittedErrorRows, 5);
+  assert.equal(summary.warningCounts.find(x => x.code === 'BAD_ROW').count, 205);
+  assert.equal(JSON.stringify(summary).includes('Sensitive'), false);
 });
