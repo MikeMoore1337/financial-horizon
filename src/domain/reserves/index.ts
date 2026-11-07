@@ -216,7 +216,7 @@ function validateDefinition(def: ReserveDefinition): number {
   }
   const start = parseDate(def.openedOn, 'Дата открытия');
   const due = parseDate(def.firstDueDate, 'Первая дата оплаты');
-  if (def.firstDueDate <= def.openedOn) throw new RangeError('Дата оплаты должна быть после открытия');
+  if (def.firstDueDate < def.openedOn) throw new RangeError('Дата оплаты не может быть раньше открытия');
   if (!Number.isInteger(def.periodMonths) || def.periodMonths < 1 || def.periodMonths > 60) {
     throw new RangeError('Периодичность должна быть от 1 до 60 месяцев');
   }
