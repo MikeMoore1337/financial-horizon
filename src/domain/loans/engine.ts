@@ -183,7 +183,9 @@ function sortedEvents(events: readonly LoanEvent[], options: LoanRunOptions): Lo
 export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], options: LoanRunOptions): LoanResult {
   validate(terms, events, options);
   const dues = dueDatesFor(terms, events.filter((e): e is DueDateChangeEvent =>
-    e.type === 'due-date-change' && !e.voidedAt));
+    e.type === 'due-date-change' && !e.voidedAt &&
+    // Factual snapshots must not include schedule changes that occur after asOfDate.
+    (options.mode !== 'actual' || e.date <= options.asOfDate!)));
   const state: Ledger = {
     balance: terms.principalCents, unpaid: 0, fraction: 0n,
     date: terms.startDate, rate: terms.annualRateMicroPercent,
@@ -204,9 +206,13 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
   let periodPrincipal = 0;
   let periodExtra = 0;
   const asOf = options.asOfDate;
+  let currentUnprocessedDue: string | null = null;
 
   function recalculatePayment(date: string): void {
-    const remainingDues = originalDues.filter(d => d > date);
+    // Events are replayed BEFORE the due installment on the same day. A
+    // rate change effective today must include that still-unpaid installment.
+    const remainingDues = originalDues.filter(d =>
+      d > date || (d === date && currentUnprocessedDue === date));
     if (!remainingDues.length || (state.balance === 0 && state.unpaid === 0)) return;
     scheduled = terms.scheduleType === 'annuity'
       ? minimumInstallment(state, remainingDues, terms)
@@ -262,6 +268,7 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
   for (let i = 0; i < dues.length; i++) {
     const due = dues[i]!;
     if (options.mode === 'actual' && due > asOf!) break;
+    currentUnprocessedDue = due;
     if (options.mode === 'forecast' && !crossedAsOf && due > asOf!) {
       while (cursor < timeline.length && timeline[cursor]!.date <= asOf!) {
         applyEvent(timeline[cursor]!);
@@ -285,7 +292,15 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
           interestCents: periodInterest, interestPaidCents: periodInterestPaid,
           principalCents: periodPrincipal, balanceCents: 0,
           unpaidInterestCents: 0, extraPaidCents: periodExtra });
+        // This installment already owns the factual amounts. Do not also
+        // expose them in actualOpenPeriod after the end of the due-date loop.
+        periodAmount = 0;
+        periodInterest = 0;
+        periodInterestPaid = 0;
+        periodPrincipal = 0;
+        periodExtra = 0;
       }
+      currentUnprocessedDue = null;
       break;
     }
     accrue(state, due, terms);
@@ -311,6 +326,7 @@ export function calculateLoan(terms: LoanTerms, events: readonly LoanEvent[], op
     periodInterestPaid = 0;
     periodPrincipal = 0;
     periodExtra = 0;
+    currentUnprocessedDue = null;
     if (state.balance === 0 && state.unpaid === 0) break;
   }
 
