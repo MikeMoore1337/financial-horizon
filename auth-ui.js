@@ -71,3 +71,71 @@ export async function cloudLogout({fetcher=fetch}={}) {
     headers:{'Content-Type':'application/json'},body:'{}'});
   if(!res.ok) throw Error('Не удалось завершить сеанс');
 }
+
+
+/** Approved design C - fail-closed OAuth choices below the existing email form. */
+const PROVIDER_ICONS=Object.freeze({
+  telegram:'./assets/providers/telegram.svg',
+  google:'./assets/providers/google.svg',
+  yandex:'./assets/providers/yandex.svg',
+  vk:'./assets/providers/vk.svg'
+});
+
+/**
+ * Reveal only server-advertised, configured providers to signed-out users.
+ * Never reads financial data or stores provider tokens in browser storage.
+ */
+export async function mountAccountOAuth(section,{fetcher=fetch,documentRef=document}={}){
+  if(!section?.isConnected)return false;
+  section.hidden=true;
+  section.dataset.ready='false';
+  const buttons=section.querySelector('#oauth-options');
+  if(!buttons)return false;
+  buttons.replaceChildren();
+  try{
+    const response=await fetcher('./api/auth/providers',{
+      credentials:'same-origin',cache:'no-store'
+    });
+    if(!response.ok)return false;
+    const providers=allowedProviderIds(await response.json());
+    if(!providers.length||!section.isConnected)return false;
+    // A live email/OAuth session must not be shown another login menu.
+    const me=await fetcher('./api/auth/email/me',{
+      credentials:'same-origin',cache:'no-store'
+    });
+    if(!me.ok||!section.isConnected)return false;
+    const current=await me.json();
+    if(current?.authenticated!==false)return false;
+    const fragment=documentRef.createDocumentFragment();
+    for(const id of providers){
+      const link=documentRef.createElement('a');
+      link.href=providerHref(id);
+      link.className='oauth-provider-link';
+      const img=documentRef.createElement('img');
+      img.className='oauth-provider-icon';
+      img.src=PROVIDER_ICONS[id];
+      img.alt='';
+      img.width=24;img.height=24;
+      const label=documentRef.createElement('span');
+      label.className='oauth-provider-label';
+      label.textContent=providerLabel(id);
+      const chevron=documentRef.createElement('span');
+      chevron.className='oauth-provider-chevron';
+      chevron.textContent='›';
+      chevron.setAttribute('aria-hidden','true');
+      link.append(img,label,chevron);
+      fragment.append(link);
+    }
+    buttons.replaceChildren(fragment);
+    section.dataset.ready='true';
+    const selected=documentRef.querySelector('.auth-modes [data-mode="login"]');
+    section.hidden=selected?.getAttribute('aria-current')!=='page';
+    return !section.hidden;
+  }catch{
+    // Staged, disabled, offline or malformed OAuth configuration stays hidden.
+    section.hidden=true;
+    section.dataset.ready='false';
+    buttons.replaceChildren();
+    return false;
+  }
+}

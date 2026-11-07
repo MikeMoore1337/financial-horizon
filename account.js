@@ -1,7 +1,7 @@
 /* Account registration with no external calls in guest or disabled mode. */
 const $=selector=>document.querySelector(selector);
 const MODES={
- login:["Войти по email","Войти"],
+ login:["Войти по email","Войти по email"],
  register:["Создать аккаунт","Отправить подтверждение"],
  resend:["Повторная отправка письма","Отправить письмо"],
  reset:["Восстановление доступа","Отправить ссылку"],
@@ -165,7 +165,9 @@ function activate(next,{preserveFeedback=false}={}){
  $("#password").value="";
  document.querySelectorAll("[data-mode]").forEach(el=>el.setAttribute("aria-current",el.dataset.mode===next?"page":"false"));
  // The resend endpoint is for email verification, never password recovery.
- $('.auth-actions [data-mode="resend"]').hidden=next==="reset"||next==="reset-confirm";
+ $('.auth-actions [data-mode="resend"]').hidden=!["register","resend","verify"].includes(next);
+ $('.auth-actions [data-mode="reset"]').hidden=next!=="login";
+ $("#oauth-login").hidden=next!=="login"||$("#oauth-login").dataset.ready!=="true";
  void challengeFor(next);
 }
 
@@ -196,6 +198,7 @@ async function refreshSession(){
   $('#change-email-panel').hidden=!authenticated||typeof result.user?.email!=='string'||config.capabilities?.email_change!==true;
   if(authenticated&&config.capabilities?.email_change===true)void renderChangeEmailChallenge();
   $('#auth-form').hidden=authenticated;
+  $("#oauth-login").hidden=authenticated||mode!=="login"||$("#oauth-login").dataset.ready!=="true";
   $('.auth-modes').hidden=authenticated;
   $('.auth-actions').hidden=authenticated;
   $('.auth-actions [data-mode="resend"]').hidden=authenticated||mode==="reset"||mode==="reset-confirm";

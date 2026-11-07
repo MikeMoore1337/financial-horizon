@@ -23,9 +23,12 @@ test('current email account and protected ledger do not activate the staged OAut
  const app=read('app.js'),sw=read('sw.js');
  assert.match(html,/<meta name="fh-email-auth" content="disabled">/);
  assert.doesNotMatch(html,/fh-cloud-auth" content="enabled"/);
- assert.doesNotMatch(account,/data-provider=|oauth\/telegram\/start|oauth\/google\/start/);
+ assert.match(account,/<section id="oauth-login"[^>]*hidden>/);
+ assert.match(account,/account-oauth\.js\?rev=oauth-auth-v1/);
+ assert.match(account,/id="auth-form"[\s\S]*id="oauth-login"/);
  assert.doesNotMatch(app,/from ['"]\.\/auth-ui\.js['"]/);
- assert.doesNotMatch(sw,/'\.\/auth-ui\.js'/);
+ assert.match(sw,/'\.\/auth-ui\.js\?rev=oauth-auth-v1'/);
+ assert.match(sw,/'\.\/account-oauth\.js\?rev=oauth-auth-v1'/);
  assert.match(app,/await emailSession\.refresh\(\)/);
  assert.match(sw,/financial-horizon-shell-/);
 });

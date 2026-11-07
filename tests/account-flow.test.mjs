@@ -19,9 +19,9 @@ function element(name){
 async function boot({initialSignedIn=false,sessionReadable=true,hash="",search="",supportsChange=false,supportsOthers=false}={}){
  const selectors=[
   "#auth-feedback","#auth-submit","#form-heading","#form-description",
-  "#email-label","#email","#password-label","#password",
+  "#email-label","#email","#password-label","#password","#oauth-login",
   "#turnstile-container","#session-panel","#auth-form",
-  ".auth-modes",".auth-actions",".auth-actions [data-mode=\"resend\"]",
+  ".auth-modes",".auth-actions",".auth-actions [data-mode=\"resend\"]",".auth-actions [data-mode=\"reset\"]",
   "#session-email","#auth-logout","#auth-logout-others","#change-email-panel","#change-email-form",
   "#change-email","#change-email-password","#change-email-challenge","#change-email-submit"
  ];
@@ -231,4 +231,19 @@ test("successful OAuth linking confirms status without exposing provider tokens"
  assert.match(page.elements["#auth-feedback"].textContent,/Новый способ входа привязан/);
  assert.ok(page.historyCalls.some(args=>args[2]==="/account.html"));
  assert.equal(page.elements["#session-panel"].hidden,false);
+});
+
+test('OAuth choices are only visible during the initial login mode',async()=>{
+ const page=await boot();
+ const oauth=page.elements['#oauth-login'];
+ oauth.dataset.ready='true';
+ oauth.hidden=false;
+ await page.changeMode('register');
+ assert.equal(oauth.hidden,true);
+ await page.changeMode('reset');
+ assert.equal(oauth.hidden,true);
+ await page.changeMode('login');
+ assert.equal(oauth.hidden,false);
+ assert.equal(page.elements['.auth-actions [data-mode="resend"]'].hidden,true);
+ assert.equal(page.elements['.auth-actions [data-mode="reset"]'].hidden,false);
 });
