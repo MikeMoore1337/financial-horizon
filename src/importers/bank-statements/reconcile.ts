@@ -93,7 +93,7 @@ export async function draftBankImportBatch(
     if (candidate.status === 'possible-duplicate' && !allow.has(sourceKey)) {
       throw new Error('Неоднозначное совпадение требует явного подтверждения');
     }
-    operations.push(candidate.operation);
+    operations.push(Object.freeze({ ...candidate.operation }));
   }
   if (operations.length === 0) throw new Error('Не выбрано ни одной операции');
   for (const key of allow) {
@@ -101,12 +101,19 @@ export async function draftBankImportBatch(
       throw new Error('Некорректное исключение из сверки');
     }
   }
-  const sourceKeys = operations.map(x => x.sourceKey).sort();
-  return {
-    batchKey: await sha256('bank-import-v1\u001f' + sourceKeys.join('\u001f')),
-    sourceKeys, operations, expectedOperationCount: operations.length,
-    journal: operations.map(op => ({ type: 'planned', sourceKey: op.sourceKey, sourceRow: op.sourceRow })),
-  };
+  const sorted = [...operations].sort((a, b) => a.sourceKey.localeCompare(b.sourceKey));
+  const sourceKeys = Object.freeze(sorted.map(x => x.sourceKey));
+  const confirmation = sorted.map(op => [
+    op.sourceKey, op.accountId, op.targetAccountId || '', op.date,
+    op.kind, op.amountCents, op.category || '', op.externalId || '', op.description,
+  ].join('\u001f')).join('\u001e');
+  return Object.freeze({
+    batchKey: await sha256('bank-import-v1\u001e' + confirmation),
+    sourceKeys, operations: Object.freeze(operations), expectedOperationCount: operations.length,
+    journal: Object.freeze(operations.map(op => Object.freeze({
+      type: 'planned' as const, sourceKey: op.sourceKey, sourceRow: op.sourceRow,
+    }))),
+  });
 }
 
 /** Fail-closed undo proposal; does not remove or mutate any movement. */
