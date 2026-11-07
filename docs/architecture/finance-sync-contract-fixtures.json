@@ -1,0 +1,329 @@
+{
+  "fixture_schema_version": 1,
+  "description": "Synthetic reference examples ONLY: do not send to production. Expected statuses specify future behavior, not observed API results.",
+  "profiles": [
+    {
+      "label": "U1",
+      "user_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "id": "00000000-0000-4000-8000-000000000001",
+      "revision": 7,
+      "etag": "\"fh.1.7.0ce5\"",
+      "accounts": [
+        {
+          "id": "00000000-0000-4000-8000-000000000101",
+          "entity_revision": 3
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000102",
+          "entity_revision": 4
+        }
+      ]
+    },
+    {
+      "label": "U2",
+      "user_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "id": "00000000-0000-4000-8000-000000000002",
+      "revision": 1,
+      "etag": "\"fh.1.1.a5b0\"",
+      "accounts": [
+        {
+          "id": "00000000-0000-4000-8000-000000000201",
+          "entity_revision": 1
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000202",
+          "entity_revision": 1
+        }
+      ]
+    }
+  ],
+  "devices": [
+    {
+      "label": "A",
+      "scopes": [
+        "U1"
+      ]
+    },
+    {
+      "label": "B",
+      "scopes": [
+        "U1",
+        "U2"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "name": "u1_first_transfer",
+      "as": "U1",
+      "device": "A",
+      "target_profile_id": "00000000-0000-4000-8000-000000000001",
+      "if_match": "\"fh.1.7.0ce5\"",
+      "idempotency_key": "11111111-1111-4111-8111-111111111111",
+      "body": {
+        "schema_version": 1,
+        "client_mutation_id": "11111111-1111-4111-8111-111111111111",
+        "base_revision": 7,
+        "action": "account.transfer",
+        "expected_entity_revisions": {
+          "00000000-0000-4000-8000-000000000101": 3,
+          "00000000-0000-4000-8000-000000000102": 4
+        },
+        "payload": {
+          "from_account_id": "00000000-0000-4000-8000-000000000101",
+          "to_account_id": "00000000-0000-4000-8000-000000000102",
+          "amount_minor": 25000,
+          "occurred_on": "2026-11-07"
+        }
+      },
+      "expected": {
+        "http": 201,
+        "revision": 8,
+        "posted_minor_total": 0,
+        "posting_count": 2
+      }
+    },
+    {
+      "name": "u1_retry_exact_request",
+      "as": "U1",
+      "device": "B",
+      "target_profile_id": "00000000-0000-4000-8000-000000000001",
+      "if_match": "\"fh.1.7.0ce5\"",
+      "idempotency_key": "11111111-1111-4111-8111-111111111111",
+      "body": {
+        "schema_version": 1,
+        "client_mutation_id": "11111111-1111-4111-8111-111111111111",
+        "base_revision": 7,
+        "action": "account.transfer",
+        "expected_entity_revisions": {
+          "00000000-0000-4000-8000-000000000101": 3,
+          "00000000-0000-4000-8000-000000000102": 4
+        },
+        "payload": {
+          "from_account_id": "00000000-0000-4000-8000-000000000101",
+          "to_account_id": "00000000-0000-4000-8000-000000000102",
+          "amount_minor": 25000,
+          "occurred_on": "2026-11-07"
+        }
+      },
+      "expected": {
+        "http": 200,
+        "revision": 8,
+        "replayed": true,
+        "posting_count_delta": 0
+      }
+    },
+    {
+      "name": "same_key_changed_amount",
+      "as": "U1",
+      "device": "B",
+      "target_profile_id": "00000000-0000-4000-8000-000000000001",
+      "if_match": "\"fh.1.7.0ce5\"",
+      "idempotency_key": "11111111-1111-4111-8111-111111111111",
+      "body": {
+        "schema_version": 1,
+        "client_mutation_id": "11111111-1111-4111-8111-111111111111",
+        "base_revision": 7,
+        "action": "account.transfer",
+        "expected_entity_revisions": {
+          "00000000-0000-4000-8000-000000000101": 3,
+          "00000000-0000-4000-8000-000000000102": 4
+        },
+        "payload": {
+          "from_account_id": "00000000-0000-4000-8000-000000000101",
+          "to_account_id": "00000000-0000-4000-8000-000000000102",
+          "amount_minor": 30000,
+          "occurred_on": "2026-11-07"
+        }
+      },
+      "expected": {
+        "http": 409,
+        "code": "idempotency_key_reuse"
+      }
+    },
+    {
+      "name": "u2_idor_u1",
+      "as": "U2",
+      "device": "B",
+      "target_profile_id": "00000000-0000-4000-8000-000000000001",
+      "if_match": "\"fh.1.8.0ce5\"",
+      "idempotency_key": "22222222-2222-4222-8222-222222222222",
+      "body": {
+        "schema_version": 1,
+        "client_mutation_id": "22222222-2222-4222-8222-222222222222",
+        "base_revision": 8,
+        "action": "account.transfer",
+        "expected_entity_revisions": {
+          "00000000-0000-4000-8000-000000000101": 3,
+          "00000000-0000-4000-8000-000000000102": 4
+        },
+        "payload": {
+          "from_account_id": "00000000-0000-4000-8000-000000000101",
+          "to_account_id": "00000000-0000-4000-8000-000000000102",
+          "amount_minor": 1000,
+          "occurred_on": "2026-11-07"
+        }
+      },
+      "expected": {
+        "http": 403,
+        "code": "forbidden"
+      }
+    },
+    {
+      "name": "u1_stale_etag",
+      "as": "U1",
+      "device": "B",
+      "target_profile_id": "00000000-0000-4000-8000-000000000001",
+      "if_match": "\"fh.1.7.0ce5\"",
+      "idempotency_key": "22222222-2222-4222-8222-222222222222",
+      "body": {
+        "schema_version": 1,
+        "client_mutation_id": "22222222-2222-4222-8222-222222222222",
+        "base_revision": 7,
+        "action": "account.transfer",
+        "expected_entity_revisions": {
+          "00000000-0000-4000-8000-000000000101": 3,
+          "00000000-0000-4000-8000-000000000102": 4
+        },
+        "payload": {
+          "from_account_id": "00000000-0000-4000-8000-000000000101",
+          "to_account_id": "00000000-0000-4000-8000-000000000102",
+          "amount_minor": 500,
+          "occurred_on": "2026-11-07"
+        }
+      },
+      "expected": {
+        "http": 412,
+        "code": "stale_revision"
+      }
+    },
+    {
+      "name": "u1_business_conflict",
+      "as": "U1",
+      "device": "A",
+      "target_profile_id": "00000000-0000-4000-8000-000000000001",
+      "if_match": "\"fh.1.8.0ce5\"",
+      "idempotency_key": "33333333-3333-4333-8333-333333333333",
+      "body": {
+        "schema_version": 1,
+        "client_mutation_id": "33333333-3333-4333-8333-333333333333",
+        "base_revision": 8,
+        "action": "account.transfer",
+        "expected_entity_revisions": {
+          "00000000-0000-4000-8000-000000000101": 2,
+          "00000000-0000-4000-8000-000000000102": 4
+        },
+        "payload": {
+          "from_account_id": "00000000-0000-4000-8000-000000000101",
+          "to_account_id": "00000000-0000-4000-8000-000000000102",
+          "amount_minor": 1500,
+          "occurred_on": "2026-11-07"
+        }
+      },
+      "expected": {
+        "http": 409,
+        "code": "semantic_conflict"
+      }
+    },
+    {
+      "name": "missing_if_match",
+      "as": "U1",
+      "device": "A",
+      "target_profile_id": "00000000-0000-4000-8000-000000000001",
+      "if_match": null,
+      "idempotency_key": "44444444-4444-4444-8444-444444444444",
+      "body": {
+        "schema_version": 1,
+        "client_mutation_id": "44444444-4444-4444-8444-444444444444",
+        "base_revision": 8,
+        "action": "account.transfer",
+        "expected_entity_revisions": {
+          "00000000-0000-4000-8000-000000000101": 3,
+          "00000000-0000-4000-8000-000000000102": 4
+        },
+        "payload": {
+          "from_account_id": "00000000-0000-4000-8000-000000000101",
+          "to_account_id": "00000000-0000-4000-8000-000000000102",
+          "amount_minor": 1500,
+          "occurred_on": "2026-11-07"
+        }
+      },
+      "expected": {
+        "http": 428,
+        "code": "precondition_required"
+      }
+    },
+    {
+      "name": "expired_session",
+      "as": null,
+      "device": "A",
+      "target_profile_id": "00000000-0000-4000-8000-000000000001",
+      "if_match": "\"fh.1.8.0ce5\"",
+      "idempotency_key": "55555555-5555-4555-8555-555555555555",
+      "body": {
+        "schema_version": 1,
+        "client_mutation_id": "55555555-5555-4555-8555-555555555555",
+        "base_revision": 8,
+        "action": "account.transfer",
+        "expected_entity_revisions": {
+          "00000000-0000-4000-8000-000000000101": 3,
+          "00000000-0000-4000-8000-000000000102": 4
+        },
+        "payload": {
+          "from_account_id": "00000000-0000-4000-8000-000000000101",
+          "to_account_id": "00000000-0000-4000-8000-000000000102",
+          "amount_minor": 1500,
+          "occurred_on": "2026-11-07"
+        }
+      },
+      "expected": {
+        "http": 401,
+        "code": "unauthenticated"
+      }
+    },
+    {
+      "name": "u2_independent_budget",
+      "as": "U2",
+      "device": "B",
+      "target_profile_id": "00000000-0000-4000-8000-000000000002",
+      "if_match": "\"fh.1.1.a5b0\"",
+      "idempotency_key": "55555555-5555-4555-8555-555555555555",
+      "body": {
+        "schema_version": 1,
+        "client_mutation_id": "55555555-5555-4555-8555-555555555555",
+        "base_revision": 1,
+        "action": "account.transfer",
+        "expected_entity_revisions": {
+          "00000000-0000-4000-8000-000000000201": 1,
+          "00000000-0000-4000-8000-000000000202": 1
+        },
+        "payload": {
+          "from_account_id": "00000000-0000-4000-8000-000000000201",
+          "to_account_id": "00000000-0000-4000-8000-000000000202",
+          "amount_minor": 1000,
+          "occurred_on": "2026-11-07"
+        }
+      },
+      "expected": {
+        "http": 201,
+        "revision": 2,
+        "posted_minor_total": 0,
+        "posting_count": 2
+      }
+    }
+  ],
+  "offline_invariants": {
+    "queue_scoped_by": [
+      "user_id",
+      "profile_id"
+    ],
+    "state": "pending",
+    "logout_must_not_send_pending_to_new_user": true,
+    "expired_session_must_keep_pending": true
+  },
+  "migration_invariants": {
+    "requires_local_decrypted_backup_verification": true,
+    "requires_explicit_consent": true,
+    "overwrites_existing_cloud_budget": false
+  }
+}
