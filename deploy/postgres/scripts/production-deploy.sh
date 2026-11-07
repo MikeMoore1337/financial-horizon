@@ -42,6 +42,8 @@ def denied(reason):
 pr = api("pulls/79")
 if pr.get("merged") is not True or not pr.get("merged_at"):
     denied("PR #79 has not been merged")
+if pr.get("draft") is True or pr.get("base", {}).get("ref") != "main":
+    denied("Only a reviewed PR into main may be deployed")
 if pr.get("merge_commit_sha") != prod:
     denied("Production SHA must be PR #79 merge commit")
 if pr.get("head", {}).get("sha") != reviewed:
@@ -57,6 +59,8 @@ for item in reviews:
     if (username and username != "MikeMoore1337"
             and item.get("author_association") in ("COLLABORATOR", "MEMBER", "OWNER")):
         latest[username] = item
+if any(r.get("state") == "CHANGES_REQUESTED" for r in latest.values()):
+    denied("An independent reviewer has unresolved requested changes")
 if not any(r.get("state") == "APPROVED" and r.get("commit_id") == reviewed
            for r in latest.values()):
     denied("No independent APPROVED review for the exact financial PR HEAD")
