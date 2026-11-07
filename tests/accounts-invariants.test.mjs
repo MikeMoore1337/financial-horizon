@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { assertLedgerState } from '../src/domain/accounts/invariants.ts';
-import { applyLedgerCommand, emptyLedger, totalBalanceMinor, accountBalanceMinor } from '../src/domain/accounts/ledger.ts';
+import { applyLedgerCommand, emptyLedger, totalBalanceMinor, accountBalanceMinor, availableBalanceMinor, monthlyCashFlowMinor } from '../src/domain/accounts/ledger.ts';
 
 const uuid = n => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
 const context = profileId => ({ profileId, actorUserId: '0123456789abcdef0123456789abcdef' });
@@ -133,4 +133,17 @@ test('deterministic 160-transfer model maintains total wealth on every step', ()
   assert.equal(s.postings.length, 320);
   assert.equal(s.transactions.length, 160);
   assert.equal(s.revision, 162);
+});
+
+test('public balance/cash-flow readers never silently omit corrupt or foreign postings', () => {
+  const broken = fixture();
+  broken.postings[0].profileId = uuid(9);
+  for (const query of [
+    () => accountBalanceMinor(broken, uuid(2)),
+    () => totalBalanceMinor(broken),
+    () => availableBalanceMinor(broken, uuid(2), 100),
+    () => monthlyCashFlowMinor(broken, '2026-11'),
+  ]) {
+    assert.throws(query, /Проводка/);
+  }
 });
