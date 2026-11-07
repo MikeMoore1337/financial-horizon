@@ -353,7 +353,9 @@ def test_real_loopback_http_with_sqlite_and_cookies(tmp_path):
     email, oauth, cfg, app = context(tmp_path)
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind(("127.0.0.1", 8791))
+    # Use an OS-assigned port so parallel browser/CI suites do not collide.
+    listener.bind(("127.0.0.1", 0))
+    port = listener.getsockname()[1]
     listener.listen(32)
     server = uvicorn.Server(uvicorn.Config(
         app, log_level="critical", access_log=False
@@ -366,7 +368,7 @@ def test_real_loopback_http_with_sqlite_and_cookies(tmp_path):
                 break
             time.sleep(0.05)
         assert server.started, "Uvicorn did not start"
-        with httpx.Client(base_url=ORIGIN, trust_env=False, timeout=5) as browser:
+        with httpx.Client(base_url=f"http://127.0.0.1:{port}", trust_env=False, timeout=5) as browser:
             offer = browser.get("/api/auth/providers").json()
             assert offer["providers"] == ["telegram", "google", "yandex", "vk"]
             state, _ = start(browser)
@@ -377,7 +379,7 @@ def test_real_loopback_http_with_sqlite_and_cookies(tmp_path):
             assert account["authenticated"] is True
             assert account["user"]["email"] is None
             uid = account["user"]["id"]
-            with httpx.Client(base_url=ORIGIN, trust_env=False) as second:
+            with httpx.Client(base_url=f"http://127.0.0.1:{port}", trust_env=False) as second:
                 state2, _ = start(second)
                 assert finish(second, state2, "tcp-id").status_code == 303
                 assert second.get("/api/auth/email/me").json()["user"]["id"] == uid
@@ -500,3 +502,101 @@ def test_unrecognized_user_table_index_blocks_migration_without_backup(tmp_path)
     with sqlite3.connect(original) as db:
         assert db.execute("PRAGMA table_info(users)").fetchall()[1][3] == 1
         assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_vk_payload_rejects_duplicate_json_keys_without_consuming_state(tmp_path):
+    """Reject ambiguous VK payloads before claiming the one-time transaction."""
+    email, oauth, cfg, app = context(tmp_path)
+    browser = client(app)
+    state, _ = start(browser, "vk")
+    duplicated = (
+        '{"state":"' + state + '","state":"' + state +
+        '","code":"subject-duplicate","device_id":"device-123"}'
+    )
+    rejected = browser.get(
+        "/api/auth/oauth/vk/callback",
+        params={"payload": duplicated},
+        follow_redirects=False,
+    )
+    assert rejected.status_code == 400
+    assert oauth.user_id_for("vk", "vk-subject-duplicate") is None
+    # Rejecting malformed provider input must not burn the original state.
+    valid = finish(
+        browser, state, "subject-after-duplicate", "vk",
+        {"device_id": "device-123"},
+    )
+    assert valid.status_code == 303
+    assert valid.headers["location"] == "/?auth=success"
+
+
+def test_callback_query_size_and_parameter_counts_are_bounded(tmp_path):
+    email, oauth, cfg, app = context(tmp_path)
+    browser = client(app)
+    state, _ = start(browser, "google")
+    oversized = browser.get(
+        "/api/auth/oauth/google/callback",
+        params={"state": state, "code": "x", "junk": "A" * 8500},
+        follow_redirects=False,
+    )
+    assert oversized.status_code == 413
+    fragmented = browser.get(
+        "/api/auth/oauth/google/callback",
+        params=[("state", state), ("code", "x")]
+        + [(f"noise{i}", "x") for i in range(40)],
+        follow_redirects=False,
+    )
+    assert fragmented.status_code == 400
+    # Proper callback must still succeed after malformed requests.
+    assert finish(browser, state, "valid-after-noise").status_code == 303
+
+
+def test_callback_get_plus_post_body_cannot_bypass_total_bytes_limit(tmp_path):
+    email, oauth, cfg, app = context(tmp_path)
+    browser = client(app)
+    state, _ = start(browser, "google")
+    response = browser.post(
+        "/api/auth/oauth/google/callback",
+        params={"state": state, "padding": "Z" * 3900},
+        headers={"content-type": "application/x-www-form-urlencoded"},
+        content="code=valid&padding2=" + "B" * 4900,
+        follow_redirects=False,
+    )
+    assert response.status_code == 413
+    assert finish(browser, state, "valid-after-big-post").status_code == 303
+
+
+def test_streamed_callback_body_has_a_hard_cap_before_state_claim(tmp_path):
+    """Chunked or unknown-length form bodies must not be read without limits."""
+    email, oauth, cfg, app = context(tmp_path)
+    browser = client(app)
+    state, _ = start(browser, "google")
+    def chunks():
+        yield b"code=some-code&extra="
+        yield b"X" * 9000
+    oversized = browser.post(
+        "/api/auth/oauth/google/callback",
+        params={"state": state},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        content=chunks(),
+        follow_redirects=False,
+    )
+    assert oversized.status_code == 413
+    assert finish(browser, state, "valid-after-chunks").status_code == 303
+
+
+def test_callback_rejects_oversized_content_length_number(tmp_path):
+    email, oauth, cfg, app = context(tmp_path)
+    browser = client(app)
+    state, _ = start(browser, "google")
+    rejected = browser.post(
+        "/api/auth/oauth/google/callback",
+        params={"state": state},
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Content-Length": "9" * 4500,
+        },
+        content="code=valid",
+        follow_redirects=False,
+    )
+    assert rejected.status_code == 400
+    assert finish(browser, state, "good-after-invalid-length").status_code == 303

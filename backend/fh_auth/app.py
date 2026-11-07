@@ -28,6 +28,17 @@ from .store import OAuthStore
 _MARKER = "fh_oauth_marker"
 _STATE_RE = re.compile(r"^[A-Za-z0-9._~-]{32,256}$")
 _VK_DEVICE_RE = re.compile(r"^[A-Za-z0-9._~-]{6,256}$")
+_MAX_CALLBACK_PARAMETERS = 32
+_MAX_CALLBACK_BYTES = 8192
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate provider payload field")
+        result[key] = value
+    return result
 _logger = logging.getLogger("fh.oauth")
 
 
@@ -40,18 +51,37 @@ def _random() -> str:
 
 
 async def _params(request: Request) -> dict[str, str]:
+    # Reject oversized or excessively fragmented callbacks before parsing JSON
+    # or claiming a one-time state. A GET callback otherwise has no body cap.
+    if len(request.scope.get("query_string", b"")) > _MAX_CALLBACK_BYTES:
+        raise HTTPException(413, "Слишком большой ответ провайдера")
     pairs = list(request.query_params.multi_items())
+    if len(pairs) > _MAX_CALLBACK_PARAMETERS:
+        raise HTTPException(400, "Слишком много параметров авторизации")
     if request.method == "POST":
         ctype = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
         if ctype != "application/x-www-form-urlencoded":
             raise HTTPException(400, "Неверный формат ответа провайдера")
-        body = await request.body()
-        if len(body) > 8192:
-            raise HTTPException(413, "Слишком большой ответ провайдера")
+        query_length = len(request.scope.get("query_string", b""))
+        maximum_body = _MAX_CALLBACK_BYTES - query_length
+        length = request.headers.get("content-length")
+        if length is not None:
+            if len(length) > 10 or not length.isascii() or not length.isdecimal():
+                raise HTTPException(400, "Неверная длина ответа провайдера")
+            if int(length) > maximum_body:
+                raise HTTPException(413, "Слишком большой ответ провайдера")
+        # Do not buffer an unlimited chunked request with request.body().
+        body = bytearray()
+        async for chunk in request.stream():
+            if len(body) + len(chunk) > maximum_body:
+                raise HTTPException(413, "Слишком большой ответ провайдера")
+            body.extend(chunk)
         try:
             pairs += parse_qsl(body.decode("utf-8"), keep_blank_values=True)
         except UnicodeDecodeError:
             raise HTTPException(400, "Неверный ответ провайдера") from None
+    if len(pairs) > _MAX_CALLBACK_PARAMETERS:
+        raise HTTPException(400, "Слишком много параметров авторизации")
     params = {}
     for key, value in pairs:
         if (not key.isascii() or len(key) > 48 or len(value) > 4096 or
@@ -61,7 +91,7 @@ async def _params(request: Request) -> dict[str, str]:
     if "payload" in params:
         raw = params.pop("payload")
         try:
-            decoded = json.loads(raw)
+            decoded = json.loads(raw, object_pairs_hook=_unique_json_object)
         except ValueError:
             raise HTTPException(400, "Неверный ответ VK ID") from None
         if not isinstance(decoded, dict):
