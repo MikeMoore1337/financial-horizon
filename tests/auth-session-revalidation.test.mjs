@@ -15,7 +15,7 @@ function setup(refresh){
  const session={busy:false,userId:user,email:'qa@example.invalid',refresh};
  const ctx={guestMode:false,activeUserId:user,sessionValidation:null,emailSession:session,
   state:{entries:[{title:'local'}]},
-  calendarRoot:{unmount:()=>events.push('react-unmount')},
+  screenRoot:{unmount:()=>events.push('react-unmount')},
   $:()=>({replaceChildren:()=>events.push('ledger-cleared')}),
   window:{location:{replace:url=>events.push(url)}},
   syncAccountControls:()=>events.push('sync')};
@@ -39,14 +39,14 @@ test('expired session hides the old account ledger and opens login',async()=>{
  const s=setup(async()=>false);
  assert.equal(await s.check(),false);
  assert.equal(s.ctx.state,null);
- assert.equal(s.ctx.calendarRoot,null);
+ assert.equal(s.ctx.screenRoot,null);
  assert.deepEqual(s.events,['react-unmount','ledger-cleared','./account.html']);
 });
 test('a different account cannot re-use previous account data',async()=>{
  const s=setup(async()=>true);s.ctx.emailSession.userId='b'.repeat(32);
  assert.equal(await s.check(),false);
  assert.equal(s.ctx.state,null);
- assert.equal(s.ctx.calendarRoot,null);
+ assert.equal(s.ctx.screenRoot,null);
  assert.deepEqual(s.events,['react-unmount','ledger-cleared','./account.html']);
 });
 test('guest mode and pending logout must not run a session check',async()=>{

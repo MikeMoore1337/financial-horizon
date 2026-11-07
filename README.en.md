@@ -113,7 +113,7 @@ HTTPS is required to install the hosted PWA. Browser profiles, separate browsers
 
 | Layer | Implementation |
 | --- | --- |
-| Frontend | Vite 8, TypeScript 6, React 19 (Calendar, staged migration), HTML/CSS and existing ES modules |
+| Frontend | Vite 8, TypeScript 6, React 19 (Overview and Calendar, staged migration), HTML/CSS and existing ES modules |
 | Storage | IndexedDB, versioned migrations, concurrent-write checks |
 | Backup encryption | Web Crypto API, AES-256-GCM, PBKDF2-SHA256 |
 | Offline | Web App Manifest, Service Worker |
@@ -126,6 +126,8 @@ HTTPS is required to install the hosted PWA. Browser profiles, separate browsers
 ~~~text
 index.html / app.js / styles.css   UI entry point and shell
 src/react/Calendar.tsx             React Calendar (stage #72)
+src/react/Overview.tsx             React Overview (stage #72)
+src/react/ScreenRoot.tsx           Shared root for migrated screens
 legacy/app.js                      Older installed PWA compatibility
 finance.js / ledger-operations.js  Financial calculations and ledger
 storage.js / state-migrations.js   IndexedDB and migrations

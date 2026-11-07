@@ -5,7 +5,7 @@ import {parseSchedule} from './schedule.js';
 import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.js';
 import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
-import {createCalendarRoot} from './src/react/Calendar.tsx';
+import {createScreenRoot} from './src/react/ScreenRoot.tsx';
 
 const $=sel=>document.querySelector(sel);
 const svg=name=>`<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-${name}"></use></svg>`;
@@ -18,10 +18,10 @@ let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),
 const emailSession=createEmailSession();
 let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
 const GUEST_MODE_KEY='fh-guest-session-v2';
-let calendarRoot=null;
+let screenRoot=null;
 function revokeDisplayedLedger(){
  state=null;
- if(calendarRoot){calendarRoot.unmount();calendarRoot=null;}
+ if(screenRoot){screenRoot.unmount();screenRoot=null;}
  $('#main').replaceChildren();
 }
 const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
@@ -41,13 +41,29 @@ function render(){
  $('#toolbar-title').textContent=titles[ui.view];
  document.querySelectorAll('[data-view]').forEach(el=>{const active=el.dataset.view===ui.view;el.classList.toggle('active',active);el.setAttribute('aria-current',active?'page':'false');});
  const main=$('#main');
- if(ui.view==='calendar'){
-  if(!calendarRoot){main.replaceChildren();calendarRoot=createCalendarRoot(main);}
-  const events=monthEvents(),totals=monthTotals(events);
-  calendarRoot.render({events,month:ui.month,selectedDate:ui.selectedDate,currentDate:today(),monthTitle:monthLabel(ui.month),netPlanCents:totals.netPlanCents,netFactCents:totals.netFactCents,formatDate,rubles});
+ if(ui.view==='calendar'||ui.view==='overview'){
+  if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main);}
+  if(ui.view==='calendar'){
+   const events=monthEvents(),totals=monthTotals(events);
+   screenRoot.render({view:'calendar',props:{events,month:ui.month,selectedDate:ui.selectedDate,currentDate:today(),monthTitle:monthLabel(ui.month),netPlanCents:totals.netPlanCents,netFactCents:totals.netFactCents,formatDate,rubles}});
+  }else{
+   const currentDate=today(),events=monthEvents(),totals=monthTotals(events);
+   const upcoming=events.filter(event=>event.date>=currentDate).slice(0,4);
+   const groups=new Map();
+   for(const event of events.filter(event=>event.kind!=='income'))
+    groups.set(event.category,(groups.get(event.category)||0)+event.plannedCents);
+   const ordered=[...groups.entries()].sort((a,b)=>b[1]-a[1]).slice(0,5);
+   const highest=Math.max(...ordered.map(([_,sum])=>sum),1);
+   const categories=ordered.map(([name,amountCents])=>({name,amountCents,percent:Math.max(2,Math.round(amountCents/highest*100))}));
+   const loan=state.loans.find(isActive)||null;
+   const snapshot=loan?loanLedger(loan,state.loanPayments):null;
+   const loanSummary=loan?{id:loan.id,title:loan.title,outstandingCents:snapshot.outstandingCents,monthlyCents:snapshot.monthlyCents,months:snapshot.months,
+    percent:Math.max(0,Math.min(100,Math.round((1-snapshot.outstandingCents/loan.openingCents)*100)))}:null;
+   screenRoot.render({view:'overview',props:{currentDate,monthTitle:monthLabel(ui.month),hasData:hasData(),totals,categories,upcoming,loan:loanSummary,rubles,formatDate}});
+  }
  }else{
-  if(calendarRoot){calendarRoot.unmount();calendarRoot=null;}
-  const sections={overview:renderOverview,obligations:renderObligations,loans:renderLoans,settings:renderSettings};
+  if(screenRoot){screenRoot.unmount();screenRoot=null;}
+  const sections={obligations:renderObligations,loans:renderLoans,settings:renderSettings};
   main.innerHTML=sections[ui.view]();
  }
  syncAccountControls();
@@ -99,28 +115,6 @@ async function logoutEmailAccount(){
 }
 function pageHead(title,subtitle,actions=''){return `<header class="page-header"><div><div class="eyebrow">${formatDate(today())} · Личные финансы</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div><div class="header-tools">${actions}</div></header>`;}
 const action=(type,label,kind='button-primary',props='')=>`<button class="${kind}" data-action="${type}" ${props}>${label}</button>`;
-function moneyRow(event,{compact=false}={}){
- const remaining=Math.max(0,event.plannedCents-event.paidCents);
- const status=event.paidCents<=0?'Ожидается':remaining===0?'Оплачено':'Частично';
- const chip=`<span class="pill ${event.paidCents?remaining===0?'pill-paid':'pill-partial':''}">${status}</span>`;
- const isIncome=event.kind==='income';
- const click=event.source==='loan'?`data-action="pay" data-id="${escapeHtml(event.id)}"`:`data-action="settle" data-id="${escapeHtml(event.id)}" data-month="${escapeHtml(monthKey(event.date))}"`;
- return `<div class="list-row"><div class="list-icon">${svg(isIncome?'download':event.source==='loan'?'credit':'calendar')}</div><div class="list-row-main"><strong>${escapeHtml(event.title)}</strong><small>${formatDate(event.date)} · ${escapeHtml(event.category)} ${event.paidCents?`· факт ${rubles(event.paidCents)}`:''}</small></div><div class="list-row-right"><strong class="${isIncome?'pos':''}">${isIncome?'+':'−'}${rubles(event.plannedCents)}</strong>${chip}</div><button class="mini-action" aria-label="${isIncome?'Отметить поступление':'Отметить оплату'}: ${escapeHtml(event.title)}" ${click}>${svg('check')}</button></div>`;
-}
-function renderOverview(){
- const events=monthEvents(),totals=monthTotals(events);
- if(!hasData()) return pageHead('Обзор месяца','Начните без регистрации. Все записи сохранятся только в этом браузере.')+`<div class="surface empty-panel">${svg('lock')}<h3>Ваша бухгалтерия пока пуста</h3><p>Добавьте поступления, обязательные платежи и ипотеку. Можно сначала включить вымышленные данные, чтобы посмотреть приложение.</p><div class="setting-actions" style="justify-content:center">${action('new-entry','Добавить доход', 'button-primary','data-kind="income"')}${action('new-loan','Добавить кредит','button-secondary')}${action('sample','Показать пример','button-secondary')}</div></div>`;
- const activeLoans=state.loans.filter(isActive);const upcoming=events.filter(e=>e.date>=today()).slice(0,4);
- const grouped=new Map();for(const e of events.filter(e=>e.kind!=='income'))grouped.set(e.category,(grouped.get(e.category)||0)+e.plannedCents);
- const categoryRows=[...grouped.entries()].sort((a,b)=>b[1]-a[1]).slice(0,5);
- const max=Math.max(...categoryRows.map(x=>x[1]),1);
- const loan=activeLoans[0],snapshot=loan?loanLedger(loan,state.loanPayments):null;
- return pageHead('Обзор месяца',`${monthLabel(ui.month)} · план и фактически внесённые суммы`,`${action('prev-month',svg('chevron'),'button-secondary','aria-label="Предыдущий месяц"')}${action('next-month',svg('chevron'),'button-secondary','aria-label="Следующий месяц"')}`)+`
- <div class="overview-grid"><div class="overview-column"><div class="surface hero-money"><div class="hero-label">Плановый остаток после обязательств</div><div class="hero-amount">${rubles(totals.netPlanCents)}</div><div class="hero-foot">Доходы за месяц минус обязательные платежи. Это не остаток на банковском счёте.</div></div><div class="kpi-grid"><div class="surface kpi"><div class="kpi-label">Плановые доходы</div><div class="kpi-num pos">${rubles(totals.incomeCents)}</div><div class="small-hint">Получено: ${rubles(totals.incomePaidCents)}</div></div><div class="surface kpi"><div class="kpi-label">Обязательства</div><div class="kpi-num">${rubles(totals.expenseCents)}</div><div class="small-hint">Оплачено: ${rubles(totals.expensePaidCents)}</div></div></div>
- <div class="section-title"><h2>Распределение платежей</h2><button class="button-text" data-view="obligations">Все записи ${svg('chevron')}</button></div><div class="surface">${categoryRows.length?categoryRows.map(([name,sum])=>`<div class="allocation-row"><div class="allocation-label"><span>${escapeHtml(name)}</span><strong>${rubles(sum)}</strong></div><div class="progress-track"><div class="progress-fill" style="width:${Math.max(2,Math.round(sum/max*100))}%"></div></div></div>`).join(''):'<p class="small-hint">Добавьте расходы для построения распределения.</p>'}</div></div>
- <div class="overview-column"><div class="section-title" style="margin-top:0"><h2>Ближайшие события</h2><button class="button-text" data-view="calendar">Календарь ${svg('chevron')}</button></div><div class="surface plain-list">${upcoming.length?upcoming.map(e=>moneyRow(e)).join(''):'<div class="empty-mini">В этом месяце больше нет запланированных событий.</div>'}</div>
- <div class="section-title"><h2>${loan?'Кредитный горизонт':'Кредиты'}</h2><button class="button-text" data-view="loans">Подробнее ${svg('chevron')}</button></div><div class="surface loan-spotlight">${loan?`<div class="small-hint">Осталось выплатить · ${escapeHtml(loan.title)}</div><div class="loan-balance">${rubles(snapshot.outstandingCents)}</div><div class="progress-track"><div class="progress-fill" style="width:${Math.max(0,Math.min(100,Math.round((1-snapshot.outstandingCents/loan.openingCents)*100)))}%"></div></div><p class="small-hint" style="margin:10px 0">Ориентировочный срок: ${snapshot.months===null?'не рассчитывается':`${snapshot.months} мес.`}. Платёж: ${rubles(snapshot.monthlyCents)}</p>${action('pay',`${svg('plus')} Внести платёж`,'button-primary',`data-id="${escapeHtml(loan.id)}"`)}`:`<p class="small-hint">Кредитов пока нет.</p>${action('new-loan','Добавить кредит','button-primary')}`}</div></div></div>`;
-}
 function entryRecord(entry){
  const date=entry.recurrence==='once'?entry.date:dayInMonth(ui.month,Number(entry.date.slice(-2)));
  const occurrence=ui.month;
@@ -386,7 +380,7 @@ async function previewExcelImport(file){
  $('#excel-import-confirm').disabled=!diff.entries.length&&!diff.loans.length;
  openDialog('#excel-import-dialog');
 }
-function onErrorNoStorage(error){if(calendarRoot){calendarRoot.unmount();calendarRoot=null;}$('#main').innerHTML=`<section class="surface empty-panel"><h1>Хранилище недоступно</h1><p>${escapeHtml(error.message)}</p><p>Финансовые данные не будут незаметно записаны в ненадёжное временное хранилище. Откройте приложение в обычном окне Safari или другого браузера и разрешите сохранение данных.</p></section>`;}
+function onErrorNoStorage(error){if(screenRoot){screenRoot.unmount();screenRoot=null;}$('#main').innerHTML=`<section class="surface empty-panel"><h1>Хранилище недоступно</h1><p>${escapeHtml(error.message)}</p><p>Финансовые данные не будут незаметно записаны в ненадёжное временное хранилище. Откройте приложение в обычном окне Safari или другого браузера и разрешите сохранение данных.</p></section>`;}
 async function saveEntry(form){
  const id=formValue(form,'id'),title=formValue(form,'title').trim(),amountCents=cents(formValue(form,'amount'));
  const kind=formValue(form,'kind'),date=formValue(form,'date'),recurrence=formValue(form,'recurrence'),category=formValue(form,'category');
@@ -499,7 +493,7 @@ function bindEvents(){
   // A restored page from back/forward cache must re-validate authorization
   // before it can show any finance records.
   state=null;
-  if(calendarRoot){calendarRoot.unmount();calendarRoot=null;}
+  if(screenRoot){screenRoot.unmount();screenRoot=null;}
   $('#main').textContent='Проверяем доступ к бухгалтерии…';
   void (async()=>{
    if(!await refreshEmailSession())return;
