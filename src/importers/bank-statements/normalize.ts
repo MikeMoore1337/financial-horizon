@@ -290,7 +290,15 @@ export async function normalizeBankStatement(
     if (externalId.length > 150) err('EXTERNAL_ID_TOO_LONG', 'Длинный идентификатор операции', 'externalId');
     let category: string | null = text(get(source.cells, 'category')) || null;
     if (category) {
-      const mapped = options.categoryAliases?.[category] || category;
+      // Category labels are untrusted: do not resolve inherited JS object
+      // properties such as "constructor" or "__proto__" as aliases.
+      const aliases = options.categoryAliases;
+      const ownAlias = aliases && Object.prototype.hasOwnProperty.call(aliases, category)
+        ? aliases[category] : undefined;
+      if (ownAlias !== undefined && (typeof ownAlias !== 'string' || !ownAlias.trim())) {
+        err('INVALID_CATEGORY_ALIAS', 'Недопустимое соответствие категории', 'category');
+      }
+      const mapped = typeof ownAlias === 'string' && ownAlias.trim() ? ownAlias : category;
       const known = options.categories?.find(x => norm(x) === norm(mapped));
       if (options.categories && !known) err('UNKNOWN_CATEGORY', 'Неизвестная категория', 'category');
       else category = known || mapped;
