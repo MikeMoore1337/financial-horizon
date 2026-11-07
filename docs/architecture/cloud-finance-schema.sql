@@ -248,18 +248,33 @@ CREATE POLICY profiles_owner ON finance_profiles
     AND id = NULLIF(current_setting('fh.profile_id', true),'')::uuid
   );
 
--- Repeat the following for every child table above (including receipts,
--- change_log and import_*) as part of Alembic #66. No child-table exemptions.
--- Replace <table_name> with a child table name before execution.
--- ALTER TABLE <table_name> ENABLE ROW LEVEL SECURITY;
--- ALTER TABLE <table_name> FORCE ROW LEVEL SECURITY;
--- CREATE POLICY <table_name>_owner ON <table_name>
---   USING (profile_id = NULLIF(current_setting('fh.profile_id',true),'')::uuid
---     AND EXISTS (SELECT 1 FROM finance_profiles p
---                 WHERE p.id = profile_id))
---   WITH CHECK (profile_id = NULLIF(current_setting('fh.profile_id',true),'')::uuid
---     AND EXISTS (SELECT 1 FROM finance_profiles p
---                 WHERE p.id = profile_id));
+-- Apply default-deny policies to EVERY child table; omission would be an IDOR risk.
+-- App runtime role cannot bypass RLS even if it is the owner (FORCE).
+-- The auth user's principal must be server-validated before SET LOCAL.
+DO $fh_rls$
+DECLARE tablename text;
+BEGIN
+  FOREACH tablename IN ARRAY ARRAY[
+    'accounts','obligations','loans','reserves','ledger_transactions',
+    'ledger_postings','settlements','loan_payments','ledger_payment_links',
+    'reserve_allocations','command_receipts','change_log','import_batches',
+    'import_record_map'
+  ]
+  LOOP
+    EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY',tablename);
+    EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY',tablename);
+    EXECUTE format(
+      'CREATE POLICY owner_scope ON %I USING (
+        profile_id = NULLIF(current_setting(''fh.profile_id'',true),'''')::uuid
+        AND EXISTS (SELECT 1 FROM finance_profiles p WHERE p.id=profile_id)
+      ) WITH CHECK (
+        profile_id = NULLIF(current_setting(''fh.profile_id'',true),'''')::uuid
+        AND EXISTS (SELECT 1 FROM finance_profiles p WHERE p.id=profile_id)
+      )',tablename
+    );
+  END LOOP;
+END
+$fh_rls$;
 
 -- #66/#67 mandatory, NOT implemented here:
 -- (1) Deferred DB constraint trigger or equivalent locked transactional validation
