@@ -156,9 +156,14 @@ function sheetRows(doc: Document, strings: string[]): { rows: BankTableRow[]; wa
   const rows: BankTableRow[] = [];
   const warnings: ImportWarning[] = [];
   let cells = 0;
-  for (const row of nodes(doc, 'row')) {
+  const seenRows = new Set<number>();
+  const sheetData = child(doc, 'sheetData');
+  if (!sheetData) bad('В XLSX отсутствуют данные листа');
+  for (const row of nodes(sheetData, 'row')) {
     const index = Number(row.getAttribute('r'));
     if (!Number.isSafeInteger(index) || index < 1 || index > MAX_TABLE_ROWS + 1) bad('Слишком много строк XLSX');
+    if (seenRows.has(index)) bad('Повторяющаяся строка XLSX');
+    seenRows.add(index);
     const values: (string | number | null)[] = [];
     const assigned = new Set<number>();
     for (const cell of nodes(row, 'c')) {
