@@ -19,6 +19,8 @@ const emailSession=createEmailSession();
 let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
 const GUEST_MODE_KEY='fh-guest-session-v2';
 let screenRoot=null;
+let storageStatusMessage='Браузер может удалить данные при очистке хранилища. Делайте резервные копии.';
+let storageStatusRequest=0;
 function revokeDisplayedLedger(){
  state=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
@@ -35,13 +37,13 @@ async function mutate(change,msg='Сохранено на устройстве',
 function stampFormRevision(form){form.dataset.stateRevision=String(state.revision);}
 function revisionForForm(form){const revision=Number(form.dataset.stateRevision);if(!Number.isSafeInteger(revision)||revision<0)throw Error('Не удалось определить версию записи. Откройте форму повторно.');return revision;}
 function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#172336':'#ffffff';$('#theme-toggle').innerHTML=svg(mode==='dark'?'sun':'moon');$('#theme-toggle').setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}
-function navigation(view){ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings'&&!guestMode)void refreshEmailSession();}
+function navigation(view){ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings'){void renderStorageStatus();if(!guestMode)void refreshEmailSession();}}
 function render(){
  if(!state)return;
  $('#toolbar-title').textContent=titles[ui.view];
  document.querySelectorAll('[data-view]').forEach(el=>{const active=el.dataset.view===ui.view;el.classList.toggle('active',active);el.setAttribute('aria-current',active?'page':'false');});
  const main=$('#main');
- if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'){
+ if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'||ui.view==='settings'){
   if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main);}
   if(ui.view==='calendar'){
    const events=monthEvents(),totals=monthTotals(events);
@@ -76,7 +78,7 @@ function render(){
    screenRoot.render({view:'obligations',props:{rows,month:ui.month,monthTitle:monthLabel(ui.month),
     filter:ui.filter,expandedEntry:ui.expandedEntry,currentDate:today(),
     expenseCents:totals.expenseCents,expensePaidCents:totals.expensePaidCents,rubles,formatDate}});
-  }else{
+  }else if(ui.view==='loans'){
    const loans=state.loans.filter(isActive);
    if(!loans.find(loan=>loan.id===ui.selectedLoan))ui.selectedLoan=loans[0]?.id||null;
    const projected=loans.map(loan=>({loan,snapshot:loanLedger(loan,state.loanPayments)}));
@@ -97,14 +99,24 @@ function render(){
      .sort((a,b)=>b.date.localeCompare(a.date)||b.createdAt.localeCompare(a.createdAt)),
    }:null;
    screenRoot.render({view:'loans',props:{loans:summaries,selected,currentDate:today(),rubles,formatDate}});
+  }else{
+   const archived=[
+    ...state.entries.filter(x=>x.deletedAt).map(item=>({id:item.id,title:item.title,entity:'entry'})),
+    ...state.loans.filter(x=>x.deletedAt).map(item=>({id:item.id,title:item.title,entity:'loan'})),
+   ];
+   const audit=state.audit.slice(-8).reverse().map((item,index)=>({
+    id:item.id||item.date+'-'+index,description:item.description,date:item.date.slice(0,10),
+   }));
+   screenRoot.render({view:'settings',props:{
+    currentDate:today(),categories:state.categories,archived,audit,storageMessage:storageStatusMessage,
+    formatDate,
+   }});
   }
  }else{
   if(screenRoot){screenRoot.unmount();screenRoot=null;}
-  const sections={settings:renderSettings};
-  main.innerHTML=sections[ui.view]();
+  main.textContent='Неизвестный раздел';
  }
  syncAccountControls();
- if(ui.view==='settings')void renderStorageStatus();
 }
 function syncAccountControls(){
  const signedIn=Boolean(emailSession.email);
@@ -152,67 +164,6 @@ async function logoutEmailAccount(){
 }
 function pageHead(title,subtitle,actions=''){return `<header class="page-header"><div><div class="eyebrow">${formatDate(today())} · Личные финансы</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div><div class="header-tools">${actions}</div></header>`;}
 const action=(type,label,kind='button-primary',props='')=>`<button class="${kind}" data-action="${type}" ${props}>${label}</button>`;
-function renderSettings(){
- const deleted=[...state.entries.filter(x=>x.deletedAt).map(x=>({...x,entity:'entry'})),...state.loans.filter(x=>x.deletedAt).map(x=>({...x,entity:'loan'}))];
- const panelIcon=name=>'<div class="settings-symbol" aria-hidden="true">'+svg(name)+'</div>';
- return pageHead('Настройки','Безопасность, данные и управление записями')+`<div class="settings-grid">
- <section class="surface settings-card" data-settings-card="security">
-  ${panelIcon('shield')}<div class="settings-card-body">
-   <h2>Локальная безопасность</h2>
-   <p>Финансовые записи хранятся в этом браузере и не передаются на сервер. В приватном режиме они могут быть удалены после закрытия окна.</p>
-   <div class="setting-actions">${action('persist',`${svg('lock')} Запросить постоянное хранение`,'button-secondary')}</div>
-   <p id="storage-status" class="small-hint settings-footnote" role="status">Браузер может удалить данные при очистке хранилища. Делайте резервные копии.</p>
-  </div>
- </section>
- <section class="surface settings-card" data-settings-card="backup">
-  ${panelIcon('download')}<div class="settings-card-body">
-   <h2>Зашифрованная копия</h2>
-   <p>Сохраните записи в зашифрованный файл (AES-256-GCM) для переноса на другое устройство или восстановления.</p>
-   <div class="setting-actions">${action('backup',`${svg('download')} Скачать копию`,'button-primary')}${action('restore',`${svg('upload')} Восстановить`,'button-secondary')}</div>
-  </div>
- </section>
- <section class="surface settings-card" data-settings-card="import">
-  ${panelIcon('sheet')}<div class="settings-card-body">
-   <h2>Импорт из Excel</h2>
-   <p>Выберите XLSX для предварительного просмотра. Файл обрабатывается в браузере, текущие записи не заменяются.</p>
-   <div class="setting-actions">${action('excel-import',`${svg('upload')} Выбрать файл`,'button-secondary')}</div>
-   <p class="small-hint settings-footnote">Поддерживается шаблон с доходами и кредитами. Перед импортом проверьте суммы, даты и остатки.</p>
-  </div>
- </section>
- <section class="surface settings-card" data-settings-card="categories">
-  ${panelIcon('tag')}<div class="settings-card-body">
-   <h2>Категории</h2>
-   <p>Добавляйте, переименовывайте и удаляйте категории. Используемую категорию сначала замените в записях.</p>
-   <div class="category-items">${state.categories.map(x=>`<span class="category-chip"><span class="category-name">${escapeHtml(x)}</span><button type="button" data-action="edit-category" data-category="${escapeHtml(x)}" aria-label="Переименовать категорию ${escapeHtml(x)}" title="Переименовать">${svg('edit')}</button><button type="button" data-action="delete-category" data-category="${escapeHtml(x)}" aria-label="Удалить категорию ${escapeHtml(x)}" title="Удалить">${svg('trash')}</button></span>`).join('')}</div>
-   <form id="category-form" class="category-add"><input name="name" maxlength="40" required aria-label="Новая категория" placeholder="Название категории"><button class="button-primary" type="submit">Добавить</button></form>
-  </div>
- </section>
- <section class="surface settings-card" data-settings-card="archive">
-  ${panelIcon('archive')}<div class="settings-card-body">
-   <h2>Архив записей</h2>
-   <p>Удалённые записи остаются в архиве и доступны для восстановления.</p>
-   <div class="archive-list">${deleted.length?deleted.map(x=>`<div class="archive-row"><span>${escapeHtml(x.title)}</span>${action('restore-item','Восстановить','button-text',`data-id="${escapeHtml(x.id)}" data-entity="${x.entity}"`)}</div>`).join(''):'<div class="small-hint">Архив пуст.</div>'}</div>
-  </div>
- </section>
- <section class="surface settings-card" data-settings-card="history">
-  ${panelIcon('database')}<div class="settings-card-body">
-   <h2>Пример и история</h2>
-   <p>Загрузите пример записей для знакомства с интерфейсом или очистите бухгалтерию.</p>
-   <div class="setting-actions">${action('sample','Загрузить пример','button-secondary')}${action('clear','Очистить бухгалтерию','button-secondary danger-zone')}</div>
-   <details class="settings-history"><summary>Последние изменения${state.audit.length?' ('+Math.min(state.audit.length,8)+')':''}</summary>
-    <div class="archive-list">${state.audit.slice(-8).reverse().map(x=>`<div class="archive-row"><span>${escapeHtml(x.description)}</span><span class="muted">${formatDate(x.date.slice(0,10))}</span></div>`).join('')||'<div class="small-hint">Пока изменений нет.</div>'}</div>
-   </details>
-  </div>
- </section>
- <section class="surface settings-card settings-install" data-settings-card="install">
-  ${panelIcon('smartphone')}<div class="settings-card-body">
-   <h2>Установка приложения</h2>
-   <p>Установите приложение через меню браузера. На iPhone используйте «Поделиться» → «На экран Домой», на Mac - «Добавить в Dock». Данные разных устройств автоматически не объединяются.</p>
-   <div class="setting-actions">${action('install','Установить (где поддерживается)','button-secondary')}</div>
-  </div>
- </section>
- </div>`;
-}
 function openDialog(sel){
  const dlg=$(sel);if(!dlg||dlg.open)return;
  const focused=document.activeElement;
@@ -348,9 +299,18 @@ async function handleAction(button){
  }
 }
 async function renderStorageStatus(){
- if(ui.view!=='settings')return;
- const info=await storageStatus();const el=$('#storage-status');if(!el)return;
- el.textContent=info.persistent===true?'Постоянное хранение браузером разрешено. Экспорт копий всё равно обязателен для надёжности.':'Постоянное хранение не подтверждено. Очистка данных сайта может уничтожить бухгалтерию.';
+ if(ui.view!=='settings'||!state)return;
+ const request=++storageStatusRequest;
+ try{
+  const info=await storageStatus();
+  if(request!==storageStatusRequest||ui.view!=='settings'||!state)return;
+  const next=info.persistent===true
+   ?'Постоянное хранение браузером разрешено. Экспорт копий всё равно обязателен для надёжности.'
+   :'Постоянное хранение не подтверждено. Очистка данных сайта может уничтожить бухгалтерию.';
+  if(next!==storageStatusMessage){storageStatusMessage=next;render();}
+ }catch(error){
+  if(ui.view==='settings')toast('Не удалось проверить состояние хранилища','error');
+ }
 }
 async function previewExcelImport(file){
  if(!file)return;
@@ -448,6 +408,7 @@ async function onFormSubmit(event){
    const title=form.elements.namedItem('name').value.trim();if(!title||title.length>40)throw Error('Название категории должно быть от 1 до 40 символов');
    if(state.categories.some(x=>x.toLowerCase()===title.toLowerCase()))throw Error('Такая категория уже существует');
    await mutate(s=>{s.categories.push(title);audit(s,'category',`Добавлена категория: ${title}`);},'Категория добавлена');
+   if(form.isConnected)form.reset();
   }
   if(form.getAttribute('id')==='password-form'){
    const password=form.elements.password.value;
