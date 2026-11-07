@@ -171,6 +171,7 @@ test('reduce-payment after the regular same-day due installment excludes the alr
       mode, asOfDate: '2026-02-02',
     });
     assert.equal(actual.rows[0].amountCents, 40_000, mode);
+    assert.equal(actual.rows[0].plannedPaymentCents, 25_000, mode); // Original February obligation.
     assert.equal(actual.principalBalanceCents, mode === 'actual' ? 60_000 : 0, mode);
     assert.equal(actual.scheduledPaymentCents, 20_000, mode);
     assert.equal(actual.actualOpenPeriod, null, mode);
@@ -243,4 +244,18 @@ test('a later date change cannot affect an earlier same-rate repricing event', (
   assert.equal(result.rows[1].date, '2026-03-28');
   assert.throws(() => calculateLoan({ ...contract, dueDateChangePolicy: 'unknown' },
     [], { mode: 'plan' }), RangeError);
+});
+
+test('rate change effective on due date updates the due amount before any payment', () => {
+  const contract = { ...terms, termMonths: 2 };
+  const baseline = calculateLoan(contract, [], { mode: 'plan' });
+  const changed = calculateLoan(contract, [{
+    id: 'rate-effective-feb-due', type: 'rate-change',
+    date: '2026-02-01', annualRateMicroPercent: 12_000_000,
+  }], { mode: 'plan' });
+  assert.equal(baseline.rows[0].plannedPaymentCents, 50_000);
+  assert.equal(changed.rows[0].plannedPaymentCents, changed.rows[0].amountCents);
+  assert.ok(changed.rows[0].plannedPaymentCents > baseline.rows[0].plannedPaymentCents);
+  assert.equal(changed.complete, true);
+  assert.equal(changed.rows[1].balanceCents, 0);
 });
