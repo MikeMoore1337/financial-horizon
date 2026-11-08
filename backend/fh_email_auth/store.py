@@ -76,6 +76,17 @@ class AuthStore:
                     created_at INTEGER NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
+                CREATE TABLE IF NOT EXISTS oauth_identities (
+                    provider TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    created_at INTEGER NOT NULL,
+                    PRIMARY KEY(provider,subject)
+                );
+                CREATE INDEX IF NOT EXISTS oauth_identities_user_idx
+                    ON oauth_identities(user_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS oauth_identities_one_provider_per_user
+                    ON oauth_identities(user_id, provider);
                 CREATE TABLE IF NOT EXISTS email_changes (
                     hash TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL REFERENCES users(id),
@@ -443,7 +454,9 @@ class AuthStore:
                 row=db.execute(
                     """SELECT s.user_id FROM sessions s JOIN users u ON u.id=s.user_id
                        WHERE s.hash=? AND s.revoked_at IS NULL AND s.expires_at>?
-                       AND u.disabled=0 AND u.verified_at IS NOT NULL""",
+                       AND u.disabled=0
+                       AND (u.verified_at IS NOT NULL OR EXISTS (
+                           SELECT 1 FROM oauth_identities oi WHERE oi.user_id=u.id))""",
                     (token_hash(session),now)
                 ).fetchone()
                 if not row:
@@ -464,7 +477,9 @@ class AuthStore:
         with self._db() as db:
             row=db.execute(
                 """SELECT s.user_id, u.email FROM sessions s JOIN users u ON u.id=s.user_id
-                   WHERE s.hash=? AND s.expires_at>? AND s.revoked_at IS NULL AND u.disabled=0 AND u.verified_at IS NOT NULL""",
+                   WHERE s.hash=? AND s.expires_at>? AND s.revoked_at IS NULL AND u.disabled=0
+                   AND (u.verified_at IS NOT NULL OR EXISTS (
+                       SELECT 1 FROM oauth_identities oi WHERE oi.user_id=u.id))""",
                 (token_hash(session),int(self.now()))
             ).fetchone()
         return {"id":row[0],"email":row[1]} if row else None
@@ -481,7 +496,9 @@ class AuthStore:
                 row=db.execute(
                     """SELECT s.user_id FROM sessions s JOIN users u ON u.id=s.user_id
                        WHERE s.hash=? AND s.expires_at>? AND s.revoked_at IS NULL
-                         AND u.disabled=0 AND u.verified_at IS NOT NULL""",
+                         AND u.disabled=0
+                         AND (u.verified_at IS NOT NULL OR EXISTS (
+                             SELECT 1 FROM oauth_identities oi WHERE oi.user_id=u.id))""",
                     (current_hash,now)
                 ).fetchone()
                 if not row:
