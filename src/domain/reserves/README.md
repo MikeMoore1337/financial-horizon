@@ -64,6 +64,34 @@ must not become a duplicate obligation when confirmed. This connection
 remains blocked until the agreed #33 ledger/persistence contract and the
 separate approved UI implementation.
 
+## Pure account-payment reconciliation oracle
+
+`previewReservePaymentImpact(input)` in `payment-impact.ts` is a **read-only**
+mathematical check for the agreement with #33. The caller supplies the
+signed real balance of **one** account, total earmarked funds on that
+account, the allocation belonging to the selected obligation, actual payment
+amount, and amount consumed from this reserve. It never reads account data,
+creates a financial operation, or authorizes an overdraft.
+
+Its invariants, all in integer kopecks:
+
+- Real account after payment: `B' = B - paymentCents` (one real debit).
+- Earmarked amount after payment: `R' = R - reservedUsedCents`.
+- Unreserved before: `A = B - R`; unreserved after:
+  `A' = A - (paymentCents - reservedUsedCents)`.
+- Actual expense equals `paymentCents` once, **not** `paymentCents +
+  reservedUsedCents`. Allocating a reserve is never a ledger debit.
+- `reservedUsedCents` cannot exceed either the selected reserve's allocation
+  on the account or the full payment. No allocation can exceed the sum of
+  all allocations on that same account.
+- It reports projected shortfall/negative availability but leaves the actual
+  authorization and overdraft policy to #33/#67 under a verified account scope.
+
+The function is deliberately **not** integrated with `ledger.ts` or PostgreSQL:
+it is a regression oracle for the future atomic payment/void implementation.
+Persistence, idempotency, tenant isolation and valid account membership must
+be guaranteed by the authoritative server and tested on real PostgreSQL.
+
 ## Required integration gate with #33
 
 Do **not** independently write to `finance.js`, `ledger-operations.js`, `storage.js`,
