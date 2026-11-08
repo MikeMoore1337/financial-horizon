@@ -110,6 +110,7 @@ export interface GoalSnapshot {
   progressBasisPoints: number; // 10_000 = 100%; clamped at target.
   status: GoalStatus;
   reached: boolean;
+  reachedOn: string | null; // Factual date when the current target last became fully funded.
   monthlyCents: number; // Effective monthly plan (fixed or auto-calculated).
   monthlyPlanIsFixed: boolean;
   requiredMonthlyCents: number | null; // null if no installment can occur before deadline.

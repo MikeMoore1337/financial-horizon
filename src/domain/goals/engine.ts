@@ -170,6 +170,7 @@ interface InternalState {
   monthlyCents: number | null;
   plannedFunding: GoalFunding;
   balance: number;
+  reachedOn: string | null;
   status: GoalStatus;
 }
 
@@ -239,7 +240,12 @@ function replay(goal: GoalRecord, asOf: string): InternalState {
     monthlyCents: start.monthlyCents,
     plannedFunding: start.plannedFunding,
     balance: 0,
+    reachedOn: null,
     status: 'active',
+  };
+  const checkReach = (date: string): void => {
+    if (state.balance < state.targetCents) state.reachedOn = null;
+    else if (state.reachedOn === null) state.reachedOn = date;
   };
   const skips = new Set<string>();
   for (const event of sortedEvents(goal.events)) {
@@ -247,11 +253,13 @@ function replay(goal: GoalRecord, asOf: string): InternalState {
     switch (event.type) {
       case 'create':
         state.balance = safeAdd(state.balance, event.openingCents);
+        checkReach(event.on);
         break;
       case 'update':
         if (state.status !== 'active') throw new Error('Reopen a closed goal before editing');
         state = { ...state, ...event.changes };
         if (state.targetDate < state.createdOn) throw new RangeError('Deadline precedes start');
+        checkReach(event.on);
         break;
       case 'contribution':
         if (state.status !== 'active') throw new Error('Reopen a closed goal before funding');
@@ -259,10 +267,12 @@ function replay(goal: GoalRecord, asOf: string): InternalState {
           throw new RangeError('Contribution date is not a monthly due date');
         }
         state.balance = safeAdd(state.balance, event.amountCents);
+        checkReach(event.on);
         break;
       case 'use':
         if (state.status !== 'active') throw new Error('Reopen a closed goal before using savings');
         state.balance = safeAdd(state.balance, -event.amountCents);
+        checkReach(event.on);
         break;
       case 'skip':
         if (state.status !== 'active') throw new Error('Reopen a closed goal before marking a skip');
@@ -277,6 +287,7 @@ function replay(goal: GoalRecord, asOf: string): InternalState {
         if (original.type === 'contribution') state.balance = safeAdd(state.balance, -original.amountCents);
         if (original.type === 'use') state.balance = safeAdd(state.balance, original.amountCents);
         if (original.type === 'skip') skips.delete(original.dueOn);
+        checkReach(event.on);
         break;
       }
       case 'complete':
@@ -385,7 +396,7 @@ export function calculateGoal(goal: GoalRecord, asOf: string): GoalSnapshot {
   const required = remaining === 0 ? 0 : futureDue.length ? ceilDiv(remaining, futureDue.length) : null;
   const monthly = state.monthlyCents ?? required ?? 0;
   const deficit = required === null ? null : Math.max(0, required - monthly);
-  let projected: string | null = remaining === 0 ? asOf : null;
+  let projected: string | null = remaining === 0 ? state.reachedOn : null;
   let remainingProjection = remaining;
   let horizonLimited = false;
   if (remaining > 0 && monthly > 0) {
@@ -411,7 +422,7 @@ export function calculateGoal(goal: GoalRecord, asOf: string): GoalSnapshot {
     targetCents: state.targetCents, targetDate: state.targetDate,
     openingCents: state.openingCents, savedCents: state.balance, remainingCents: remaining,
     progressBasisPoints: Math.min(10_000, Number(BigInt(state.balance) * 10_000n / BigInt(state.targetCents))),
-    status: state.status, reached: remaining === 0,
+    status: state.status, reached: remaining === 0, reachedOn: state.reachedOn,
     monthlyCents: monthly, monthlyPlanIsFixed: state.monthlyCents !== null,
     requiredMonthlyCents: required, monthlyDeficitCents: deficit,
     remainingInstallments: futureDue.length, projectedCompletionDate: projected,

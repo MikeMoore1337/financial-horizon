@@ -47,6 +47,8 @@ test('early completion and lifecycle: complete, archive, restore, reopen', () =>
   assert.equal(reached.progressBasisPoints, 10_000);
   assert.equal(reached.projectedCompletionDate, '2026-02-10');
   assert.equal(reached.reached, true);
+  assert.equal(calculateGoal(funded, '2026-03-01').reachedOn, '2026-02-10');
+  assert.equal(calculateGoal(funded, '2026-03-01').projectedCompletionDate, '2026-02-10');
   const complete = applyGoalEvent(funded, { id: 'done', type: 'complete', on: '2026-02-10' });
   assert.equal(calculateGoal(complete, '2026-02-10').status, 'completed');
   assert.throws(() => add(complete, 'late', '2026-02-11', 1), /Reopen/);
@@ -283,4 +285,19 @@ test('old history cannot be corrupted by returned journal or edited input object
   assert.equal(calculateGoal(created, '2026-02-01').targetCents, 12_000_000);
   const retry = { type: 'update', changes: { targetCents: 20_000_000 }, on: '2026-02-01', id: 'update' };
   assert.equal(applyGoalEvent(changed, retry), changed); // property order cannot break idempotency
+});
+
+
+test('factual reached date is preserved until increased goal or withdrawal resets it', () => {
+  const reached = add(fresh(), 'early', '2026-02-01', 12_000_000);
+  assert.equal(calculateGoal(reached, '2026-05-01').reachedOn, '2026-02-01');
+  assert.equal(calculateGoal(reached, '2026-05-01').projectedOnTime, true);
+  const larger = change(reached, 'larger', '2026-03-01', { targetCents: 14_000_000 });
+  assert.equal(calculateGoal(larger, '2026-03-01').reachedOn, null);
+  const topped = add(larger, 'top-up', '2026-04-01', 2_000_000);
+  assert.equal(calculateGoal(topped, '2026-05-01').reachedOn, '2026-04-01');
+  const withdraw = use(topped, 'use-savings', '2026-05-01', 1_000_000);
+  assert.equal(calculateGoal(withdraw, '2026-05-01').reachedOn, null);
+  assert.equal(calculateGoal(fresh({ openingCents: 12_000_000 }), '2026-06-01').reachedOn,
+    '2026-01-01');
 });
