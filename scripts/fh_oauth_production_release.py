@@ -48,12 +48,16 @@ class Gate(Exception):
         super().__init__(code)
 
 
-def command(args: list[str], *, timeout: int = 1200, cwd: Path | None = None) -> bytes:
+def command(args: list[str], *, timeout: int = 1200, cwd: Path | None = None,
+            env: dict[str, str] | None = None,
+            failure_code: str | None = None) -> bytes:
     p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                       cwd=cwd, timeout=timeout, check=False)
+                       cwd=cwd, env=env, timeout=timeout, check=False)
     if p.returncode:
-        raise Gate("COMMAND_FAILED_" + re.sub(r"[^A-Z0-9_]", "_",
-                                               Path(args[0]).name.upper()))
+        # Never expose unfiltered pip, subprocess or OAuth output: it may hold
+        # tokens, local paths or secrets. Stable operation codes identify the step.
+        raise Gate(failure_code or "COMMAND_FAILED_" + re.sub(
+            r"[^A-Z0-9_]", "_", Path(args[0]).name.upper()))
     return p.stdout
 
 
@@ -318,6 +322,60 @@ def find_auth_python(args: list[str]) -> Path:
     raise Gate("AUTH_VENV_NOT_IDENTIFIED")
 
 
+def stage_isolated_python(auth_py: Path, new_backend: Path,
+                          source: Path) -> str:
+    """Install all auth dependencies in a NEW release-only venv, never live.
+
+    The currently running service keeps its original Python executable.
+    A post-switch systemd PYTHONPATH prepends the new venv's site-packages,
+    preserving any existing PYTHONPATH for source-module discovery.
+    """
+    target = new_backend / ".oauth-venv"
+    if not new_backend.is_dir() or target.exists() or target.is_symlink():
+        raise Gate("ISOLATED_VENV_TARGET_INVALID")
+    requirements = source / "backend" / "requirements.txt"
+    if not requirements.is_file():
+        raise Gate("REQUIREMENTS_NOT_FOUND")
+    try:
+        command([str(auth_py), "-m", "venv", "--copies", str(target)],
+                timeout=120, failure_code="ISOLATED_VENV_CREATION_FAILED")
+        isolated_py = target / "bin" / "python"
+        if not isolated_py.is_file():
+            raise Gate("ISOLATED_VENV_PYTHON_MISSING")
+        command([str(isolated_py), "-m", "pip", "install", "--no-input",
+                 "--disable-pip-version-check", "--require-virtualenv",
+                 "-r", str(requirements)],
+                timeout=360, failure_code="ISOLATED_DEPS_INSTALL_FAILED")
+        modules = "import fastapi, uvicorn, httpx, pwdlib, joserfc, cryptography"
+        command([str(isolated_py), "-c", modules],
+                timeout=30, failure_code="ISOLATED_DEPS_IMPORT_FAILED")
+        site = command(
+            [str(isolated_py), "-c",
+             "import sysconfig; print(sysconfig.get_path('purelib'))"],
+            timeout=30, failure_code="ISOLATED_SITE_QUERY_FAILED",
+        ).decode("utf-8", errors="strict").strip()
+        if (not site or not re.fullmatch(r"/[A-Za-z0-9_./-]+", site) or
+                not Path(site).is_relative_to(target) or
+                not Path(site).is_dir()):
+            raise Gate("ISOLATED_SITE_PATH_INVALID")
+        return site
+    except Exception:
+        # This path belongs exclusively to this staged release.
+        if target.is_dir() and not target.is_symlink():
+            shutil.rmtree(target)
+        raise
+
+
+def service_python_path(isolated_site: str, process_env: dict[str, str]) -> str:
+    old_path = process_env.get("PYTHONPATH", "")
+    if old_path and not re.fullmatch(r"[/A-Za-z0-9_.:-]+", old_path):
+        raise Gate("EXISTING_PYTHONPATH_UNEXPECTED")
+    result = isolated_site + (os.pathsep + old_path if old_path else "")
+    if not re.fullmatch(r"[/A-Za-z0-9_.:-]+", result):
+        raise Gate("ISOLATED_PYTHONPATH_INVALID")
+    return result
+
+
 def preflight(sha: str):
     if os.geteuid() != 0 or not re.fullmatch("[a-f0-9]{40}", sha):
         raise Gate("ROOT_OR_SHA_INVALID")
@@ -396,10 +454,19 @@ def rollout(sha: str) -> None:
         source = source_archive(sha, Path(workdir))
         new_backend = stage_backend(source, sha, old_backend)
         new_static = stage_static(source, sha)
-        command([str(auth_py), "-m", "pip", "install", "--disable-pip-version-check",
-                 "joserfc>=1.8,<2", "cryptography>=44,<50"], timeout=240)
-        command([str(auth_py), "-c", "import joserfc, cryptography"], timeout=30)
-        command([sys.executable, "-m", "compileall", "-q", str(new_backend)], timeout=45)
+        isolated_site = stage_isolated_python(auth_py, new_backend, source)
+        _, _, stage_process_env = running_process()
+        prepared_path = service_python_path(isolated_site, stage_process_env)
+        check_env = os.environ.copy()
+        check_env["PYTHONPATH"] = prepared_path
+        command([str(auth_py), "-c",
+                 "import fastapi, uvicorn, httpx, pwdlib, joserfc, cryptography"],
+                timeout=30, env=check_env,
+                failure_code="LIVE_PYTHON_WITH_STAGED_DEPS_FAILED")
+        command([sys.executable, "-m", "compileall", "-q", str(new_backend)],
+                timeout=45, failure_code="BACKEND_COMPILE_FAILED")
+        print("ISOLATED_PYTHON_DEPS=PASS", flush=True)
+        print("LIVE_AUTH_PYTHON_UNMODIFIED=YES", flush=True)
         print("RELEASE_STAGED=PASS", flush=True)
         # Revalidate after network-dependent staging: other releases or
         # operators may have changed the live service while we built assets.
@@ -423,7 +490,12 @@ def rollout(sha: str) -> None:
             db_migrated = True
             switch_release(BACKEND_ROOT, new_backend)
             DROPIN.parent.mkdir(parents=True, exist_ok=True)
-            atomic_file(DROPIN, b"[Service]\nEnvironmentFile=/etc/financial-horizon/oauth.env\n", 0o644)
+            dropin_content = (
+                "[Service]\n"
+                "Environment=\"PYTHONPATH=" + prepared_path + "\"\n"
+                "EnvironmentFile=/etc/financial-horizon/oauth.env\n"
+            )
+            atomic_file(DROPIN, dropin_content.encode("utf-8"), 0o644)
             atomic_file(OAUTH_ENV, replace_flags(old_env))
             command(["systemctl", "daemon-reload"], timeout=25)
             command(["systemctl", "start", SERVICE], timeout=30)
