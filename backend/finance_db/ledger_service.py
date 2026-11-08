@@ -251,6 +251,73 @@ def _post(session: Session, p: UUID, txid: UUID, kind: str, actor: str,
         """), {"p": p, "a": acc})
 
 
+def _account_sync_entity(session: Session, profile_id: UUID, account_id: UUID) -> dict[str, Any]:
+    """Full account entity at the *committed revision*, including both balances."""
+    row = session.execute(text("""
+        SELECT a.id,a.entity_revision,a.name,a.kind,a.currency,a.opening_minor,a.archived_at,
+          a.opening_minor + COALESCE((
+            SELECT SUM(p.signed_minor) FROM ledger_postings p
+            WHERE p.profile_id=a.profile_id AND p.account_id=a.id
+          ), 0) AS balance_minor,
+          COALESCE((
+            SELECT SUM(r.delta_minor) FROM reserve_allocations r
+            WHERE r.profile_id=a.profile_id AND r.account_id=a.id
+          ), 0) AS reserved_minor
+        FROM accounts a WHERE a.profile_id=:p AND a.id=:id
+    """), {"p": profile_id, "id": account_id}).mappings().one()
+    balance = _safe_balance(row["balance_minor"])
+    reserved = _safe_balance(row["reserved_minor"])
+    available = _safe_balance(balance - reserved)
+    return {
+        "id": str(row["id"]), "entity_revision": int(row["entity_revision"]),
+        "kind": "account",
+        "data": {
+            "name": row["name"], "type": row["kind"],
+            "currency": row["currency"].strip(),
+            "opening_minor": int(row["opening_minor"]),
+            "balance_minor": balance, "reserved_minor": reserved,
+            "available_minor": available,
+            "archived_at": row["archived_at"].isoformat() if row["archived_at"] else None,
+        },
+    }
+
+
+def _transaction_sync_entity(session: Session, profile_id: UUID, txid: UUID) -> dict[str, Any]:
+    """Immutable transaction with exact historical date and complete signed effects."""
+    row = session.execute(text("""
+        SELECT id,kind,occurred_on,note,posted_at,reversed_transaction_id,entity_revision
+        FROM ledger_transactions WHERE profile_id=:p AND id=:id
+    """), {"p": profile_id, "id": txid}).mappings().one()
+    postings = session.execute(text("""
+        SELECT account_id,signed_minor FROM ledger_postings
+        WHERE profile_id=:p AND transaction_id=:id ORDER BY account_id
+    """), {"p": profile_id, "id": txid}).mappings().all()
+    data = {
+        "kind": row["kind"], "occurred_on": row["occurred_on"].isoformat(),
+        "note": row["note"], "posted_at": row["posted_at"].isoformat(),
+        "reversed_transaction_id": (
+            str(row["reversed_transaction_id"]) if row["reversed_transaction_id"] else None
+        ),
+        "postings": [
+            {"account_id": str(item["account_id"]), "signed_minor": int(item["signed_minor"])}
+            for item in postings
+        ],
+    }
+    link = session.execute(text("""
+        SELECT settlement_id,loan_payment_id FROM ledger_payment_links
+        WHERE profile_id=:p AND transaction_id=:id
+    """), {"p": profile_id, "id": txid}).mappings().one_or_none()
+    if link:
+        data["payment_link"] = {
+            "settlement_id": str(link["settlement_id"]) if link["settlement_id"] else None,
+            "loan_payment_id": str(link["loan_payment_id"]) if link["loan_payment_id"] else None,
+        }
+    return {
+        "id": str(row["id"]), "entity_revision": int(row["entity_revision"]),
+        "kind": "transaction", "data": data,
+    }
+
+
 def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any],
            versions: Mapping[str, int], new_revision: int) -> dict[str, Any]:
     p = scope.profile_id
@@ -480,6 +547,26 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
                           "transaction_kind": "reversal"}
     else:
         raise _reject("Неизвестная финансовая команда")
+
+    # Clients must be able to reconstruct /state from /changes without
+    # inferring dates, posting signs, balances or account entity revisions.
+    # Embed complete entity images in the *same* revision and receipt; never
+    # advance the cursor based on incomplete financial postings.
+    if change_kind == "ledger_posted":
+        entity = _transaction_sync_entity(session, p, target)
+        account_ids = sorted({
+            UUID(item["account_id"]) for item in entity["data"]["postings"]
+        })
+        change_payload = {
+            **change_payload,
+            "entity": entity,
+            "accounts": [_account_sync_entity(session, p, acc) for acc in account_ids],
+        }
+    elif action.startswith("account."):
+        change_payload = {
+            **change_payload,
+            "entity": _account_sync_entity(session, p, target),
+        }
 
     session.execute(text("""
         UPDATE finance_profiles SET revision=:r,updated_at=now() WHERE id=:p
