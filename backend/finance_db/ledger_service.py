@@ -386,11 +386,14 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
     session.execute(text("""
         UPDATE finance_profiles SET revision=:r,updated_at=now() WHERE id=:p
     """), {"r": new_revision, "p": p})
+    # Preserve the entity revision *as of this event* in private change_log,
+    # not the entity's current revision at a later delta read.
+    audit_payload = {**change_payload, "_entity_revision": affected_revision}
     session.execute(text("""
         INSERT INTO change_log (profile_id,revision,ordinal,schema_version,kind,entity_id,payload)
         VALUES (:p,:r,0,1,:kind,:id,CAST(:payload AS jsonb))
     """), {"p": p, "r": new_revision, "kind": change_kind,
-           "id": target, "payload": json.dumps(change_payload, ensure_ascii=False)})
+           "id": target, "payload": json.dumps(audit_payload, ensure_ascii=False)})
     return _change(new_revision, change_kind, target, affected_revision, change_payload)
 
 
