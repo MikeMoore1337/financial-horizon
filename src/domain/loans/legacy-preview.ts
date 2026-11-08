@@ -89,17 +89,34 @@ export function prepareLegacyLoanPreview(
   if (!accepted || typeof accepted !== 'object' || Array.isArray(accepted)) {
     throw new TypeError('Explicit confirmation object is required');
   }
+  // Inherited defaults cannot stand in for explicit approval of a bank
+  // agreement or its financial parameters. Accept only own supplied fields.
+  const provided = (key: keyof ExplicitLoanTermsSelection): boolean =>
+    Object.hasOwn(accepted, key);
   const missing: MissingLoanAcceptance[] = [];
-  if (accepted.agreementConfirmed !== true) missing.push('agreementConfirmed');
-  if (accepted.openingBalanceDateConfirmed !== true) {
+  if (!provided('agreementConfirmed') || accepted.agreementConfirmed !== true) {
+    missing.push('agreementConfirmed');
+  }
+  if (!provided('openingBalanceDateConfirmed') ||
+      accepted.openingBalanceDateConfirmed !== true) {
     missing.push('openingBalanceDateConfirmed');
   }
-  if (accepted.firstDueDate == null || accepted.firstDueDate === '') missing.push('firstDueDate');
-  if (accepted.annualRateMicroPercent == null) missing.push('annualRateMicroPercent');
-  if (accepted.dayCount == null) missing.push('dayCount');
-  if (accepted.rounding == null) missing.push('rounding');
-  if (accepted.scheduleType == null) missing.push('scheduleType');
-  if (accepted.installmentBasis == null) missing.push('installmentBasis');
+  if (!provided('firstDueDate') ||
+      accepted.firstDueDate == null || accepted.firstDueDate === '') {
+    missing.push('firstDueDate');
+  }
+  if (!provided('annualRateMicroPercent') ||
+      accepted.annualRateMicroPercent == null) {
+    missing.push('annualRateMicroPercent');
+  }
+  if (!provided('dayCount') || accepted.dayCount == null) missing.push('dayCount');
+  if (!provided('rounding') || accepted.rounding == null) missing.push('rounding');
+  if (!provided('scheduleType') || accepted.scheduleType == null) {
+    missing.push('scheduleType');
+  }
+  if (!provided('installmentBasis') || accepted.installmentBasis == null) {
+    missing.push('installmentBasis');
+  }
 
   const safeBase = {
     status: 'needs-confirmation' as const,
