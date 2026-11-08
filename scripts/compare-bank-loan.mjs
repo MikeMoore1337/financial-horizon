@@ -3,7 +3,8 @@
  * No fetch, API key, IndexedDB access, output file or network transfer.
  * Run on an owner-controlled machine; never submit real bank data to CI.
  */
-import { open, stat } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { open } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseSchedule } from '../schedule.js';
@@ -15,17 +16,17 @@ const CSV_LIMIT = 1024 * 1024;
 async function readLimited(path, limit) {
   // Keep the read bounded even for a huge file, a FIFO or a file being edited:
   // never read the full content into memory before enforcing its byte limit.
-  // Reject FIFOs, sockets, directories and oversized files BEFORE open():
-  // opening a FIFO for reading could otherwise wait indefinitely for a writer.
-  const metadata = await stat(path);
-  if (!metadata.isFile() || metadata.size === 0 || metadata.size > limit) {
-    throw new RangeError('Input must be a bounded regular file');
-  }
-  const handle = await open(path, 'r');
+  // Open once, non-blocking and without following symlinks where supported.
+  // Validate the opened descriptor: no time-of-check/time-of-use path race.
+  // O_NONBLOCK stops a FIFO without a writer from blocking at open().
+  const flags = fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0) |
+    (fsConstants.O_NOFOLLOW ?? 0);
+  const handle = await open(path, flags);
   try {
-    // Verify again after opening to cover a file replacement between calls.
     const opened = await handle.stat();
-    if (!opened.isFile()) throw new RangeError('Input must be a regular file');
+    if (!opened.isFile() || opened.size === 0 || opened.size > limit) {
+      throw new RangeError('Input must be a bounded regular file');
+    }
     const bytes = Buffer.alloc(limit + 1);
     let count = 0;
     while (count < bytes.length) {
