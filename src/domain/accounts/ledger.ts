@@ -64,6 +64,7 @@ export interface VerifiedPaymentFact {
   source: 'settlement' | 'loanPayment';
   direction: 'income' | 'expense';
   amountMinor: number;
+  entityRevision: number;
   voidedAt: string | null;
 }
 export interface LedgerContext {
@@ -332,6 +333,10 @@ export function applyLedgerCommand(source: LedgerState, command: LedgerCommand, 
         throw new Error('Факт оплаты не подтверждён для этого финансового профиля');
       }
       integer(fact.amountMinor, 1);
+      checkedRevision(fact.entityRevision);
+      if (fact.entityRevision === 0 || command.expectedEntityRevisions[fact.id] !== fact.entityRevision) {
+        throw new Error('Конфликт ревизии факта оплаты');
+      }
       if (fact.voidedAt !== null || fact.amountMinor !== payload.amountMinor) {
         throw new Error('Сумма факта оплаты не совпадает или факт аннулирован');
       }
