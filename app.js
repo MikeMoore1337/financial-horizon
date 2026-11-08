@@ -103,6 +103,13 @@ function render(){
     scheduleCount:current.loan.schedule?.length||0,
     scheduleSource:current.loan.scheduleSource||'CSV',
     schedule:current.loan.schedule?.slice(0,4)||[],
+    bankSchedule:current.loan.schedule||[],
+    legacySnapshot:{
+     openingCents:current.loan.openingCents,paymentCents:current.loan.paymentCents,
+     termMonths:current.loan.termMonths,dueDay:current.loan.dueDay,
+     asOfDate:current.loan.asOfDate,
+    },
+    stateRevision:state.revision,
     history:state.loanPayments.filter(payment=>payment.loanId===current.loan.id)
      .sort((a,b)=>b.date.localeCompare(a.date)||b.createdAt.localeCompare(a.createdAt)),
    }:null;
