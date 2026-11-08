@@ -5,3 +5,5 @@ export type {
   AnalyticsTransaction, CashflowDirection, CategorySummary, ChangeSummary, MonthlySummary,
   PeriodComparison, PeriodTotals, TransactionKind,
 } from './types.ts';
+export { toAnalyticsTransactions, buildLedgerAnalyticsReport } from './ledger-adapter.ts';
+export type { LedgerAnalyticsSnapshot, AnalyticsCategoryAssignment, LedgerAnalyticsInput } from './ledger-adapter.ts';
