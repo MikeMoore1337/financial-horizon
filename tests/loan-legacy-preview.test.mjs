@@ -20,6 +20,7 @@ const approved = {
   agreementConfirmed: true,
   openingBalanceDateConfirmed: true,
   firstDueDate: '2026-02-01',
+  dueDayAnchor: 1,
   annualRateMicroPercent: 12_000_000,
   dayCount: 'ACT/365F',
   rounding: 'HALF_UP',
@@ -31,7 +32,7 @@ test('legacy loan without explicit bank terms never claims precise model readine
   const result = prepareLegacyLoanPreview(legacy);
   assert.equal(result.status, 'needs-confirmation');
   assert.equal(result.terms, null);
-  assert.equal(result.missing.length, 8);
+  assert.equal(result.missing.length, 9);
   assert.equal(result.bankParityVerified, false);
   assert.equal(result.storedDataChanged, false);
   assert.equal(result.historicalPaymentsImported, false);
@@ -63,6 +64,7 @@ test('confirmed snapshot maps only explicit terms, not floating legacy APR or gu
     paymentCents: 507_410,
     startDate: '2026-01-01',
     firstDueDate: '2026-02-01',
+    dueDayAnchor: 1,
     termMonths: 2,
     annualRateMicroPercent: 12_000_000,
     dayCount: 'ACT/365F',
@@ -124,6 +126,9 @@ test('confirmed non-calendar dates, unsupported day counts and unsafe rates are 
     { firstDueDate: '2026-02-29' },
     { firstDueDate: '2025-12-01' },
     { firstDueDate: '2027-02-05' },
+    { dueDayAnchor: 0 },
+    { dueDayAnchor: 32 },
+    { dueDayAnchor: 28.5 },
     { dayCount: '30E/360-ISDA' },
     { rounding: 'BANKER_GUESS' },
     { scheduleType: 'balloon' },
@@ -177,8 +182,37 @@ test('inherited defaults cannot masquerade as confirmed banking terms', () => {
   const result = prepareLegacyLoanPreview(legacy, inherited);
   assert.equal(result.status, 'needs-confirmation');
   assert.equal(result.terms, null);
-  assert.equal(result.missing.length, 8);
+  assert.equal(result.missing.length, 9);
 
   const own = Object.assign({}, approved);
   assert.equal(prepareLegacyLoanPreview(legacy, own).status, 'ready');
+});
+
+test('confirmed 31st monthly anchor survives a clamped February first installment', () => {
+  const thirtyFirst = { ...legacy, asOfDate: '2026-02-01',
+    dueDay: 31, termMonths: 3, openingCents: 90_000, paymentCents: 30_000, apr: 0 };
+  const consent = { ...approved, firstDueDate: '2026-02-28', dueDayAnchor: 31,
+    annualRateMicroPercent: 0 };
+  const accepted = prepareLegacyLoanPreview(thirtyFirst, consent);
+  assert.equal(accepted.status, 'ready');
+  assert.equal(accepted.terms.dueDayAnchor, 31);
+  const planned = calculateLoan(accepted.terms, [], { mode: 'plan' });
+  assert.deepEqual(planned.rows.map(row => row.date),
+    ['2026-02-28', '2026-03-31', '2026-04-30']);
+  assert.equal(planned.complete, true);
+  // Unanchored legacy behavior remains different and untouched.
+  const oldBehavior = calculateLoan({ ...accepted.terms, dueDayAnchor: undefined }, [],
+    { mode: 'plan' });
+  assert.deepEqual(oldBehavior.rows.map(row => row.date),
+    ['2026-02-28', '2026-03-28', '2026-04-28']);
+});
+
+test('first due date cannot silently supply the subsequent due-day anchor', () => {
+  const clamped = { ...legacy, asOfDate: '2026-02-01', dueDay: 31 };
+  const missing = prepareLegacyLoanPreview(clamped, {
+    ...approved, firstDueDate: '2026-02-28', dueDayAnchor: undefined,
+  });
+  assert.equal(missing.status, 'needs-confirmation');
+  assert.deepEqual(missing.missing, ['dueDayAnchor']);
+  assert.equal(missing.terms, null);
 });
