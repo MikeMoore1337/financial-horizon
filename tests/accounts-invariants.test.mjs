@@ -229,3 +229,51 @@ test('mixed-case UUID aliases are rejected before persistence or aggregation', (
   assert.throws(() => assertLedgerState(damaged), /UUID/);
   assert.equal(totalBalanceMinor(s), 700);
 });
+
+test('correction receipt cannot replay a partially restored replacement without its reversal', () => {
+  let s = create(emptyLedger(uuid(1)), uuid(2), 10_000);
+  s = run(s, 'transaction.record', {
+    id: uuid(3), accountId: uuid(2), kind: 'expense',
+    signedMinor: -500, occurredOn: '2026-11-07',
+  }, revisions(s, uuid(2)));
+  s = run(s, 'transaction.correct', {
+    originalTransactionId: uuid(3), reversalId: uuid(4),
+    reason: 'Исправлена сумма', occurredOn: '2026-11-07',
+    replacement: {
+      id: uuid(5), kind: 'expense', accountId: uuid(2),
+      signedMinor: -700, occurredOn: '2026-11-07',
+    },
+  }, revisions(s, uuid(2), uuid(3)));
+  assert.equal(accountBalanceMinor(s, uuid(2)), 9_300);
+  const c = JSON.parse(s.receipts.at(-1).requestFingerprint);
+  const damaged = structuredClone(s);
+  damaged.transactions = damaged.transactions.filter(tx => tx.id !== uuid(4));
+  damaged.postings = damaged.postings.filter(p => p.transactionId !== uuid(4));
+  assert.throws(() => assertLedgerState(damaged), /Квитанция исправления без нужной компенсирующей операции/);
+  assert.throws(() => applyLedgerCommand(damaged, c, context(s.profileId)),
+    /Квитанция исправления без нужной компенсирующей операции/);
+  assert.equal(accountBalanceMinor(s, uuid(2)), 9_300);
+});
+
+test('correction receipt rejects a reversal relinked to a different equally sized expense', () => {
+  let s = create(emptyLedger(uuid(1)), uuid(2), 10_000);
+  for (const txId of [uuid(3), uuid(6)]) {
+    s = run(s, 'transaction.record', {
+      id: txId, accountId: uuid(2), kind: 'expense',
+      signedMinor: -500, occurredOn: '2026-11-07',
+    }, revisions(s, uuid(2)));
+  }
+  s = run(s, 'transaction.correct', {
+    originalTransactionId: uuid(3), reversalId: uuid(4),
+    reason: 'Исправление', occurredOn: '2026-11-07',
+    replacement: {
+      id: uuid(5), kind: 'expense', accountId: uuid(2),
+      signedMinor: -700, occurredOn: '2026-11-07',
+    },
+  }, revisions(s, uuid(2), uuid(3)));
+  const altered = structuredClone(s);
+  const reversal = altered.transactions.find(tx => tx.id === uuid(4));
+  assert.ok(reversal);
+  reversal.reversedTransactionId = uuid(6);
+  assert.throws(() => assertLedgerState(altered), /Квитанция исправления без нужной компенсирующей операции/);
+});

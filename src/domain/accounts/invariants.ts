@@ -198,11 +198,23 @@ export function assertLedgerState(state: LedgerState): void {
         targetType = 'transaction';
         targetId = payload.id;
         break;
-      case 'transaction.correct':
+      case 'transaction.correct': {
         targetType = 'transaction';
         targetId = payload.replacement && typeof payload.replacement === 'object'
           ? (payload.replacement as { id?: unknown }).id : undefined;
+        // A correction commits TWO transactions (reversal + replacement) but
+        // emits one receipt. Validate both before allowing an idempotent replay.
+        const reversalId = payload.reversalId;
+        const originalId = payload.originalTransactionId;
+        requireUUID(reversalId);
+        requireUUID(originalId);
+        const reversal = transactions.get(reversalId);
+        if (!transactions.has(originalId) || !reversal || reversal.kind !== 'reversal'
+            || reversal.reversedTransactionId !== originalId) {
+          throw new Error('Квитанция исправления без нужной компенсирующей операции');
+        }
         break;
+      }
       default:
         throw new Error('Неизвестный тип команды в квитанции');
     }
