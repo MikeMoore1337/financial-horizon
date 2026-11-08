@@ -155,6 +155,17 @@ describe('approved accounts interface (feature not exposed)', () => {
     expect(screen.getByRole('button', { name: /Новый счёт/ }).hasAttribute('disabled')).toBe(true);
     expect(screen.getByText(/Нет связи с сервером/)).toBeTruthy();
   });
+  it('hides account names and balances before verified loading completes', () => {
+    const view = render(<Accounts {...props()} />);
+    expect(screen.getByText('Основной')).toBeTruthy();
+    view.rerender(<Accounts {...props({ status: 'loading' })} />);
+    expect(screen.queryByText('Основной')).toBeNull();
+    expect(screen.getByText(/Сведения о счетах недоступны/)).toBeTruthy();
+    view.rerender(<Accounts {...props({ status: 'error' })} />);
+    expect(screen.queryByText('Накопления')).toBeNull();
+    view.rerender(<Accounts {...props({ status: 'locked' })} />);
+    expect(screen.queryByText('Основной')).toBeNull();
+  });
   it('locks uncertain network result instead of silently retrying financial mutation', async () => {
     const send = vi.fn().mockRejectedValue(new Error('timeout after possible commit'));
     const data = props({ onTransfer: send });
