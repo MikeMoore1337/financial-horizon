@@ -48,6 +48,16 @@ export function parseReservePeriodHint(note: unknown): ReservePeriodHint | null 
   const frequencyMarker = /(?:^|[^\p{L}\p{N}])(?:раз\s+в|каждые|каждый)\s+/gu;
   const supportedPeriod = /^(?:\d+\s*(?:мес(?:\.|яц(?:ев|а)?)?|год(?:а|ов)?|лет)|полгода|квартал|год|месяц)(?!\p{L})/u;
   const trailingPeriod = /^\s*\(?\s*(?:(или|либо|и|\/|\+|,)\s*)?(?:[-+]?\d+(?:[.,]\d+)?\s*)?(?:мес(?:\.|яц(?:ев|а)?)?|год(?:а|ов)?|лет|полгода|квартал)(?!\p{L})/u;
+  const invalidContinuation = (rest: string): ReservePeriodHint | null => {
+    const tail = trailingPeriod.exec(rest);
+    if (!tail) return null;
+    const alternative = tail[1] === 'или' || tail[1] === 'либо' || tail[1] === '/';
+    return {
+      status: 'invalid',
+      reason: alternative ? 'ambiguous' : 'unsupported',
+      confirmationRequired: true,
+    };
+  };
   for (const marker of normalized.matchAll(frequencyMarker)) {
     const valueStart = (marker.index ?? 0) + marker[0].length;
     const expression = normalized.slice(valueStart);
@@ -57,15 +67,8 @@ export function parseReservePeriodHint(note: unknown): ReservePeriodHint | null 
     }
     // Never accept the prefix of a composite or alternative interval:
     // "1 год 6 месяцев" and "3 месяца или 6 месяцев" require confirmation.
-    const tail = trailingPeriod.exec(expression.slice(period[0].length));
-    if (tail) {
-      const alternative = tail[1] === 'или' || tail[1] === 'либо' || tail[1] === '/';
-      return {
-        status: 'invalid',
-        reason: alternative ? 'ambiguous' : 'unsupported',
-        confirmationRequired: true,
-      };
-    }
+    const conflict = invalidContinuation(expression.slice(period[0].length));
+    if (conflict) return conflict;
   }
 
   const values: number[] = [];
@@ -92,7 +95,14 @@ export function parseReservePeriodHint(note: unknown): ReservePeriodHint | null 
     [/(?:^|[^\p{L}\p{N}])(?:ежемесячно|раз\s+в\s+месяц|каждый\s+месяц)(?!\p{L})/gu, 1],
   ];
   for (const [re, months] of aliases) {
-    for (const _match of normalized.matchAll(re)) values.push(months);
+    for (const match of normalized.matchAll(re)) {
+      // An alias like "ежегодно" has no frequencyMarker; still check what
+      // immediately follows it before declaring a single period.
+      const afterAlias = normalized.slice((match.index ?? 0) + match[0].length);
+      const conflict = invalidContinuation(afterAlias);
+      if (conflict) return conflict;
+      values.push(months);
+    }
   }
   if (values.length === 0) return null;
   if (values.some((months) => !Number.isSafeInteger(months) || months < 1 || months > MONTHS_MAX)) {
