@@ -378,3 +378,21 @@ test('voiding an early allocated contribution restores future installment foreca
   assert.equal(goalForecastReservations(corrected, '2026-01-17')
     .reduce((sum, row) => sum + row.plannedCents, 0), 12_000_000);
 });
+
+
+test('late factual payment corrects a skipped installment status but remains no bank expense', () => {
+  const initial = fresh({ monthlyCents: 1_000_000 });
+  const skipped = applyGoalEvent(initial, {
+    id: 'missed-feb', type: 'skip', on: '2026-02-02', dueOn: '2026-02-01',
+  });
+  assert.equal(goalInstallments(skipped, '2026-02-03')[0].status, 'skipped');
+  const partial = add(skipped, 'late-partial', '2026-02-10', 400_000,
+    { forDueOn: '2026-02-01' });
+  assert.equal(goalInstallments(partial, '2026-02-11')[0].status, 'partial');
+  const paid = add(partial, 'late-balance', '2026-02-12', 600_000,
+    { forDueOn: '2026-02-01' });
+  assert.equal(goalInstallments(paid, '2026-02-13')[0].status, 'paid');
+  assert.equal(calculateGoal(paid, '2026-02-13').savedCents, 1_000_000);
+  assert.equal(goalLedgerLinks([paid]).length, 0);
+  assert.ok(goalJournal(paid).every(entry => entry.ledgerMutationCents === 0));
+});

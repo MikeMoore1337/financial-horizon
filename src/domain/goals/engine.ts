@@ -557,7 +557,7 @@ export function goalInstallments(goal: GoalRecord, asOf: string): GoalInstallmen
       ? historicPlan(goal, previousUTCDate(dueOn), prepared) : null;
     const plannedCents = historic?.monthlyCents ?? snapshot.monthlyCents;
     let status: GoalInstallment['status'];
-    if (skipped.has(dueOn)) status = 'skipped';
+    if (skipped.has(dueOn) && actualCents === 0) status = 'skipped';
     else if (dueOn > asOf && reached) status = 'unnecessary';
     else if (historic?.reached && actualCents === 0) status = 'unnecessary';
     else if (actualCents >= plannedCents && actualCents > 0) status = 'paid';
