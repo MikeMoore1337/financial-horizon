@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 from unittest import mock
 import tempfile
@@ -117,6 +118,8 @@ class ProviderSwitchTests(unittest.TestCase):
             with self.assertRaises(switcher.CheckFailed):
                 switcher.verify_target('google')
 
+    @unittest.skipIf(os.name == 'nt' or not hasattr(os, 'O_NOFOLLOW'),
+                     'Operator script requires Linux filesystem APIs')
     def test_atomic_replace_preserves_0600(self):
         with tempfile.TemporaryDirectory() as directory:
             file = Path(directory) / 'canary.env'
