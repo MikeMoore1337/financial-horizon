@@ -23,13 +23,14 @@ test('approved C places all configured providers AFTER email and adapts to the v
  const list=page.locator('#oauth-login');
  await expect(list).toBeVisible();
  const anchors=page.locator('.oauth-provider-link');
- await expect(anchors).toHaveCount(4);
+ await expect(anchors).toHaveCount(3);
+ await expect(page.locator('.oauth-provider-link[href*="telegram"]')).toHaveCount(0);
  expect(await anchors.allTextContents()).toEqual([
-  'Войти через Telegram›','Войти через Google›',
+  'Войти через Google›',
   'Войти через Яндекс ID›','Войти через VK ID›'
  ]);
  expect(await anchors.evaluateAll(nodes=>nodes.map(n=>n.getAttribute('href')))).toEqual([
-  './api/auth/oauth/telegram/start','./api/auth/oauth/google/start',
+  './api/auth/oauth/google/start',
   './api/auth/oauth/yandex/start','./api/auth/oauth/vk/start'
  ]);
  const position=await page.evaluate(()=>{
@@ -93,6 +94,6 @@ test('OAuth account and logout remain functional with public email-registration 
  await expect(page.locator('#auth-form')).toBeVisible();
  await expect(page.locator('#auth-submit')).toBeDisabled();
  await expect(page.locator('#oauth-login')).toBeVisible();
- await expect(page.locator('.oauth-provider-link')).toHaveCount(4);
+ await expect(page.locator('.oauth-provider-link')).toHaveCount(3);
  await expect(page.locator('#auth-feedback')).toContainText('Сеанс завершён');
 });
