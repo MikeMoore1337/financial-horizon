@@ -15,7 +15,7 @@ import type { BankScheduleRow, LoanResult, ScheduleReconciliation } from './type
 export type LoanComparisonStatus =
   | 'needs-confirmation'
   | 'no-bank-schedule'
-  | 'incomplete-bank-columns'
+  | 'incomplete-bank-evidence'
   | 'numerical-match'
   | 'differences';
 
@@ -83,8 +83,8 @@ export function prepareReadOnlyLoanComparison(
   const bankComparison = reconcileLoanSchedule(plan, bankRows);
   const status: ReadOnlyLoanComparison['status'] =
     bankComparison.exactMatch ? 'numerical-match'
-    : bankComparison.matchingKnownFields && !bankComparison.comparisonComplete
-      ? 'incomplete-bank-columns'
+    : bankComparison.matchingKnownFields
+      ? 'incomplete-bank-evidence'
       : 'differences';
 
   return {
