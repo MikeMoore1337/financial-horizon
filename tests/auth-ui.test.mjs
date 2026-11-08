@@ -11,6 +11,7 @@ test('only the three production-approved OAuth providers have fixed start URLs',
  assert.throws(()=>providerHref('telegram'));
  assert.equal(providerLabel('telegram'),null);
  assert.deepEqual(allowedProviderIds({enabled:false,providers:['google']}),[]);
+ assert.deepEqual(allowedProviderIds({enabled:true,providers:['telegram']}),[]);
  assert.deepEqual(allowedProviderIds(null),[]);
  for(const provider of ids){
   assert.ok(providerLabel(provider));
