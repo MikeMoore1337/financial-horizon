@@ -21,8 +21,10 @@ const revisionOf = (state, id) => {
   return a?.entityRevision ?? state.transactions.find(t => t.id === id)?.entityRevision;
 };
 const expectFor = (state, ...ids) => Object.fromEntries(ids.map(id => [id, revisionOf(state, id)]));
-const apply = (state, action, payload, expected = {}, mutationId) =>
-  applyLedgerCommand(state, command(state, action, payload, expected, mutationId), context(state.profileId)).state;
+const apply = (state, action, payload, expected = {}, mutationId, verifiedPaymentFact) =>
+  applyLedgerCommand(state, command(state, action, payload, expected, mutationId), {
+    ...context(state.profileId), verifiedPaymentFact,
+  }).state;
 const create = (state, accountId, openingMinor, kind = 'bank') =>
   apply(state, 'account.create', { id: accountId, name: 'Счёт', kind, currency: 'RUB', openingMinor });
 const transfer = (state, from, to, amount, tx = unique()) => apply(state, 'account.transfer', {
@@ -31,9 +33,17 @@ const transfer = (state, from, to, amount, tx = unique()) => apply(state, 'accou
 const record = (state, accountId, kind, signedMinor, tx = unique()) => apply(state, 'transaction.record', {
   id: tx, accountId, kind, signedMinor, occurredOn: '2026-11-07',
 }, expectFor(state, accountId));
-const pay = (state, accountId, amountMinor, link, tx = unique()) => apply(state, 'payment.record', {
-  id: tx, accountId, amountMinor, link, occurredOn: '2026-11-07',
-}, expectFor(state, accountId));
+const pay = (state, accountId, amountMinor, link, tx = unique(), direction = 'expense') => {
+  const fact = {
+    profileId: state.profileId,
+    id: link.settlementId ?? link.loanPaymentId,
+    source: 'settlementId' in link ? 'settlement' : 'loanPayment',
+    amountMinor, direction, voidedAt: null,
+  };
+  return apply(state, 'payment.record', {
+    id: tx, accountId, amountMinor, link, occurredOn: '2026-11-07',
+  }, expectFor(state, accountId), undefined, fact);
+};
 const reverse = (state, tx, reversal = unique()) => {
   const related = state.postings.filter(p => p.transactionId === tx).map(p => p.accountId);
   return apply(state, 'transaction.reverse', {
@@ -391,4 +401,72 @@ test('actual v1 AES-GCM encrypted backup is readable for safe ledger staging onl
   assert.deepEqual(manifest.plannedTransactions, []);
   assert.equal(manifest.requiresExplicitOpeningBalances, true);
   assert.deepEqual(source, before);
+});
+
+test('verified income settlement increases cash and monthly income without creating expense', () => {
+  let s = create(emptyLedger(id(1)), id(2), 500);
+  s = pay(s, id(2), 17_500, { settlementId: id(3) }, id(4), 'income');
+  assert.equal(accountBalanceMinor(s, id(2)), 18_000);
+  assert.equal(s.postings.length, 1);
+  assert.equal(s.postings[0].signedMinor, 17_500);
+  assert.deepEqual(monthlyCashFlowMinor(s, '2026-11'), { incomeMinor: 17_500, expenseMinor: 0 });
+  assert.throws(() => pay(s, id(2), 17_500, { settlementId: id(3) }, id(5), 'income'), /уже проведена/);
+});
+
+test('linked payment requires a trusted, account-scoped real fact with exact amount and direction', () => {
+  const s = create(emptyLedger(id(1)), id(2), 20_000);
+  const cmd = command(s, 'payment.record', {
+    id: id(4), accountId: id(2), amountMinor: 2_500,
+    link: { settlementId: id(3) }, occurredOn: '2026-11-07',
+  }, expectFor(s, id(2)));
+  const good = {
+    profileId: s.profileId, id: id(3), source: 'settlement',
+    amountMinor: 2_500, direction: 'expense', voidedAt: null,
+  };
+  assert.throws(() => applyLedgerCommand(s, cmd, context(s.profileId)), /Факт оплаты не подтверждён/);
+  for (const verifiedPaymentFact of [
+    { ...good, profileId: id(9) },
+    { ...good, id: id(5) },
+    { ...good, source: 'loanPayment' },
+  ]) {
+    assert.throws(() => applyLedgerCommand(s, cmd, {
+      ...context(s.profileId), verifiedPaymentFact,
+    }), /Факт оплаты не подтверждён/);
+  }
+  for (const verifiedPaymentFact of [
+    { ...good, amountMinor: 2_501 },
+    { ...good, voidedAt: '2026-11-08T00:00:00.000Z' },
+  ]) {
+    assert.throws(() => applyLedgerCommand(s, cmd, {
+      ...context(s.profileId), verifiedPaymentFact,
+    }), /не совпадает или факт аннулирован/);
+  }
+  assert.throws(() => applyLedgerCommand(s, cmd, {
+    ...context(s.profileId), verifiedPaymentFact: { ...good, direction: 'other' },
+  }), /направление/);
+  const accepted = applyLedgerCommand(s, cmd, {
+    ...context(s.profileId), verifiedPaymentFact: good,
+  }).state;
+  assert.equal(accountBalanceMinor(accepted, id(2)), 17_500);
+  assert.equal(s.postings.length, 0, 'rejected commands must not mutate source');
+});
+
+test('loan payment can only debit and a forged income loan event is rejected', () => {
+  const s = create(emptyLedger(id(1)), id(2), 8_000);
+  const cmd = command(s, 'payment.record', {
+    id: id(4), accountId: id(2), amountMinor: 500,
+    link: { loanPaymentId: id(3) }, occurredOn: '2026-11-07',
+  }, expectFor(s, id(2)));
+  const fact = {
+    profileId: s.profileId, id: id(3), source: 'loanPayment',
+    amountMinor: 500, direction: 'income', voidedAt: null,
+  };
+  assert.throws(() => applyLedgerCommand(s, cmd, {
+    ...context(s.profileId), verifiedPaymentFact: fact,
+  }), /не может быть доходом/);
+  const next = applyLedgerCommand(s, cmd, {
+    ...context(s.profileId), verifiedPaymentFact: { ...fact, direction: 'expense' },
+  }).state;
+  assert.equal(accountBalanceMinor(next, id(2)), 7_500);
+  assert.deepEqual(monthlyCashFlowMinor(next, '2026-11'), { incomeMinor: 0, expenseMinor: 500 });
 });
