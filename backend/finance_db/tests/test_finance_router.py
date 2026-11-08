@@ -361,3 +361,41 @@ def test_blocked_sql_command_never_stalls_unrelated_auth_requests(auth_finance):
             finally:
                 release.set()
             assert command.result(timeout=3).status_code == 201
+
+
+def test_finance_command_auth_session_lookup_uses_worker_not_asgi_event_loop():
+    """Even a slow synchronous AuthStore.current must not stop unrelated async routes."""
+    from fastapi import FastAPI
+    from threading import get_ident
+    from backend.finance_db.finance_router import mount_finance_routes
+
+    observed = []
+    app = FastAPI()
+
+    def synthetic_auth(token):
+        observed.append(get_ident())
+        return {"id": "a" * 32} if token == "test-session" else None
+
+    # Invalid command is rejected before any finance DB call, so the real
+    # PostgreSQL engine is not needed for this scheduling-focused test.
+    mount_finance_routes(
+        app, engine=object(), namespace=uuid4(), public_origin=ORIGIN,
+        auth_resolver=synthetic_auth, secure_cookie=False,
+    )
+
+    @app.get("/synthetic-loop-thread")
+    async def loop_thread():
+        return {"thread_id": get_ident()}
+
+    with TestClient(app) as client:
+        event_loop_thread = client.get("/synthetic-loop-thread").json()["thread_id"]
+        client.cookies.set(
+            "fh_finance_session", "test-session", path="/api/finance/v1",
+        )
+        response = client.post(
+            "/api/finance/v1/commands", json={},
+            headers={"Origin": ORIGIN},
+        )
+        assert response.status_code == 422
+        assert observed, "Finance scope must resolve the actual session"
+        assert observed[-1] != event_loop_thread
