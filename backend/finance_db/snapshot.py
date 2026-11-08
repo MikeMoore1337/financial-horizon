@@ -7,6 +7,7 @@ lock; readers use FOR SHARE to prevent partial multi-statement snapshots.
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import re
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -52,28 +53,28 @@ _ENTITY_QUERIES = {
     "obligations": text(
         "SELECT id,entity_revision,title,direction,amount_minor,starts_on,timezone,"
         "recurrence_unit,recurrence_every,category,deleted_at "
-        "FROM obligations WHERE profile_id=:p ORDER BY id LIMIT :n"
+        "FROM obligations WHERE profile_id=:p AND id>:after ORDER BY id LIMIT :n"
     ),
     "loans": text(
         "SELECT id,entity_revision,title,opening_minor,payment_minor,apr_basis_points,"
         "term_months,due_day,as_of_date,calculation_version,imported_schedule,deleted_at "
-        "FROM loans WHERE profile_id=:p ORDER BY id LIMIT :n"
+        "FROM loans WHERE profile_id=:p AND id>:after ORDER BY id LIMIT :n"
     ),
     "reserves": text(
         "SELECT id,entity_revision,title,target_minor,target_on,archived_at "
-        "FROM reserves WHERE profile_id=:p ORDER BY id LIMIT :n"
+        "FROM reserves WHERE profile_id=:p AND id>:after ORDER BY id LIMIT :n"
     ),
     "ledger_transactions": text(
         "SELECT id,entity_revision,kind,occurred_on,note,posted_at,reversed_transaction_id "
-        "FROM ledger_transactions WHERE profile_id=:p ORDER BY id LIMIT :n"
+        "FROM ledger_transactions WHERE profile_id=:p AND id>:after ORDER BY id LIMIT :n"
     ),
     "settlements": text(
         "SELECT id,entity_revision,obligation_id,occurrence_on,paid_on,amount_minor,voided_at "
-        "FROM settlements WHERE profile_id=:p ORDER BY id LIMIT :n"
+        "FROM settlements WHERE profile_id=:p AND id>:after ORDER BY id LIMIT :n"
     ),
     "loan_payments": text(
         "SELECT id,entity_revision,loan_id,paid_on,amount_minor,strategy,voided_at "
-        "FROM loan_payments WHERE profile_id=:p ORDER BY id LIMIT :n"
+        "FROM loan_payments WHERE profile_id=:p AND id>:after ORDER BY id LIMIT :n"
     ),
 }
 
@@ -102,104 +103,163 @@ def _locked_profile(session: Session, scope: VerifiedFinanceScope):
     return profile
 
 
-def get_finance_snapshot(engine: Engine, *, scope: VerifiedFinanceScope) -> FinanceResult:
-    """All published finance entities and posted account entries, from one SQL snapshot."""
+_PAGE_MAX = 5_000
+_CURSOR_RE = re.compile(
+    r"^(0|[1-9][0-9]{0,18}):(account|obligation|loan|reserve|transaction|settlement|loan_payment):"
+    r"([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
+)
+_KIND_ORDER = ("account",) + tuple(value[0] for value in _ENTITY_FIELDS.values())
+
+
+def _page_cursor(cursor: str | None, current_revision: int) -> tuple[str | None, UUID]:
+    if cursor is None:
+        return None, UUID(int=0)
+    match = _CURSOR_RE.fullmatch(cursor) if isinstance(cursor, str) and len(cursor) <= 150 else None
+    if not match:
+        raise FinanceCommandError("invalid_command", "Неверный курсор финансового снимка", 422)
+    revision = int(match[1])
+    if revision != current_revision:
+        raise FinanceCommandError("stale_revision", "Снимок изменён при загрузке страниц", 412, current_revision)
+    return match[2], UUID(match[3])
+
+
+def get_finance_snapshot(
+    engine: Engine, *, scope: VerifiedFinanceScope, cursor: str | None = None,
+    limit_entities: int = 1_000,
+) -> FinanceResult:
+    """Stable kind+UUID keyset pages pinned to the full finance revision.
+
+    A subsequent page is refused if concurrent edits advanced profile revision.
+    Return 206 (not 200) for partial responses so old clients cannot silently
+    treat the first page as a complete financial snapshot. The optional cursor
+    is a protocol extension gated on #65/#68 acceptance, NOT a live v1 release.
+    """
+    if type(limit_entities) is not int or not 1 <= limit_entities <= _PAGE_MAX:
+        raise FinanceCommandError("invalid_command", "Неверный размер страницы снимка", 422)
     with finance_transaction(engine, verified_user_id=scope.user_id,
                              profile_id=scope.profile_id) as session:
         profile = _locked_profile(session, scope)
         revision = int(profile["revision"])
-
-        # A single grouped query yields exact, all-time balance including archived accounts.
-        accounts = session.execute(text("""
-            SELECT a.id,a.entity_revision,a.name,a.kind,a.currency,a.opening_minor,a.archived_at,
-                   a.opening_minor+COALESCE(SUM(p.signed_minor),0) AS balance_minor
-            FROM accounts a LEFT JOIN ledger_postings p
-                 ON p.profile_id=a.profile_id AND p.account_id=a.id
-            WHERE a.profile_id=:pid
-            GROUP BY a.id,a.profile_id,a.entity_revision,a.name,a.kind,a.currency,
-                     a.opening_minor,a.archived_at
-            ORDER BY a.id LIMIT :n
-        """), {"pid": scope.profile_id, "n": _MAX_PER_ENTITY + 1}).mappings().all()
-        if len(accounts) > _MAX_PER_ENTITY:
-            raise FinanceCommandError("service_unavailable", "Слишком большой финансовый снимок", 503)
-        reserves = session.execute(text("""
-            SELECT account_id,COALESCE(SUM(delta_minor),0) AS amount
-              FROM reserve_allocations WHERE profile_id=:pid GROUP BY account_id
-        """), {"pid": scope.profile_id}).mappings().all()
-        by_account = {r["account_id"]: _safe_balance(r["amount"]) for r in reserves}
+        after_kind, after_id = _page_cursor(cursor, revision)
+        first_kind = _KIND_ORDER.index(after_kind) if after_kind else 0
         entities: list[dict[str, Any]] = []
-        for a in accounts:
-            balance = _safe_balance(a["balance_minor"])
-            reserved = by_account.get(a["id"], 0)
-            if abs(balance - reserved) > 2**53 - 1:
-                raise FinanceCommandError("invalid_command", "Доступный остаток переполнен", 422)
-            entities.append({
-                "id": str(a["id"]), "entity_revision": int(a["entity_revision"]),
-                "kind": "account",
-                "data": {
-                    "name": a["name"], "type": a["kind"], "currency": a["currency"].strip(),
-                    "opening_minor": int(a["opening_minor"]), "balance_minor": balance,
-                    "reserved_minor": reserved, "available_minor": balance - reserved,
-                    "archived_at": _as_json(a["archived_at"]),
-                },
-            })
+        last_kind: str | None = None
+        last_id: str | None = None
+        full_page = False
 
-        for table, (kind, fields) in _ENTITY_FIELDS.items():
-            # Every statement is static SQL, not interpolated identifiers.
-            rows = session.execute(
-                _ENTITY_QUERIES[table],
-                {"p": scope.profile_id, "n": _MAX_PER_ENTITY + 1},
-            ).mappings().all()
-            if len(rows) > _MAX_PER_ENTITY:
-                raise FinanceCommandError("service_unavailable", "Слишком большой финансовый снимок", 503)
-            for row in rows:
-                entities.append({
+        def collect(kind: str, rows, convert):
+            nonlocal last_kind, last_id, full_page
+            remaining = limit_entities - len(entities)
+            extra = len(rows) > remaining
+            for row in rows[:remaining]:
+                item = convert(row)
+                entities.append(item)
+                last_kind, last_id = kind, item["id"]
+            if extra or len(entities) == limit_entities:
+                full_page = True
+
+        if first_kind == 0:
+            after = after_id if after_kind == "account" else UUID(int=0)
+            account_rows = session.execute(text("""
+                SELECT a.id,a.entity_revision,a.name,a.kind,a.currency,a.opening_minor,a.archived_at,
+                       a.opening_minor+COALESCE(SUM(p.signed_minor),0) AS balance_minor
+                FROM accounts a LEFT JOIN ledger_postings p
+                    ON p.profile_id=a.profile_id AND p.account_id=a.id
+                WHERE a.profile_id=:pid AND a.id>:after
+                GROUP BY a.id,a.profile_id,a.entity_revision,a.name,a.kind,a.currency,
+                         a.opening_minor,a.archived_at
+                ORDER BY a.id LIMIT :n
+            """), {"pid": scope.profile_id, "after": after,
+                   "n": limit_entities + 1}).mappings().all()
+            ids = [a["id"] for a in account_rows[:limit_entities]]
+            reserved = session.execute(text("""
+                SELECT account_id,COALESCE(SUM(delta_minor),0) AS amount
+                FROM reserve_allocations WHERE profile_id=:p
+                    AND account_id=ANY(:ids)
+                GROUP BY account_id
+            """), {"p": scope.profile_id, "ids": ids}).mappings().all() if ids else []
+            by_account = {r["account_id"]: _safe_balance(r["amount"]) for r in reserved}
+
+            def account_entity(row):
+                balance = _safe_balance(row["balance_minor"])
+                reserve = by_account.get(row["id"], 0)
+                available = _safe_balance(balance - reserve)
+                return {
                     "id": str(row["id"]), "entity_revision": int(row["entity_revision"]),
-                    "kind": kind,
-                    "data": {name: _as_json(row[name]) for name in fields},
+                    "kind": "account",
+                    "data": {
+                        "name": row["name"], "type": row["kind"],
+                        "currency": row["currency"].strip(),
+                        "opening_minor": int(row["opening_minor"]),
+                        "balance_minor": balance,
+                        "reserved_minor": reserve, "available_minor": available,
+                        "archived_at": _as_json(row["archived_at"]),
+                    },
+                }
+
+            collect("account", account_rows, account_entity)
+
+        if not full_page:
+            for index, (table, (kind, fields)) in enumerate(_ENTITY_FIELDS.items(), start=1):
+                if index < first_kind:
+                    continue
+                after = after_id if after_kind == kind else UUID(int=0)
+                remaining = limit_entities - len(entities)
+                rows = session.execute(_ENTITY_QUERIES[table], {
+                    "p": scope.profile_id, "after": after, "n": remaining + 1,
+                }).mappings().all()
+                collect(kind, rows, lambda row, k=kind, cols=fields: {
+                    "id": str(row["id"]),
+                    "entity_revision": int(row["entity_revision"]),
+                    "kind": k,
+                    "data": {field: _as_json(row[field]) for field in cols},
                 })
+                if full_page:
+                    break
 
-        # Attach full, signed postings and payment links to each immutable transaction.
-        transactions = {entity["id"]: entity for entity in entities
-                        if entity["kind"] == "transaction"}
-        postings = session.execute(text("""
-            SELECT transaction_id,account_id,signed_minor FROM ledger_postings
-            WHERE profile_id=:p ORDER BY transaction_id,account_id
-            LIMIT :n
-        """), {"p": scope.profile_id, "n": 2 * _MAX_PER_ENTITY + 1}).mappings().all()
-        if len(postings) > 2 * _MAX_PER_ENTITY:
-            raise FinanceCommandError("service_unavailable", "Слишком много проводок", 503)
-        for p in postings:
-            tx = transactions.get(str(p["transaction_id"]))
-            if tx is None:
-                raise FinanceCommandError("service_unavailable", "Неполный журнал транзакций", 503)
-            tx["data"].setdefault("postings", []).append({
-                "account_id": str(p["account_id"]), "signed_minor": int(p["signed_minor"]),
-            })
-        links = session.execute(text("""
-            SELECT transaction_id,settlement_id,loan_payment_id FROM ledger_payment_links
-            WHERE profile_id=:p ORDER BY transaction_id LIMIT :n
-        """), {"p": scope.profile_id, "n": _MAX_PER_ENTITY + 1}).mappings().all()
-        if len(links) > _MAX_PER_ENTITY:
-            raise FinanceCommandError("service_unavailable", "Слишком много связей платежей", 503)
-        for link in links:
-            tx = transactions.get(str(link["transaction_id"]))
-            if tx is None:
-                raise FinanceCommandError("service_unavailable", "Повреждена связь платежа", 503)
-            tx["data"]["payment_link"] = {
-                "settlement_id": _as_json(link["settlement_id"]),
-                "loan_payment_id": _as_json(link["loan_payment_id"]),
-            }
+        # Only fetch postings and links for the transactions in this page,
+        # not every historical transaction. This remains bounded at page_size*2.
+        transactions = {
+            entity["id"]: entity for entity in entities if entity["kind"] == "transaction"
+        }
+        transaction_ids = [UUID(txid) for txid in transactions]
+        if transaction_ids:
+            postings = session.execute(text("""
+                SELECT transaction_id,account_id,signed_minor FROM ledger_postings
+                WHERE profile_id=:p AND transaction_id=ANY(:ids)
+                ORDER BY transaction_id,account_id
+            """), {"p": scope.profile_id, "ids": transaction_ids}).mappings().all()
+            for posting in postings:
+                tx = transactions.get(str(posting["transaction_id"]))
+                if tx is None:
+                    raise FinanceCommandError("service_unavailable", "Неполный журнал транзакций", 503)
+                tx["data"].setdefault("postings", []).append({
+                    "account_id": str(posting["account_id"]),
+                    "signed_minor": int(posting["signed_minor"]),
+                })
+            links = session.execute(text("""
+                SELECT transaction_id,settlement_id,loan_payment_id FROM ledger_payment_links
+                WHERE profile_id=:p AND transaction_id=ANY(:ids)
+                ORDER BY transaction_id
+            """), {"p": scope.profile_id, "ids": transaction_ids}).mappings().all()
+            for link in links:
+                tx = transactions.get(str(link["transaction_id"]))
+                if tx is None:
+                    raise FinanceCommandError("service_unavailable", "Повреждена связь платежа", 503)
+                tx["data"]["payment_link"] = {
+                    "settlement_id": _as_json(link["settlement_id"]),
+                    "loan_payment_id": _as_json(link["loan_payment_id"]),
+                }
 
-        return FinanceResult(200, {
-            "schema_version": 1,
-            "profile_id": str(scope.profile_id),
-            "revision": revision,
-            "currency": profile["currency"].strip(),
-            "entities": entities,
-            "server_at": datetime.now(timezone.utc).isoformat(),
-        }, _opaque_etag(scope.profile_id, revision))
-
+        body = {
+            "schema_version": 1, "profile_id": str(scope.profile_id),
+            "revision": revision, "currency": profile["currency"].strip(),
+            "entities": entities, "server_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if full_page and last_kind is not None and last_id is not None:
+            body["next_cursor"] = f"{revision}:{last_kind}:{last_id}"
+        return FinanceResult(206 if "next_cursor" in body else 200,
+                             body, _opaque_etag(scope.profile_id, revision))
 
 def get_finance_delta(
     engine: Engine, *, scope: VerifiedFinanceScope, since_revision: int,
