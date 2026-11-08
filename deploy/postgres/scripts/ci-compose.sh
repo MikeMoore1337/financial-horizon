@@ -62,6 +62,15 @@ fi
 echo "CI_NO_PSQL_PASSWORD_ARGV_PASS"
 docker compose -f deploy/postgres/compose.yml config --quiet
 docker compose -f deploy/postgres/compose.yml up -d --wait --wait-timeout 35 db
+# Actual container restart policy is part of the security boundary. A daemon
+# restart while LUKS2 is locked MUST leave PostgreSQL stopped, never let
+# Docker silently start it against the unencrypted host mount directory.
+db_restart_policy="$(docker inspect fh-finance-postgres --format '{{.HostConfig.RestartPolicy.Name}}')"
+test "$db_restart_policy" = no || {
+  echo "ERROR: finance DB bypasses the encrypted-volume startup gate" >&2
+  exit 1
+}
+echo "CI_FINANCE_DAEMON_AUTO_RESTART_DISABLED_PASS"
 docker compose -f deploy/postgres/compose.yml --profile ops run --rm --build migrator
 version="$(docker exec -u postgres fh-finance-postgres \
   psql -U postgres -d fh_finance -Atc 'SELECT version_num FROM finance.alembic_version')"
