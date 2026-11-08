@@ -14,6 +14,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -143,7 +144,9 @@ def mount_finance_routes(
     @router.post("/commands")
     async def commands(request: Request):
         _guard_origin(request, public_origin)
-        rate(request, "finance-write")
+        # Do not run SQLite rate limits or blocking PostgreSQL row locks in
+        # the ASGI event loop; unrelated sessions must remain responsive.
+        await run_in_threadpool(rate, request, "finance-write")
         verified = scope(request)
         media_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
         if media_type != "application/json":
@@ -167,12 +170,13 @@ def mount_finance_routes(
                 "invalid_command", "Некорректный JSON", 422
             ))
         try:
-            return _finance_response(submit_account_command(
-                engine, scope=verified, command=body,
+            result = await run_in_threadpool(
+                submit_account_command, engine, scope=verified, command=body,
                 if_match=request.headers.get("if-match", ""),
                 idempotency_key=request.headers.get("idempotency-key", ""),
                 allow_internal=False,  # Never enable unpublished account CRUD from client.
-            ))
+            )
+            return _finance_response(result)
         except FinanceCommandError as exc:
             return _finance_error(exc)
         except SQLAlchemyError:
