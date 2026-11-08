@@ -4,8 +4,7 @@ This is a **prerequisite implementation**, not a finance API release.
 
 - Parent branch / schema: #66 PR #79, feat/issue-66-postgres-foundation.
 - Business driver: #33 PR #84 (TypeScript domain), ADR #65.
-- The code has **no registered FastAPI endpoint, no frontend import, no auth-cookie change,
-  no Service Worker changes and no production deployment**.
+- The new FastAPI routers are **mounted only when** `create_app` receives an explicit finance engine and stable server-side namespace. The default `app=create_app()` **does not mount or deploy finance endpoints**. No frontend/Service Worker or production deployment changes.
 
 ## Implemented
 
@@ -32,28 +31,44 @@ Each mutation:
 5. Returns the OpenAPI v1 acknowledgement shape. An exact retry returns the
    stored receipt and never posts money a second time.
 
-get_account_snapshot reads an RLS-scoped, transaction-consistent **accounts
-subset** with calculated balances. It is deliberately **not** advertised as
-the full /api/finance/v1/state until all expected entity kinds are implemented.
+get_account_snapshot reads a transaction-consistent, profile-scoped account subset.
+snapshot.py also implements full (account/obligation/loan/reserve/posted transaction,
+settlement/loan payment) snapshots and revision-aligned delta pagination. The HTTP
+router provides GET /api/finance/v1/state, GET /api/finance/v1/changes, and POST
+/api/finance/v1/commands, but only the two approved v1 commands are allowed.
+
+**Safe opt-in auth bridge:** The legacy `fh_email_session` cookie is scoped to
+`/api/auth`. Authenticated, Origin-checked POST `/api/auth/email/finance/session`
+verifies the existing AuthStore session and sets a second
+`HttpOnly; SameSite=Strict; Secure` (except synthetic test)
+`fh_finance_session` scoped to `/api/finance/v1`. This token is checked against
+the *same* AuthStore on every finance request. Logout deletes the finance
+cookie and revokes the underlying SQLite session; session revocation also
+invalidates remote finance cookies. No cookie is accepted from a header/JSON body.
+
+**No production activation:** Neither the default FH FastAPI app nor
+the existing production deployment settings supplies a finance engine
+or server-owned profile namespace. The router is not registered live.
 
 ## Synthetic CI (no live data)
 
 The added workflow runs only on this branch or its stacked PR. It provisions
 a disposable PostgreSQL 17 service, synthetic least-privileged roles, the
-reviewed #66 Alembic migration, real PostgreSQL pytest tests, compilation and
-Bandit. test_ledger_service.py skips outside the explicit synthetic
+reviewed #66 Alembic migration, real PostgreSQL and existing AuthStore SQLite pytest tests, compilation and Bandit. 
+Tests cover two authenticated browser sessions sharing one authoritative ledger, idempotent
+retry, stale 412 and logout-others token revocation. test_ledger_service.py skips outside the explicit synthetic
 FH_FINANCE_CI_ALLOW_BOOTSTRAP=yes environment. Never point it at production.
 
 ## Release blockers
 
 1. #66 PR #79 requires independent approval, encryption-at-rest, offsite
    recovery, real restore drill, measured RPO/RTO and exact-SHA release.
-2. FH email login cookie currently uses Path=/api/auth, whereas the approved
-   financial URL is /api/finance/v1. A reviewed same-origin session bridge
-   or safely migrated scoped cookie must preserve existing authenticated
-   users and CSRF/Origin protection. VerifiedFinanceScope is **not** HTTP JSON.
-3. Authoritative owner/profile mapping and safe first-profile provisioning must
-   be agreed and tested with real AuthStore-backed login.
+2. The opt-in same-origin session bridge and deterministic server-owned profile
+   provisioning now have real AuthStore/SQLite/PostgreSQL integration tests.
+   This remains unactivated pending independent security review, production
+   credential handling, session/revocation testing and deployment configuration.
+3. The server-owned profile namespace must be stable and included in backup/
+   recovery configuration. `VerifiedFinanceScope` is **not** accepted as HTTP JSON.
 4. Existing OpenAPI v1 does not accept account create/update/archive/record.
    These actions remain internal until a versioned contract is approved.
 5. Linked loan/obligation/reserve payments need one atomic fact+ledger
