@@ -13,7 +13,7 @@ from hashlib import sha256
 import json
 import re
 from typing import Any, Mapping
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -113,6 +113,49 @@ def _opaque_etag(profile_id: UUID, revision: int) -> str:
     # Stable, strong version tag. It is not an authentication token.
     digest = sha256(profile_id.bytes + revision.to_bytes(8, "big")).hexdigest()[:16]
     return f'"fh.1.{revision}.{digest}"'
+
+
+def _safe_balance(amount: object) -> int:
+    # PostgreSQL SUM(bigint) returns NUMERIC. Never serialize money as float or
+    # more than JavaScript's safe integer boundary into the public API.
+    if amount is None:
+        raise FinanceCommandError("invalid_command", "Нет расчётного остатка", 422)
+    value = int(amount)
+    if value != amount or not -(2**53 - 1) <= value <= (2**53 - 1):
+        raise FinanceCommandError("invalid_command", "Остаток вне допустимого диапазона", 422)
+    return value
+
+
+def ensure_verified_profile(
+    engine: Engine, *, verified_user_id: str, server_namespace: UUID,
+) -> VerifiedFinanceScope:
+    """Create one stable finance profile on first login, with no privileged role.
+
+    The namespace MUST be a stable server-side deployment setting, backed up
+    alongside recovery materials. Not a user-entered UUID or secret token.
+    Only call after actual AuthStore.current() authenticated this principal.
+    """
+    if (not isinstance(verified_user_id, str)
+        or not re.fullmatch(r"[0-9a-f]{32}", verified_user_id)):
+        raise ValueError("A verified FH auth session is required")
+    if not isinstance(server_namespace, UUID):
+        raise ValueError("Server profile namespace must be configured")
+    profile_id = uuid5(server_namespace, "financial-horizon:finance-profile:v1:" + verified_user_id)
+    scope = VerifiedFinanceScope(verified_user_id, profile_id)
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        # RLS FOR ALL, including INSERT and ON CONFLICT, still applies.
+        # The exact same principal gets the same UUID on concurrent logins.
+        session.execute(text("""
+            INSERT INTO finance_profiles (id,owner_user_id,currency)
+            VALUES (:id,:user,'RUB') ON CONFLICT (id) DO NOTHING
+        """), {"id": profile_id, "user": verified_user_id})
+        owner = session.execute(text("""
+            SELECT owner_user_id FROM finance_profiles WHERE id=:id
+        """), {"id": profile_id}).scalar_one_or_none()
+        if owner != verified_user_id:
+            raise FinanceCommandError("forbidden", "Нет доступа к финансовому профилю", 403)
+    return scope
 
 
 def _validated(command: object, if_match: str, idem_key: str,
@@ -216,7 +259,7 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         name = payload["name"]
         if not isinstance(name, str) or not name.strip() or len(name) > 160:
             raise _reject("Некорректное название счёта")
-        if payload["kind"] not in _TYPES or payload["currency"] != "RUB":
+        if not isinstance(payload["kind"], str) or payload["kind"] not in _TYPES or payload["currency"] != "RUB":
             raise _reject("Недоступный тип или валюта счёта")
         opening = _integer(payload["opening_minor"], -MAX_MINOR, MAX_MINOR)
         session.execute(text("""
@@ -234,7 +277,8 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         entity = _account(session, p, target, versions, archived=True)
         if action == "account.update":
             name = payload["name"]
-            if not isinstance(name, str) or not name.strip() or len(name) > 160 or payload["kind"] not in _TYPES:
+            if (not isinstance(name, str) or not name.strip() or len(name) > 160
+                or not isinstance(payload["kind"], str) or payload["kind"] not in _TYPES):
                 raise _reject("Некорректные параметры счёта")
             session.execute(text("""
                 UPDATE accounts SET name=:name,kind=:kind,
@@ -413,7 +457,7 @@ def get_account_snapshot(engine: Engine, *, scope: VerifiedFinanceScope) -> Fina
             "id": str(a["id"]), "entity_revision": a["entity_revision"],
             "kind": "account",
             "data": {"name": a["name"], "type": a["kind"], "currency": a["currency"].strip(),
-                     "opening_minor": a["opening_minor"], "balance_minor": a["balance_minor"],
+                     "opening_minor": int(a["opening_minor"]), "balance_minor": _safe_balance(a["balance_minor"]),
                      "archived_at": a["archived_at"].isoformat() if a["archived_at"] else None},
         } for a in accounts]
         revision = int(row["revision"])
