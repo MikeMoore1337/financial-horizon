@@ -14,6 +14,7 @@ import json
 import time
 from uuid import UUID, uuid4
 
+from fastapi import Response
 from fastapi.testclient import TestClient
 import pytest
 from sqlalchemy import text
@@ -1037,8 +1038,6 @@ def test_finance_cookie_is_invalidated_for_any_identity_cookie_issuer(env):
     exchange itself. The new OAuth router in main directly issues the
     fh_email_session cookie instead of calling the email app's cookie() helper.
     """
-    from fastapi import Response
-
     alice, token_a = env["first"]
     bob, token_b = env["new_user"]()
     alice_account = env["account"](alice, opening=98_765)
