@@ -269,7 +269,14 @@ export function assertLedgerState(state: LedgerState): void {
             || actual.length !== 1 || Math.abs(actual[0]!.signedMinor) !== amount) {
             throw new Error('Квитанция не соответствует сумме оплаты');
           }
-          match([[payload.accountId, actual[0]!.signedMinor]]);
+          // The request only contains unsigned amountMinor. The signed effect was
+          // confirmed by a trusted settlement/loan fact at commit time; do not
+          // infer its direction from mutable restored postings.
+          requireMoney(receipt.postedSignedMinor, false);
+          if (Math.abs(receipt.postedSignedMinor!) !== amount) {
+            throw new Error('Квитанция не соответствует подтверждённому направлению оплаты');
+          }
+          match([[payload.accountId, receipt.postedSignedMinor]]);
           const fact = payload.link;
           if (!fact || typeof fact !== 'object' || Array.isArray(fact)) {
             throw new Error('Квитанция не соответствует связи оплаты');

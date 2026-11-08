@@ -44,6 +44,8 @@ export interface CommandReceipt {
   requestFingerprint: string;
   revision: number;
   affectedId: string;
+  /** Server-verified signed effect for linked payments, never derived from the cache. */
+  postedSignedMinor?: number;
 }
 export interface LedgerState {
   profileId: string;
@@ -248,6 +250,7 @@ export function applyLedgerCommand(source: LedgerState, command: LedgerCommand, 
   if (source.revision === Number.MAX_SAFE_INTEGER) throw new RangeError('Переполнение ревизии');
   const state = structuredClone(source);
   let affectedId: string;
+  let postedPaymentSignedMinor: number | undefined;
   switch (command.action) {
     case 'account.create': {
       const payload = command.payload;
@@ -348,6 +351,7 @@ export function applyLedgerCommand(source: LedgerState, command: LedgerCommand, 
           || (loan && 'loanPaymentId' in p && p.loanPaymentId === loan))) throw new Error('Оплата уже проведена по счёту');
       const signedMinor = fact.direction === 'income' ? payload.amountMinor : -payload.amountMinor;
       post(state, transaction(state, context, payload.id, 'payment', payload.occurredOn, payload.note), [[a, signedMinor]]);
+      postedPaymentSignedMinor = signedMinor;
       state.paymentLinks.push(settlement !== undefined
         ? { profileId: state.profileId, transactionId: payload.id, settlementId: settlement }
         : { profileId: state.profileId, transactionId: payload.id, loanPaymentId: loan as string });
@@ -423,7 +427,13 @@ export function applyLedgerCommand(source: LedgerState, command: LedgerCommand, 
     }
   }
   state.revision++;
-  const receipt: CommandReceipt = { clientMutationId: command.clientMutationId, requestFingerprint: fingerprint, revision: state.revision, affectedId };
+  const receipt: CommandReceipt = {
+    clientMutationId: command.clientMutationId,
+    requestFingerprint: fingerprint,
+    revision: state.revision,
+    affectedId,
+    ...(postedPaymentSignedMinor === undefined ? {} : { postedSignedMinor: postedPaymentSignedMinor }),
+  };
   state.receipts.push(receipt);
   assertLedgerState(state);
   return { state, receipt, replayed: false };

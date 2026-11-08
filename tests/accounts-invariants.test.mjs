@@ -177,13 +177,17 @@ test('hydrated snapshot rejects a positive loan payment while allowing income se
   assert.ok(loanPosting);
   loanPosting.signedMinor = 500;
   assert.throws(() => assertLedgerState(corrupt), /Кредитный платёж не может быть поступлением/);
-  const valid = fixture();
-  const p = valid.postings.find(p => p.transactionId === uuid(6));
-  const link = valid.paymentLinks.find(x => x.transactionId === uuid(6));
-  p.signedMinor = 500;
-  delete link.loanPaymentId;
-  link.settlementId = uuid(5);
+  let valid = create(emptyLedger(uuid(1)), uuid(2), 1_000);
+  const settlementId = uuid(11);
+  valid = run(valid, 'payment.record', {
+    id: uuid(12), accountId: uuid(2), amountMinor: 500,
+    link: { settlementId }, occurredOn: '2026-11-07',
+  }, { ...revisions(valid, uuid(2)), [settlementId]: 1 }, {
+    profileId: valid.profileId, id: settlementId, source: 'settlement',
+    direction: 'income', amountMinor: 500, entityRevision: 1, voidedAt: null,
+  });
   assert.doesNotThrow(() => assertLedgerState(valid), 'positive settlement is a valid income');
+  assert.equal(accountBalanceMinor(valid, uuid(2)), 1_500);
 });
 
 test('orphan command receipt cannot suppress missing debit after corrupted restore', () => {
@@ -350,4 +354,39 @@ test('correction receipt verifies replacement posting amount as well as its reve
   const damaged = structuredClone(s);
   damaged.postings.find(p => p.transactionId === uuid(5)).signedMinor = -800;
   assert.throws(() => assertLedgerState(damaged), /Квитанция не соответствует проводкам/);
+});
+
+test('payment receipt preserves the signed direction of real expense and income settlements', () => {
+  const initial = create(emptyLedger(uuid(1)), uuid(2), 10_000);
+  for (const direction of ['income', 'expense']) {
+    const signed = direction === 'income' ? 500 : -500;
+    const factId = direction === 'income' ? uuid(21) : uuid(22);
+    const s = run(initial, 'payment.record', {
+      id: direction === 'income' ? uuid(23) : uuid(24),
+      accountId: uuid(2), amountMinor: 500,
+      link: { settlementId: factId }, occurredOn: '2026-11-07',
+    }, { ...revisions(initial, uuid(2)), [factId]: 1 }, {
+      profileId: initial.profileId, id: factId, source: 'settlement',
+      direction, amountMinor: 500, entityRevision: 1, voidedAt: null,
+    });
+    assert.doesNotThrow(() => assertLedgerState(s));
+    assert.equal(s.receipts.at(-1).postedSignedMinor, signed);
+    assert.equal(accountBalanceMinor(s, uuid(2)), 10_000 + signed);
+    const damaged = structuredClone(s);
+    damaged.postings.at(-1).signedMinor = -signed;
+    assert.throws(() => assertLedgerState(damaged), /Квитанция не соответствует проводкам/);
+    const reply = JSON.parse(s.receipts.at(-1).requestFingerprint);
+    assert.equal(applyLedgerCommand(s, reply, context(s.profileId)).replayed, true);
+    assert.equal(s.postings.length, 1);
+  }
+});
+
+test('missing or altered signed payment receipt must not hide a changed cash direction', () => {
+  const source = fixture();
+  const without = structuredClone(source);
+  delete without.receipts.at(-1).postedSignedMinor;
+  assert.throws(() => assertLedgerState(without), /Повреждена сумма/);
+  const changed = structuredClone(source);
+  changed.receipts.at(-1).postedSignedMinor = 500;
+  assert.throws(() => assertLedgerState(changed), /Квитанция не соответствует проводкам/);
 });
