@@ -43,13 +43,10 @@ async function mutate(change,msg='Сохранено на устройстве',
 }
 function stampFormRevision(form){form.dataset.stateRevision=String(state.revision);}
 function revisionForForm(form){const revision=Number(form.dataset.stateRevision);if(!Number.isSafeInteger(revision)||revision<0)throw Error('Не удалось определить версию записи. Откройте форму повторно.');return revision;}
-function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#172336':'#ffffff';$('#theme-toggle').innerHTML=svg(mode==='dark'?'sun':'moon');$('#theme-toggle').setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}
+function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#172336':'#ffffff';if(!navRoots){const toggle=$('#theme-toggle');if(toggle){toggle.innerHTML=svg(mode==='dark'?'sun':'moon');toggle.setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}}}
 function navigation(view){ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings'){void renderStorageStatus();if(!guestMode)void refreshEmailSession();}}
 function render(){
  if(!state)return;
- $('#toolbar-title').textContent=titles[ui.view];
- if(!navRoots)navRoots=createAppShellRoots($('.sidebar-nav'),$('.bottom-nav'));
- navRoots.render(ui.view);
  const main=$('#main');
  if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'||ui.view==='settings'){
   if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main,getAuthAccess);}
@@ -127,11 +124,13 @@ function render(){
  syncAccountControls();
 }
 function syncAccountControls(){
- const signedIn=Boolean(emailSession.email);
- const toolbarButton=$('#account-logout-toolbar');
- toolbarButton.hidden=!signedIn;
- toolbarButton.disabled=emailSession.busy;
- $('#account-entry-toolbar').hidden=!signedIn;
+ if(!state)return;
+ if(!navRoots)navRoots=createAppShellRoots($('.sidebar-nav'),$('.bottom-nav'),$('.toolbar'));
+ navRoots.render(ui.view,{
+  theme:document.body.dataset.theme==='dark'?'dark':'light',
+  signedIn:Boolean(emailSession.email),
+  busy:Boolean(emailSession.busy),
+ });
 }
 async function refreshEmailSession(){
  if(guestMode||!activeUserId||emailSession.busy)return true;
@@ -433,12 +432,21 @@ function bindEvents(){
   if(button)lastDialogActivator=button;
  },true);
  document.addEventListener('click',async event=>{
+  if(event.target.closest('#theme-toggle')){
+   event.preventDefault();
+   themeSet(document.body.dataset.theme==='dark'?'light':'dark');
+   render();
+   return;
+  }
+  if(event.target.closest('#top-add')){
+   event.preventDefault();
+   openEntry();
+   return;
+  }
   const nav=event.target.closest('[data-view]');if(nav){event.preventDefault();navigation(nav.dataset.view);return;}
   const actionEl=event.target.closest('[data-action]');if(actionEl){event.preventDefault();try{await handleAction(actionEl);}catch(e){fail(e);}return;}
  });
  document.addEventListener('submit',onFormSubmit);
- $('#theme-toggle').addEventListener('click',()=>{themeSet(document.body.dataset.theme==='dark'?'light':'dark');render();});
- $('#top-add').addEventListener('click',()=>openEntry());
  $('#payment-form').addEventListener('input',updatePaymentPreview);
  $('#payment-form').addEventListener('change',updatePaymentPreview);
  $('#payment-loan').addEventListener('change',()=>{const l=state.loans.find(x=>x.id===$('#payment-loan').value);if(l){$('#payment-form').elements.amount.value=numberInput(loanLedger(l,state.loanPayments).monthlyCents);updatePaymentPreview();}});
