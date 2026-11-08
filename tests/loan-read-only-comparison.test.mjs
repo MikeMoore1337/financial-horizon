@@ -139,7 +139,7 @@ test('bank fees remain unallocated differences, never part of mortgage principal
 });
 
 test('identical full rows for an unclosed loan are insufficient closure evidence', () => {
-  const tooSmall = { ...legacy, paymentCents: 1 };
+  const tooSmall = { ...legacy, paymentCents: 300_000 };
   const first = prepareReadOnlyLoanComparison(tooSmall, approved);
   assert.equal(first.status, 'no-bank-schedule');
   assert.equal(first.plan.complete, false);
