@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { AppShell, createAppShellRoots } from '../../src/react/AppShell';
 import { Navigation } from '../../src/react/Navigation';
+import { Toolbar } from '../../src/react/Toolbar';
 import { AuthBoundary, isAuthorized } from '../../src/react/AuthBoundary';
 
 afterEach(() => {
@@ -29,22 +30,25 @@ describe('React navigation shell and auth boundary', () => {
   });
   it('uses a single delegated action per click across both React-owned navigation hosts', () => {
     const sidebar = document.createElement('nav'),
-      bottom = document.createElement('nav');
+      bottom = document.createElement('nav'),
+      toolbar = document.createElement('header');
     sidebar.className = 'sidebar-nav';
     bottom.className = 'bottom-nav';
-    document.body.append(sidebar, bottom);
+    toolbar.className = 'toolbar';
+    document.body.append(sidebar, bottom, toolbar);
     const events: string[] = [];
     const callback = (event: MouseEvent) => {
       const el = (event.target as Element).closest('[data-view]');
       if (el) events.push(el.getAttribute('data-view')!);
     };
     document.addEventListener('click', callback);
-    const roots = createAppShellRoots(sidebar, bottom);
+    const roots = createAppShellRoots(sidebar, bottom, toolbar);
     try {
-      roots.render('overview');
-      roots.render('loans');
+      roots.render('overview', { theme: 'light', signedIn: false, busy: false });
+      roots.render('loans', { theme: 'dark', signedIn: true, busy: false });
       expect(sidebar.querySelectorAll('[data-view]')).toHaveLength(5);
       expect(bottom.querySelectorAll('[data-view]')).toHaveLength(5);
+      expect(toolbar.querySelector('#toolbar-title')?.textContent).toBe('Кредиты');
       expect(sidebar.querySelector('[data-view="loans"]')?.getAttribute('aria-current')).toBe(
         'page',
       );
@@ -57,6 +61,23 @@ describe('React navigation shell and auth boundary', () => {
     }
     expect(sidebar.childElementCount).toBe(0);
     expect(bottom.childElementCount).toBe(0);
+    expect(toolbar.childElementCount).toBe(0);
+  });
+  it('keeps theme/account controls in React without initiating financial operations', () => {
+    const { rerender } = render(
+      <StrictMode>
+        <Toolbar view="loans" theme="light" signedIn={false} busy={false} />
+      </StrictMode>,
+    );
+    expect(screen.getByRole('button', { name: 'Добавить запись' }).id).toBe('top-add');
+    expect(screen.getByRole('button', { name: 'Включить тёмную тему' }).id).toBe(
+      'theme-toggle',
+    );
+    expect(document.querySelector('#account-logout-toolbar')?.hasAttribute('hidden')).toBe(true);
+    rerender(<Toolbar view="settings" theme="dark" signedIn={true} busy={true} />);
+    expect(screen.getByRole('button', { name: 'Включить светлую тему' })).toBeTruthy();
+    expect(document.querySelector('#account-logout-toolbar')?.hasAttribute('disabled')).toBe(true);
+    expect(document.querySelector('#account-logout-toolbar')?.hasAttribute('hidden')).toBe(false);
   });
   it('hides all user data until the verified account matches active storage scope', () => {
     const forbidden = {

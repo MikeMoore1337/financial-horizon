@@ -131,7 +131,8 @@ src/react/Obligations.tsx          React-обязательства
 src/react/Loans.tsx                React-кредиты
 src/react/Settings.tsx             React-настройки
 src/react/ScreenRoot.tsx           Единый React root для финансовых экранов
-src/react/AppShell.tsx             React-контейнеры боковой и мобильной навигации
+src/react/AppShell.tsx             React-контейнеры навигации и верхней панели
+src/react/Toolbar.tsx              React-верхняя панель аккаунта и темы
 src/react/AuthBoundary.tsx         Граница отображения авторизованных данных
 legacy/app.js                      Совместимость со старыми установленными PWA
 finance.js / ledger-operations.js  Финансовые расчёты и операции

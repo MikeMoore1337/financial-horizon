@@ -131,7 +131,8 @@ src/react/Obligations.tsx          React obligations
 src/react/Loans.tsx                React loans
 src/react/Settings.tsx             React settings
 src/react/ScreenRoot.tsx           Shared React root for financial screens
-src/react/AppShell.tsx             React-owned sidebar and bottom navigation
+src/react/AppShell.tsx             React-owned navigation and toolbar
+src/react/Toolbar.tsx              React account and theme toolbar
 src/react/AuthBoundary.tsx         Read-only auth presentation gate
 legacy/app.js                      Older installed PWA compatibility
 finance.js / ledger-operations.js  Financial calculations and ledger
