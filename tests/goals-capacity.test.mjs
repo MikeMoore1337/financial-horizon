@@ -1,11 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createGoal, applyGoalEvent,
+  createGoal, applyGoalEvent, reconcileGoalCapacity, assertGoalCapacity,
 } from '../src/domain/goals/index.ts';
-import {
-  reconcileGoalCapacity, assertGoalCapacity,
-} from '../src/domain/goals/allocation-capacity.ts';
 
 const SCOPE = 'profile:synthetic';
 const account = (id, amount) => ({ id, scopeKey: SCOPE, currency: 'RUB', balanceCents: amount });
