@@ -13,7 +13,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint .",
-    "format:check": "prettier --check vite.config.mjs eslint.config.mjs tsconfig.json .prettierrc.json state-migrations.ts src/types/*.ts scripts/verify-build.mjs playwright.config.mjs src/react/*.tsx tests/react/*.tsx vitest.config.mts",
+    "format:check": "node scripts/format-preview-33.mjs && prettier --check vite.config.mjs eslint.config.mjs tsconfig.json .prettierrc.json state-migrations.ts src/types/*.ts scripts/verify-build.mjs playwright.config.mjs src/react/*.tsx tests/react/*.tsx vitest.config.mts",
     "test:build": "node scripts/verify-build.mjs",
     "audit:deps": "npm audit --audit-level=high",
     "test:component": "vitest run --config vitest.config.mts"
