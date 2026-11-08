@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 from decimal import Decimal
-import json
 from typing import Any
 from uuid import UUID
 
@@ -45,6 +44,37 @@ _ENTITY_FIELDS = {
     "loan_payments": ("loan_payment", (
         "loan_id", "paid_on", "amount_minor", "strategy", "voided_at",
     )),
+}
+
+
+# Hard-coded SQL projection for each audited table; no dynamic SQL identifiers.
+_ENTITY_QUERIES = {
+    "obligations": text(
+        "SELECT id,entity_revision,title,direction,amount_minor,starts_on,timezone,"
+        "recurrence_unit,recurrence_every,category,deleted_at "
+        "FROM obligations WHERE profile_id=:p ORDER BY id LIMIT :n"
+    ),
+    "loans": text(
+        "SELECT id,entity_revision,title,opening_minor,payment_minor,apr_basis_points,"
+        "term_months,due_day,as_of_date,calculation_version,imported_schedule,deleted_at "
+        "FROM loans WHERE profile_id=:p ORDER BY id LIMIT :n"
+    ),
+    "reserves": text(
+        "SELECT id,entity_revision,title,target_minor,target_on,archived_at "
+        "FROM reserves WHERE profile_id=:p ORDER BY id LIMIT :n"
+    ),
+    "ledger_transactions": text(
+        "SELECT id,entity_revision,kind,occurred_on,note,posted_at,reversed_transaction_id "
+        "FROM ledger_transactions WHERE profile_id=:p ORDER BY id LIMIT :n"
+    ),
+    "settlements": text(
+        "SELECT id,entity_revision,obligation_id,occurrence_on,paid_on,amount_minor,voided_at "
+        "FROM settlements WHERE profile_id=:p ORDER BY id LIMIT :n"
+    ),
+    "loan_payments": text(
+        "SELECT id,entity_revision,loan_id,paid_on,amount_minor,strategy,voided_at "
+        "FROM loan_payments WHERE profile_id=:p ORDER BY id LIMIT :n"
+    ),
 }
 
 
@@ -115,11 +145,11 @@ def get_finance_snapshot(engine: Engine, *, scope: VerifiedFinanceScope) -> Fina
             })
 
         for table, (kind, fields) in _ENTITY_FIELDS.items():
-            # The table/columns come exclusively from the hard-coded whitelist above.
-            rows = session.execute(text(
-                f"SELECT id,entity_revision,{','.join(fields)} "
-                f"FROM {table} WHERE profile_id=:p ORDER BY id LIMIT :n"
-            ), {"p": scope.profile_id, "n": _MAX_PER_ENTITY + 1}).mappings().all()
+            # Every statement is static SQL, not interpolated identifiers.
+            rows = session.execute(
+                _ENTITY_QUERIES[table],
+                {"p": scope.profile_id, "n": _MAX_PER_ENTITY + 1},
+            ).mappings().all()
             if len(rows) > _MAX_PER_ENTITY:
                 raise FinanceCommandError("service_unavailable", "Слишком большой финансовый снимок", 503)
             for row in rows:
