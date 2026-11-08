@@ -167,7 +167,7 @@ class ReleaseContracts(unittest.TestCase):
             source = base / "src"
             requirements = source / "backend" / "requirements.txt"
             requirements.parent.mkdir(parents=True)
-            requirements.write_text("fastapi>=0.115,<1\\njoserfc>=1.8,<2\\n")
+            requirements.write_text("fastapi>=0.115,<1\njoserfc>=1.8,<2\n")
             active = base / "running-venv" / "bin" / "python"
             isolated = release_dir / ".oauth-venv"
             staged_py = isolated / "bin" / "python"
@@ -181,7 +181,7 @@ class ReleaseContracts(unittest.TestCase):
                     staged_py.touch()
                     site.mkdir(parents=True)
                 if len(args) > 2 and args[1] == "-c" and "sysconfig.get_path" in args[2]:
-                    return str(site).encode("utf-8") + b"\\n"
+                    return str(site).encode("utf-8") + b"\n"
                 return b""
 
             with mock.patch.object(release, "command", side_effect=fake_command):
@@ -200,7 +200,7 @@ class ReleaseContracts(unittest.TestCase):
             source = base / "src"
             path = source / "backend" / "requirements.txt"
             path.parent.mkdir(parents=True)
-            path.write_text("fastapi>=0.115,<1\\n")
+            path.write_text("fastapi>=0.115,<1\n")
             dest = base / "releases" / SHA
             dest.mkdir(parents=True)
             venv = dest / ".oauth-venv"
