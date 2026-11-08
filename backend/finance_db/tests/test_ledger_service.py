@@ -12,7 +12,7 @@ import pytest
 from sqlalchemy import text
 
 from backend.finance_db.db import create_finance_engine, finance_transaction
-from backend.finance_db.snapshot import get_finance_delta
+from backend.finance_db.snapshot import get_finance_delta, get_finance_snapshot
 from backend.finance_db.ledger_service import (
     FinanceCommandError, VerifiedFinanceScope, ensure_verified_profile,
     get_account_snapshot, submit_account_command,
@@ -384,6 +384,12 @@ def test_settlement_payment_posts_exact_signed_income_and_expense_once(context):
         assert page.body["next_since_revision"] == reply.body["revision"]
         assert len(page.body["changes"]) == 2
         assert [c["ordinal"] for c in page.body["changes"]] == [0, 1]
+        full = get_finance_snapshot(engine, scope=scope)
+        fact = next(e for e in full.body["entities"] if e["id"] == str(payment_fact))
+        # Revision-ordered delta must contain the exact committed fact, not a
+        # partial payload requiring unsafe defaults on a second device.
+        assert page.body["changes"][1]["payload"]["entity"] == fact
+        assert fact["data"]["voided_at"] is None
     state = get_account_snapshot(engine, scope=scope)
     assert state.body["entities"][0]["data"]["balance_minor"] == 11_300
 
@@ -409,6 +415,10 @@ def test_loan_payment_debits_cash_atomically_and_blocks_invalid_strategy(context
     posted = call(engine, scope, cmd, before.etag)
     assert posted.status == 201 and len(posted.body["changes"]) == 2
     assert posted.body["changes"][0]["payload"]["signed_minor"] == -5000
+    state = get_finance_snapshot(engine, scope=scope)
+    loan_fact = next(e for e in state.body["entities"] if e["id"] == str(payment_id))
+    assert posted.body["changes"][1]["payload"]["entity"] == loan_fact
+    assert loan_fact["data"]["voided_at"] is None
     assert get_account_snapshot(engine, scope=scope).body["entities"][0]["data"]["balance_minor"] == 10_000
     with finance_transaction(engine, verified_user_id=scope.user_id,
                              profile_id=scope.profile_id) as session:
