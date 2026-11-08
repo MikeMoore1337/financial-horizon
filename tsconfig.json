@@ -20,6 +20,7 @@
   "include": [
     "src/types/**/*.ts",
     "src/domain/loans/**/*.ts",
+    "src/domain/goals/**/*.ts",
     "src/domain/cashflow/**/*.ts",
     "state-migrations.ts",
     "src/react/**/*.tsx",
