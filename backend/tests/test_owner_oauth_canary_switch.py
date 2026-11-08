@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import os
 from pathlib import Path
 from unittest import mock
@@ -127,6 +128,43 @@ class ProviderSwitchTests(unittest.TestCase):
             switcher.atomic_replace(file, switcher.rewrite_flags(CANARY_SOURCE, 'google'))
             self.assertEqual(file.stat().st_mode & 0o777, 0o600)
             self.assertIn('FH_GOOGLE_OAUTH_ENABLED=true', file.read_text())
+
+    @unittest.skipIf(os.name == 'nt', 'Operator backup requires Linux fs permissions')
+    def test_repeated_target_switches_preserve_private_backups(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(switcher, 'ROOT_ONLY_BACKUPS', Path(directory)):
+                first = switcher.write_private_backup('google', 'FIRST-SYNTHETIC-ONLY\\n')
+                second = switcher.write_private_backup('google', 'SECOND-SYNTHETIC-ONLY\\n')
+                self.assertNotEqual(first, second)
+                self.assertEqual(first.read_text(), 'FIRST-SYNTHETIC-ONLY\\n')
+                self.assertEqual(second.read_text(), 'SECOND-SYNTHETIC-ONLY\\n')
+                self.assertEqual(first.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(second.stat().st_mode & 0o777, 0o600)
+                self.assertFalse(first.is_symlink())
+                self.assertFalse(second.is_symlink())
+
+    def test_preflight_is_read_only_and_has_no_secrets_in_output(self):
+        with mock.patch.object(switcher, 'check_static_guards', return_value=CANARY_SOURCE) as guard, \\
+                mock.patch.object(switcher, 'restart') as restart, \\
+                mock.patch('sys.stdout', new_callable=io.StringIO) as output:
+            switcher.preflight('google')
+            guard.assert_called_once_with('google')
+            restart.assert_not_called()
+            self.assertIn('CANARY_PREFLIGHT=PASS', output.getvalue())
+            self.assertIn('CURRENT_PROVIDER=telegram', output.getvalue())
+            self.assertIn('TARGET_PROVIDER=google', output.getvalue())
+            self.assertNotIn('FH_AUTH_DATABASE_PATH=', output.getvalue())
+
+    def test_failure_codes_never_echo_unknown_private_exception(self):
+        secret = 'sensitive-token-must-not-be-printed'
+        with mock.patch('sys.argv', ['switcher', '--provider', 'google', '--preflight']), \\
+                mock.patch.object(switcher, 'preflight', side_effect=switcher.CheckFailed(secret)), \\
+                mock.patch('sys.stdout', new_callable=io.StringIO) as output:
+            self.assertEqual(switcher.main(), 1)
+            self.assertIn('FAILURE_CODE=OTHER_CHECK_FAILED', output.getvalue())
+            self.assertNotIn(secret, output.getvalue())
+        self.assertEqual(switcher.SAFE_FAILURE_CODES['Target provider credentials not staged'],
+                         'TARGET_CREDENTIALS_NOT_STAGED')
 
     def test_no_side_effects_at_import_time(self):
         self.assertTrue(callable(switcher.main))
