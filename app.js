@@ -1,5 +1,5 @@
 import {cents,rubles,numberInput,monthKey,monthIndex,shiftMonth,monthLabel,dayInMonth,loanLedger,previewLoanPayment,getMonthEvents,monthTotals,createSampleState,isActive,emptyState,payoffMonths} from './finance.js';
-import {readState,updateState,replaceState,askPersistentStorage,storageStatus,selectStateScope} from './storage.js?rev=auth-scopes-v18';
+import {readState,updateState,replaceState,askPersistentStorage,storageStatus,selectStateScope,revokeStateScope} from './storage.js?rev=auth-scopes-v18';
 import {encryptBackup,decryptBackup} from './backup.js';
 import {parseSchedule} from './schedule.js';
 import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.js';
@@ -28,6 +28,7 @@ function getAuthAccess(){
 let storageStatusMessage='Браузер может удалить данные при очистке хранилища. Делайте резервные копии.';
 let storageStatusRequest=0;
 function revokeDisplayedLedger(){
+ revokeStateScope(); // invalidate pending IDB reads/writes before clearing the UI
  state=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
  if(navRoots){navRoots.unmount();navRoots=null;}
@@ -473,7 +474,7 @@ function bindEvents(){
    render();
   })().catch(()=>window.location.replace('./account.html'));
  });
- try{channel=new BroadcastChannel('financial-horizon-updates');channel.onmessage=async()=>{try{state=await readState();render();}catch(e){fail(e);}};}catch{}
+ try{channel=new BroadcastChannel('financial-horizon-updates');channel.onmessage=async()=>{if(!state)return;try{state=await readState();render();}catch(e){fail(e);}};}catch{}
 }
 async function init(){
  try{themeSet(localStorage.getItem('fh-theme')||((window.matchMedia?.('(prefers-color-scheme: dark)').matches)?'dark':'light'));}catch{themeSet('light');}
