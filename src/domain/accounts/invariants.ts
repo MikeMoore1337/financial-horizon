@@ -223,6 +223,97 @@ export function assertLedgerState(state: LedgerState): void {
           : !transactions.has(receipt.affectedId))) {
       throw new Error('Квитанция указывает на отсутствующую или неверную сущность');
     }
+    if (request.action === 'account.create') {
+      const account = state.accounts.find(a => a.id === receipt.affectedId);
+      if (!account || account.openingMinor !== payload.openingMinor) {
+        throw new Error('Квитанция создания не соответствует начальному остатку');
+      }
+    }
+    if (targetType === 'transaction') {
+      const tx = transactions.get(receipt.affectedId);
+      if (!tx) throw new Error('Квитанция не соответствует финансовой операции');
+      const actual = postings.get(tx.id) ?? [];
+      const match = (expected: Array<[unknown, unknown]>): void => {
+        if (actual.length !== expected.length) throw new Error('Квитанция не соответствует проводкам');
+        const matched = new Set<number>();
+        for (const [accountId, signedMinor] of expected) {
+          requireUUID(accountId);
+          requireMoney(signedMinor, false);
+          const index = actual.findIndex((p, i) => !matched.has(i)
+            && p.accountId === accountId && p.signedMinor === signedMinor);
+          if (index < 0) throw new Error('Квитанция не соответствует проводкам');
+          matched.add(index);
+        }
+      };
+      switch (request.action) {
+        case 'transaction.record':
+          if (!['income','expense','adjustment'].includes(String(payload.kind))
+              || tx.kind !== payload.kind || tx.occurredOn !== payload.occurredOn) {
+            throw new Error('Квитанция не соответствует виду/дате операции');
+          }
+          match([[payload.accountId, payload.signedMinor]]);
+          break;
+        case 'account.transfer': {
+          const amount = payload.amountMinor;
+          requireMoney(amount, false);
+          if (amount <= 0 || tx.kind !== 'transfer' || tx.occurredOn !== payload.occurredOn) {
+            throw new Error('Квитанция не соответствует переводу');
+          }
+          match([[payload.fromAccountId, -amount], [payload.toAccountId, amount]]);
+          break;
+        }
+        case 'payment.record': {
+          const amount = payload.amountMinor;
+          requireMoney(amount, false);
+          if (amount <= 0 || tx.kind !== 'payment' || tx.occurredOn !== payload.occurredOn
+            || actual.length !== 1 || Math.abs(actual[0]!.signedMinor) !== amount) {
+            throw new Error('Квитанция не соответствует сумме оплаты');
+          }
+          match([[payload.accountId, actual[0]!.signedMinor]]);
+          const fact = payload.link;
+          if (!fact || typeof fact !== 'object' || Array.isArray(fact)) {
+            throw new Error('Квитанция не соответствует связи оплаты');
+          }
+          const requested = fact as Record<string, unknown>;
+          const link = state.paymentLinks.find(p => p.transactionId === tx.id);
+          const isSettlement = typeof requested.settlementId === 'string';
+          const isLoan = typeof requested.loanPaymentId === 'string';
+          if (!link || isSettlement === isLoan ||
+            (isSettlement ? link.settlementId !== requested.settlementId
+              : link.loanPaymentId !== requested.loanPaymentId)) {
+            throw new Error('Квитанция не соответствует связи оплаты');
+          }
+          break;
+        }
+        case 'transaction.reverse':
+          if (tx.kind !== 'reversal' || tx.reversedTransactionId !== payload.transactionId
+            || tx.occurredOn !== payload.occurredOn || tx.note !== payload.reason) {
+            throw new Error('Квитанция отмены указывает на другую исходную операцию');
+          }
+          break;
+        case 'transaction.correct': {
+          const replacement = payload.replacement as Record<string, unknown>;
+          if (tx.kind !== replacement.kind || tx.occurredOn !== replacement.occurredOn) {
+            throw new Error('Квитанция не соответствует исправленной операции');
+          }
+          if (replacement.kind === 'transfer') {
+            const amount = replacement.amountMinor;
+            requireMoney(amount, false);
+            if (amount <= 0) throw new Error('Квитанция не соответствует исправленному переводу');
+            match([[replacement.fromAccountId, -amount], [replacement.toAccountId, amount]]);
+          } else if (['income','expense','adjustment'].includes(String(replacement.kind))) {
+            match([[replacement.accountId, replacement.signedMinor]]);
+          } else {
+            throw new Error('Неизвестный вид исправленной операции в квитанции');
+          }
+          const reversal = transactions.get(payload.reversalId as string);
+          if (!reversal || reversal.occurredOn !== payload.occurredOn || reversal.note !== payload.reason) {
+            throw new Error('Квитанция не соответствует компенсирующей операции');
+          }
+          break;
+        }
+      }
+    }
     receipts.add(receipt.clientMutationId);
   }
 }
