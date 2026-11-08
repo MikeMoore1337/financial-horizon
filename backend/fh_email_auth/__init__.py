@@ -1,1 +1,3 @@
-"""Financial Horizon's independent opt-in email authentication."""
+"""Financial Horizon shared email/OAuth account authority."""
+
+SESSION_COOKIE = "fh_email_session"
