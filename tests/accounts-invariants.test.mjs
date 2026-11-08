@@ -6,9 +6,9 @@ import { applyLedgerCommand, emptyLedger, totalBalanceMinor, accountBalanceMinor
 const uuid = n => `00000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
 const context = profileId => ({ profileId, actorUserId: '0123456789abcdef0123456789abcdef' });
 const u = (() => { let i = 100; return () => uuid(++i); })();
-function run(state, action, payload, expected = {}) {
+function run(state, action, payload, expected = {}, verifiedPaymentFact) {
   const cmd = { clientMutationId: u(), baseRevision: state.revision, expectedEntityRevisions: expected, action, payload };
-  return applyLedgerCommand(state, cmd, context(state.profileId)).state;
+  return applyLedgerCommand(state, cmd, { ...context(state.profileId), verifiedPaymentFact }).state;
 }
 function create(state, id, openingMinor = 0) {
   return run(state, 'account.create', { id, name: 'Синтетический счёт', kind: 'bank', currency: 'RUB', openingMinor });
@@ -26,7 +26,10 @@ function transfer(s, from, to, amount, transactionId = u()) {
 function payment(s, accountId, amountMinor, loanId = u(), transactionId = u()) {
   return run(s, 'payment.record', {
     id: transactionId, accountId, amountMinor, link: { loanPaymentId: loanId }, occurredOn: '2026-11-07',
-  }, revisions(s, accountId));
+  }, revisions(s, accountId), {
+    profileId: s.profileId, id: loanId, source: 'loanPayment',
+    direction: 'expense', amountMinor, voidedAt: null,
+  });
 }
 function fixture() {
   let s = create(emptyLedger(uuid(1)), uuid(2), 100_000);
@@ -166,4 +169,19 @@ test('hydrated ledger rejects a linked payment reversal without an atomic fact v
   });
   s.revision++;
   assert.throws(() => assertLedgerState(s), /Связанная оплата отменена/);
+});
+
+test('hydrated snapshot rejects a positive loan payment while allowing income settlement', () => {
+  const corrupt = fixture();
+  const loanPosting = corrupt.postings.find(p => p.transactionId === uuid(6));
+  assert.ok(loanPosting);
+  loanPosting.signedMinor = 500;
+  assert.throws(() => assertLedgerState(corrupt), /Кредитный платёж не может быть поступлением/);
+  const valid = fixture();
+  const p = valid.postings.find(p => p.transactionId === uuid(6));
+  const link = valid.paymentLinks.find(x => x.transactionId === uuid(6));
+  p.signedMinor = 500;
+  delete link.loanPaymentId;
+  link.settlementId = uuid(5);
+  assert.doesNotThrow(() => assertLedgerState(valid), 'positive settlement is a valid income');
 });
