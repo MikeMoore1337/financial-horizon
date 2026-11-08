@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
+from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -326,3 +329,35 @@ def test_session_revocation_invalidates_finance_cookie_on_second_device(auth_fin
             "expected_entity_revisions": {},
             "payload": {"transaction_id": str(uuid4()), "reason": "revoked"},
         }).status_code == 401
+
+
+def test_blocked_sql_command_never_stalls_unrelated_auth_requests(auth_finance):
+    """A blocked finance command must run in a worker, not the ASGI event loop."""
+    client, _, mail, _, _, _ = auth_finance
+    authenticate(client, mail)
+    assert bootstrap(client).status_code == 200
+    entered, release = Event(), Event()
+
+    def blocked_command(*args, **kwargs):
+        from backend.finance_db.ledger_service import FinanceResult
+        entered.set()
+        if not release.wait(timeout=5):
+            raise AssertionError("Test never released the simulated SQL lock")
+        return FinanceResult(201, {"ok": True}, '"synthetic-test-etag"')
+
+    with patch("backend.finance_db.finance_router.submit_account_command", blocked_command):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            command = pool.submit(
+                client.post, "/api/finance/v1/commands",
+                json={}, headers={"Origin": ORIGIN, "Idempotency-Key": str(uuid4()),
+                                  "If-Match": '"synthetic-etag"'},
+            )
+            assert entered.wait(timeout=3), "The finance worker did not start"
+            try:
+                auth = pool.submit(client.get, "/api/auth/email/me")
+                user = auth.result(timeout=1.5)
+                assert user.status_code == 200
+                assert user.json()["authenticated"] is True
+            finally:
+                release.set()
+            assert command.result(timeout=3).status_code == 201
