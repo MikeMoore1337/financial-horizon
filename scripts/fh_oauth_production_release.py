@@ -401,6 +401,15 @@ def rollout(sha: str) -> None:
         command([str(auth_py), "-c", "import joserfc, cryptography"], timeout=30)
         command([sys.executable, "-m", "compileall", "-q", str(new_backend)], timeout=45)
         print("RELEASE_STAGED=PASS", flush=True)
+        # Revalidate after network-dependent staging: other releases or
+        # operators may have changed the live service while we built assets.
+        _, _, fresh_env = running_process()
+        if fresh_env.get("FH_AUTH_DATABASE_PATH") != str(db) or \
+                private_file(OAUTH_ENV) != old_env or \
+                CADDY_SITE.read_text(encoding="utf-8") != old_caddy or \
+                current_release(BACKEND_ROOT) != old_backend or \
+                current_release(STATIC_ROOT) != old_static:
+            raise Gate("LIVE_DEPLOYMENT_CHANGED_DURING_STAGING")
         changed = False
         db_migrated = False
         # Crash-resistant root-only copies before touching live configuration.
