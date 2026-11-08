@@ -84,3 +84,22 @@ test('1000 seeded synthetic journals agree with an independent BigInt cash oracl
     assert.equal(exportAnalyticsCsv(report), exportAnalyticsCsv(opposite));
   }
 });
+
+test('moving an expense between categories never changes totals, dates or spending shares', () => {
+  const source = Object.freeze({ id: 'reassigned-1', date: '2026-02-12', kind: 'expense',
+    signedMinor: -14_321, categoryId: 'food' });
+  const bounds = { from: '2026-02-01', to: '2026-02-28' };
+  const initial = buildAnalyticsReport({ ...bounds, transactions: [source], categories: [
+    { id: 'food', name: 'Еда', archived: true }, { id: 'travel', name: 'Поездки' },
+  ] });
+  const updated = buildAnalyticsReport({ ...bounds, transactions: [{ ...source, categoryId: 'travel' }],
+    categories: [{ id: 'food', name: 'Еда', archived: true }, { id: 'travel', name: 'Поездки' }] });
+  assert.deepEqual(initial.totals, updated.totals);
+  assert.deepEqual(initial.monthly, updated.monthly);
+  assert.deepEqual(initial.charts.cashflow, updated.charts.cashflow);
+  assert.deepEqual(initial.charts.expenseShares.map(x => [x.categoryId, x.amountMinor, x.shareBps]),
+    [['food', 14_321, 10_000]]);
+  assert.deepEqual(updated.charts.expenseShares.map(x => [x.categoryId, x.amountMinor, x.shareBps]),
+    [['travel', 14_321, 10_000]]);
+  assert.equal(source.categoryId, 'food', 'the original immutable source is not modified');
+});
