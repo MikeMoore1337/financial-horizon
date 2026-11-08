@@ -100,7 +100,7 @@ describe('approved accounts interface (feature not exposed)', () => {
   it('renders only confirmed amounts and five-item nav remains untouched', () => {
     render(<Accounts {...props()} />);
     expect(screen.getByRole('heading', { name: 'Счета' })).toBeTruthy();
-    expect(screen.getByText('21' + '\u00a0' + '500,00 ₽')).toBeTruthy();
+    expect(screen.getByText(/21[\s\u00a0\u202f]500,00 ₽/)).toBeTruthy();
     expect(screen.getByText('Основной')).toBeTruthy();
     expect(screen.getByText('Накопления')).toBeTruthy();
     expect(screen.getAllByRole('button', { name: 'Перевести' })).toHaveLength(2);
@@ -117,7 +117,7 @@ describe('approved accounts interface (feature not exposed)', () => {
     fireEvent.change(screen.getByLabelText(/Начальный остаток/), { target: { value: '0,00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
     await waitFor(() => expect(data.onCreate).toHaveBeenCalledWith({
-      name: 'Наличные', kind: 'bank', openingMinor: 0,
+      baseRevision: 1, name: 'Наличные', kind: 'bank', openingMinor: 0,
     }));
     expect(data.onRefresh).toHaveBeenCalledTimes(1);
   });
