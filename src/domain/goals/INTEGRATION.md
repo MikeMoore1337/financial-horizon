@@ -35,7 +35,11 @@ append-only event stream. No migration is performed here.
   means auto recompute the remaining amount over non-skipped due dates.
   Fixed plans are compared with the required contribution, yielding an explicit
   monthly deficit and projected completion date or a null/limited forecast.
-  The last proposed reservation is capped to the remaining exact kopecks.
+  Historic installments retain the plan in effect before their due dates.
+  Contributions already assigned to future installments are credited once;
+  automatic monthly planning uses integer water-filling and only the missing
+  portion of a prepaid installment is reserved. The last proposed reservation
+  is capped to the remaining exact kopecks.
 
 ## Integration gate for #33 and #6
 

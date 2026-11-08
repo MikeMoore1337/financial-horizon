@@ -315,3 +315,66 @@ test('unrecognized event fields cannot corrupt a JSON-serializable financial jou
   }), /unknown goal update/i);
   assert.equal(JSON.parse(JSON.stringify(goal)).events.length, 1);
 });
+
+
+test('historical plan is not rewritten by a later change of monthly contribution', () => {
+  const initial = fresh({ monthlyCents: 1_000_000 });
+  const paid = add(initial, 'feb', '2026-02-01', 1_000_000);
+  const revised = change(paid, 'raise-plan', '2026-03-01', { monthlyCents: 2_000_000 });
+  const rows = goalInstallments(revised, '2026-03-02');
+  assert.equal(rows[0].plannedCents, 1_000_000);
+  assert.equal(rows[0].status, 'paid');
+  assert.equal(rows[1].plannedCents, 1_000_000);
+  assert.equal(rows[2].plannedCents, 2_000_000);
+});
+
+test('fully prepaid future installment is not reserved twice', () => {
+  const goal = add(fresh(), 'prepaid-march', '2026-01-20', 2_000_000,
+    { forDueOn: '2026-03-01' });
+  const snapshot = calculateGoal(goal, '2026-01-21');
+  assert.equal(snapshot.savedCents, 2_000_000);
+  assert.equal(snapshot.requiredMonthlyCents, 909_091);
+  assert.equal(snapshot.projectedCompletionDate, '2027-01-01');
+  const rows = goalInstallments(goal, '2026-01-21');
+  assert.equal(rows[1].status, 'paid');
+  const reservations = goalForecastReservations(goal, '2026-01-21');
+  assert.equal(reservations.some((row) => row.dueOn === '2026-03-01'), false);
+  assert.equal(reservations.reduce((sum, row) => sum + row.plannedCents, 0), 10_000_000);
+});
+
+test('partially prepaid future installment receives only its missing amount', () => {
+  const goal = add(fresh(), 'prepaid-march', '2026-01-20', 900_000,
+    { forDueOn: '2026-03-01' });
+  const snapshot = calculateGoal(goal, '2026-01-21');
+  assert.equal(snapshot.requiredMonthlyCents, 1_000_000);
+  assert.equal(snapshot.projectedCompletionDate, '2027-01-01');
+  const rows = goalInstallments(goal, '2026-01-21');
+  assert.equal(rows[1].status, 'partial');
+  assert.equal(rows[1].actualCents, 900_000);
+  const reservations = goalForecastReservations(goal, '2026-01-21');
+  assert.equal(reservations.find((row) => row.dueOn === '2026-03-01').plannedCents, 100_000);
+  assert.equal(reservations.reduce((sum, row) => sum + row.plannedCents, 0), 11_100_000);
+});
+
+test('auto-plan history survives later target changes', () => {
+  const paid = add(fresh(), 'feb', '2026-02-01', 1_000_000);
+  const revised = change(paid, 'larger-goal', '2026-03-01', { targetCents: 24_000_000 });
+  const [february, march, april] = goalInstallments(revised, '2026-03-02');
+  assert.equal(february.plannedCents, 1_000_000);
+  assert.equal(february.status, 'paid');
+  assert.equal(march.plannedCents, 1_000_000);
+  assert.ok(april.plannedCents > march.plannedCents);
+});
+
+test('voiding an early allocated contribution restores future installment forecast', () => {
+  const prepaid = add(fresh(), 'ahead', '2026-01-15', 2_000_000,
+    { forDueOn: '2026-03-01' });
+  const corrected = reverse(prepaid, 'correction', '2026-01-16', 'ahead');
+  const snapshot = calculateGoal(corrected, '2026-01-17');
+  assert.equal(snapshot.savedCents, 0);
+  assert.equal(snapshot.monthlyCents, 1_000_000);
+  assert.equal(goalInstallments(corrected, '2026-01-17')[1].status, 'upcoming');
+  assert.equal(goalForecastReservations(corrected, '2026-01-17').length, 12);
+  assert.equal(goalForecastReservations(corrected, '2026-01-17')
+    .reduce((sum, row) => sum + row.plannedCents, 0), 12_000_000);
+});

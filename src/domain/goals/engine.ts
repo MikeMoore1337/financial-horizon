@@ -46,12 +46,6 @@ function safeAdd(a: number, b: number): number {
   }
   return result;
 }
-function ceilDiv(a: number, b: number): number {
-  if (!Number.isSafeInteger(a) || a < 0 || !Number.isSafeInteger(b) || b <= 0) {
-    throw new RangeError('Invalid installment division');
-  }
-  return Number((BigInt(a) + BigInt(b) - 1n) / BigInt(b));
-}
 function category(value: unknown): asserts value is GoalCategory {
   if (!CATEGORIES.includes(value as GoalCategory)) throw new TypeError('Invalid goal category');
 }
@@ -190,9 +184,14 @@ interface InternalState {
   status: GoalStatus;
 }
 
-/** Validates the entire event stream, including retroactive corrections and future events. */
-function replay(goal: GoalRecord, asOf: string): InternalState {
-  assertGoalDate(asOf);
+interface PreparedJournal {
+  created: GoalCreated;
+  eventMap: Map<string, GoalEvent>;
+  chronologicalEvents: GoalEvent[];
+}
+
+/** Validates an immutable journal once before replaying its historical snapshots. */
+function prepareJournal(goal: GoalRecord): PreparedJournal {
   if (!goal || goal.version !== 1 || typeof goal.id !== 'string' || !goal.id.trim()) {
     throw new TypeError('Unknown goal record version or ID');
   }
@@ -243,7 +242,13 @@ function replay(goal: GoalRecord, asOf: string): InternalState {
       throw new TypeError('Virtual correction cannot contain a ledger reversal');
     }
   }
-  const start = created as GoalCreated;
+  return { created: created as GoalCreated, eventMap, chronologicalEvents: sortedEvents(goal.events) };
+}
+
+/** Historical replay shares validation, but never shares mutable snapshot state. */
+function replay(goal: GoalRecord, asOf: string, prepared = prepareJournal(goal)): InternalState {
+  assertGoalDate(asOf);
+  const { created: start, eventMap, chronologicalEvents } = prepared;
   if (asOf < start.on) throw new RangeError('Snapshot predates goal creation');
   if (start.targetDate < start.on) throw new RangeError('Goal deadline precedes start');
   let state: InternalState = {
@@ -264,8 +269,8 @@ function replay(goal: GoalRecord, asOf: string): InternalState {
     else if (state.reachedOn === null) state.reachedOn = date;
   };
   const skips = new Set<string>();
-  for (const event of sortedEvents(goal.events)) {
-    if (event.on > asOf) continue;
+  for (const event of chronologicalEvents) {
+    if (event.on > asOf) break;
     switch (event.type) {
       case 'create':
         state.balance = safeAdd(state.balance, event.openingCents);
@@ -359,6 +364,46 @@ function dueAssignment(goal: GoalRecord, date: string, explicit: string | undefi
   return null;
 }
 
+/** Count contributions already assigned to a future installment, not additional future cash. */
+function prepaidInstallments(goal: GoalRecord, asOf: string): Map<string, number> {
+  const voided = effectiveVoids(goal, asOf);
+  const assigned = new Map<string, number>();
+  for (const event of goal.events) {
+    if (event.type !== 'contribution' || event.on > asOf || voided.has(event.id)) continue;
+    const dueOn = dueAssignment(goal, event.on, event.forDueOn);
+    if (dueOn && dueOn > asOf) {
+      assigned.set(dueOn, safeAdd(assigned.get(dueOn) ?? 0, event.amountCents));
+    }
+  }
+  return assigned;
+}
+
+/** Smallest monthly installment level covering the outstanding goal, after prepayments. */
+function requiredLevel(remaining: number, dates: readonly string[], assigned: Map<string, number>): number {
+  if (remaining === 0) return 0;
+  let low = 0;
+  let high = MAX_GOAL_CENTS;
+  const total = BigInt(remaining);
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    let capacity = 0n;
+    for (const dueOn of dates) {
+      capacity += BigInt(Math.max(0, mid - (assigned.get(dueOn) ?? 0)));
+      if (capacity >= total) break;
+    }
+    if (capacity >= total) high = mid;
+    else low = mid + 1;
+  }
+  return low;
+}
+
+function previousUTCDate(date: string): string {
+  const year = Number(date.slice(0, 4));
+  const month = Number(date.slice(5, 7));
+  const day = Number(date.slice(8, 10));
+  return new Date(Date.UTC(year, month - 1, day) - 86_400_000).toISOString().slice(0, 10);
+}
+
 export function createGoal(input: GoalCreateInput): GoalRecord {
   nonBlank(input.id, 'Goal ID');
   nonBlank(input.eventId, 'Creation event ID');
@@ -403,13 +448,17 @@ export function applyGoalEvent(goal: GoalRecord, event: Exclude<GoalEvent, GoalC
 }
 
 /** Pure as-of snapshot. Future-dated movements, edits and reversals are not factual. */
-export function calculateGoal(goal: GoalRecord, asOf: string): GoalSnapshot {
-  const state = replay(goal, asOf);
+function calculateGoalPrepared(
+  goal: GoalRecord, asOf: string, prepared: PreparedJournal,
+): GoalSnapshot {
+  const state = replay(goal, asOf, prepared);
   const due = goalDueDates(state.createdOn, state.targetDate);
   const skipped = skippedDates(goal, asOf);
   const futureDue = due.filter((date) => date > asOf && !skipped.has(date));
+  const assigned = prepaidInstallments(goal, asOf);
   const remaining = Math.max(0, state.targetCents - state.balance);
-  const required = remaining === 0 ? 0 : futureDue.length ? ceilDiv(remaining, futureDue.length) : null;
+  const required = remaining === 0 ? 0 : futureDue.length
+    ? requiredLevel(remaining, futureDue, assigned) : null;
   const monthly = state.monthlyCents ?? required ?? 0;
   const deficit = required === null ? null : Math.max(0, required - monthly);
   let projected: string | null = remaining === 0 ? state.reachedOn : null;
@@ -428,7 +477,8 @@ export function calculateGoal(goal: GoalRecord, asOf: string): GoalSnapshot {
       const day = monthDue(state.createdOn, offset);
       offset += 1;
       if (day <= asOf || futureSkips.has(day)) continue;
-      remainingProjection = Math.max(0, remainingProjection - monthly);
+      const additional = Math.max(0, monthly - (assigned.get(day) ?? 0));
+      remainingProjection = Math.max(0, remainingProjection - additional);
       if (remainingProjection === 0) { projected = day; break; }
     }
     if (projected === null) horizonLimited = true;
@@ -447,8 +497,30 @@ export function calculateGoal(goal: GoalRecord, asOf: string): GoalSnapshot {
   };
 }
 
+export function calculateGoal(goal: GoalRecord, asOf: string): GoalSnapshot {
+  return calculateGoalPrepared(goal, asOf, prepareJournal(goal));
+}
+
+/** Historic planned amount is evaluated before the due day, without rerunning projections. */
+function historicPlan(
+  goal: GoalRecord, beforeDue: string, prepared: PreparedJournal,
+): { monthlyCents: number; reached: boolean } {
+  const state = replay(goal, beforeDue, prepared);
+  const reached = state.balance >= state.targetCents;
+  if (state.monthlyCents !== null) return { monthlyCents: state.monthlyCents, reached };
+  if (reached) return { monthlyCents: 0, reached };
+  const skipped = skippedDates(goal, beforeDue);
+  const dates = goalDueDates(state.createdOn, state.targetDate)
+    .filter((due) => due > beforeDue && !skipped.has(due));
+  const remaining = state.targetCents - state.balance;
+  const monthlyCents = dates.length
+    ? requiredLevel(remaining, dates, prepaidInstallments(goal, beforeDue)) : 0;
+  return { monthlyCents, reached };
+}
+
 export function goalInstallments(goal: GoalRecord, asOf: string): GoalInstallment[] {
-  const snapshot = calculateGoal(goal, asOf);
+  const prepared = prepareJournal(goal);
+  const snapshot = calculateGoalPrepared(goal, asOf, prepared);
   const dates = goalDueDates(snapshot.createdOn, snapshot.targetDate);
   const skipped = skippedDates(goal, asOf);
   const voided = effectiveVoids(goal, asOf);
@@ -461,13 +533,19 @@ export function goalInstallments(goal: GoalRecord, asOf: string): GoalInstallmen
   const reached = snapshot.reached;
   return dates.map((dueOn) => {
     const actualCents = allocated.get(dueOn) ?? 0;
+    // Later edits must not retroactively turn a fully paid installment into a missed one.
+    const historic = dueOn <= asOf
+      ? historicPlan(goal, previousUTCDate(dueOn), prepared) : null;
+    const plannedCents = historic?.monthlyCents ?? snapshot.monthlyCents;
     let status: GoalInstallment['status'];
     if (skipped.has(dueOn)) status = 'skipped';
-    else if (dueOn > asOf) status = reached ? 'unnecessary' : 'upcoming';
-    else if (actualCents === 0) status = 'missed';
-    else if (actualCents < snapshot.monthlyCents) status = 'partial';
-    else status = 'paid';
-    return { dueOn, plannedCents: snapshot.monthlyCents, actualCents, status };
+    else if (dueOn > asOf && reached) status = 'unnecessary';
+    else if (historic?.reached && actualCents === 0) status = 'unnecessary';
+    else if (actualCents >= plannedCents && actualCents > 0) status = 'paid';
+    else if (actualCents > 0) status = 'partial';
+    else if (dueOn > asOf) status = 'upcoming';
+    else status = 'missed';
+    return { dueOn, plannedCents, actualCents, status };
   });
 }
 
@@ -513,9 +591,10 @@ export function goalForecastReservations(goal: GoalRecord, asOf: string): GoalFo
   if (snapshot.status !== 'active' || snapshot.reached) return [];
   let toAllocate = snapshot.remainingCents;
   return goalInstallments(goal, asOf)
-    .filter((row) => row.dueOn > asOf && row.status === 'upcoming')
+    .filter((row) => row.dueOn > asOf &&
+      (row.status === 'upcoming' || row.status === 'partial'))
     .map((row) => {
-      const plannedCents = Math.min(toAllocate, row.plannedCents);
+      const plannedCents = Math.min(toAllocate, Math.max(0, row.plannedCents - row.actualCents));
       toAllocate -= plannedCents;
       return { goalId: goal.id, dueOn: row.dueOn, plannedCents,
         funding: snapshot.plannedFunding, cashFlowCents: 0 as const, confirmed: false as const };
