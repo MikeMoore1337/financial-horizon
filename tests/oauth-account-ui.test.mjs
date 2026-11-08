@@ -55,6 +55,7 @@ test('approved design C renders email before the initially hidden OAuth section'
  const css=readFileSync(new URL('../account.css',import.meta.url),'utf8');
  assert.match(css,/#oauth-login\[hidden\]\{display:none\}/);
  assert.match(css,/\.oauth-provider-grid\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
+ assert.match(css,/\.oauth-provider-grid>\.oauth-provider-link:last-child:nth-child\(odd\)\{grid-column:1\/-1\}/);
  assert.match(css,/@media\(max-width:770px\)\{[\s\S]*\.oauth-provider-grid\{grid-template-columns:1fr/);
 });
 
