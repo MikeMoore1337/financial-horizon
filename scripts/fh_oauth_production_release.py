@@ -229,7 +229,8 @@ def source_archive(sha: str, target: Path) -> Path:
     root.mkdir(mode=0o700)
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
         names = archive.getnames()
-        if not names or any(not n.startswith("financial-horizon-" + sha + "/")
+        prefix = "financial-horizon-" + sha
+        if not names or any(n != prefix and not n.startswith(prefix + "/")
                             for n in names):
             raise Gate("SOURCE_ARCHIVE_UNEXPECTED")
         archive.extractall(root, filter="data")
@@ -377,8 +378,8 @@ def rollout(sha: str) -> None:
         changed = False
         db_migrated = False
         try:
-            command(["systemctl", "stop", SERVICE], timeout=25)
             changed = True
+            command(["systemctl", "stop", SERVICE], timeout=25)
             migrate_live_database(source, db)
             db_migrated = True
             switch_release(BACKEND_ROOT, new_backend)
@@ -387,12 +388,35 @@ def rollout(sha: str) -> None:
             atomic_file(OAUTH_ENV, replace_flags(old_env))
             command(["systemctl", "daemon-reload"], timeout=25)
             command(["systemctl", "start", SERVICE], timeout=30)
-            validate_running_oauth(port, PROVIDERS)
+            # A systemd active state does not prove Uvicorn is ready yet.
+            import time
+            deadline = time.monotonic() + 35
+            while True:
+                try:
+                    validate_running_oauth(port, PROVIDERS)
+                    break
+                except (OSError, Gate):
+                    if time.monotonic() >= deadline:
+                        raise Gate("AUTH_READY_TIMEOUT")
+                    time.sleep(0.5)
             atomic_file(CADDY_SITE, new_caddy.encode("utf-8"), 0o644)
             command(["caddy", "validate", "--config", str(CADDY_MAIN)], timeout=30)
             command(["systemctl", "reload", "caddy.service"], timeout=30)
             switch_release(STATIC_ROOT, new_static)
             validate_running_oauth(port, PROVIDERS)
+            # HTTPS origin HTTP response must actually reach production auth.
+            data = command([
+                "curl", "--fail", "--silent", "--show-error",
+                "--max-time", "12", "--resolve", HOST + ":443:127.0.0.1",
+                "https://" + HOST + "/api/auth/providers",
+            ], timeout=16)
+            try:
+                exposed = json.loads(data)
+            except ValueError as exc:
+                raise Gate("PUBLIC_CADDY_BAD_JSON") from exc
+            if exposed != {"enabled": True, "providers": PROVIDERS}:
+                raise Gate("PUBLIC_CADDY_PROVIDER_MISMATCH")
+            print("PUBLIC_CADDY_PROVIDERS=PASS", flush=True)
             print("PRODUCTION_OAUTH=DEPLOYED", flush=True)
             print("DEPLOYED_COMMIT=" + sha, flush=True)
             print("PUBLIC_PROVIDERS=google,yandex,vk", flush=True)
@@ -400,7 +424,7 @@ def rollout(sha: str) -> None:
             print("EMAIL_REGISTRATION_GATE=UNCHANGED", flush=True)
             print("DATABASE_MIGRATED=YES", flush=True)
             print("DB_RESTORE_NOT_PERFORMED=YES", flush=True)
-        except BaseException:
+        except Exception:
             if changed:
                 print("ROLLBACK=STARTED", flush=True)
                 # New nullable schema is compatible with the legacy email service.
@@ -419,7 +443,7 @@ def rollout(sha: str) -> None:
                     print("ROLLBACK=PASS", flush=True)
                     print("LIVE_DB_SCHEMA_MAY_BE_NULLABLE=" +
                           ("YES" if db_migrated else "NO"), flush=True)
-                except BaseException:
+                except Exception:
                     print("ROLLBACK=FAILED_MANUAL_INTERVENTION_REQUIRED", flush=True)
             raise
 
@@ -441,8 +465,7 @@ def main() -> int:
         print("RELEASE_STATUS=BLOCKED")
         print("FAILURE_CODE=" + exc.code)
         return 1
-    except (OSError, ValueError, sqlite3.Error, subprocess.TimeoutExpired,
-            tarfile.TarError, EOFError):
+    except Exception:
         print("RELEASE_STATUS=FAILED")
         print("FAILURE_CODE=UNEXPECTED_RUNTIME")
         return 1
