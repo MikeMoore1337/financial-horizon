@@ -470,3 +470,28 @@ test('loan payment can only debit and a forged income loan event is rejected', (
   assert.equal(accountBalanceMinor(next, id(2)), 7_500);
   assert.deepEqual(monthlyCashFlowMinor(next, '2026-11'), { incomeMinor: 0, expenseMinor: 500 });
 });
+
+test('confirmed payment replay needs no fresh fact lookup after receipt is committed', () => {
+  const s = create(emptyLedger(id(1)), id(2), 1_000);
+  const c = command(s, 'payment.record', {
+    id: id(4), accountId: id(2), amountMinor: 500,
+    link: { settlementId: id(3) }, occurredOn: '2026-11-07',
+  }, expectFor(s, id(2)), id(8));
+  const trusted = {
+    ...context(s.profileId),
+    verifiedPaymentFact: {
+      profileId: s.profileId, id: id(3), source: 'settlement',
+      direction: 'income', amountMinor: 500, voidedAt: null,
+    },
+  };
+  const posted = applyLedgerCommand(s, c, trusted);
+  assert.equal(accountBalanceMinor(posted.state, id(2)), 1_500);
+  const replayed = applyLedgerCommand(posted.state, c, context(s.profileId));
+  assert.equal(replayed.replayed, true);
+  assert.equal(replayed.receipt.revision, posted.receipt.revision);
+  assert.strictEqual(replayed.state, posted.state);
+  assert.equal(replayed.state.postings.length, 1);
+  assert.throws(() => applyLedgerCommand(posted.state, {
+    ...c, payload: { ...c.payload, amountMinor: 400 },
+  }, context(s.profileId)), /idempotency_key_reuse/);
+});
