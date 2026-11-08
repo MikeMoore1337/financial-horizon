@@ -890,3 +890,106 @@ def test_v1_reserve_allocate_rejects_exceeding_available_account_balance(env):
         assert db.execute(text("""
             SELECT count(*) FROM command_receipts WHERE client_mutation_id=:id
         """), {"id": cmd["client_mutation_id"]}).scalar_one() == 0
+
+
+def test_reserved_cash_is_not_silently_spent_by_transfers(env):
+    """A transfer may spend only unreserved cash; failed writes leave no receipt."""
+    uid, token = env["first"]
+    source = env["account"](uid, opening=1_000)
+    dest = env["account"](uid, opening=50)
+    reserve_id = seed_synthetic_reserve(env, uid, target=900)
+    client = env["client"](token)
+    initial = snapshot(env, token)
+    allocated = submit(client, initial, reserve_command(
+        initial, reserve_id, source, 700))
+    assert allocated.status_code == 201, allocated.text
+    before = snapshot(env, token)
+    denied_cmd = transfer(before, source, dest, 301)
+    denied = submit(client, before, denied_cmd)
+    assert denied.status_code == 409, denied.text
+    assert denied.json()["code"] == "semantic_conflict"
+    after = snapshot(env, token)
+    assert after.json()["revision"] == before.json()["revision"]
+    assert after.json()["entities"] == before.json()["entities"]
+    with finance_transaction(env["engine"], verified_user_id=uid,
+                             profile_id=env["scope"](uid).profile_id) as db:
+        assert db.execute(text("SELECT count(*) FROM ledger_postings")).scalar_one() == 0
+        assert db.execute(text("""
+            SELECT count(*) FROM command_receipts WHERE client_mutation_id=:id
+        """), {"id": denied_cmd["client_mutation_id"]}).scalar_one() == 0
+    accepted = submit(client, before, transfer(before, source, dest, 300))
+    assert accepted.status_code == 201, accepted.text
+    available = snapshot(env, token)
+    by_id = {e["id"]: e for e in available.json()["entities"]}
+    assert by_id[source]["data"]["balance_minor"] == 700
+    assert by_id[source]["data"]["reserved_minor"] == 700
+    assert by_id[source]["data"]["available_minor"] == 0
+    assert balance(env, uid, dest) == 350
+    release = submit(client, available, reserve_command(
+        available, reserve_id, source, -200))
+    assert release.status_code == 201, release.text
+    free = snapshot(env, token)
+    completed = submit(client, free, transfer(free, source, dest, 200))
+    assert completed.status_code == 201, completed.text
+    final = snapshot(env, token)
+    by_id = {e["id"]: e for e in final.json()["entities"]}
+    assert by_id[source]["data"]["balance_minor"] == 500
+    assert by_id[source]["data"]["reserved_minor"] == 500
+    assert by_id[source]["data"]["available_minor"] == 0
+    assert balance(env, uid, dest) == 550
+
+
+def test_transfer_reversal_cannot_take_money_earmarked_after_original_post(env):
+    """Reversal is also a debit and cannot invalidate a later reserve."""
+    uid, token = env["first"]
+    source = env["account"](uid, opening=1_200)
+    dest = env["account"](uid, opening=300)
+    reserve_id = seed_synthetic_reserve(env, uid, target=1_000)
+    client = env["client"](token)
+    before = snapshot(env, token)
+    sent = submit(client, before, transfer(before, source, dest, 500))
+    assert sent.status_code == 201, sent.text
+    original_id = sent.json()["changes"][0]["entity_id"]
+    arrived = snapshot(env, token)
+    funded = submit(client, arrived, reserve_command(
+        arrived, reserve_id, dest, 700))
+    assert funded.status_code == 201, funded.text
+    reserved = snapshot(env, token)
+    revisions = {e["id"]: e["entity_revision"] for e in reserved.json()["entities"]}
+    reverse_cmd = command(
+        reserved, "transaction.reverse",
+        {"transaction_id": original_id, "reason": "Synthetic correction"},
+        {source: revisions[source], dest: revisions[dest], original_id: revisions[original_id]},
+    )
+    rejected = submit(client, reserved, reverse_cmd)
+    assert rejected.status_code == 409, rejected.text
+    assert rejected.json()["code"] == "semantic_conflict"
+    assert snapshot(env, token).json()["entities"] == reserved.json()["entities"]
+    assert balance(env, uid, source) == 700
+    assert balance(env, uid, dest) == 800
+    with finance_transaction(env["engine"], verified_user_id=uid,
+                             profile_id=env["scope"](uid).profile_id) as db:
+        assert db.execute(text("""
+            SELECT count(*) FROM ledger_transactions
+            WHERE reversed_transaction_id=:id
+        """), {"id": original_id}).scalar_one() == 0
+        assert db.execute(text("""
+            SELECT count(*) FROM command_receipts WHERE client_mutation_id=:id
+        """), {"id": reverse_cmd["client_mutation_id"]}).scalar_one() == 0
+    released = submit(client, reserved, reserve_command(
+        reserved, reserve_id, dest, -500))
+    assert released.status_code == 201, released.text
+    newest = snapshot(env, token)
+    revs = {e["id"]: e["entity_revision"] for e in newest.json()["entities"]}
+    allowed = submit(client, newest, command(
+        newest, "transaction.reverse",
+        {"transaction_id": original_id, "reason": "Correct after reserve release"},
+        {source: revs[source], dest: revs[dest], original_id: revs[original_id]},
+    ))
+    assert allowed.status_code == 201, allowed.text
+    assert balance(env, uid, source) == 1_200
+    assert balance(env, uid, dest) == 300
+    final = snapshot(env, token)
+    dest_entity = next(e for e in final.json()["entities"] if e["id"] == dest)
+    assert dest_entity["data"]["reserved_minor"] == 200
+    assert dest_entity["data"]["available_minor"] == 100

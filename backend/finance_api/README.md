@@ -181,3 +181,20 @@ SHA-256 idempotency receipt.
 **No release claim:** The current PR contains only an opt-in candidate. The
 existing PWA continues to use IndexedDB, and existing browser E2E validates
 that unchanged mode, **not** production finance sync.
+
+
+## Reserved-cash integrity in all money-posting commands
+
+A reserve allocation earmarks existing cash without changing the actual
+balance. Each outgoing ledger posting (transfer, correction reversal, and
+internal linked-payment debit) now checks **after the new posting but before
+commit** that any positive account reservation remains covered by its
+resulting balance. Otherwise the entire PostgreSQL transaction and receipt
+are rolled back with `409 semantic_conflict`. This also prevents a later
+reversal from silently taking funds reserved after the original transfer.
+The pre-existing overdraft semantics of accounts with **no** reservations
+are unchanged. Two real PostgreSQL HTTP regressions cover the denied
+transfer/reversal and safe operation after an explicit reserve release.
+
+This rule still needs agreement with the #68 sync client before public cloud
+activation. The server remains feature OFF until #66/#70 release gates.

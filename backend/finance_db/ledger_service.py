@@ -250,6 +250,34 @@ def _post(session: Session, p: UUID, txid: UUID, kind: str, actor: str,
             UPDATE accounts SET entity_revision=entity_revision+1, updated_at=now()
             WHERE profile_id=:p AND id=:a
         """), {"p": p, "a": acc})
+        if amount < 0:
+            # Earmarked cash is not available for an ordinary debit. Check
+            # after inserting the actual posting, but BEFORE COMMIT. The
+            # caller's profile FOR UPDATE lock serializes all competing
+            # reserve allocations/transfers. A rejection rolls back both
+            # ledger rows and the idempotency receipt.
+            result = session.execute(text("""
+                SELECT a.opening_minor + COALESCE((
+                    SELECT SUM(t.signed_minor) FROM ledger_postings t
+                    WHERE t.profile_id=a.profile_id AND t.account_id=a.id
+                ),0) AS balance_minor,
+                COALESCE((
+                    SELECT SUM(r.delta_minor) FROM reserve_allocations r
+                    WHERE r.profile_id=a.profile_id AND r.account_id=a.id
+                ),0) AS reserved_minor
+                FROM accounts a WHERE a.profile_id=:p AND a.id=:a
+            """), {"p": p, "a": acc}).mappings().one()
+            reserved = _safe_balance(result["reserved_minor"])
+            if reserved < 0:
+                raise FinanceCommandError(
+                    "service_unavailable", "Повреждён остаток резерва", 503
+                )
+            # Preserve existing permitted-overdraft behavior for accounts
+            # without reservations; only protect funds explicitly earmarked.
+            if reserved > 0 and _safe_balance(result["balance_minor"]) < reserved:
+                raise FinanceCommandError(
+                    "semantic_conflict", "Средства уже зарезервированы", 409
+                )
 
 
 def _account_sync_entity(session: Session, profile_id: UUID, account_id: UUID) -> dict[str, Any]:
