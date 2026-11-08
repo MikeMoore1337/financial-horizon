@@ -120,3 +120,19 @@ test('future correction cannot enter factual reserve history before its date',()
   assert.equal(sum(b.movements,'actual'),3_000_000);
   assert.equal(b.movements.filter(x=>x.status==='actual').length,1);
 });
+
+
+test('control characters cannot produce malformed #36 movement identifiers',()=>{
+  assert.throws(()=>buildGoalCashflowBundle([fresh('bad\0id')],source(),[
+    {goalId:'bad\0id',accountId:'bank'},
+  ]),/NUL/);
+  const bad=fundingWithInvalidEventId();
+  assert.throws(()=>buildGoalCashflowBundle([bad],source(),binding),/NUL/);
+  assert.throws(()=>buildGoalCashflowBundle([fresh()],source({
+    accounts:[{id:'bank\0internal',currency:'RUB',openingBalanceCents:1000}],
+  }),[{goalId:'g1',accountId:'bank\0internal'}]),/RUB account/);
+});
+
+function fundingWithInvalidEventId() {
+  return put(fresh(),'deposit\0bad','2026-02-01',10_000);
+}

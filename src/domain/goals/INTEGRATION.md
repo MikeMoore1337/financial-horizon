@@ -118,3 +118,40 @@ and PR #103 (`src/domain/cashflow/types.ts`). This is a proposed adapter contrac
 **Release:** This PR is domain-only. Production UI, migration, account linkage
 and backup/device QA remain separately gated behind #33/#36, approved design,
 independent review, exact-SHA CI, and an observed deployment/rollback receipt.
+
+## Read-only #36 bridge available (no account mutations)
+
+The optional `src/domain/goals/cashflow-bridge.ts` introduces
+`buildGoalCashflowBundle(goals, sources, bindings)` and
+`withGoalCashflowSources(sources, goals, bindings)`. It imports only the
+**type-only** canonical #36 `CashflowSourcesDto` / `ReserveMovementDto`,
+without touching the cashflow implementation, application storage, React,
+PostgreSQL, or #6/#33 files.
+
+- Each goal requires a caller-supplied known RUB account ID. This is **not
+  proof of ownership**: authentication, account-scoped bindings, available
+  balance and atomic cross-goal/#6 allocations must be verified by #33/#67.
+- Allocated balances **before** the opening snapshot are emitted once as
+  `openingReservedCents`; journal actions from the opening day through the
+  selected `asOfDate` are emitted as `actual` reserve allocations/releases.
+- Voiding a contribution emits its **release on the correction date**;
+  undoing a withdrawal emits an allocation on the correction date. Skipping
+  or correcting a planned installment never posts money. A future void is not
+  treated as an earlier fact.
+- Only the *unpaid* remainder of future installments is emitted as
+  `planned` reserve movements. Event identifiers are stable and disjoint
+  across goals; NUL control characters are rejected for #36 compatibility.
+- The bridge returns **no booked income, expenses or transfers** and copies
+  the external factual `actuals` unchanged. An already-posted #33 purchase
+  must be included by the authoritative ledger adapter **once**; the goal
+  contribution or use adjusts earmarking **only**.
+- Re-applying the bridge to the same `CashflowSourcesDto` fails closed on
+  duplicate opening reserve or movement IDs. Never treat a projection or
+  caller-supplied binding as proof that a bank transaction happened.
+
+The standalone tests exercise snapshot dates, partial/prepaid schedules,
+reversals and duplicate IDs. End-to-end integration tests call the **real**
+merged #36 `forecastCashflow(adaptCashflowSources(...))` to verify that
+confirmed bank cash, external expenses and internal transfers are not
+mistakenly changed by goal earmarking. These tests are **not** a substitute
+for real #33/#67 authorization, persistence, encrypted-backup or #7 sync E2E.

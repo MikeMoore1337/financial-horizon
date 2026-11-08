@@ -31,6 +31,9 @@ function prevDay(date: string): string | null {
 
 // Length-prefix fields to prevent collisions even with separator-like IDs.
 function idFor(goalId: string, kind: string, suffix: string): string {
+  if (goalId.includes('\0') || suffix.includes('\0')) {
+    throw new RangeError('Goal and event identifiers must not contain NUL');
+  }
   return `goals:${goalId.length}:${goalId}:${kind}:${suffix.length}:${suffix}`;
 }
 
@@ -82,7 +85,7 @@ export function buildGoalCashflowBundle(
   const accounts = new Set<string>();
   for (const account of source.accounts) {
     if (!account || typeof account.id !== 'string' || !account.id ||
-      accounts.has(account.id) || account.currency !== 'RUB') {
+      accounts.has(account.id) || account.id.includes('\0') || account.currency !== 'RUB') {
       throw new TypeError('Invalid or duplicated RUB account');
     }
     accounts.add(account.id);
