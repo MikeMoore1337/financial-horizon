@@ -189,3 +189,24 @@ test('lifecycle fence increases on every lock, reselect and logout', async () =>
   session.logout();
   assert.ok(session.lifecycleVersion > afterLock);
 });
+
+
+test('lifecycle abort signal fires synchronously and re-arms after lock/account switch', async () => {
+  const session = new LocalBudgetSession();
+  session.selectScope(USER_A);
+  const first = session.lifecycleSignal;
+  let calls = 0;
+  first.addEventListener('abort', () => { calls++; });
+  session.lock();
+  assert.equal(calls, 1);
+  assert.equal(first.aborted, true);
+  assert.equal(session.lifecycleSignal.aborted, false);
+  const second = session.lifecycleSignal;
+  session.selectScope(USER_B);
+  assert.equal(second.aborted, true);
+  assert.equal(session.lifecycleSignal.aborted, false);
+  const third = session.lifecycleSignal;
+  session.logout();
+  assert.equal(third.aborted, true);
+  assert.equal(session.state, 'unselected');
+});

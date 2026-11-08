@@ -162,3 +162,20 @@ test('local CLI: refuses symlinked bank files rather than following swapped path
   assert.equal(call.status, 1);
   assert.match(call.stderr, /Ошибка:/);
 });
+
+test('local CLI: no balance column yields partial evidence, never an exact match', async t => {
+  const partial = 'Date;Payment;Interest;Principal\n' +
+    '2026-02-01;5074,10;101,92;4972,18\n' +
+    '2026-03-01;5074,10;46,28;5027,82\n';
+  const args = await withLocalFiles(t, contract(), partial);
+  const run = spawnSync(process.execPath, [script, ...args, '--json'],
+    { encoding: 'utf8' });
+  assert.equal(run.status, 2, run.stderr);
+  const result = JSON.parse(run.stdout);
+  assert.equal(result.matchingKnownFields, true);
+  assert.equal(result.comparisonComplete, false);
+  assert.equal(result.arithmeticExactMatch, false);
+  assert.equal(result.missingBreakdownRows, 2);
+  assert.equal(result.bankParityVerified, false);
+  assert.doesNotMatch(run.stdout, /5074,10|5027,82|bank\.csv/);
+});
