@@ -32,7 +32,7 @@ for (const { label, field, change } of scenarios) {
     for (const value of ['false', 'true', null, 0, 1, [], {}]) {
       const x = base();
       change(x, value);
-      assert.throws(() => forecastCashflow(x), new RegExp(`${field.replace('.', '\.')}:? .*boolean`),
+      assert.throws(() => forecastCashflow(x), new RegExp(`${field.replace('.', '\\.')}:? .*boolean`),
         `${field}=${JSON.stringify(value)} must fail closed`);
     }
   });
