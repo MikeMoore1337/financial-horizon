@@ -229,7 +229,7 @@ test('plan/fact never claims saving or overspending without actual history', () 
   assert.equal(empty.monthly[0].expenseVarianceMinor, null);
   assert.equal(empty.totals.expenseVarianceMinor, null);
   const exported = exportAnalyticsCsv(empty);
-  assert.ok(exported.includes('"2026-01";"месяц";"";;;;;10000;;"нет"'));
+  assert.ok(exported.includes('"2026-01";"месяц";"";;;;;10000;;;"нет"'));
 
   const partial = buildAnalyticsReport({ from: '2026-01-01', to: '2026-02-28',
     transactions: [tx('jan-actual', '2026-01-15', 'expense', -3000)], plans });
@@ -257,4 +257,57 @@ test('CSV refuses unsafe category net rather than losing kopecks', () => {
   fabricated.categories[0].incomeMinor = Number.MAX_SAFE_INTEGER;
   fabricated.categories[0].expenseMinor = -Number.MAX_SAFE_INTEGER;
   assert.throws(() => exportAnalyticsCsv(fabricated), /переполнение/);
+});
+
+
+test('near-limit credit/reversal order does not change a representable zero net', () => {
+  // 9_100 * 1e12 exceeds Number.MAX_SAFE_INTEGER before later reversals.
+  // The complete factual January sum is exactly zero and must be order-invariant.
+  const originals = Array.from({ length: 9_100 }, (_, i) =>
+    tx(`large-income-${i}`, '2026-01-05', 'income', 1_000_000_000_000, 'salary'));
+  const reversals = originals.map((item, i) => tx(`large-reversal-${i}`, '2026-01-18',
+    'reversal', -1_000_000_000_000, null, { reversedTransactionId: item.id }));
+  const options = { from: '2026-01-01', to: '2026-01-31' };
+  const interleaved = buildAnalyticsReport({ ...options,
+    transactions: originals.flatMap((item, i) => [item, reversals[i]]) });
+  const grouped = buildAnalyticsReport({ ...options, transactions: [...originals, ...reversals] });
+  const reversed = buildAnalyticsReport({ ...options, transactions: [...reversals, ...originals] });
+  assert.deepEqual(interleaved, grouped);
+  assert.deepEqual(grouped, reversed);
+  assert.deepEqual([grouped.totals.incomeMinor, grouped.totals.expenseMinor,
+    grouped.totals.netMinor], [0, 0, 0]);
+  assert.equal(grouped.totals.hasActual, true);
+});
+
+test('CSV contains verified period totals, plan variance and explicit partial coverage', () => {
+  const data = buildAnalyticsReport({ from: '2026-01-01', to: '2026-02-28',
+    transactions: [tx('salary', '2026-01-01', 'income', 20_000),
+      tx('food', '2026-01-12', 'expense', -3_000, 'food')],
+    plans: [{ id: 'limit-jan', month: '2026-01', direction: 'expense',
+      scope: 'total', amountMinor: 5_000 }],
+  });
+  assert.equal(data.totals.hasActual, true);
+  assert.equal(data.totals.expenseVarianceMinor, null);
+  const csv = exportAnalyticsCsv(data);
+  const lines = csv.slice(1).trimEnd().split('\r\n');
+  const total = lines[1].split(';');
+  assert.equal(total[1], '"итого"');
+  assert.equal(total[3], '20000');
+  assert.equal(total[4], '3000');
+  assert.equal(total[5], '17000');
+  assert.equal(total[8], ''); // Missing multi-month coverage; do not invent variance.
+  assert.equal(total.at(-1), '"частично"');
+  const jan = lines[2].split(';');
+  assert.equal(jan[8], '-2000'); // Actual 3000 - planned 5000.
+  const feb = lines[3].split(';');
+  assert.equal(feb.at(-1), '"нет"');
+  assert.equal(feb[3], ''); // No fictitious zero income in unobserved February.
+});
+
+test('CSV total for empty history is not a fabricated zero', () => {
+  const csv = exportAnalyticsCsv(report([]));
+  const total = csv.slice(1).trimEnd().split('\r\n')[1].split(';');
+  assert.equal(total[1], '"итого"');
+  assert.deepEqual(total.slice(3, 9), ['', '', '', '', '', '']);
+  assert.equal(total.at(-1), '"нет"');
 });

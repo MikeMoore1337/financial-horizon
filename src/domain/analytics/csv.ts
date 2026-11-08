@@ -24,27 +24,39 @@ function netCell(income: number, expense: number): number {
 export function exportAnalyticsCsv(report: AnalyticsReport): string {
   const rows: string[][] = [[
     'Дата', 'Тип', 'Категория', 'Доход, коп.', 'Расход, коп.', 'Результат, коп.',
-    'План дохода, коп.', 'План расхода, коп.', 'Остаток, коп.', 'Наличие факта',
+    'План дохода, коп.', 'План расхода, коп.', 'Отклонение потока расходов, коп.',
+    'Остаток, коп.', 'Наличие факта',
   ]];
   const add = (date: string, type: string, category: string, income: number | null,
     expense: number | null, net: number | null, plannedIncome: number | null,
-    plannedExpense: number | null, balance: number | null, hasActual: string): void => {
+    plannedExpense: number | null, variance: number | null, balance: number | null,
+    hasActual: string): void => {
     rows.push([textCell(date), textCell(type), textCell(category),
       amountCell(income), amountCell(expense), amountCell(net),
-      amountCell(plannedIncome), amountCell(plannedExpense), amountCell(balance), textCell(hasActual)]);
+      amountCell(plannedIncome), amountCell(plannedExpense), amountCell(variance),
+      amountCell(balance), textCell(hasActual)]);
   };
+  const coverage = report.monthly.every(item => item.hasActual) ? 'да'
+    : report.totals.hasActual ? 'частично' : 'нет';
+  add(`${report.period.from}/${report.period.to}`, 'итого', '',
+    report.totals.hasActual ? report.totals.incomeMinor : null,
+    report.totals.hasActual ? report.totals.expenseMinor : null,
+    report.totals.hasActual ? report.totals.netMinor : null,
+    report.totals.plannedIncomeMinor, report.totals.plannedExpenseMinor,
+    report.totals.expenseVarianceMinor, null, coverage);
   for (const item of report.monthly) {
     add(item.month, 'месяц', '', item.hasActual ? item.incomeMinor : null,
       item.hasActual ? item.expenseMinor : null, item.hasActual ? item.netMinor : null,
-      item.plannedIncomeMinor, item.plannedExpenseMinor, null, item.hasActual ? 'да' : 'нет');
+      item.plannedIncomeMinor, item.plannedExpenseMinor, item.expenseVarianceMinor,
+      null, item.hasActual ? 'да' : 'нет');
   }
   for (const item of report.categories) {
     add(`${report.period.from}/${report.period.to}`, 'категория', item.name,
       item.hasActual ? item.incomeMinor : null, item.hasActual ? item.expenseMinor : null,
       item.hasActual ? netCell(item.incomeMinor, item.expenseMinor) : null,
-      null, item.plannedExpenseMinor, null, item.hasActual ? 'да' : 'нет');
+      null, item.plannedExpenseMinor, null, null, item.hasActual ? 'да' : 'нет');
   }
-  for (const item of report.debt) add(item.date, 'долг', '', null, null, null, null, null, item.balanceMinor, 'да');
-  for (const item of report.savings) add(item.date, 'накопления', '', null, null, null, null, null, item.balanceMinor, 'да');
+  for (const item of report.debt) add(item.date, 'долг', '', null, null, null, null, null, null, item.balanceMinor, 'да');
+  for (const item of report.savings) add(item.date, 'накопления', '', null, null, null, null, null, null, item.balanceMinor, 'да');
   return '\uFEFF' + rows.map((cells, index) => index === 0 ? cells.map(textCell).join(';') : cells.join(';')).join('\r\n') + '\r\n';
 }

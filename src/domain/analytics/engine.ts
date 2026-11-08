@@ -14,6 +14,24 @@ function safeAdd(a: number, b: number): number {
   if (!Number.isSafeInteger(sum)) throw new RangeError('Переполнение суммы финансового отчёта');
   return sum;
 }
+/** Never reject a valid net sum merely because temporary credits precede reversals. */
+function fromBigint(value: bigint): number {
+  if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)) {
+    throw new RangeError('Переполнение суммы финансового отчёта');
+  }
+  return Number(value);
+}
+interface AggregatedAmounts { income: bigint; expense: bigint }
+function accumulate<K>(totals: Map<K, AggregatedAmounts>, key: K,
+  direction: 'income' | 'expense', signedMinor: number): void {
+  let values = totals.get(key);
+  if (!values) {
+    values = { income: 0n, expense: 0n };
+    totals.set(key, values);
+  }
+  if (direction === 'income') values.income += BigInt(signedMinor);
+  else values.expense -= BigInt(signedMinor);
+}
 function money(value: number, allowNegative: boolean, max = MAX_TRANSACTION_MINOR): void {
   if (!Number.isSafeInteger(value) || Math.abs(value) > max || (!allowNegative && value < 0)) {
     throw new RangeError('Ожидается целая сумма копеек в допустимых пределах');
@@ -192,6 +210,8 @@ export function buildAnalyticsReport(input: AnalyticsInput): AnalyticsReport {
     expenseVarianceMinor: null,
   }]));
   const catMap = new Map<string | null, CategorySummary>();
+  const monthAmounts = new Map<string, AggregatedAmounts>();
+  const categoryAmounts = new Map<string | null, AggregatedAmounts>();
   const getCategory = (id: string | null): CategorySummary => {
     const existing = catMap.get(id);
     if (existing) return existing;
@@ -213,16 +233,14 @@ export function buildAnalyticsReport(input: AnalyticsInput): AnalyticsReport {
     const category = getCategory(source.categoryId ?? null);
     row.hasActual = true;
     category.hasActual = true;
-    if (direction === 'income') {
-      row.incomeMinor = safeAdd(row.incomeMinor, tx.signedMinor);
-      category.incomeMinor = safeAdd(category.incomeMinor, tx.signedMinor);
-    } else {
-      row.expenseMinor = safeAdd(row.expenseMinor, -tx.signedMinor);
-      category.expenseMinor = safeAdd(category.expenseMinor, -tx.signedMinor);
-    }
+    accumulate(monthAmounts, row.month, direction, tx.signedMinor);
+    accumulate(categoryAmounts, category.categoryId, direction, tx.signedMinor);
   }
   const monthly = [...monthMap.values()];
   for (const row of monthly) {
+    const amounts = monthAmounts.get(row.month);
+    row.incomeMinor = fromBigint(amounts?.income ?? 0n);
+    row.expenseMinor = fromBigint(amounts?.expense ?? 0n);
     row.netMinor = safeAdd(row.incomeMinor, -row.expenseMinor);
     if (row.hasActual && row.plannedExpenseMinor !== null) {
       row.expenseVarianceMinor = safeAdd(row.expenseMinor, -row.plannedExpenseMinor);
@@ -235,6 +253,9 @@ export function buildAnalyticsReport(input: AnalyticsInput): AnalyticsReport {
   }
   const categories = [...catMap.values()];
   for (const row of categories) {
+    const amounts = categoryAmounts.get(row.categoryId);
+    row.incomeMinor = fromBigint(amounts?.income ?? 0n);
+    row.expenseMinor = fromBigint(amounts?.expense ?? 0n);
     const values = months.map(month => fullCalendarMonth(month, input.from, input.to)
       ? plans.get(`${month}|expense|category|${row.categoryId ?? ''}`)?.amountMinor ?? null : null);
     row.plannedExpenseMinor = sumKnown(values);
@@ -246,8 +267,8 @@ export function buildAnalyticsReport(input: AnalyticsInput): AnalyticsReport {
   positiveShares(categories);
   categories.sort((a, b) => b.expenseMinor - a.expenseMinor || compare(key(a.categoryId), key(b.categoryId)));
   const topExpenses = categories.filter(x => x.expenseMinor > 0).slice(0, 5).map(x => ({ ...x }));
-  const incomeMinor = monthly.reduce((acc, item) => safeAdd(acc, item.incomeMinor), 0);
-  const expenseMinor = monthly.reduce((acc, item) => safeAdd(acc, item.expenseMinor), 0);
+  const incomeMinor = fromBigint(monthly.reduce((acc, item) => acc + BigInt(item.incomeMinor), 0n));
+  const expenseMinor = fromBigint(monthly.reduce((acc, item) => acc + BigInt(item.expenseMinor), 0n));
   const plannedIncomeMinor = sumKnown(monthly.map(x => x.plannedIncomeMinor));
   const plannedExpenseMinor = sumKnown(monthly.map(x => x.plannedExpenseMinor));
   const totals = {
