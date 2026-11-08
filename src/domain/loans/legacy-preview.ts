@@ -24,6 +24,11 @@ export interface ExplicitLoanTermsSelection {
   openingBalanceDateConfirmed?: true;
   /** Bank-provided next due date. Never synthesize it from dueDay. */
   firstDueDate?: string;
+  /**
+   * Bank-confirmed monthly due day. Distinct from the clamped first due date:
+   * February 28 may reflect a contractual 31st of each month.
+   */
+  dueDayAnchor?: number;
   /** Bank-confirmed nominal rate in integer millionths of percent. */
   annualRateMicroPercent?: number;
   dayCount?: DayCount;
@@ -40,6 +45,7 @@ export type MissingLoanAcceptance =
   | 'agreementConfirmed'
   | 'openingBalanceDateConfirmed'
   | 'firstDueDate'
+  | 'dueDayAnchor'
   | 'annualRateMicroPercent'
   | 'dayCount'
   | 'rounding'
@@ -105,6 +111,9 @@ export function prepareLegacyLoanPreview(
       accepted.firstDueDate == null || accepted.firstDueDate === '') {
     missing.push('firstDueDate');
   }
+  if (!provided('dueDayAnchor') || accepted.dueDayAnchor == null) {
+    missing.push('dueDayAnchor');
+  }
   if (!provided('annualRateMicroPercent') ||
       accepted.annualRateMicroPercent == null) {
     missing.push('annualRateMicroPercent');
@@ -134,6 +143,10 @@ export function prepareLegacyLoanPreview(
   if (elapsed < 1 || elapsed > 366) {
     throw new RangeError('Confirmed first due date must follow the opening snapshot within a year');
   }
+  if (!Number.isInteger(accepted.dueDayAnchor) ||
+      accepted.dueDayAnchor! < 1 || accepted.dueDayAnchor! > 31) {
+    throw new RangeError('Confirmed monthly due day must be 1-31');
+  }
   assertRate(accepted.annualRateMicroPercent!);
   if (!DAYS.includes(accepted.dayCount!)) throw new RangeError('Unrecognized day-count');
   if (!ROUNDING.includes(accepted.rounding!)) throw new RangeError('Unrecognized rounding');
@@ -149,6 +162,7 @@ export function prepareLegacyLoanPreview(
     principalCents: snapshot.openingCents,
     startDate: snapshot.asOfDate,
     firstDueDate: dueDate,
+    dueDayAnchor: accepted.dueDayAnchor!,
     termMonths: snapshot.termMonths,
     annualRateMicroPercent: accepted.annualRateMicroPercent!,
     dayCount: accepted.dayCount!,
