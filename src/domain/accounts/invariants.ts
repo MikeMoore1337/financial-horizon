@@ -104,11 +104,12 @@ export function assertLedgerState(state: LedgerState): void {
   }
 
   const linkedTransactionIds = new Set<string>();
+  const loanPaymentTransactionIds = new Set<string>();
   const linkedPaymentFacts = new Set<string>();
   for (const link of state.paymentLinks) {
     if (!link || typeof link !== 'object' || link.profileId !== state.profileId) throw new Error('Чужая связь оплаты');
     requireUUID(link.transactionId);
-    if (transactions.get(link.transactionId)?.kind !== 'payment') throw new Error('Связь оплаты не у фактического списания');
+    if (transactions.get(link.transactionId)?.kind !== 'payment') throw new Error('Связь оплаты не у фактического движения');
     if (linkedTransactionIds.has(link.transactionId)) throw new Error('Платёж имеет несколько связей');
     const hasSettlement = typeof link.settlementId === 'string';
     const hasLoan = typeof link.loanPaymentId === 'string';
@@ -119,6 +120,7 @@ export function assertLedgerState(state: LedgerState): void {
     if (linkedPaymentFacts.has(factKey)) throw new Error('Факт оплаты списан более одного раза');
     linkedPaymentFacts.add(factKey);
     linkedTransactionIds.add(link.transactionId);
+    if (hasLoan) loanPaymentTransactionIds.add(link.transactionId);
   }
 
   const reversed = new Set<string>();
@@ -143,7 +145,10 @@ export function assertLedgerState(state: LedgerState): void {
     } else {
       if (pair.length !== 1) throw new Error('Неверное число проводок в фактической операции');
       if (tx.kind === 'income' && pair[0]!.signedMinor <= 0) throw new Error('Неверный знак дохода');
-      if ((tx.kind === 'expense' || tx.kind === 'payment') && pair[0]!.signedMinor >= 0) throw new Error('Неверный знак расхода');
+      if (tx.kind === 'expense' && pair[0]!.signedMinor >= 0) throw new Error('Неверный знак расхода');
+      if (tx.kind === 'payment' && loanPaymentTransactionIds.has(tx.id) && pair[0]!.signedMinor >= 0) {
+        throw new Error('Кредитный платёж не может быть поступлением');
+      }
     }
     if (tx.kind === 'payment' && !linkedTransactionIds.has(tx.id)) throw new Error('Отсутствует связь фактической оплаты');
   }
