@@ -27,6 +27,14 @@ function invoke({email='test@example.com',userId=email?'a'.repeat(32):null,logou
   busy:false,
   activeUserId:'a'.repeat(32),
   authBroadcast:null,
+  restoreFile:{synthetic:'private'},pendingExcelImport:{synthetic:'private'},
+  scheduleLoanId:'private-loan',lastDialogActivator:{synthetic:'private'},
+  revokeStateScope:()=>events.push('scope-revoked'),
+  document:{querySelectorAll(selector){
+   assert.equal(selector,'dialog');
+   return [{open:true,close:()=>events.push('dialog-closed'),
+    replaceChildren:()=>events.push('dialog-cleared')}];
+  }},
   screenRoot:{unmount:()=>events.push('react-unmount')},
   navRoots:{unmount:()=>events.push('nav-unmount')},
   $:()=>({replaceChildren:()=>events.push('ledger-cleared')}),
@@ -51,6 +59,11 @@ test('successful logout returns to the login page after server confirmation',asy
  assert.equal(ui.events.filter(x=>x==='redirect:./account.html').length,1);
  assert.ok(ui.events.indexOf('logout-request')<ui.events.indexOf('redirect:./account.html'));
  assert.ok(ui.events.indexOf('react-unmount')>ui.events.indexOf('logout-request'));
+ assert.ok(ui.events.includes('scope-revoked'));
+ assert.ok(ui.events.indexOf('scope-revoked')<ui.events.indexOf('ledger-cleared'));
+ assert.ok(ui.events.includes('dialog-closed'));
+ assert.ok(ui.events.includes('dialog-cleared'));
+ assert.ok(ui.events.indexOf('dialog-cleared')<ui.events.indexOf('redirect:./account.html'));
  assert.ok(ui.events.indexOf('react-unmount')<ui.events.indexOf('redirect:./account.html'));
  assert.ok(ui.events.indexOf('nav-unmount')<ui.events.indexOf('redirect:./account.html'));
  assert.ok(ui.events.indexOf('ledger-cleared')<ui.events.indexOf('redirect:./account.html'));
@@ -62,6 +75,8 @@ test('OAuth-only account without email can log out',async()=>{
  await ui.run();
  assert.equal(ui.session.userId,null);
  assert.ok(ui.events.includes('logout-request'));
+ assert.ok(ui.events.includes('scope-revoked'));
+ assert.ok(ui.events.includes('dialog-cleared'));
  assert.ok(ui.events.includes('nav-unmount'));
  assert.ok(ui.events.includes('redirect:./account.html'));
 });
@@ -72,6 +87,7 @@ test('failed logout keeps ledger open and shows an error',async()=>{
  assert.equal(ui.session.email,'test@example.com');
  assert.ok(ui.events.some(x=>x.includes('toast:error:Сервер недоступен')));
  assert.equal(ui.events.filter(x=>x.startsWith('redirect:')).length,0);
+ assert.ok(!ui.events.includes('scope-revoked'),'failed logout must keep the scope selected');
 });
 
 test('no session and pending logout cannot trigger a redirect',async()=>{
