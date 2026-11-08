@@ -26,8 +26,12 @@ const blank = (): Bucket => ({
   actualReserve: 0, plannedReserve: 0, forecastReserve: 0, estimatedIncome: 0, ids: [],
 });
 const keyed = (id: string, date: string) => `${id}\0${date}`;
+const compareString = (left: string, right: string): number =>
+  left < right ? -1 : left > right ? 1 : 0;
 function mustId(id: string, what: string): void {
-  if (typeof id !== 'string' || !id.trim()) throw new RangeError(`${what} ID is required`);
+  if (typeof id !== 'string' || !id.trim() || id.includes('\0')) {
+    throw new RangeError(`${what} ID must be nonempty and contain no NUL`);
+  }
 }
 function isIncome(plan: PlannedFlowDto): boolean { return plan.kind === 'income'; }
 
@@ -327,8 +331,8 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
   }
   const closing = days[days.length - 1];
   if (!closing) throw new Error('Projection has no days');
-  occurrences.sort((a, b) => a.date.localeCompare(b.date)
-    || a.planId.localeCompare(b.planId) || a.occurrenceDate.localeCompare(b.occurrenceDate));
+  occurrences.sort((a, b) => compareString(a.date, b.date)
+    || compareString(a.planId, b.planId) || compareString(a.occurrenceDate, b.occurrenceDate));
   return {
     openingDate: input.openingDate, asOfDate: input.asOfDate, endDate, horizonMonths: input.horizonMonths,
     days, occurrences, confirmedAsOfBalanceCents, confirmedAsOfReservedCents,

@@ -366,3 +366,8 @@ test('source adapter rejects implicit zero balances and mixed currencies', () =>
     { id: 'foreign', currency: 'EUR', openingBalanceCents: 1 },
   ] }), /Only RUB/);
 });
+
+test('composite identifiers cannot contain NUL separator characters', () => {
+  assert.throws(() => forecastCashflow(base({ plans: [out('broken\0id', '2026-11-12', 100)] })), /NUL/);
+  assert.throws(() => forecastCashflow(base({ actuals: [actual('bad\0id', '2026-11-08', 1, 'income')] })), /NUL/);
+});
