@@ -14,7 +14,7 @@ from uuid import uuid4
 
 import pytest
 
-from backend.finance_api.tests.test_http import env
+from backend.finance_api.tests.test_http import env, engine
 
 pytestmark = pytest.mark.skipif(
     os.getenv("FH_FINANCE_CI_ALLOW_BOOTSTRAP") != "yes",
