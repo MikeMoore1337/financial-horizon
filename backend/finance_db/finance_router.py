@@ -107,11 +107,13 @@ def mount_finance_routes(
     router = APIRouter(prefix="/api/finance/v1", include_in_schema=False)
 
     @router.get("/state")
-    def state(request: Request):
+    def state(request: Request, cursor: str | None = None, limit_entities: int = 1_000):
         rate(request, "finance-read")
         verified = scope(request)
         try:
-            return _finance_response(get_finance_snapshot(engine, scope=verified))
+            return _finance_response(get_finance_snapshot(
+                engine, scope=verified, cursor=cursor, limit_entities=limit_entities,
+            ))
         except FinanceCommandError as exc:
             return _finance_error(exc)
         except SQLAlchemyError:
