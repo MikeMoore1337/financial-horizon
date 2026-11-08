@@ -232,7 +232,9 @@ export function LoanReadOnlyComparison({
       if (request !== csvRequest.current) return;
       // The user may have confirmed or changed bank rules while file.text() ran.
       const latestRules = acceptedRef.current;
-      const next = latestRules ? prepareReadOnlyLoanComparison(snapshot, latestRules, parsed) : null;
+      const next = latestRules
+        ? prepareReadOnlyLoanComparison(snapshot, latestRules, parsed)
+        : null;
       setLocalRows(parsed);
       setResult(next);
       setRowsVisible(25);
