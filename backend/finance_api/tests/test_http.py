@@ -1030,6 +1030,55 @@ def test_transfer_reversal_cannot_take_money_earmarked_after_original_post(env):
     assert dest_entity["data"]["available_minor"] == 100
 
 
+def test_finance_cookie_is_invalidated_for_any_identity_cookie_issuer(env):
+    """OAuth-shaped callback must not retain a previous email user's finance scope.
+
+    This tests the generic Set-Cookie integration contract, not OAuth token
+    exchange itself. The new OAuth router in main directly issues the
+    fh_email_session cookie instead of calling the email app's cookie() helper.
+    """
+    from fastapi import Response
+
+    alice, token_a = env["first"]
+    bob, token_b = env["new_user"]()
+    alice_account = env["account"](alice, opening=98_765)
+
+    def synthetic_provider_callback(response: Response):
+        response.set_cookie(
+            "fh_email_session", token_b, path="/api/auth",
+            secure=False, httponly=True, samesite="lax",
+        )
+        return {"authenticated": True}
+
+    env["app"].add_api_route(
+        "/__synthetic_provider_callback", synthetic_provider_callback,
+        methods=["GET"], include_in_schema=False,
+    )
+    client = env["client"](token_a)
+    before = client.get("/api/finance/v1/state")
+    assert before.status_code == 200
+    assert alice_account in before.text
+    assert any(c.name == "fh_finance_session" for c in client.cookies.jar)
+
+    swapped = client.get("/__synthetic_provider_callback")
+    assert swapped.status_code == 200, swapped.text
+    cookies = swapped.headers.get_list("set-cookie")
+    assert any(c.startswith("fh_email_session=") for c in cookies)
+    assert any(c.startswith("fh_finance_session=") and "Max-Age=0" in c
+               for c in cookies)
+    assert not any(c.name == "fh_finance_session" for c in client.cookies.jar)
+
+    denied = client.get("/api/finance/v1/state")
+    assert denied.status_code == 401, denied.text
+    assert denied.json()["code"] == "unauthenticated"
+    assert client.post("/api/auth/email/finance/session",
+                       headers={"Origin": ORIGIN}, json={}).status_code == 200
+    new_state = client.get("/api/finance/v1/state")
+    assert new_state.status_code == 200
+    assert new_state.json()["entities"] == []
+    assert alice_account not in new_state.text
+
+
 def test_finance_http_auth_origin_rate_and_outage_use_stable_error_envelope(env, monkeypatch):
     """AuthStore errors must use Error(code,message), not FastAPI's detail."""
     from backend.fh_email_auth.store import Throttled

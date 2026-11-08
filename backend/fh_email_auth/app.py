@@ -141,16 +141,8 @@ def create_app(
             raise HTTPException(status_code=400,detail="Не удалось подтвердить защитную проверку")
 
     def cookie(response:Response,session:str):
-        if finance_engine is not None:
-            # A newly verified/login/rotated FH identity must NEVER inherit a
-            # stale finance cookie from a previous browser user. The two
-            # cookies have different Paths, so changing the auth cookie does
-            # not overwrite the finance cookie automatically. Require a new
-            # verified same-origin finance bootstrap after every login.
-            response.delete_cookie(
-                "fh_finance_session", path="/api/finance/v1",
-                secure=not config.test_mode, httponly=True, samesite="strict",
-            )
+        # Finance-cookie invalidation is enforced by the opted-in finance
+        # adapter for EVERY session issuer, including OAuth callbacks.
         response.set_cookie(
             key=SESSION_COOKIE,value=session,path="/api/auth",max_age=7*86400,
             secure=not config.test_mode,httponly=True,samesite="strict"

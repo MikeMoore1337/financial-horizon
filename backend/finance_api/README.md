@@ -230,3 +230,18 @@ machine-readable `{code,message}` envelope with `no-store` and
 original FastAPI error shapes; this avoids a breaking login change. Real
 SQLite/PostgreSQL HTTP regressions cover these responses and two-account,
 two-reserve state recovery after a 410 journal compaction.
+
+## Auth provider compatibility (feature-off)
+
+A new verified FH session can be issued by both the email-auth routes and
+OAuth provider callbacks. The email cookie and finance cookie use different
+Paths. To prevent a stale finance cookie from surviving a user switch, the
+opted-in finance middleware **clears the finance cookie whenever any route
+sets or deletes the primary `fh_email_session` cookie**, irrespective of
+which identity provider issued it. This allows the current-main OAuth router
+to retain its login-cookie `SameSite=Lax` policy while the separate finance
+cookie remains `SameSite=Strict`. The finance layer never forces changes to
+OAuth login or to default (finance-disabled) FH auth. One synthetic provider
+Set-Cookie integration regression tests the boundary; it is not a real OAuth
+exchange E2E. Actual OAuth/Main integration remains a mandatory gate before
+merging the stacked branch.

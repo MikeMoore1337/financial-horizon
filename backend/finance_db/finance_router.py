@@ -112,6 +112,28 @@ def mount_finance_routes(
 
     app.add_exception_handler(HTTPException, finance_http_errors)
 
+    # The primary FH session may be replaced by email verify/login/rotation OR
+    # by a separately mounted OAuth provider callback. Its cookie lives at
+    # /api/auth, while the finance session lives at /api/finance/v1. Browsers
+    # do not automatically discard the second cookie when the first changes.
+    # Install this only on explicit finance opt-in and on *every* response
+    # that rotates or removes the primary cookie, regardless of auth provider.
+    @app.middleware("http")
+    async def invalidate_finance_cookie_on_primary_session_change(
+        request: Request, call_next,
+    ):
+        response = await call_next(request)
+        if any(
+            name.lower() == b"set-cookie"
+            and raw.strip().lower().startswith(b"fh_email_session=")
+            for name, raw in response.raw_headers
+        ):
+            response.delete_cookie(
+                FINANCE_COOKIE, path=FINANCE_COOKIE_PATH,
+                secure=secure_cookie, httponly=True, samesite="strict",
+            )
+        return response
+
     def require_user(request: Request, *, finance_cookie: bool) -> str:
         cookie = request.cookies.get(FINANCE_COOKIE if finance_cookie else AUTH_COOKIE)
         try:
