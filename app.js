@@ -30,9 +30,17 @@ let storageStatusRequest=0;
 function revokeDisplayedLedger(){
  revokeStateScope(); // invalidate pending IDB reads/writes before clearing the UI
  state=null;
+ restoreFile=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
  if(navRoots){navRoots.unmount();navRoots=null;}
  $('#main').replaceChildren();
+ // Modal forms and previews live OUTSIDE #main; reset alone can retain
+ // programmatically inserted finance titles, choices and payment schedules.
+ // Every caller immediately redirects to the account page.
+ for(const dialog of document.querySelectorAll('dialog')){
+  if(dialog.open)dialog.close();
+  dialog.replaceChildren();
+ }
 }
 const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
 const monthEvents=()=>getMonthEvents(state,ui.month);
