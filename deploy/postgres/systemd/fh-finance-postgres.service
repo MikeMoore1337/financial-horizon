@@ -1,6 +1,5 @@
 [Unit]
 Description=Financial Horizon PostgreSQL (guarded LUKS2 startup)
-Documentation=README
 Requires=docker.service
 After=docker.service
 RequiresMountsFor=/srv/financial-horizon-finance/pgdata
