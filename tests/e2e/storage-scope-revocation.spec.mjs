@@ -77,10 +77,14 @@ test('fenced target account selection does not retain access to prior account',a
   const empty=await s.readState();
   await s.selectStateScope(a);
   const intact=await s.readState();
+  s.revokeStateScope(); // models confirmed logout and session revocation
+  let revokedRead=false,revokedWrite=false;
+  try{await s.readState()}catch{revokedRead=true}
+  try{await s.updateState(()=>{})}catch{revokedWrite=true}
   return {fenced,locked,selected,other:empty.entries.length,intact:intact.entries[0].amountCents,
-   revision:intact.revision,originalRevision:source.revision};
+   revision:intact.revision,originalRevision:source.revision,revokedRead,revokedWrite};
  });
  expect(observed).toEqual({fenced:true,locked:true,selected:'account-state-v2:'+'b'.repeat(32),
-  other:0,intact:999,revision:1,originalRevision:1});
+  other:0,intact:999,revision:1,originalRevision:1,revokedRead:true,revokedWrite:true});
  expect(errors).toEqual([]);
 });
