@@ -79,7 +79,9 @@ test('native IDB atomic encrypted offline snapshot, outbox, CAS, restart and tam
   const secondTab = await context.newPage();
   secondTab.on('pageerror', error => errors.push(error.message));
   await secondTab.goto('/__e2e__/ready');
-  const commitInTab = (tab, id) => tab.evaluate(async ({id}) => {
+  // A two-phase barrier proves both tabs read the same committed epoch
+  // and independently prepare different outboxes BEFORE either tab can write.
+  const prepareInTab = (tab, id) => tab.evaluate(async ({id}) => {
     const db = await import('/__e2e_atomic_store__.js');
     const {LocalBudgetSession} = await import('/__e2e_atomic_session__.js');
     const scope = 'guest:atomic-browser-qa';
@@ -87,25 +89,42 @@ test('native IDB atomic encrypted offline snapshot, outbox, CAS, restart and tam
     const session = new LocalBudgetSession();
     session.selectScope(scope);
     await session.unlock(keyset, {passphrase:'independent offline atomic test phrase 2026'});
-    try {
-      const current = await db.readAtomicEncryptedCandidate(scope, session);
-      const changed = {
-        snapshot: current.snapshot,
-        outbox: [...current.outbox, {id, amountCents:123}],
-        conflicts: current.conflicts,
-      };
-      try {
-        await db.compareAndSwapAtomicEncryptedCandidate(scope, session, 1, 2, changed);
-        return {status:'written'};
-      } catch (error) {
-        return {status:'rejected', reason:String(error.message)};
-      }
-    } finally { session.logout(); }
+    const current = await db.readAtomicEncryptedCandidate(scope, session);
+    globalThis.__atomicPrepared = {
+      scope,
+      session,
+      expectedEpoch:current.epoch,
+      changed:{
+        snapshot:current.snapshot,
+        outbox:[...current.outbox, {id, amountCents:123}],
+        conflicts:current.conflicts,
+      },
+    };
+    return {epoch:current.epoch, queue:current.outbox.length};
   }, {id});
-  const competing = await Promise.all([
-    commitInTab(page, 'TAB_ONE_PAYMENT'),
-    commitInTab(secondTab, 'TAB_TWO_PAYMENT'),
+  const prepared = await Promise.all([
+    prepareInTab(page, 'TAB_ONE_PAYMENT'),
+    prepareInTab(secondTab, 'TAB_TWO_PAYMENT'),
   ]);
+  expect(prepared).toEqual([{epoch:1, queue:2}, {epoch:1, queue:2}]);
+
+  // Both prepared updates now contend in the native IndexedDB write queue;
+  // the losing tab must receive a CAS failure, never silent last-write-wins.
+  const commitInTab = tab => tab.evaluate(async () => {
+    const db = await import('/__e2e_atomic_store__.js');
+    const prepared = globalThis.__atomicPrepared;
+    try {
+      await db.compareAndSwapAtomicEncryptedCandidate(
+        prepared.scope, prepared.session, prepared.expectedEpoch, 2, prepared.changed);
+      return {status:'written'};
+    } catch (error) {
+      return {status:'rejected', reason:String(error.message)};
+    } finally {
+      prepared.session.logout();
+      delete globalThis.__atomicPrepared;
+    }
+  });
+  const competing = await Promise.all([commitInTab(page), commitInTab(secondTab)]);
   expect(competing.filter(x => x.status === 'written')).toHaveLength(1);
   expect(competing.filter(x => x.status === 'rejected')).toHaveLength(1);
   expect(competing.find(x => x.status === 'rejected').reason).toContain('другой вкладке');
