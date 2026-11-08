@@ -38,11 +38,11 @@ const pay = (state, accountId, amountMinor, link, tx = unique(), direction = 'ex
     profileId: state.profileId,
     id: link.settlementId ?? link.loanPaymentId,
     source: 'settlementId' in link ? 'settlement' : 'loanPayment',
-    amountMinor, direction, voidedAt: null,
+    amountMinor, direction, entityRevision: 1, voidedAt: null,
   };
   return apply(state, 'payment.record', {
     id: tx, accountId, amountMinor, link, occurredOn: '2026-11-07',
-  }, expectFor(state, accountId), undefined, fact);
+  }, { ...expectFor(state, accountId), [fact.id]: fact.entityRevision }, undefined, fact);
 };
 const reverse = (state, tx, reversal = unique()) => {
   const related = state.postings.filter(p => p.transactionId === tx).map(p => p.accountId);
@@ -418,10 +418,10 @@ test('linked payment requires a trusted, account-scoped real fact with exact amo
   const cmd = command(s, 'payment.record', {
     id: id(4), accountId: id(2), amountMinor: 2_500,
     link: { settlementId: id(3) }, occurredOn: '2026-11-07',
-  }, expectFor(s, id(2)));
+  }, { ...expectFor(s, id(2)), [id(3)]: 1 });
   const good = {
     profileId: s.profileId, id: id(3), source: 'settlement',
-    amountMinor: 2_500, direction: 'expense', voidedAt: null,
+    amountMinor: 2_500, direction: 'expense', entityRevision: 1, voidedAt: null,
   };
   assert.throws(() => applyLedgerCommand(s, cmd, context(s.profileId)), /Факт оплаты не подтверждён/);
   for (const verifiedPaymentFact of [
@@ -456,10 +456,10 @@ test('loan payment can only debit and a forged income loan event is rejected', (
   const cmd = command(s, 'payment.record', {
     id: id(4), accountId: id(2), amountMinor: 500,
     link: { loanPaymentId: id(3) }, occurredOn: '2026-11-07',
-  }, expectFor(s, id(2)));
+  }, { ...expectFor(s, id(2)), [id(3)]: 1 });
   const fact = {
     profileId: s.profileId, id: id(3), source: 'loanPayment',
-    amountMinor: 500, direction: 'income', voidedAt: null,
+    amountMinor: 500, direction: 'income', entityRevision: 1, voidedAt: null,
   };
   assert.throws(() => applyLedgerCommand(s, cmd, {
     ...context(s.profileId), verifiedPaymentFact: fact,
@@ -476,12 +476,12 @@ test('confirmed payment replay needs no fresh fact lookup after receipt is commi
   const c = command(s, 'payment.record', {
     id: id(4), accountId: id(2), amountMinor: 500,
     link: { settlementId: id(3) }, occurredOn: '2026-11-07',
-  }, expectFor(s, id(2)), id(8));
+  }, { ...expectFor(s, id(2)), [id(3)]: 1 }, id(8));
   const trusted = {
     ...context(s.profileId),
     verifiedPaymentFact: {
       profileId: s.profileId, id: id(3), source: 'settlement',
-      direction: 'income', amountMinor: 500, voidedAt: null,
+      direction: 'income', amountMinor: 500, entityRevision: 1, voidedAt: null,
     },
   };
   const posted = applyLedgerCommand(s, c, trusted);
@@ -494,4 +494,27 @@ test('confirmed payment replay needs no fresh fact lookup after receipt is commi
   assert.throws(() => applyLedgerCommand(posted.state, {
     ...c, payload: { ...c.payload, amountMinor: 400 },
   }, context(s.profileId)), /idempotency_key_reuse/);
+});
+
+test('fact entity revision is required to prevent stale linked payment postings', () => {
+  const s = create(emptyLedger(id(1)), id(2), 10_000);
+  const c = command(s, 'payment.record', {
+    id: id(4), accountId: id(2), amountMinor: 1_000,
+    link: { settlementId: id(3) }, occurredOn: '2026-11-07',
+  }, expectFor(s, id(2)));
+  const verifiedPaymentFact = {
+    profileId: s.profileId, id: id(3), source: 'settlement',
+    direction: 'expense', amountMinor: 1_000, entityRevision: 3, voidedAt: null,
+  };
+  assert.throws(() => applyLedgerCommand(s, c, {
+    ...context(s.profileId), verifiedPaymentFact,
+  }), /Конфликт ревизии факта оплаты/);
+  assert.throws(() => applyLedgerCommand(s, {
+    ...c, expectedEntityRevisions: { ...c.expectedEntityRevisions, [id(3)]: 2 },
+  }, { ...context(s.profileId), verifiedPaymentFact }), /Конфликт ревизии факта оплаты/);
+  const accepted = applyLedgerCommand(s, {
+    ...c, expectedEntityRevisions: { ...c.expectedEntityRevisions, [id(3)]: 3 },
+  }, { ...context(s.profileId), verifiedPaymentFact });
+  assert.equal(accountBalanceMinor(accepted.state, id(2)), 9_000);
+  assert.equal(s.postings.length, 0);
 });
