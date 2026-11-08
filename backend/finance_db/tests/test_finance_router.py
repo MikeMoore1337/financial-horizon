@@ -429,3 +429,80 @@ def test_chunked_finance_request_rejects_oversized_stream_without_length(auth_fi
                                 "Transfer-Encoding": "chunked"})
     assert tiny.status_code == 422
     assert tiny.json()["code"] == "invalid_command"
+
+
+def test_session_revoked_between_stream_chunks_never_commits_financial_transfer(auth_finance):
+    """Real AuthStore revocation DURING the body cannot authorize a delayed write."""
+    import asyncio
+    import json
+    import httpx
+
+    client, app, mail, store, engine, namespace = auth_finance
+    user_id = authenticate(client, mail)
+    assert bootstrap(client).status_code == 200
+    token = next(c.value for c in client.cookies.jar if c.name == "fh_finance_session")
+    scope = derive_verified_scope(user_id, namespace)
+    a = seed(engine, scope, 5000)
+    b = seed(engine, scope, 200)
+    snapshot = get_account_snapshot(engine, scope=scope)
+    versions = {x["id"]: x["entity_revision"] for x in snapshot.body["entities"]}
+    mutation = str(uuid4())
+    command = {
+        "schema_version": 1, "client_mutation_id": mutation,
+        "base_revision": snapshot.body["revision"],
+        "expected_entity_revisions": {a: versions[a], b: versions[b]},
+        "action": "account.transfer", "payload": {
+            "from_account_id": a, "to_account_id": b,
+            "amount_minor": 1000, "occurred_on": "2026-11-08",
+        },
+    }
+    encoded = json.dumps(command).encode("utf-8")
+    half = len(encoded) // 2
+
+    async def revoke_mid_body():
+        first_consumed = asyncio.Event()
+        finish_body = asyncio.Event()
+
+        async def delayed_body():
+            yield encoded[:half]
+            # This executes only when ASGI requests another body chunk, so the
+            # initial command handler session lookup already completed.
+            first_consumed.set()
+            await finish_body.wait()
+            yield encoded[half:]
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url=ORIGIN,
+        ) as other_client:
+            pending = asyncio.create_task(other_client.post(
+                "/api/finance/v1/commands", content=delayed_body(),
+                headers={
+                    "Origin": ORIGIN, "Content-Type": "application/json",
+                    "Cookie": f"fh_finance_session={token}",
+                    "Idempotency-Key": mutation, "If-Match": snapshot.etag,
+                    "Transfer-Encoding": "chunked",
+                },
+            ))
+            try:
+                await asyncio.wait_for(first_consumed.wait(), timeout=4)
+                # Model a logout-others event on another authenticated device.
+                await asyncio.to_thread(store.logout, token)
+            finally:
+                finish_body.set()
+            return await asyncio.wait_for(pending, timeout=6)
+
+    result = asyncio.run(revoke_mid_body())
+    assert result.status_code == 401, result.text
+    assert store.current(token) is None
+    after = get_account_snapshot(engine, scope=scope)
+    assert after.body["revision"] == snapshot.body["revision"]
+    accounts = {x["id"]: x["data"]["balance_minor"] for x in after.body["entities"]}
+    assert accounts == {a: 5000, b: 200}
+    from backend.finance_db.db import finance_transaction
+    from sqlalchemy import text
+
+    with finance_transaction(engine, verified_user_id=user_id, profile_id=scope.profile_id) as tx:
+        assert tx.execute(text("SELECT count(*) FROM ledger_postings")).scalar_one() == 0
+        assert tx.execute(text("""
+            SELECT count(*) FROM command_receipts WHERE client_mutation_id=:mid
+        """), {"mid": mutation}).scalar_one() == 0
