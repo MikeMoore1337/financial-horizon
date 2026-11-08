@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { LedgerState } from '../../src/domain/accounts/ledger.ts';
 import { Accounts, type AccountsProps } from '../../src/react/Accounts';
-import { deriveAccountsView, formatRubMinor, parseRubMinor } from '../../src/react/accounts-view-model';
+import {
+  deriveAccountsView,
+  formatRubMinor,
+  parseRubMinor,
+} from '../../src/react/accounts-view-model';
 import { createScreenRoot } from '../../src/react/ScreenRoot';
 
 const PROFILE = '00000000-0000-4000-8000-0000000000aa';
@@ -16,10 +20,26 @@ function snapshot(): LedgerState {
     profileId: PROFILE,
     revision: 1,
     accounts: [
-      { id: A, profileId: PROFILE, name: 'Основной', kind: 'bank', currency: 'RUB',
-        openingMinor: 13_500_000, entityRevision: 1, archivedAt: null },
-      { id: B, profileId: PROFILE, name: 'Накопления', kind: 'savings', currency: 'RUB',
-        openingMinor: 8_000_000, entityRevision: 1, archivedAt: null },
+      {
+        id: A,
+        profileId: PROFILE,
+        name: 'Основной',
+        kind: 'bank',
+        currency: 'RUB',
+        openingMinor: 13_500_000,
+        entityRevision: 1,
+        archivedAt: null,
+      },
+      {
+        id: B,
+        profileId: PROFILE,
+        name: 'Накопления',
+        kind: 'savings',
+        currency: 'RUB',
+        openingMinor: 8_000_000,
+        entityRevision: 1,
+        archivedAt: null,
+      },
     ],
     transactions: [],
     postings: [],
@@ -69,22 +89,36 @@ describe('approved account model and money safety', () => {
     expect(model.totalMinor).toBe(21_500_000);
     expect(model.reservedMinor).toBe(3_000_000);
     expect(model.availableMinor).toBe(18_500_000);
-    expect(model.rows.find(row => row.id === A)?.availableMinor).toBe(10_500_000);
+    expect(model.rows.find((row) => row.id === A)?.availableMinor).toBe(10_500_000);
     expect(data).toEqual(original);
   });
   it('conserves assets and excludes internal transfers from expenses', () => {
     const data = snapshot();
     data.revision = 2;
-    data.accounts.forEach(account => { account.entityRevision = 2; });
-    data.transactions.push({ id: T, profileId: PROFILE, kind: 'transfer',
-      occurredOn: '2026-11-08', note: null, actorUserId: 'a'.repeat(32),
-      entityRevision: 1, reversedTransactionId: null });
-    data.postings.push({ profileId: PROFILE, transactionId: T, accountId: A, signedMinor: -100000 });
+    data.accounts.forEach((account) => {
+      account.entityRevision = 2;
+    });
+    data.transactions.push({
+      id: T,
+      profileId: PROFILE,
+      kind: 'transfer',
+      occurredOn: '2026-11-08',
+      note: null,
+      actorUserId: 'a'.repeat(32),
+      entityRevision: 1,
+      reversedTransactionId: null,
+    });
+    data.postings.push({
+      profileId: PROFILE,
+      transactionId: T,
+      accountId: A,
+      signedMinor: -100000,
+    });
     data.postings.push({ profileId: PROFILE, transactionId: T, accountId: B, signedMinor: 100000 });
     const model = deriveAccountsView(data, PROFILE, { [A]: 0, [B]: 0 });
     expect(model.totalMinor).toBe(21_500_000);
-    expect(model.rows.find(row => row.id === A)?.balanceMinor).toBe(13_400_000);
-    expect(model.rows.find(row => row.id === B)?.balanceMinor).toBe(8_100_000);
+    expect(model.rows.find((row) => row.id === A)?.balanceMinor).toBe(13_400_000);
+    expect(model.rows.find((row) => row.id === B)?.balanceMinor).toBe(8_100_000);
   });
   it('fails closed on foreign profiles, unavailable reserves and tampering', () => {
     const data = snapshot();
@@ -116,30 +150,49 @@ describe('approved accounts interface (feature not exposed)', () => {
     expect(data.onCreate).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText(/Начальный остаток/), { target: { value: '0,00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
-    await waitFor(() => expect(data.onCreate).toHaveBeenCalledWith({
-      baseRevision: 1, name: 'Наличные', kind: 'bank', openingMinor: 0,
-    }));
+    await waitFor(() =>
+      expect(data.onCreate).toHaveBeenCalledWith({
+        baseRevision: 1,
+        name: 'Наличные',
+        kind: 'bank',
+        openingMinor: 0,
+      }),
+    );
     expect(data.onRefresh).toHaveBeenCalledTimes(1);
   });
   it('previews transfer from an authoritative snapshot and passes expected revisions', async () => {
     const data = props();
     render(<Accounts {...data} />);
-    fireEvent.click(within(screen.getByText('Основной').closest('article')!).getByRole('button', { name: 'Перевести' }));
+    fireEvent.click(
+      within(screen.getByText('Основной').closest('article')!).getByRole('button', {
+        name: 'Перевести',
+      }),
+    );
     fireEvent.change(screen.getByLabelText('Сумма в рублях'), { target: { value: '1 000,00' } });
     fireEvent.change(screen.getByLabelText('Дата перевода'), { target: { value: '2026-11-08' } });
     expect(screen.getByText(/Без изменений/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Подтвердить перевод' }));
-    await waitFor(() => expect(data.onTransfer).toHaveBeenCalledWith({
-      fromAccountId: A, toAccountId: B, amountMinor: 100000, occurredOn: '2026-11-08',
-      baseRevision: 1, expectedEntityRevisions: { [A]: 1, [B]: 1 },
-    }));
+    await waitFor(() =>
+      expect(data.onTransfer).toHaveBeenCalledWith({
+        fromAccountId: A,
+        toAccountId: B,
+        amountMinor: 100000,
+        occurredOn: '2026-11-08',
+        baseRevision: 1,
+        expectedEntityRevisions: { [A]: 1, [B]: 1 },
+      }),
+    );
     expect(data.snapshot!.accounts[0]!.openingMinor).toBe(13_500_000);
     expect(data.onRefresh).toHaveBeenCalledTimes(1);
   });
   it('cannot consume explicitly reserved funds via a transfer preview', () => {
     const data = props({ reservedMinorByAccount: { [A]: 13_400_000, [B]: 0 } });
     render(<Accounts {...data} />);
-    fireEvent.click(within(screen.getByText('Основной').closest('article')!).getByRole('button', { name: 'Перевести' }));
+    fireEvent.click(
+      within(screen.getByText('Основной').closest('article')!).getByRole('button', {
+        name: 'Перевести',
+      }),
+    );
     fireEvent.change(screen.getByLabelText('Сумма в рублях'), { target: { value: '2 000,00' } });
     fireEvent.change(screen.getByLabelText('Дата перевода'), { target: { value: '2026-11-08' } });
     fireEvent.click(screen.getByRole('button', { name: 'Подтвердить перевод' }));
@@ -170,17 +223,27 @@ describe('approved accounts interface (feature not exposed)', () => {
     const send = vi.fn().mockRejectedValue(new Error('timeout after possible commit'));
     const data = props({ onTransfer: send });
     render(<Accounts {...data} />);
-    fireEvent.click(within(screen.getByText('Основной').closest('article')!).getByRole('button', { name: 'Перевести' }));
+    fireEvent.click(
+      within(screen.getByText('Основной').closest('article')!).getByRole('button', {
+        name: 'Перевести',
+      }),
+    );
     fireEvent.change(screen.getByLabelText('Сумма в рублях'), { target: { value: '1 000,00' } });
     fireEvent.change(screen.getByLabelText('Дата перевода'), { target: { value: '2026-11-08' } });
     fireEvent.click(screen.getByRole('button', { name: 'Подтвердить перевод' }));
     await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/не подтверждён/));
     expect(send).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('button', { name: 'Подтвердить перевод' }).hasAttribute('disabled')).toBe(true);
+    expect(
+      screen.getByRole('button', { name: 'Подтвердить перевод' }).hasAttribute('disabled'),
+    ).toBe(true);
   });
   it('keeps focus within the transfer dialog and supports Escape', () => {
     render(<Accounts {...props()} />);
-    fireEvent.click(within(screen.getByText('Основной').closest('article')!).getByRole('button', { name: 'Перевести' }));
+    fireEvent.click(
+      within(screen.getByText('Основной').closest('article')!).getByRole('button', {
+        name: 'Перевести',
+      }),
+    );
     const dialog = screen.getByRole('dialog');
     expect(dialog.contains(document.activeElement)).toBe(true);
     fireEvent.keyDown(document, { key: 'Escape' });
@@ -188,10 +251,19 @@ describe('approved accounts interface (feature not exposed)', () => {
   });
   it('never emits two mutations on rapid repeated confirmation', async () => {
     let finish: (() => void) | undefined;
-    const onTransfer = vi.fn().mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+    const onTransfer = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
     const data = props({ onTransfer });
     render(<Accounts {...data} />);
-    fireEvent.click(within(screen.getByText('Основной').closest('article')!).getByRole('button', { name: 'Перевести' }));
+    fireEvent.click(
+      within(screen.getByText('Основной').closest('article')!).getByRole('button', {
+        name: 'Перевести',
+      }),
+    );
     fireEvent.change(screen.getByLabelText('Сумма в рублях'), { target: { value: '1 000,00' } });
     fireEvent.change(screen.getByLabelText('Дата перевода'), { target: { value: '2026-11-08' } });
     const confirm = screen.getByRole('button', { name: 'Подтвердить перевод' });
@@ -205,7 +277,10 @@ describe('approved accounts interface (feature not exposed)', () => {
     const host = document.createElement('main');
     document.body.append(host);
     const root = createScreenRoot(host, () => ({
-      kind: 'account', accountId: PROFILE, verifiedUserId: FOREIGN, sessionValid: true,
+      kind: 'account',
+      accountId: PROFILE,
+      verifiedUserId: FOREIGN,
+      sessionValid: true,
     }));
     root.render({ view: 'accounts', props: props() });
     expect(host.querySelector('h1')).toBeNull();
