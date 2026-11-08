@@ -18,6 +18,8 @@ test('12,000 independent linked-payment, reserve, transfer and gap-date scenario
     const salary = Math.floor(random() * 1_000_000);
     const release = Math.floor(random() * (locked + 1));
     const incomeActual = Math.floor(random() * 500_000);
+    const adjustmentMagnitude = Math.floor(random() * 200_000);
+    const adjustmentSigned = random() < 0.5 ? adjustmentMagnitude : -adjustmentMagnitude;
     const horizonMonths = horizonOptions[run % horizonOptions.length];
     const input = {
       openingDate: '2026-11-01',
@@ -33,6 +35,9 @@ test('12,000 independent linked-payment, reserve, transfer and gap-date scenario
         { id: 'partial', date: '2026-11-05', kind: 'expense', amountCents: alreadyPaid,
           planId: 'rent', occurrenceDate: '2026-11-12' },
         { id: 'bonus', date: '2026-11-06', kind: 'income', amountCents: incomeActual },
+        { id: 'adjustment', date: '2026-11-07',
+          kind: adjustmentSigned >= 0 ? 'adjustment-credit' : 'adjustment-debit',
+          amountCents: Math.abs(adjustmentSigned) },
         { id: 'internal-transfer', date: '2026-11-02', kind: 'transfer', amountCents: 3_000_000 },
       ],
       reserves: [
@@ -43,7 +48,7 @@ test('12,000 independent linked-payment, reserve, transfer and gap-date scenario
     const result = forecastCashflow(input);
     // Independent algebraic oracles: the early partial debit and the remaining
     // forecast debit sum to the original invoice once, not twice.
-    const bankAfterFacts = cash - alreadyPaid + incomeActual;
+    const bankAfterFacts = cash - alreadyPaid + incomeActual + adjustmentSigned;
     const bankAtEnd = bankAfterFacts - (due - alreadyPaid) + salary;
     const reservedAtEnd = locked - release;
     const availableBeforeDue = bankAfterFacts - locked;
@@ -57,6 +62,7 @@ test('12,000 independent linked-payment, reserve, transfer and gap-date scenario
 
     assert.equal(result.confirmedAsOfBalanceCents, bankAfterFacts, `${tag}: factual bank`);
     assert.equal(result.confirmedAsOfReservedCents, locked, `${tag}: factual reserves`);
+    assert.equal(result.confirmedAdjustmentCents, adjustmentSigned, `${tag}: balance correction`);
     assert.equal(result.expectedClosingBalanceCents, bankAtEnd, `${tag}: closing bank`);
     assert.equal(result.expectedClosingReservedCents, reservedAtEnd, `${tag}: closing reserves`);
     assert.equal(result.expectedClosingAvailableCents, availableAtEnd, `${tag}: closing available`);

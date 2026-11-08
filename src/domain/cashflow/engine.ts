@@ -10,6 +10,7 @@ interface Bucket {
   plannedExpense: number;
   actualIncome: number;
   actualExpense: number;
+  actualAdjustment: number;
   forecastIncome: number;
   forecastExpense: number;
   overdueExpense: number;
@@ -22,7 +23,8 @@ interface Bucket {
 }
 const blank = (): Bucket => ({
   plannedIncome: 0, plannedExpense: 0, actualIncome: 0, actualExpense: 0,
-  forecastIncome: 0, forecastExpense: 0, overdueExpense: 0, unrealizedIncome: 0,
+  actualAdjustment: 0, forecastIncome: 0, forecastExpense: 0,
+  overdueExpense: 0, unrealizedIncome: 0,
   actualReserve: 0, plannedReserve: 0, forecastReserve: 0, estimatedIncome: 0, ids: [],
 });
 const keyed = (id: string, date: string) => `${id}\0${date}`;
@@ -116,7 +118,8 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
     const date = dayNumber(actual.date);
     if (date > asOf) throw new RangeError('Future actual movement is not confirmed');
     cents(actual.amountCents, 'actual.amountCents', true);
-    if (!['income', 'expense', 'transfer'].includes(actual.kind)) {
+    if (!['income', 'expense', 'transfer', 'adjustment-credit', 'adjustment-debit']
+      .includes(actual.kind)) {
       throw new RangeError('Unknown actual kind');
     }
     if ((actual.planId === undefined) !== (actual.occurrenceDate === undefined)) {
@@ -124,7 +127,8 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
     }
     if (actual.planId !== undefined && actual.occurrenceDate !== undefined) {
       const plan = plans.get(actual.planId);
-      if (!plan || !validOccurrence(plan, actual.occurrenceDate) || actual.kind === 'transfer'
+      if (!plan || !validOccurrence(plan, actual.occurrenceDate)
+        || !['income', 'expense'].includes(actual.kind)
         || (isIncome(plan) !== (actual.kind === 'income'))) {
         throw new RangeError('Actual references an incompatible plan occurrence');
       }
@@ -136,7 +140,14 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
     if (actual.voided || actual.kind === 'transfer' || date < opening || date > end) continue;
     const bucket = dayBucket(actual.date);
     if (actual.kind === 'income') bucket.actualIncome = addCents(bucket.actualIncome, actual.amountCents);
-    else bucket.actualExpense = addCents(bucket.actualExpense, actual.amountCents);
+    else if (actual.kind === 'expense') {
+      bucket.actualExpense = addCents(bucket.actualExpense, actual.amountCents);
+    } else {
+      // Ledger `adjustment` postings change the bank balance without becoming
+      // income, expense, a planned settlement or a reserve movement.
+      const signed = actual.kind === 'adjustment-credit' ? actual.amountCents : -actual.amountCents;
+      bucket.actualAdjustment = addCents(bucket.actualAdjustment, signed);
+    }
     bucket.ids.push(`actual:${actual.id}`);
   }
 
@@ -260,13 +271,16 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
   let firstCashGap: CashflowResult['firstCashGap'] = null;
   let confirmedAsOfBalanceCents: number | null = null;
   let confirmedAsOfReservedCents: number | null = null;
+  let confirmedAdjustmentCents = 0;
   const days: CashflowDay[] = [];
   for (let number = opening; number <= end; number++) {
     const date = isoDay(number);
     const b = buckets.get(date) ?? blank();
     plannedBalance = addCents(plannedBalance, addCents(b.plannedIncome, -b.plannedExpense));
     if (number <= asOf) {
-      confirmedBalance = addCents(confirmedBalance, addCents(b.actualIncome, -b.actualExpense));
+      confirmedBalance = addCents(confirmedBalance,
+        addCents(addCents(b.actualIncome, -b.actualExpense), b.actualAdjustment));
+      confirmedAdjustmentCents = addCents(confirmedAdjustmentCents, b.actualAdjustment);
       confirmedReserved = addCents(confirmedReserved, b.actualReserve);
       if (confirmedReserved < 0) throw new RangeError(`Actual reserves negative on ${date}`);
       expectedBalance = confirmedBalance;
@@ -304,6 +318,7 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
       plannedExpenseCents: b.plannedExpense,
       actualIncomeCents: b.actualIncome,
       actualExpenseCents: b.actualExpense,
+      actualAdjustmentCents: b.actualAdjustment,
       projectedIncomeCents: number >= asOf ? b.forecastIncome : 0,
       projectedExpenseCents: number >= asOf ? b.forecastExpense : 0,
       overdueExpenseCents: b.overdueExpense,
@@ -317,7 +332,8 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
       expectedReservedCents: expectedReserved,
       expectedAvailableCents: available,
       plannedBalanceCents: plannedBalance,
-      planVsActualVarianceCents: number <= asOf ? addCents(confirmedBalance, -plannedBalance) : null,
+      planVsActualVarianceCents: number <= asOf
+        ? addCents(addCents(confirmedBalance, -plannedBalance), -confirmedAdjustmentCents) : null,
       estimatedIncomeCents: b.estimatedIncome,
       eventIds: b.ids.slice().sort(),
     });
@@ -339,6 +355,7 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
   return {
     openingDate: input.openingDate, asOfDate: input.asOfDate, endDate, horizonMonths: input.horizonMonths,
     days, occurrences, confirmedAsOfBalanceCents, confirmedAsOfReservedCents,
+    confirmedAdjustmentCents,
     expectedClosingBalanceCents: closing.expectedBalanceCents,
     expectedClosingReservedCents: closing.expectedReservedCents,
     expectedClosingAvailableCents: closing.expectedAvailableCents,
@@ -351,7 +368,7 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
       'Unpaid due expenses are modeled as immediate asOfDate exposure; missed income is not carried forward.',
       'Future planned income is a forecast, and is estimated unless explicitly marked confirmed.',
       'An allocation only earmarks existing cash; a real payment debits the bank balance once.',
-      'Internal transfers are ignored in the consolidated cashflow.',
+      'Internal transfers are ignored; account balance corrections affect cash, never plan-vs-fact income/expense.',
       'Dates and amounts are deterministic; no bank-specific payment or posting is inferred.',
     ],
   };

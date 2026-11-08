@@ -150,6 +150,40 @@ test('unlinked incoming actual is booked; transfer has zero aggregate external e
   assert.equal(on(result, '2026-11-05').actualIncomeCents, 0);
 });
 
+test('ledger balance corrections change confirmed cash, never income/expense or plan-vs-fact variance', () => {
+  const result = forecastCashflow(base({
+    openingDate: '2026-11-01',
+    openingBalanceCents: 1_000_000,
+    plans: [out('bill', '2026-11-03', 50_000)],
+    actuals: [
+      actual('income', '2026-11-02', 10_000, 'income'),
+      actual('credit', '2026-11-03', 20_000, 'adjustment-credit'),
+      actual('debit', '2026-11-04', 5_000, 'adjustment-debit'),
+      actual('paid', '2026-11-04', 50_000, 'expense', 'bill', '2026-11-03'),
+      { ...actual('void-adjustment', '2026-11-05', 1_000_000, 'adjustment-credit'), voided: true },
+      actual('transfer', '2026-11-06', 5_000_000, 'transfer'),
+    ],
+  }));
+  assert.equal(result.confirmedAsOfBalanceCents, 975_000);
+  assert.equal(result.expectedClosingBalanceCents, 975_000);
+  assert.equal(result.confirmedAdjustmentCents, 15_000);
+  assert.equal(on(result, '2026-11-03').actualAdjustmentCents, 20_000);
+  assert.equal(on(result, '2026-11-04').actualAdjustmentCents, -5_000);
+  assert.equal(result.planVsActual.plannedNetCents, -50_000);
+  assert.equal(result.planVsActual.actualNetCents, -40_000);
+  assert.equal(result.planVsActual.varianceCents, 10_000);
+  assert.equal(on(result, '2026-11-08').planVsActualVarianceCents, 10_000);
+  assert.equal(result.totalOverdueExpenseCents, 0);
+});
+
+test('balance correction cannot be linked to an income or expense plan', () => {
+  assert.throws(() => forecastCashflow(base({
+    plans: [out('bill', '2026-11-12', 50_000)],
+    actuals: [actual('wrong-kind', '2026-11-08', 50_000,
+      'adjustment-debit', 'bill', '2026-11-12')],
+  })), /incompatible/);
+});
+
 test('reserves never alter bank balance; releases offset the accessible impact of payment', () => {
   const result = forecastCashflow(base({
     openingReservedCents: 100_000,

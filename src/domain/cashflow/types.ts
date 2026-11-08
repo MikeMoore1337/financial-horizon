@@ -24,17 +24,19 @@ export interface OccurrenceOverrideDto {
   cancelled?: boolean;
 }
 
-export interface BookedFlowDto {
+interface BookedBaseDto {
   id: string; // stable identity; duplicates are rejected
   date: string;
-  kind: 'income' | 'expense' | 'transfer';
   amountCents: number; // absolute value of one confirmed cash movement
-  /** Both must be specified for a booked part-payment of a planned occurrence. */
-  planId?: string;
-  occurrenceDate?: string;
   /** Canonicalized logical void: adapter must NOT also send the reversing posting. */
   voided?: boolean;
 }
+
+/** Corrections change account cash, but never count as earned income or spending. */
+export type BookedFlowDto = BookedBaseDto & (
+  | { kind: 'income' | 'expense'; planId?: string; occurrenceDate?: string }
+  | { kind: 'transfer' | 'adjustment-credit' | 'adjustment-debit'; planId?: never; occurrenceDate?: never }
+);
 
 export interface ReserveMovementDto {
   id: string;
@@ -66,6 +68,8 @@ export interface CashflowDay {
   plannedExpenseCents: number;
   actualIncomeCents: number;
   actualExpenseCents: number;
+  /** Signed confirmed balance corrections, excluded from income/expense plan-vs-fact. */
+  actualAdjustmentCents: number;
   projectedIncomeCents: number;
   projectedExpenseCents: number;
   overdueExpenseCents: number;
@@ -119,6 +123,8 @@ export interface CashflowResult {
   occurrences: CashflowOccurrence[]; // explicit calendar events for later read-only UI adapters
   confirmedAsOfBalanceCents: number;
   confirmedAsOfReservedCents: number;
+  /** Signed corrections from openingDate through asOfDate, not external cashflow. */
+  confirmedAdjustmentCents: number;
   expectedClosingBalanceCents: number;
   expectedClosingReservedCents: number;
   expectedClosingAvailableCents: number;
