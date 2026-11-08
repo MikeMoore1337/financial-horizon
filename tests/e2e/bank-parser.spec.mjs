@@ -239,3 +239,46 @@ test('XLSX omitted trailing optional cells do not cause false row width errors',
   expect(result.wrongWidth).toBe(false);
   watcher.assertClean();
 });
+
+
+test('XLSX rejects recursive or overlong shared strings before expansion', async ({ page }, testInfo) => {
+  const watcher = await setup(page, testInfo);
+  for (const variant of ['--nested-shared', '--oversized-shared']) {
+    const encoded = makeFixture(testInfo, variant);
+    const outcome = await page.evaluate(async encoded => {
+      const mod = await import('/__bank-parser/index.ts');
+      try {
+        await mod.readBankStatementFile(
+          Uint8Array.from(atob(encoded), c => c.charCodeAt(0)),
+          { filename: 'synthetic.xlsx' },
+        );
+        return 'UNSAFE_ACCEPT';
+      } catch (error) { return String(error.message); }
+    }, encoded);
+    expect(outcome, variant).toMatch(/Вложенные строки|длинное текстовое поле/);
+  }
+  watcher.assertClean();
+});
+
+test('XLSX numeric bank IDs beyond 2^53 remain exact strings and never alias', async ({ page }, testInfo) => {
+  const watcher = await setup(page, testInfo);
+  const encoded = makeFixture(testInfo, '--big-number-id');
+  const result = await page.evaluate(async ({ encoded, accounts }) => {
+    const mod = await import('/__bank-parser/index.ts');
+    const table = await mod.readBankStatementFile(
+      Uint8Array.from(atob(encoded), c => c.charCodeAt(0)),
+      { filename: 'synthetic.xlsx' },
+    );
+    const { mapping } = mod.suggestColumnMapping(table.headers);
+    const preview = await mod.normalizeBankStatement(table, { mapping, accounts });
+    return {
+      cells: [table.rows[0].cells[7], table.rows[1].cells[7]],
+      ids: [preview.rows[0].operation?.externalId, preview.rows[1].operation?.externalId],
+      accepted: preview.accepted,
+    };
+  }, { encoded, accounts });
+  expect(result.accepted).toBe(3);
+  expect(result.cells).toEqual(['9007199254740993', '9007199254740992']);
+  expect(result.ids).toEqual(['9007199254740993', '9007199254740992']);
+  watcher.assertClean();
+});

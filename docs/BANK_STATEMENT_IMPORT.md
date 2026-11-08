@@ -106,3 +106,5 @@ are deliberately left unchanged.
   verification. Until then use a draft PR, no merge/deploy/Issue closure.
 
 Additional parsing rules: a split credit/debit column determines transaction direction and a conflicting explicit kind blocks the row. For XLSX, sourceKey includes a stable sheet identity in addition to file digest and physical row, preventing cross-sheet collisions. Missing trailing optional XLSX cells are treated as blank (but surplus columns and malformed CSV widths remain invalid).
+
+Additional XLSX safety limits: shared string dictionaries reject nested `<si>` elements, more than 128 rich-text runs per item, text beyond 16,384 characters per cell, over 50,000 entries, and over 2 million aggregate characters. Unsafe integer numeric scalars remain raw strings to prevent bank transaction ID collisions beyond JavaScript's safe integer range.

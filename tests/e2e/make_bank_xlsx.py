@@ -95,6 +95,15 @@ def main() -> None:
                 "Тестовая операция", "Основной", "", "расход", "Питание", "PM-1",
             ], numeric={0, 1}),
         ]
+    if variant == "--big-number-id":
+        rows[1] = row(2, [
+            date_serial(date(2026, 11, 7)), "-1234.50", "Синтетическая покупка",
+            "Основной", "", "расход", "Питание", "9007199254740993",
+        ], numeric={0, 1, 7})
+        rows[2] = row(3, [
+            "08.11.2026", "1500.25", "Тестовое поступление",
+            "Основной", "", "доход", "Зарплата", "9007199254740992",
+        ], numeric={1, 7})
     if variant == "--missing-trailing":
         rows[1] = row(2, [
             date_serial(date(2026, 11, 7)), "-1234.50",
@@ -115,6 +124,15 @@ def main() -> None:
         zf.writestr("xl/workbook.xml", workbook)
         zf.writestr("xl/_rels/workbook.xml.rels", relationships)
         zf.writestr("xl/worksheets/sheet1.xml", worksheet)
+        if variant in {"--nested-shared", "--oversized-shared"}:
+            text_value = "S" * 20_000
+            shared = ('<sst xmlns="http://schemas.openxmlformats.org/'
+                      'spreadsheetml/2006/main">')
+            if variant == "--nested-shared":
+                shared += "<si>" * 200 + "<t>" + text_value + "</t>" + "</si>" * 200
+            else:
+                shared += "<si><t>" + text_value + "</t></si>"
+            zf.writestr("xl/sharedStrings.xml", shared + "</sst>")
         if variant == "--two-sheets":
             zf.writestr(
                 "xl/worksheets/sheet2.xml",

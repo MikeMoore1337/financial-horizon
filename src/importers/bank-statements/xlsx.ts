@@ -144,8 +144,45 @@ function nodes(root: Document | Element | null, name: string): Element[] {
 function child(root: Document | Element | null, name: string): Element | null {
   return nodes(root, name)[0] || null;
 }
+const MAX_STRING_CHARS = 16_384;
+const MAX_SHARED_CHARS = 2_000_000;
+const MAX_SHARED_ITEMS = 50_000;
+const MAX_RICH_TEXT_RUNS = 128;
+
 function combinedText(el: Element | null): string {
-  return nodes(el, 't').map(node => node.textContent || '').join('');
+  if (!el) return '';
+  const runs = el.getElementsByTagNameNS('*', 't');
+  if (runs.length > MAX_RICH_TEXT_RUNS) bad('Слишком много фрагментов текста XLSX');
+  let result = '';
+  for (let i = 0; i < runs.length; i++) {
+    const node = runs.item(i);
+    if (!node || node.children.length) bad('Вложенные текстовые элементы XLSX не поддерживаются');
+    const fragment = node.textContent || '';
+    if (fragment.length > MAX_STRING_CHARS - result.length) {
+      bad('Слишком длинное текстовое поле XLSX');
+    }
+    result += fragment;
+  }
+  return result;
+}
+
+function readSharedStrings(doc: Document | null): string[] {
+  if (!doc) return [];
+  const root = doc.documentElement;
+  if (!root || root.localName !== 'sst') bad('Некорректный справочник строк XLSX');
+  const descendants = root.getElementsByTagNameNS('*', 'si');
+  if (descendants.length > MAX_SHARED_ITEMS) bad('Слишком много строк справочника XLSX');
+  const direct = Array.from(root.children).filter(el => el.localName === 'si');
+  if (direct.length !== descendants.length) bad('Вложенные строки XLSX запрещены');
+  const output: string[] = [];
+  let totalChars = 0;
+  for (const item of direct) {
+    const value = combinedText(item);
+    totalChars += value.length;
+    if (totalChars > MAX_SHARED_CHARS) bad('Превышен лимит общего текста XLSX');
+    output.push(value);
+  }
+  return output;
 }
 function letterIndex(column: string): number {
   let result = 0;
@@ -189,7 +226,10 @@ function sheetRows(doc: Document, strings: string[]): { rows: BankTableRow[]; wa
       else if (type === 'e') value = null;
       else if (raw !== '') {
         const n = Number(raw);
-        value = Number.isFinite(n) ? n : null;
+        // A bank's numeric transaction ID can exceed JS safe integer precision.
+        // Preserve its raw scalar text instead of collapsing two distinct IDs.
+        value = !Number.isFinite(n) ? null
+          : Number.isInteger(n) && !Number.isSafeInteger(n) ? raw : n;
       }
       if (typeof value === 'string' && value.length > 16_384) bad('Слишком длинное поле XLSX');
       values[column] = value;
@@ -227,8 +267,7 @@ export async function readBankXlsx(
   else if (!target.startsWith('xl/')) target = 'xl/' + target.replace(/^(?:\.\/)+/, '');
   if (!/^xl\/worksheets\/[a-zA-Z0-9_.-]+\.xml$/.test(target)) bad('Небезопасная ссылка на лист');
   const stringsXml = await xmlPart(entries, 'xl/sharedStrings.xml');
-  const strings = stringsXml ? nodes(stringsXml, 'si').map(combinedText) : [];
-  if (strings.length > 100_000) bad('Слишком много общих строк XLSX');
+  const strings = readSharedStrings(stringsXml);
   const sheetXml = await xmlPart(entries, target);
   if (!sheetXml) bad('Лист XLSX отсутствует');
   const parsed = sheetRows(sheetXml, strings);
