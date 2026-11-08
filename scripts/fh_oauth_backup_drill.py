@@ -122,6 +122,13 @@ def inspect_sqlite(path: Path) -> tuple[int, ...]:
                      for table in TABLES)
 
 
+def check_backup_directory(directory: Path) -> None:
+    if (directory.is_symlink() or not directory.is_dir() or
+            directory.stat().st_uid != 0 or
+            stat.S_IMODE(directory.stat().st_mode) != 0o700):
+        raise Blocked("BACKUP_DIRECTORY_NOT_PRIVATE")
+
+
 def preflight() -> Path:
     if os.geteuid() != 0:
         raise Blocked("ROOT_REQUIRED")
@@ -134,10 +141,7 @@ def preflight() -> Path:
         raise Blocked("CONFIG_DATABASE_PATH_MISMATCH")
     if any(value(staged, key) != ["false"] for key in FLAGS):
         raise Blocked("OAUTH_FLAGS_MUST_BE_OFF")
-    if (BACKUPS.is_symlink() or not BACKUPS.is_dir() or
-            BACKUPS.stat().st_uid != 0 or
-            stat.S_IMODE(BACKUPS.stat().st_mode) != 0o700):
-        raise Blocked("BACKUP_DIRECTORY_NOT_PRIVATE")
+    check_backup_directory(BACKUPS)
     inspect_sqlite(db)
     return db
 
