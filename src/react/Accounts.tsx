@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Icon } from './Calendar';
 import type { LedgerState } from '../domain/accounts/ledger.ts';
 import {
@@ -105,6 +105,7 @@ export function Accounts({
   const [busy, setBusy] = useState(false);
   // Synchronous guard against double-clicks before React commits the busy state.
   const inFlight = useRef(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [uncertain, setUncertain] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
@@ -263,6 +264,46 @@ export function Accounts({
     }));
   }
 
+  // The modal owns focus while visible; Escape never interrupts a pending write.
+  useEffect(() => {
+    if (!panel) return;
+    const previouslyFocused = document.activeElement instanceof HTMLElement
+      ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    const focusable = () => Array.from(
+      dialog?.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled])') || [],
+    ).filter(element => element.getClientRects().length > 0 || element.tabIndex >= 0);
+    const initial = dialog?.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled])');
+    (initial || focusable()[0])?.focus();
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        if (!busy) closePanel();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const nodes = focusable();
+      if (!nodes.length) {
+        event.preventDefault();
+        return;
+      }
+      const first = nodes[0]!;
+      const last = nodes[nodes.length - 1]!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('keydown', handleKey);
+      previouslyFocused?.focus();
+    };
+  }, [panel, busy]);
+
   const transferFrom = active.find(row => row.id === fromId);
   const transferTo = active.find(row => row.id === toId);
   let preview: { from: string; to: string } | null = null;
@@ -382,7 +423,7 @@ export function Accounts({
 
       {panel && model && (
         <div className="fh-accounts-overlay" role="presentation">
-          <div className="surface fh-accounts-dialog" role="dialog" aria-modal="true" aria-labelledby="fh-account-dialog-title">
+          <div ref={dialogRef} className="surface fh-accounts-dialog" role="dialog" aria-modal="true" aria-labelledby="fh-account-dialog-title">
             <div className="fh-accounts-dialog-header">
               <h2 id="fh-account-dialog-title">
                 {panel.kind === 'create' ? 'Создать счёт' :
