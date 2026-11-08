@@ -149,7 +149,9 @@ def mount_finance_routes(
         # Do not run SQLite rate limits or blocking PostgreSQL row locks in
         # the ASGI event loop; unrelated sessions must remain responsive.
         await run_in_threadpool(rate, request, "finance-write")
-        verified = scope(request)
+        # AuthStore.current reads SQLite synchronously, too. Keep that IO off
+        # the ASGI event loop together with the PostgreSQL command execution.
+        verified = await run_in_threadpool(scope, request)
         media_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
         if media_type != "application/json":
             return _finance_error(FinanceCommandError(
