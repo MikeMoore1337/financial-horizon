@@ -36,6 +36,11 @@ class FakeAPI(BaseHTTPRequestHandler):
         self.wfile.write(content)
 
     def do_GET(self):
+        if self.path == "/redirect":
+            self.send_response(302)
+            self.send_header("Location", "http://example.invalid/steal-cookie")
+            self.end_headers()
+            return
         user = self._user()
         if user is None:
             return self._answer(401, {"code": "expired"})
@@ -80,6 +85,10 @@ class ApiLoadTests(unittest.TestCase):
         self.assertEqual(report["gate"], "PASS")
         self.assertEqual(report["stale_precondition_status"], 412)
         self.assertTrue(report["other_user_unchanged"])
+
+    def test_redirect_is_rejected_without_forwarding_cookie(self):
+        response = api_load.request(self.url, "/redirect", "A" * 32, 2)
+        self.assertEqual(response["status"], 302)
 
     def test_read_two_users(self):
         report = api_load.check_read(self.url, "A" * 32, "B" * 32, 2, 4, 12, 0)

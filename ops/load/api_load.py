@@ -18,7 +18,7 @@ import statistics
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, HTTPRedirectHandler, build_opener
+from urllib.request import Request, HTTPRedirectHandler, ProxyHandler, build_opener
 from uuid import uuid4
 
 STATE = "/api/finance/v1/state"
@@ -35,7 +35,7 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-HTTP = build_opener(NoRedirect())
+HTTP = build_opener(ProxyHandler({}), NoRedirect())
 
 
 def local_origin(origin: str) -> str:

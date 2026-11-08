@@ -10,7 +10,7 @@ from pathlib import Path
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, HTTPRedirectHandler, build_opener
+from urllib.request import Request, HTTPRedirectHandler, ProxyHandler, build_opener
 
 
 class GateError(Exception):
@@ -22,7 +22,7 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 
-HTTP = build_opener(NoRedirect())
+HTTP = build_opener(ProxyHandler({}), NoRedirect())
 
 
 def cpu_ticks() -> tuple[int, int]:
