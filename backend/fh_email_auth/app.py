@@ -57,7 +57,9 @@ def create_app(
     config: Settings|None=None,
     store: AuthStore|None=None,
     captcha: Callable[[str,str,str,str],bool]|None=None,
-    mailer: Mailer|None=None
+    mailer: Mailer|None=None,
+    finance_engine=None,
+    finance_profile_namespace=None,
 ) -> FastAPI:
     config=config or Settings.from_env()
     app=FastAPI(title="Financial Horizon Email Auth", docs_url=None, redoc_url=None,
@@ -108,7 +110,10 @@ def create_app(
             "logout-others":((10,3600),None),
             "change-email":((5,3600),(2,86400)),
             "change-confirm":((15,3600),None),
-            "rotate":((6,3600),None)
+            "rotate":((6,3600),None),
+            "finance-session":((20,3600),None),
+            "finance-read":((300,3600),None),
+            "finance-write":((100,3600),None),
         }
         ip_policy,email_policy=policy[action]
         # Global quota must be consumed first, so distributed abusive IPs cannot
@@ -314,7 +319,27 @@ def create_app(
         store.logout(request.cookies.get(SESSION_COOKIE))
         response.delete_cookie(SESSION_COOKIE,path="/api/auth",
                                secure=not config.test_mode,httponly=True,samesite="strict")
+        if finance_engine is not None:
+            # Deleting the cookie removes stale browser tokens; AuthStore.logout
+            # revocation above is the authoritative invalidation.
+            response.delete_cookie("fh_finance_session",path="/api/finance/v1",
+                                   secure=not config.test_mode,httponly=True,samesite="strict")
         return {"ok":True}
+
+    if finance_engine is not None:
+        if not config.enabled or store is None or finance_profile_namespace is None:
+            raise ValueError("Finance API requires active auth and server profile namespace")
+        # Imported only for explicitly enabled deployments. Existing auth
+        # installs do not need SQLAlchemy/PostgreSQL and remain unchanged.
+        from backend.finance_db.finance_router import mount_finance_routes
+
+        mount_finance_routes(
+            app, engine=finance_engine, namespace=finance_profile_namespace,
+            public_origin=config.public_origin,
+            auth_resolver=store.current,
+            secure_cookie=not config.test_mode,
+            rate_limiter=lambda request, action: throttle(request, action),
+        )
 
     return app
 
