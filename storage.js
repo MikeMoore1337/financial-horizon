@@ -2,6 +2,10 @@ import {emptyState,validateState} from './finance.js';
 import {migrateState,downgradeStateForRollback} from './state-migrations.js';
 const DB='financial-horizon-browser-v1', STORE='finance', KEY='state';
 const CLAIM_KEY='legacy-account-claim-v2', GUEST_KEY='guest-state-v2';
+// Passive marker. The running app NEVER writes it: an approved migration must
+// quiesce old tabs and establish rollback before activating a protected scope.
+const FENCE_PREFIX='encrypted-cutover-fence-v1:';
+const FENCED_MESSAGE='Локальная база заблокирована для перехода на защищённое хранение. Перезагрузите приложение.';
 let dbPromise,activeKey=KEY;
 
 function openDb(){
@@ -48,10 +52,12 @@ export async function selectStateScope(userId=null){
   const tx=db.transaction(STORE,'readwrite'),object=tx.objectStore(STORE);
   let invalid=null;
   const fail=error=>{invalid=error;try{tx.abort();}catch{}};
-  const claim=object.get(CLAIM_KEY);
+  const claim=object.get(CLAIM_KEY),accountFence=object.get(FENCE_PREFIX+key);
   claim.onsuccess=()=>{
    const owner=claim.result,existing=object.get(key);
    existing.onsuccess=()=>{
+    // Check in the same native transaction before account claim or source copy.
+    if(accountFence.result!==undefined){fail(Error(FENCED_MESSAGE));return;}
     if(existing.result!==undefined){
      try{
       const migrated=migrateState(existing.result);
@@ -61,9 +67,10 @@ export async function selectStateScope(userId=null){
      return;
     }
     if(owner&&owner!==userId)return;
-    const legacy=object.get(KEY);
+    const legacyFence=object.get(FENCE_PREFIX+KEY),legacy=object.get(KEY);
     legacy.onsuccess=()=>{
      try{
+      if(legacyFence.result!==undefined)throw Error(FENCED_MESSAGE);
       if(legacy.result!==undefined)object.put(migrateState(legacy.result),key);
       if(!owner)object.put(userId,CLAIM_KEY);
      }catch(error){fail(error);}
@@ -83,18 +90,21 @@ export async function selectStateScope(userId=null){
 export async function readState(){
  const db=await openDb(),key=activeKey;
  return new Promise((resolve,reject)=>{
-  const tx=db.transaction(STORE,'readwrite'),object=tx.objectStore(STORE),req=object.get(key);
-  let migrated=null,needsCommit=false,failure=null;
+  const tx=db.transaction(STORE,'readwrite'),object=tx.objectStore(STORE);
+  // Ordered requests in ONE IndexedDB transaction: a marker cannot slip
+  // between the guard and a legacy read or automatic schema rewrite.
+  const fence=object.get(FENCE_PREFIX+key),req=object.get(key);
+  let value=null,failure=null;
   req.onsuccess=()=>{
    try{
-    if(req.result===undefined){resolve(emptyState());return;}
-    migrated=migrateState(req.result);
-    if(migrated===req.result){resolve(migrated);return;}
-    needsCommit=true;
-    object.put(migrated,key);
+    if(fence.result!==undefined)throw Error(FENCED_MESSAGE);
+    if(req.result===undefined){value=emptyState();return;}
+    value=migrateState(req.result);
+    if(value!==req.result)object.put(value,key);
    }catch(error){failure=error;try{tx.abort();}catch{}}
   };
-  tx.oncomplete=()=>{if(needsCommit)resolve(migrated);};
+  // A read must not return plaintext before its native transaction commits.
+  tx.oncomplete=()=>resolve(value);
   tx.onerror=()=>reject(failure||tx.error||new Error('Ошибка чтения финансовой базы'));
   tx.onabort=()=>reject(failure||tx.error||new Error('Миграция отменена: исходные данные сохранены'));
  });
@@ -104,10 +114,12 @@ export async function readState(){
 export async function updateState(change,{expectedRevision}={}){
  const db=await openDb(),key=activeKey;
  return new Promise((resolve,reject)=>{
-  const tx=db.transaction(STORE,'readwrite'),object=tx.objectStore(STORE),req=object.get(key);
+  const tx=db.transaction(STORE,'readwrite'),object=tx.objectStore(STORE);
+  const fence=object.get(FENCE_PREFIX+key),req=object.get(key);
   let updated=null,failure=null;
   req.onsuccess=()=>{
    try{
+    if(fence.result!==undefined)throw Error(FENCED_MESSAGE);
     const base=req.result===undefined?emptyState():migrateState(req.result);
     if(expectedRevision!==undefined&&expectedRevision!==base.revision)
      throw Error('Данные изменились в другой вкладке. Обновите страницу и повторите действие.');
