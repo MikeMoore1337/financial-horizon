@@ -108,6 +108,21 @@ def atomic_file(path: Path, data: bytes, mode: int | None = 0o600) -> None:
         Path(name).unlink(missing_ok=True)
 
 
+def save_private_release_receipt(prefix: str, content: bytes) -> None:
+    fd, filename = tempfile.mkstemp(
+        prefix="fh-oauth-release-" + prefix + "-", suffix=".backup", dir=BACKUPS
+    )
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except Exception:
+        Path(filename).unlink(missing_ok=True)
+        raise
+
+
 def current_release(root: Path) -> Path:
     link = root / "current"
     if not link.is_symlink():
@@ -388,6 +403,10 @@ def rollout(sha: str) -> None:
         print("RELEASE_STAGED=PASS", flush=True)
         changed = False
         db_migrated = False
+        # Crash-resistant root-only copies before touching live configuration.
+        save_private_release_receipt("oauth-env", old_env)
+        save_private_release_receipt("caddy", old_caddy.encode("utf-8"))
+        print("PROTECTED_CONFIG_BACKUPS=CREATED", flush=True)
         try:
             changed = True
             command(["systemctl", "stop", SERVICE], timeout=25)
