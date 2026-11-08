@@ -170,3 +170,15 @@ test('factual legacy repayment IDs are never fabricated as verified ledger event
   assert.equal(oldEvents[0].id, 'legacy-pay-not-uuid');
   assert.equal(result.bankParityVerified, false);
 });
+
+test('inherited defaults cannot masquerade as confirmed banking terms', () => {
+  const inherited = Object.create(approved);
+  assert.equal(Object.keys(inherited).length, 0);
+  const result = prepareLegacyLoanPreview(legacy, inherited);
+  assert.equal(result.status, 'needs-confirmation');
+  assert.equal(result.terms, null);
+  assert.equal(result.missing.length, 8);
+
+  const own = Object.assign({}, approved);
+  assert.equal(prepareLegacyLoanPreview(legacy, own).status, 'ready');
+});
