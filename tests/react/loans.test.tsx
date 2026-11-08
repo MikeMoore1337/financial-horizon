@@ -129,7 +129,7 @@ describe('Loans React screen (pure presentation)', () => {
   });
 });
 
-function confirmSyntheticContract() {
+function confirmSyntheticContract(annualRate = '12') {
   fireEvent.click(screen.getByRole('button', { name: 'Уточнить условия банка' }));
   const form = document.querySelector<HTMLFormElement>('.loan-comparison-dialog form')!;
   const change = (name: string, value: string) => {
@@ -142,7 +142,7 @@ function confirmSyntheticContract() {
   };
   change('firstDueDate', '2026-02-01');
   change('dueDayAnchor', '1');
-  change('annualRate', '12');
+  change('annualRate', annualRate);
   change('dayCount', 'ACT/365F');
   change('rounding', 'HALF_UP');
   change('scheduleType', 'annuity');
@@ -269,6 +269,67 @@ describe('Approved bank reconciliation UI - opt-in and no financial writes', () 
     expect(document.querySelector('.loan-comparison-status')?.textContent).toContain(
       'Числовое совпадение',
     );
+  });
+
+  it('completes a pending CSV read with rules confirmed after the file was selected', async () => {
+    const csv =
+      'Date;Payment;Interest;Principal;Balance\n' +
+      '2026-02-01;5074,10;101,92;4972,18;5027,82\n' +
+      '2026-03-01;5074,10;46,28;5027,82;0,00\n';
+    let finishRead!: (value: string) => void;
+    const pendingRead = new Promise<string>((resolve) => {
+      finishRead = resolve;
+    });
+    const file = new File([csv], 'LOCAL_REFERENCE.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => pendingRead });
+    const original = structuredClone(sample.selected);
+    render(<Loans {...sample} />);
+    fireEvent.change(screen.getByLabelText('Локальный банковский CSV для сверки'), {
+      target: { files: [file] },
+    });
+    confirmSyntheticContract();
+    finishRead(csv);
+    await waitFor(() =>
+      expect(document.querySelector('[data-testid="loan-comparison-source"]')?.textContent).toContain(
+        'Выбранный локальный CSV',
+      ),
+    );
+    expect(document.querySelector('.loan-comparison-status')?.textContent).toContain(
+      'Числовое совпадение',
+    );
+    expect(sample.selected).toEqual(original);
+  });
+
+  it('uses newly confirmed bank terms when an earlier CSV read finishes later', async () => {
+    const csv =
+      'Date;Payment;Interest;Principal;Balance\n' +
+      '2026-02-01;5074,10;101,92;4972,18;5027,82\n' +
+      '2026-03-01;5074,10;46,28;5027,82;0,00\n';
+    let finishRead!: (value: string) => void;
+    const pendingRead = new Promise<string>((resolve) => {
+      finishRead = resolve;
+    });
+    const file = new File([csv], 'IN_FLIGHT_PRIVATE.csv', { type: 'text/csv' });
+    Object.defineProperty(file, 'text', { value: () => pendingRead });
+    render(<Loans {...sample} />);
+    confirmSyntheticContract('12');
+    expect(document.querySelector('.loan-comparison-status')?.textContent).toContain(
+      'Числовое совпадение',
+    );
+    fireEvent.change(screen.getByLabelText('Локальный банковский CSV для сверки'), {
+      target: { files: [file] },
+    });
+    confirmSyntheticContract('0');
+    finishRead(csv);
+    await waitFor(() =>
+      expect(document.querySelector('[data-testid="loan-comparison-source"]')?.textContent).toContain(
+        'Выбранный локальный CSV',
+      ),
+    );
+    expect(document.querySelector('.loan-comparison-status')?.textContent).toContain(
+      'расхождения',
+    );
+    expect(screen.queryByText('IN_FLIGHT_PRIVATE.csv')).toBeNull();
   });
 
   it('discards ephemeral conditions when loan data revision or selected loan changes', () => {
