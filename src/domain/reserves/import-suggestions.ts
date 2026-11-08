@@ -47,10 +47,24 @@ export function parseReservePeriodHint(note: unknown): ReservePeriodHint | null 
   // Such spreadsheet rows must be reviewed rather than converted to a monthly bill.
   const frequencyMarker = /(?:^|[^\p{L}\p{N}])(?:раз\s+в|каждые|каждый)\s+/gu;
   const supportedPeriod = /^(?:\d+\s*(?:мес(?:\.|яц(?:ев|а)?)?|год(?:а|ов)?|лет)|полгода|квартал|год|месяц)(?!\p{L})/u;
+  const trailingPeriod = /^\s*\(?\s*(?:(или|либо|и|\/|\+|,)\s*)?(?:[-+]?\d+(?:[.,]\d+)?\s*)?(?:мес(?:\.|яц(?:ев|а)?)?|год(?:а|ов)?|лет|полгода|квартал)(?!\p{L})/u;
   for (const marker of normalized.matchAll(frequencyMarker)) {
     const valueStart = (marker.index ?? 0) + marker[0].length;
-    if (!supportedPeriod.test(normalized.slice(valueStart))) {
+    const expression = normalized.slice(valueStart);
+    const period = supportedPeriod.exec(expression);
+    if (!period) {
       return { status: 'invalid', reason: 'unsupported', confirmationRequired: true };
+    }
+    // Never accept the prefix of a composite or alternative interval:
+    // "1 год 6 месяцев" and "3 месяца или 6 месяцев" require confirmation.
+    const tail = trailingPeriod.exec(expression.slice(period[0].length));
+    if (tail) {
+      const alternative = tail[1] === 'или' || tail[1] === 'либо' || tail[1] === '/';
+      return {
+        status: 'invalid',
+        reason: alternative ? 'ambiguous' : 'unsupported',
+        confirmationRequired: true,
+      };
     }
   }
 
