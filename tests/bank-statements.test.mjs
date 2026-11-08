@@ -732,7 +732,13 @@ test('source key uses XLSX sheet identity while preserving determinism', async (
     '07.11.2026;-100;Тест;Основной;;расход;Питание;SAME-1\n',
   ));
   const first = { ...csv, format: 'xlsx', sheetName: 'Ноябрь', dateSystem: '1900' };
-  const second = { ...first, sheetName: 'Декабрь' };
+  // Two distinct sheets can describe separate bank events with the same
+  // amount/date; use a different bank event ID to isolate source row identity.
+  const second = { ...first, sheetName: 'Декабрь',
+    rows: first.rows.map(row => ({
+      ...row, cells: row.cells.map((value, index) => index === 7 ? 'SAME-2' : value),
+    })),
+  };
   const opts = { mapping: suggestColumnMapping(csv.headers).mapping, accounts, categories: ['Питание'] };
   const a = await normalizeBankStatement(first, opts);
   const b = await normalizeBankStatement(second, opts);
