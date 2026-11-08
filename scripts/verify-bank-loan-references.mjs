@@ -4,16 +4,18 @@
  * Self-attested references are not independent proof of bank parity.
  */
 import { createHash } from 'node:crypto';
+import { realpath } from 'node:fs/promises';
 import { relative, resolve, dirname, sep, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { compareLocalBankCsv, readLimited } from './compare-bank-loan.mjs';
+import { parseSchedule } from '../schedule.js';
 
 const MANIFEST_LIMIT = 64 * 1024;
 const CONTRACT_LIMIT = 128 * 1024;
 const CSV_LIMIT = 1024 * 1024;
 const MAX_REFERENCES = 12;
 
-function localReferencePath(base, supplied) {
+async function localReferencePath(base, supplied) {
   if (typeof supplied !== 'string' || !supplied.trim() ||
       supplied.includes('\0') || isAbsolute(supplied)) {
     throw new TypeError('A relative local reference path is required');
@@ -24,7 +26,16 @@ function localReferencePath(base, supplied) {
       isAbsolute(pathWithin)) {
     throw new TypeError('Reference files must be inside the manifest directory');
   }
-  return full;
+  // Resolve all intermediate symlinks before opening. The lexical path alone
+  // cannot constrain a symlinked parent directory to this private root.
+  const realBase = await realpath(base);
+  const realTarget = await realpath(full);
+  const realWithin = relative(realBase, realTarget);
+  if (!realWithin || realWithin === '..' || realWithin.startsWith('..' + sep) ||
+      isAbsolute(realWithin)) {
+    throw new TypeError('Reference path escapes the manifest root through a symlink');
+  }
+  return realTarget;
 }
 
 /**
@@ -51,15 +62,22 @@ export async function verifyBankLoanReferences(manifestPath) {
         entry.approvedForLocalAcceptance !== true) {
       throw new TypeError('Each reference must be explicitly owner-attested');
     }
-    const termsFile = localReferencePath(base, entry.contractFile);
-    const bankFile = localReferencePath(base, entry.bankCsvFile);
+    const termsFile = await localReferencePath(base, entry.contractFile);
+    const bankFile = await localReferencePath(base, entry.bankCsvFile);
     if (termsFile === bankFile || seenSources.has(bankFile)) {
       throw new TypeError('Each reference must have its own bank file');
     }
     seenSources.add(bankFile);
     const contract = JSON.parse(await readLimited(termsFile, CONTRACT_LIMIT));
     const bankCsv = await readLimited(bankFile, CSV_LIMIT);
-    const fingerprint = createHash('sha256').update(bankCsv).digest('hex');
+    // Normalize parsed dates, currency minor units and missing optional fields.
+    // Equivalent CSVs with different formatting are the same reference.
+    const normalizedRows = parseSchedule(bankCsv).map(row => [
+      row.date, row.amountCents, row.interestCents ?? null,
+      row.principalCents ?? null, row.balanceCents ?? null,
+    ]);
+    const fingerprint = createHash('sha256')
+      .update(JSON.stringify(normalizedRows)).digest('hex');
     if (seenContents.has(fingerprint)) {
       throw new TypeError('Duplicate bank reference content is not independent evidence');
     }

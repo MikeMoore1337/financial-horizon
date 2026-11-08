@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { verifyBankLoanReferences } from '../scripts/verify-bank-loan-references.mjs';
@@ -109,6 +109,23 @@ test('one reference, absent attestation and repeated reference are rejected', as
   assert.equal(invoke(await save(data, [data.cases[0], data.cases[0]])).status, 1);
   await writeFile(join(data.dir, 'reference-2', 'bank.csv'), firstBank);
   assert.equal(invoke(await save(data)).status, 1);
+  // Different bytes / trailing newline, but canonical bank rows are identical.
+  await writeFile(join(data.dir, 'reference-2', 'bank.csv'), firstBank + '\n');
+  assert.equal(invoke(await save(data)).status, 1);
+});
+
+
+test('symlinked parent directory outside the manifest root cannot load bank CSV', async t => {
+  if (process.platform === 'win32') return t.skip('POSIX symlink regression');
+  const data = await workspace(t);
+  const outside = await mkdtemp(join(tmpdir(), 'fh39-outside-'));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  await writeFile(join(outside, 'bank.csv'), secondBank, { mode: 0o600 });
+  await symlink(outside, join(data.dir, 'linked'), 'dir');
+  const entries = [data.cases[0], {...data.cases[1], bankCsvFile: 'linked/bank.csv'}];
+  const run = invoke(await save(data, entries));
+  assert.equal(run.status, 1);
+  assert.doesNotMatch(run.stderr + run.stdout, /linked|fh39-outside-|bank\.csv/);
 });
 
 test('traversal and malformed sensitive inputs fail closed without source leakage', async t => {
