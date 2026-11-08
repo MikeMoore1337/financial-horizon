@@ -177,16 +177,25 @@ export function availableBalanceMinor(state: LedgerState, accountId: string, res
 export function monthlyCashFlowMinor(state: LedgerState, month: string): { incomeMinor: number; expenseMinor: number } {
   assertLedgerState(state);
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new TypeError('Неверный месяц');
+  // Index once: scanning every posting for every transaction is quadratic
+  // for large imported/synchronized journals. Snapshot integrity is checked above.
+  const transactionsById = new Map(state.transactions.map(tx => [tx.id, tx]));
+  const impactByTransaction = new Map<string, number>();
+  for (const posting of state.postings) {
+    impactByTransaction.set(
+      posting.transactionId,
+      add(impactByTransaction.get(posting.transactionId) ?? 0, posting.signedMinor),
+    );
+  }
   let incomeMinor = 0;
   let expenseMinor = 0;
   for (const tx of state.transactions) {
     if (tx.profileId !== state.profileId || !tx.occurredOn.startsWith(`${month}-`)) continue;
     const original = tx.kind === 'reversal'
-      ? state.transactions.find(value => value.id === tx.reversedTransactionId && value.profileId === state.profileId)
+      ? transactionsById.get(tx.reversedTransactionId!)
       : tx;
     if (!original) throw new Error('Отмена без исходной операции');
-    const impact = state.postings.filter(p => p.transactionId === tx.id && p.profileId === state.profileId)
-      .reduce((sum, p) => add(sum, p.signedMinor), 0);
+    const impact = impactByTransaction.get(tx.id) ?? 0;
     if (original.kind === 'income' || (original.kind === 'payment' && impact > 0)) {
       incomeMinor = add(incomeMinor, impact);
     }
