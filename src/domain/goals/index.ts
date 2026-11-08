@@ -33,3 +33,5 @@ export type {
   GoalCardModel, GoalDeadlineIndicator, GoalDetailModel, GoalHistoryModel,
   GoalsScreenModel,
 } from './presentation.ts';
+export { buildGoalCashflowBundle, withGoalCashflowSources } from './cashflow-bridge.ts';
+export type { GoalAccountBinding, GoalCashflowBundle } from './cashflow-bridge.ts';
