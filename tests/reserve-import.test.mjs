@@ -36,6 +36,11 @@ for (const [text, months] of [
   ['каждые 3 месяца; раз в 3 мес', 3],
   ['налог раз\nв 12 месяцев', 12],
   [' раз в 6 мес ', 6],
+  ['раз в 3 месяца, месяц оплаты — июнь', 3],
+  ['ежегодно (год оплаты 2026)', 12],
+  ['каждые 2 года (год оплаты 2028)', 24],
+  ['раз в 6 мес., месяц платежа - июль', 6],
+  ['ежемесячно (месяц оплаты - текущий)', 1],
 ]) {
   test('XLSX recurrence hint: ' + JSON.stringify(text), () => {
     assert.deepEqual(parseReservePeriodHint(text), suggested(months));
@@ -80,6 +85,9 @@ for (const [text, reason] of [
   ['ежегодно (или 2 года)', 'ambiguous'],
   ['каждый год или 6 месяцев', 'ambiguous'],
   ['раз в полгода или 3 месяца', 'ambiguous'],
+  ['ежегодно или год', 'ambiguous'],
+  ['раз в 3 месяца или месяц', 'ambiguous'],
+  ['ежегодно и полгода', 'unsupported'],
 ]) {
   test('XLSX uncertain recurrence stays invalid, never auto-converted: ' + text.slice(0, 40), () => {
     assert.deepEqual(parseReservePeriodHint(text), invalid(reason));
