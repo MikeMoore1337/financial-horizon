@@ -128,3 +128,20 @@ test('local CLI: rejects unknown schema and oversized CSV', async t => {
   assert.equal(run.status, 1);
   assert.match(run.stderr, /Ошибка:/);
 });
+
+
+test('local CLI: rejects an unwritten FIFO promptly rather than blocking on open', async t => {
+  if (process.platform === 'win32') return t.skip('POSIX FIFO test only');
+  const dir = await mkdtemp(join(tmpdir(), 'fh39-fifo-'));
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  const manifest = join(dir, 'terms.json');
+  const pipe = join(dir, 'bank.csv');
+  await writeFile(manifest, JSON.stringify(contract()), { mode: 0o600 });
+  const mk = spawnSync('mkfifo', [pipe], { encoding: 'utf8' });
+  assert.equal(mk.status, 0, mk.stderr);
+  const call = spawnSync(process.execPath, [script, manifest, pipe, '--json'],
+    { encoding: 'utf8', timeout: 3_000 });
+  assert.equal(call.error, undefined, String(call.error));
+  assert.equal(call.status, 1);
+  assert.match(call.stderr, /Ошибка:/);
+});
