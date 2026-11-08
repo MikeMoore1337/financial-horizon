@@ -54,10 +54,23 @@ export interface LedgerState {
   paymentLinks: PaymentLink[];
   receipts: CommandReceipt[];
 }
+/**
+ * Supplied by the trusted finance API after loading a real payment fact with
+ * profile-scoped authorization. Never accept this structure from the HTTP body.
+ */
+export interface VerifiedPaymentFact {
+  profileId: string;
+  id: string;
+  source: 'settlement' | 'loanPayment';
+  direction: 'income' | 'expense';
+  amountMinor: number;
+  voidedAt: string | null;
+}
 export interface LedgerContext {
   /** Must be resolved from an authenticated session by the calling server. */
   profileId: string;
   actorUserId: string;
+  verifiedPaymentFact?: VerifiedPaymentFact;
 }
 interface CommandBase {
   clientMutationId: string;
@@ -171,8 +184,12 @@ export function monthlyCashFlowMinor(state: LedgerState, month: string): { incom
     if (!original) throw new Error('Отмена без исходной операции');
     const impact = state.postings.filter(p => p.transactionId === tx.id && p.profileId === state.profileId)
       .reduce((sum, p) => add(sum, p.signedMinor), 0);
-    if (original.kind === 'income') incomeMinor = add(incomeMinor, impact);
-    if (original.kind === 'expense' || original.kind === 'payment') expenseMinor = add(expenseMinor, -impact);
+    if (original.kind === 'income' || (original.kind === 'payment' && impact > 0)) {
+      incomeMinor = add(incomeMinor, impact);
+    }
+    if (original.kind === 'expense' || (original.kind === 'payment' && impact < 0)) {
+      expenseMinor = add(expenseMinor, -impact);
+    }
   }
   return { incomeMinor, expenseMinor };
 }
@@ -303,13 +320,29 @@ export function applyLedgerCommand(source: LedgerState, command: LedgerCommand, 
       const a = accountForWrite(state, payload.accountId, command);
       integer(payload.amountMinor, 1);
       const link = payload.link;
+      if (!link || typeof link !== 'object' || Array.isArray(link)) throw new TypeError('Не указан факт оплаты');
       const settlement = 'settlementId' in link ? link.settlementId : undefined;
       const loan = 'loanPaymentId' in link ? link.loanPaymentId : undefined;
       if ((settlement === undefined) === (loan === undefined)) throw new TypeError('Платёж должен ссылаться ровно на один факт оплаты');
-      uuid((settlement ?? loan) as string);
+      const factId = (settlement ?? loan) as string;
+      uuid(factId);
+      const fact = context.verifiedPaymentFact;
+      if (!fact || fact.profileId !== state.profileId || fact.id !== factId
+          || fact.source !== (settlement === undefined ? 'loanPayment' : 'settlement')) {
+        throw new Error('Факт оплаты не подтверждён для этого финансового профиля');
+      }
+      integer(fact.amountMinor, 1);
+      if (fact.voidedAt !== null || fact.amountMinor !== payload.amountMinor) {
+        throw new Error('Сумма факта оплаты не совпадает или факт аннулирован');
+      }
+      if (fact.direction !== 'income' && fact.direction !== 'expense') throw new TypeError('Неизвестное направление оплаты');
+      if (fact.source === 'loanPayment' && fact.direction !== 'expense') {
+        throw new Error('Кредитный платёж не может быть доходом');
+      }
       if (state.paymentLinks.some(p => (settlement && 'settlementId' in p && p.settlementId === settlement)
           || (loan && 'loanPaymentId' in p && p.loanPaymentId === loan))) throw new Error('Оплата уже проведена по счёту');
-      post(state, transaction(state, context, payload.id, 'payment', payload.occurredOn, payload.note), [[a, -payload.amountMinor]]);
+      const signedMinor = fact.direction === 'income' ? payload.amountMinor : -payload.amountMinor;
+      post(state, transaction(state, context, payload.id, 'payment', payload.occurredOn, payload.note), [[a, signedMinor]]);
       state.paymentLinks.push(settlement !== undefined
         ? { profileId: state.profileId, transactionId: payload.id, settlementId: settlement }
         : { profileId: state.profileId, transactionId: payload.id, loanPaymentId: loan as string });
