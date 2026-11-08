@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react';
+import { useMemo, useRef, useState, type FormEvent } from 'react';
 import { Icon } from './Calendar';
 import type { LedgerState } from '../domain/accounts/ledger.ts';
 import {
@@ -103,6 +103,8 @@ export function Accounts({
   const [amount, setAmount] = useState('');
   const [occurredOn, setOccurredOn] = useState('');
   const [busy, setBusy] = useState(false);
+  // Synchronous guard against double-clicks before React commits the busy state.
+  const inFlight = useRef(false);
   const [uncertain, setUncertain] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
@@ -158,6 +160,8 @@ export function Accounts({
   }
 
   async function commit(run: () => Promise<void>) {
+    if (inFlight.current || uncertain || status !== 'ready') return;
+    inFlight.current = true;
     setBusy(true);
     setFeedback(null);
     try {
@@ -171,6 +175,7 @@ export function Accounts({
       setUncertain(true);
       setFeedback('Статус операции не подтверждён. Проверьте состояние на сервере перед повтором.');
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }
