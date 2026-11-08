@@ -114,6 +114,10 @@ def _json(response: httpx.Response) -> dict:
         raise ProviderError("Malformed provider response") from None
     if not isinstance(parsed, dict):
         raise ProviderError("Malformed provider response")
+    # Some OAuth token endpoints return an error envelope with HTTP 200.
+    # Never treat that response as a successful exchange or surface error details.
+    if "error" in parsed and parsed["error"] not in (None, ""):
+        raise ProviderError("Provider rejected authorization")
     return parsed
 
 
