@@ -93,6 +93,9 @@ for (const [text, reason] of [
   ['ежегодно или два квартала', 'ambiguous'],
   ['ежемесячно или две недели', 'ambiguous'],
   ['раз в 3 месяца или 2 дня', 'ambiguous'],
+  ['ежегодно или 1 день', 'ambiguous'],
+  ['раз в 3 месяца или 21 день', 'ambiguous'],
+  ['ежемесячно или один день', 'ambiguous'],
   ['раз в 3 месяца 1 квартал', 'unsupported'],
 ]) {
   test('XLSX uncertain recurrence stays invalid, never auto-converted: ' + text.slice(0, 40), () => {
