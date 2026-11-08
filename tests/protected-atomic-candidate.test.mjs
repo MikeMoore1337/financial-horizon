@@ -270,3 +270,25 @@ test('nested values that would silently disappear during JSON serialization are 
     {...clone(SOURCE), snapshot:new Map([['title','lost']])}), /JSON-объектом/);
   assert.equal(db.tables.get('bundles').size,0);
 });
+
+
+test('review P2: non-enumerable, symbol and class fields cannot be silently cloned away', async () => {
+  const db = mount();
+  const hidden = clone(SOURCE);
+  Object.defineProperty(hidden.snapshot, 'secretAmountCents', {
+    value:12345, enumerable:false, configurable:true,
+  });
+  await assert.rejects(() => createAtomicEncryptedCandidate(USER_A, PASS, hidden), /JSON-объектом/);
+
+  const symbolic = clone(SOURCE);
+  symbolic.snapshot[Symbol('hiddenMoney')] = 12345;
+  await assert.rejects(() => createAtomicEncryptedCandidate(USER_A, PASS, symbolic), /JSON-объектом/);
+
+  class LegacyLedger {
+    constructor(){this.amountCents=12345;}
+  }
+  const custom = {...clone(SOURCE), snapshot:new LegacyLedger()};
+  await assert.rejects(() => createAtomicEncryptedCandidate(USER_A, PASS, custom), /JSON-объектом/);
+  assert.equal(db.tables.get('keysets').size, 0);
+  assert.equal(db.tables.get('bundles').size, 0);
+});

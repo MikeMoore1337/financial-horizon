@@ -198,7 +198,9 @@ export async function createAtomicEncryptedCandidate(
 ): Promise<{epoch: 0; recoveryKey: string}> {
   validScope(scope);
   safeInteger(schemaVersion, 1, 65535, 'schemaVersion');
-  // Pin everything before the first PBKDF2 await, including array contents.
+  // Reject invisible/symbol fields and class instances BEFORE structuredClone
+  // can silently strip them. Then freeze the accepted data before any KDF await.
+  validContents(contents);
   const pinnedContents = structuredClone(contents);
   validContents(pinnedContents);
   const {keyset, recoveryKey, vault} = await createLocalKeyset(scope, passphrase);
