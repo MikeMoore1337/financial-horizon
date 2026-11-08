@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { compareLocalBankCsv } from '../scripts/compare-bank-loan.mjs';
@@ -140,6 +140,23 @@ test('local CLI: rejects an unwritten FIFO promptly rather than blocking on open
   const mk = spawnSync('mkfifo', [pipe], { encoding: 'utf8' });
   assert.equal(mk.status, 0, mk.stderr);
   const call = spawnSync(process.execPath, [script, manifest, pipe, '--json'],
+    { encoding: 'utf8', timeout: 3_000 });
+  assert.equal(call.error, undefined, String(call.error));
+  assert.equal(call.status, 1);
+  assert.match(call.stderr, /Ошибка:/);
+});
+
+test('local CLI: refuses symlinked bank files rather than following swapped paths', async t => {
+  if (process.platform === 'win32') return t.skip('O_NOFOLLOW is POSIX-only');
+  const dir = await mkdtemp(join(tmpdir(), 'fh39-symlink-'));
+  t.after(async () => rm(dir, { recursive: true, force: true }));
+  const manifest = join(dir, 'contract.json');
+  const csvReal = join(dir, 'real.csv');
+  const csvLink = join(dir, 'linked.csv');
+  await writeFile(manifest, JSON.stringify(contract()), { mode: 0o600 });
+  await writeFile(csvReal, reference, { mode: 0o600 });
+  await symlink(csvReal, csvLink);
+  const call = spawnSync(process.execPath, [script, manifest, csvLink],
     { encoding: 'utf8', timeout: 3_000 });
   assert.equal(call.error, undefined, String(call.error));
   assert.equal(call.status, 1);
