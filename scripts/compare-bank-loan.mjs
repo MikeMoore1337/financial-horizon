@@ -3,7 +3,7 @@
  * No fetch, API key, IndexedDB access, output file or network transfer.
  * Run on an owner-controlled machine; never submit real bank data to CI.
  */
-import { readFile } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseSchedule } from '../schedule.js';
@@ -13,11 +13,22 @@ const CONTRACT_LIMIT = 128 * 1024;
 const CSV_LIMIT = 1024 * 1024;
 
 async function readLimited(path, limit) {
-  // Check actual bytes after reading as well: avoid assuming file size from a
-  // separate stat is stable while the user changes their selected file.
-  const bytes = await readFile(path);
-  if (bytes.length === 0 || bytes.length > limit) throw new RangeError('Input size is unsupported');
-  return bytes.toString('utf8');
+  // Keep the read bounded even for a huge file, a FIFO or a file being edited:
+  // never read the full content into memory before enforcing its byte limit.
+  const handle = await open(path, 'r');
+  try {
+    const bytes = Buffer.alloc(limit + 1);
+    let count = 0;
+    while (count < bytes.length) {
+      const { bytesRead } = await handle.read(bytes, count, bytes.length - count, count);
+      if (bytesRead === 0) break;
+      count += bytesRead;
+    }
+    if (count === 0 || count > limit) throw new RangeError('Input size is unsupported');
+    return bytes.subarray(0, count).toString('utf8');
+  } finally {
+    await handle.close();
+  }
 }
 
 export function compareLocalBankCsv(contract, csvText, includeDeltas = false) {
