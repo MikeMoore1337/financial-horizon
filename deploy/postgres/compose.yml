@@ -4,7 +4,10 @@ services:
   db:
     image: postgres:17@sha256:5b96f1a16bd9768b060dd2ffe55cb6225c4d9ef4d214a8b21eb08134869a97e4
     container_name: fh-finance-postgres
-    restart: unless-stopped
+    # Never let Docker daemon reboot bypass the host LUKS2 storage-preflight.
+    # The reviewed deployment/start wrapper is the only supported startup path.
+    # A missing encrypted mount must leave the DB OFF, not reinitialize plaintext.
+    restart: "no"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_DB: postgres
