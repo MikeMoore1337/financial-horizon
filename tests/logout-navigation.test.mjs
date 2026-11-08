@@ -28,6 +28,7 @@ function invoke({email='test@example.com',logout,initialBusy=false}={}){
   activeUserId:'a'.repeat(32),
   authBroadcast:null,
   screenRoot:{unmount:()=>events.push('react-unmount')},
+  navRoots:{unmount:()=>events.push('nav-unmount')},
   $:()=>({replaceChildren:()=>events.push('ledger-cleared')}),
   GUEST_MODE_KEY:'fh-guest-session-v2',
   sessionStorage:{removeItem:key=>events.push('storage-remove:'+key)},
@@ -50,6 +51,7 @@ test('successful logout returns to the login page after server confirmation',asy
  assert.ok(ui.events.indexOf('logout-request')<ui.events.indexOf('redirect:./account.html'));
  assert.ok(ui.events.indexOf('react-unmount')>ui.events.indexOf('logout-request'));
  assert.ok(ui.events.indexOf('react-unmount')<ui.events.indexOf('redirect:./account.html'));
+ assert.ok(ui.events.indexOf('nav-unmount')<ui.events.indexOf('redirect:./account.html'));
  assert.ok(ui.events.indexOf('ledger-cleared')<ui.events.indexOf('redirect:./account.html'));
  assert.ok(!ui.events.includes('render'),'Do not leave user on the ledger after logout');
 });
