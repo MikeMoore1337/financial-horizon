@@ -20,6 +20,7 @@ const kinds: Record<AccountKind, string> = {
 };
 
 export interface AccountCreation {
+  baseRevision: number;
   name: string;
   kind: AccountKind;
   openingMinor: number;
@@ -180,9 +181,10 @@ export function Accounts({
   }
   function submitCreate(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!canCreate || !onCreate) return;
+    if (!canCreate || !onCreate || !snapshot) return;
     try {
       const input: AccountCreation = {
+        baseRevision: snapshot.revision,
         name: validName(name),
         kind,
         openingMinor: parseRubMinor(opening, true),
@@ -404,7 +406,11 @@ export function Accounts({
             )}
             {panel.kind === 'transfer' && (
               <form onSubmit={submitTransfer} className="fh-accounts-form">
-                <label>Откуда<select required value={fromId} onChange={event => setFromId(event.target.value)}>
+                <label>Откуда<select required value={fromId} onChange={event => {
+                    const nextFrom = event.target.value;
+                    setFromId(nextFrom);
+                    if (toId === nextFrom) setToId(active.find(row => row.id !== nextFrom)?.id || '');
+                  }}>
                   {active.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}
                 </select></label>
                 <label>Куда<select required value={toId} onChange={event => setToId(event.target.value)}>
