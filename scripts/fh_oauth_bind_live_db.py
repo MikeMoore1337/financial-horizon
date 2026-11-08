@@ -119,6 +119,11 @@ def validate_db(path: Path) -> None:
 
 def validate_env(raw: str, live: Path) -> bool:
     key = "FH_AUTH_DATABASE_PATH"
+    # Refuse ambiguous assignments rather than silently appending a second key.
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(key) and not line.startswith(key + "="):
+            raise Blocked("STAGED_DB_KEY_MALFORMED")
     current = one_value(raw, key)
     if len(current) > 1:
         raise Blocked("OAUTH_DB_KEY_DUPLICATE")
