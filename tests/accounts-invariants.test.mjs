@@ -185,3 +185,47 @@ test('hydrated snapshot rejects a positive loan payment while allowing income se
   link.settlementId = uuid(5);
   assert.doesNotThrow(() => assertLedgerState(valid), 'positive settlement is a valid income');
 });
+
+test('orphan command receipt cannot suppress missing debit after corrupted restore', () => {
+  let s = create(emptyLedger(uuid(1)), uuid(2), 10_000);
+  s = run(s, 'transaction.record', {
+    id: uuid(18), accountId: uuid(2), kind: 'expense',
+    signedMinor: -500, occurredOn: '2026-11-07',
+  }, revisions(s, uuid(2)));
+  const receipt = s.receipts.at(-1);
+  const command = JSON.parse(receipt.requestFingerprint);
+  const damaged = structuredClone(s);
+  damaged.transactions = [];
+  damaged.postings = [];
+  assert.throws(() => assertLedgerState(damaged), /Квитанция указывает на отсутствующую/);
+  assert.throws(() => applyLedgerCommand(damaged, command, context(damaged.profileId)), /Квитанция указывает на отсутствующую/);
+  assert.equal(accountBalanceMinor(s, uuid(2)), 9_500);
+  assert.equal(damaged.receipts.length, s.receipts.length);
+});
+
+test('receipt target must match the entity kind and exact original command', () => {
+  const s = create(emptyLedger(uuid(1)), uuid(2), 250);
+  const mismatch = structuredClone(s);
+  mismatch.receipts[0].affectedId = uuid(1);
+  assert.throws(() => assertLedgerState(mismatch), /Квитанция указывает на отсутствующую/);
+  const tampered = structuredClone(s);
+  const request = JSON.parse(tampered.receipts[0].requestFingerprint);
+  request.payload.id = uuid(19);
+  tampered.receipts[0].requestFingerprint = JSON.stringify(request);
+  assert.throws(() => assertLedgerState(tampered), /Квитанция указывает на отсутствующую/);
+  const malformed = structuredClone(s);
+  malformed.receipts[0].requestFingerprint = '{not-json';
+  assert.throws(() => assertLedgerState(malformed), /Повреждён исходный запрос/);
+});
+
+test('mixed-case UUID aliases are rejected before persistence or aggregation', () => {
+  const lowercase = uuid(10);
+  const uppercase = lowercase.toUpperCase();
+  const s = create(emptyLedger(uuid(1)), lowercase, 700);
+  assert.notEqual(lowercase, uppercase);
+  assert.throws(() => create(s, uppercase, 100), /UUID/);
+  const damaged = structuredClone(s);
+  damaged.accounts[0].id = uppercase;
+  assert.throws(() => assertLedgerState(damaged), /UUID/);
+  assert.equal(totalBalanceMinor(s), 700);
+});

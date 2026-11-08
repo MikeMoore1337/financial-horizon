@@ -518,3 +518,12 @@ test('fact entity revision is required to prevent stale linked payment postings'
   assert.equal(accountBalanceMinor(accepted.state, id(2)), 9_000);
   assert.equal(s.postings.length, 0);
 });
+
+test('uppercase aliases of existing finance UUIDs cannot create another account', () => {
+  const lower = id(10);
+  const upper = lower.toUpperCase();
+  const s = create(emptyLedger(id(1)), lower, 500);
+  assert.throws(() => create(s, upper, 250), /UUID/);
+  assert.equal(s.accounts.length, 1);
+  assert.equal(totalBalanceMinor(s), 500);
+});

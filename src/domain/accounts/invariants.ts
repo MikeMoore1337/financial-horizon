@@ -6,7 +6,7 @@
 import { MAX_MINOR } from './money.ts';
 import type { LedgerState, LedgerPosting, LedgerTransaction } from './ledger.ts';
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const ACTOR = /^[0-9a-f]{32}$/;
 const KINDS = new Set(['bank', 'card', 'cash', 'savings', 'other']);
 const TRANSACTION_KINDS = new Set(['income', 'expense', 'transfer', 'adjustment', 'payment', 'reversal']);
@@ -162,6 +162,54 @@ export function assertLedgerState(state: LedgerState): void {
     if (receipt.revision > state.revision || receipts.has(receipt.clientMutationId)
       || typeof receipt.requestFingerprint !== 'string' || !receipt.requestFingerprint) {
       throw new Error('Повторяющаяся или повреждённая квитанция');
+    }
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(receipt.requestFingerprint);
+    } catch {
+      throw new Error('Повреждён исходный запрос квитанции');
+    }
+    if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
+      throw new Error('Повреждён исходный запрос квитанции');
+    }
+    const request = decoded as { clientMutationId?: unknown; action?: unknown; payload?: unknown };
+    if (request.clientMutationId !== receipt.clientMutationId
+        || !request.payload || typeof request.payload !== 'object' || Array.isArray(request.payload)) {
+      throw new Error('Квитанция не соответствует исходной команде');
+    }
+    const payload = request.payload as Record<string, unknown>;
+    let targetId: unknown;
+    let targetType: 'account' | 'transaction';
+    switch (request.action) {
+      case 'account.create':
+        targetType = 'account';
+        targetId = payload.id;
+        break;
+      case 'account.update':
+      case 'account.archive':
+      case 'account.unarchive':
+        targetType = 'account';
+        targetId = payload.accountId;
+        break;
+      case 'transaction.record':
+      case 'account.transfer':
+      case 'payment.record':
+      case 'transaction.reverse':
+        targetType = 'transaction';
+        targetId = payload.id;
+        break;
+      case 'transaction.correct':
+        targetType = 'transaction';
+        targetId = payload.replacement && typeof payload.replacement === 'object'
+          ? (payload.replacement as { id?: unknown }).id : undefined;
+        break;
+      default:
+        throw new Error('Неизвестный тип команды в квитанции');
+    }
+    if (targetId !== receipt.affectedId ||
+        (targetType === 'account' ? !accounts.has(receipt.affectedId)
+          : !transactions.has(receipt.affectedId))) {
+      throw new Error('Квитанция указывает на отсутствующую или неверную сущность');
     }
     receipts.add(receipt.clientMutationId);
   }

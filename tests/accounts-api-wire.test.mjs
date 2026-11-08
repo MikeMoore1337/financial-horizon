@@ -127,3 +127,10 @@ test('reversal encoder requires every affected account revision without changing
     postingAccountIds: [id(14), id(14)],
   })), /повторяются/);
 });
+
+test('wire commands reject noncanonical uppercase UUID aliases before sending to PostgreSQL', () => {
+  const upper = id(11).toUpperCase();
+  assert.throws(() => encodeTransfer(transfer({ clientMutationId: upper })), /UUID/);
+  assert.throws(() => encodeTransfer(transfer({ fromAccountId: id(10).toUpperCase() })), /UUID/);
+  assert.throws(() => encodeReversal(reversal({ transactionId: id(13).toUpperCase() })), /UUID/);
+});

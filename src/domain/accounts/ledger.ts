@@ -101,7 +101,7 @@ export interface AppliedLedgerCommand {
   replayed: boolean;
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const ACTOR_RE = /^[0-9a-f]{32}$/;
 const KINDS = new Set<AccountKind>(['bank', 'card', 'cash', 'savings', 'other']);
 

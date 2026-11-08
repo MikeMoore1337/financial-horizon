@@ -3,7 +3,7 @@
  * No HTTP calls, no storage, no client-derived access tokens or profile/actor IDs.
  * Server-side validation, If-Match handling and idempotency remain authoritative in #67.
  */
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const STRONG_ETAG = /^"[^"\r\n]+"$/;
 const MAX_MINOR = 1_000_000_000_000;
 
