@@ -337,15 +337,28 @@ def stage_isolated_python(auth_py: Path, new_backend: Path,
     if not requirements.is_file():
         raise Gate("REQUIREMENTS_NOT_FOUND")
     try:
-        command([str(auth_py), "-m", "venv", "--copies", str(target)],
-                timeout=120, failure_code="ISOLATED_VENV_CREATION_FAILED")
+        # Some production Python installations use uv-built virtualenvs
+        # without pip/ensurepip. Prefer uv when present, otherwise use the
+        # standard venv+pip path. Both targets are release-private.
+        uv = shutil.which("uv")
+        if uv:
+            command([uv, "venv", "--python", str(auth_py), str(target)],
+                    timeout=120, failure_code="ISOLATED_VENV_CREATION_FAILED")
+        else:
+            command([str(auth_py), "-m", "venv", "--copies", str(target)],
+                    timeout=120, failure_code="ISOLATED_VENV_CREATION_FAILED")
         isolated_py = target / "bin" / "python"
         if not isolated_py.is_file():
             raise Gate("ISOLATED_VENV_PYTHON_MISSING")
-        command([str(isolated_py), "-m", "pip", "install", "--no-input",
-                 "--disable-pip-version-check", "--require-virtualenv",
-                 "-r", str(requirements)],
-                timeout=360, failure_code="ISOLATED_DEPS_INSTALL_FAILED")
+        if uv:
+            command([uv, "pip", "install", "--python", str(isolated_py),
+                     "--no-progress", "-r", str(requirements)],
+                    timeout=360, failure_code="ISOLATED_DEPS_INSTALL_FAILED")
+        else:
+            command([str(isolated_py), "-m", "pip", "install", "--no-input",
+                     "--disable-pip-version-check", "--require-virtualenv",
+                     "-r", str(requirements)],
+                    timeout=360, failure_code="ISOLATED_DEPS_INSTALL_FAILED")
         modules = "import fastapi, uvicorn, httpx, pwdlib, joserfc, cryptography"
         command([str(isolated_py), "-c", modules],
                 timeout=30, failure_code="ISOLATED_DEPS_IMPORT_FAILED")
