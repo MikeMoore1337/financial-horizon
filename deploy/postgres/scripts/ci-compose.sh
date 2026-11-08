@@ -76,6 +76,9 @@ echo "CI_FINANCE_DAEMON_AUTO_RESTART_DISABLED_PASS"
 unit=deploy/postgres/systemd/fh-finance-postgres.service
 grep -Fq 'RequiresMountsFor=/srv/financial-horizon-finance/pgdata' "$unit"
 grep -Fq 'ConditionPathIsMountPoint=/srv/financial-horizon-finance/pgdata' "$unit"
+# GitHub Contents creates new scripts with Git mode 100644. The unit must
+# invoke it through /usr/bin/bash, not direct exec (which gives exit 126).
+grep -Fq 'exec /usr/bin/bash' "$unit"
 grep -Fq 'guarded-start.sh' "$unit"
 grep -Fq 'storage-preflight.sh' deploy/postgres/scripts/guarded-start.sh
 grep -Fq 'FH_FINANCE_APPROVED_SHA' deploy/postgres/scripts/guarded-start.sh
