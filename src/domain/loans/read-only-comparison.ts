@@ -3,13 +3,13 @@
  * No IO, no real-payment import, no ledger writes, no migration, no bank parity claim.
  */
 import { calculateLoan } from './engine.ts';
-import { prepareLegacyLoanPreview } from './legacy-preview.ts';
-import { reconcileLoanSchedule } from './reconcile.ts';
-import type {
-  ExplicitLoanTermsSelection,
-  LegacyLoanPreviewGate,
-  StoredLoanSnapshot,
+import {
+  prepareLegacyLoanPreview,
+  type ExplicitLoanTermsSelection,
+  type LegacyLoanPreviewGate,
+  type StoredLoanSnapshot,
 } from './legacy-preview.ts';
+import { reconcileLoanSchedule } from './reconcile.ts';
 import type { BankScheduleRow, LoanResult, ScheduleReconciliation } from './types.ts';
 
 export type LoanComparisonStatus =
