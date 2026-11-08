@@ -78,3 +78,8 @@ FH_FINANCE_CI_ALLOW_BOOTSTRAP=yes environment. Never point it at production.
    A passing isolated SQL service is not evidence of deployed API/sync.
 
 No paid API, proprietary runtime, personal finance data or cross-project token.
+
+
+### Internal atomic payment facts (feature OFF)
+
+The SQL core also supports internal-only settlement.payment.record and loan.payment.record commands: in one RLS-locked SQL transaction it inserts the verified obligation/loan fact, **exactly one signed ledger posting**, one uniquely constrained payment link, one receipt and two ordered change_log rows under **one** finance revision. No separate debit can be accidentally applied by the operation itself. The accepted public v1 HTTP router refuses these unpublished action names; their final UI/API semantics and safe cancellation must be version-reviewed with #6/#39/#67. This is not a claim that payments are live.

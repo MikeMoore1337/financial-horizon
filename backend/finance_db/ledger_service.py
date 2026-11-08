@@ -29,6 +29,7 @@ _TYPES = frozenset(("bank", "card", "cash", "savings", "other"))
 _INTERNAL_ACTIONS = frozenset((
     "account.create", "account.update", "account.archive", "account.unarchive",
     "transaction.record", "account.transfer", "transaction.reverse",
+    "settlement.payment.record", "loan.payment.record",
 ))
 _PUBLIC_V1_ACTIONS = frozenset(("account.transfer", "transaction.reverse"))
 
@@ -259,6 +260,7 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
     affected_revision: int
     change_kind = "upsert"
     change_payload: dict[str, Any] = {}
+    extra_changes: list[tuple[str, UUID, int, dict[str, Any]]] = []
 
     if action == "account.create":
         _shape(payload, {"id", "name", "kind", "currency", "opening_minor"},
@@ -326,6 +328,102 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         change_kind = "ledger_posted"
         change_payload = {"account_id": str(acc), "signed_minor": amount,
                           "transaction_kind": kind}
+    elif action in ("settlement.payment.record", "loan.payment.record"):
+        is_settlement = action == "settlement.payment.record"
+        required = ({
+            "transaction_id", "fact_id", "account_id", "amount_minor",
+            "paid_on", "obligation_id", "occurrence_on",
+        } if is_settlement else {
+            "transaction_id", "fact_id", "account_id", "amount_minor",
+            "paid_on", "loan_id", "strategy",
+        })
+        _shape(payload, required, required)
+        target = _uuid(payload["transaction_id"])
+        fact_id = _uuid(payload["fact_id"])
+        acc = _uuid(payload["account_id"])
+        amount = _integer(payload["amount_minor"], 1, MAX_MINOR)
+        paid_on = _date(payload["paid_on"])
+        _account(session, p, acc, versions)
+        fact_source = _uuid(payload["obligation_id"] if is_settlement else payload["loan_id"])
+        if is_settlement:
+            source = session.execute(text("""
+                SELECT direction,entity_revision,deleted_at FROM obligations
+                WHERE profile_id=:p AND id=:id FOR UPDATE
+            """), {"p": p, "id": fact_source}).mappings().one_or_none()
+            if not source or source["deleted_at"] is not None:
+                raise FinanceCommandError("semantic_conflict",
+                                          "Обязательство недоступно", 409)
+            _require_revision(versions, fact_source, source["entity_revision"])
+            occurrence = _date(payload["occurrence_on"])
+            if source["direction"] not in ("income", "expense"):
+                raise _reject("Неизвестное направление обязательства")
+            signed = amount if source["direction"] == "income" else -amount
+            session.execute(text("""
+                INSERT INTO settlements
+                  (profile_id,id,obligation_id,occurrence_on,paid_on,amount_minor)
+                VALUES (:p,:id,:source,:occurrence,:date,:amount)
+            """), {
+                "p": p, "id": fact_id, "source": fact_source,
+                "occurrence": occurrence, "date": paid_on, "amount": amount,
+            })
+            link_field = "settlement_id"
+            fact_kind = "settlement"
+            fact_payload = {
+                "kind": fact_kind, "obligation_id": str(fact_source),
+                "occurrence_on": occurrence.isoformat(),
+                "paid_on": paid_on.isoformat(), "amount_minor": amount,
+                "direction": source["direction"],
+            }
+        else:
+            source = session.execute(text("""
+                SELECT entity_revision,deleted_at FROM loans
+                WHERE profile_id=:p AND id=:id FOR UPDATE
+            """), {"p": p, "id": fact_source}).mappings().one_or_none()
+            if not source or source["deleted_at"] is not None:
+                raise FinanceCommandError("semantic_conflict",
+                                          "Кредит недоступен", 409)
+            _require_revision(versions, fact_source, source["entity_revision"])
+            strategy = payload["strategy"]
+            if not isinstance(strategy, str) or strategy not in ("term", "amount"):
+                raise _reject("Неверная стратегия кредитного платежа")
+            signed = -amount
+            session.execute(text("""
+                INSERT INTO loan_payments
+                  (profile_id,id,loan_id,paid_on,amount_minor,strategy)
+                VALUES (:p,:id,:source,:date,:amount,:strategy)
+            """), {
+                "p": p, "id": fact_id, "source": fact_source,
+                "date": paid_on, "amount": amount, "strategy": strategy,
+            })
+            link_field = "loan_payment_id"
+            fact_kind = "loan_payment"
+            fact_payload = {
+                "kind": fact_kind, "loan_id": str(fact_source),
+                "paid_on": paid_on.isoformat(),
+                "amount_minor": amount, "strategy": strategy,
+            }
+        _post(session, p, target, "payment", scope.user_id, paid_on,
+              [(acc, signed)])
+        # Both fact types have their own profile-scoped unique constraints;
+        # SQL deferred triggers validate the payment sign and exact amount.
+        if link_field == "settlement_id":
+            session.execute(text("""
+                INSERT INTO ledger_payment_links(profile_id,transaction_id,settlement_id)
+                VALUES (:p,:tx,:fact)
+            """), {"p": p, "tx": target, "fact": fact_id})
+        else:
+            session.execute(text("""
+                INSERT INTO ledger_payment_links(profile_id,transaction_id,loan_payment_id)
+                VALUES (:p,:tx,:fact)
+            """), {"p": p, "tx": target, "fact": fact_id})
+        affected_revision = 1
+        change_kind = "ledger_posted"
+        change_payload = {
+            "transaction_kind": "payment",
+            "account_id": str(acc), "signed_minor": signed,
+            link_field: str(fact_id),
+        }
+        extra_changes.append(("upsert", fact_id, 1, fact_payload))
     elif action == "account.transfer":
         _shape(payload, {"from_account_id", "to_account_id", "amount_minor", "occurred_on"},
                {"from_account_id", "to_account_id", "amount_minor", "occurred_on"})
@@ -386,15 +484,25 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
     session.execute(text("""
         UPDATE finance_profiles SET revision=:r,updated_at=now() WHERE id=:p
     """), {"r": new_revision, "p": p})
-    # Preserve the entity revision *as of this event* in private change_log,
-    # not the entity's current revision at a later delta read.
-    audit_payload = {**change_payload, "_entity_revision": affected_revision}
-    session.execute(text("""
-        INSERT INTO change_log (profile_id,revision,ordinal,schema_version,kind,entity_id,payload)
-        VALUES (:p,:r,0,1,:kind,:id,CAST(:payload AS jsonb))
-    """), {"p": p, "r": new_revision, "kind": change_kind,
-           "id": target, "payload": json.dumps(audit_payload, ensure_ascii=False)})
-    return _change(new_revision, change_kind, target, affected_revision, change_payload)
+    # A single profile revision may contain multiple logically coupled changes
+    # (payment fact + signed ledger transaction). Never paginate half a revision.
+    changes = [(change_kind, target, affected_revision, change_payload), *extra_changes]
+    for ordinal, (kind, entity_id, entity_revision, event_payload) in enumerate(changes):
+        audit_payload = {**event_payload, "_entity_revision": entity_revision}
+        session.execute(text("""
+            INSERT INTO change_log
+              (profile_id,revision,ordinal,schema_version,kind,entity_id,payload)
+            VALUES (:p,:r,:ordinal,1,:kind,:id,CAST(:payload AS jsonb))
+        """), {
+            "p": p, "r": new_revision, "ordinal": ordinal,
+            "kind": kind, "id": entity_id,
+            "payload": json.dumps(audit_payload, ensure_ascii=False),
+        })
+    return [
+        {**_change(new_revision, kind, entity_id, entity_revision, event_payload),
+         "ordinal": ordinal}
+        for ordinal, (kind, entity_id, entity_revision, event_payload) in enumerate(changes)
+    ]
 
 
 def submit_account_command(
@@ -432,9 +540,9 @@ def submit_account_command(
             raise FinanceCommandError("semantic_conflict",
                                       "Профиль изменился на другом устройстве", 409, revision)
         new_revision = revision + 1
-        change = _apply(session, scope, body, versions, new_revision)
+        changes = _apply(session, scope, body, versions, new_revision)
         ack = {"schema_version": 1, "client_mutation_id": str(mutation_id),
-               "revision": new_revision, "replayed": False, "changes": [change]}
+               "revision": new_revision, "replayed": False, "changes": changes}
         session.execute(text("""
             INSERT INTO command_receipts
             (profile_id,client_mutation_id,request_sha256,status_code,committed_revision,response_body)

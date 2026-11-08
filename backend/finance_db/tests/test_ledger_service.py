@@ -335,3 +335,109 @@ def test_untrusted_account_kind_and_missing_opening_never_raise_unhandled_type_e
         assert exc.value.code == "invalid_command"
     assert get_account_snapshot(engine, scope=scope).body["revision"] == 0
     assert ledger_counts(engine, scope) == (0, 0, 0, 0)
+
+
+def test_settlement_payment_posts_exact_signed_income_and_expense_once(context):
+    engine, scope = context
+    a, _ = add_account(engine, scope, opening=10_000)
+    for direction, amount in (("income", 2000), ("expense", -700)):
+        obligation, payment_fact, txid = uuid4(), uuid4(), uuid4()
+        with finance_transaction(engine, verified_user_id=scope.user_id,
+                                 profile_id=scope.profile_id) as session:
+            session.execute(text("""
+                INSERT INTO obligations
+                  (profile_id,id,title,direction,amount_minor,starts_on)
+                VALUES (:p,:id,'Synthetic bill',:direction,5000,'2026-11-08')
+            """), {"p": scope.profile_id, "id": obligation, "direction": direction})
+        snap = get_account_snapshot(engine, scope=scope)
+        revision = snap.body["entities"][0]["entity_revision"]
+        cmd = make_command(snap.body["revision"], "settlement.payment.record", {
+            "transaction_id": str(txid), "fact_id": str(payment_fact),
+            "account_id": a, "obligation_id": str(obligation),
+            "amount_minor": abs(amount), "paid_on": "2026-11-08",
+            "occurrence_on": "2026-11-08",
+        }, {a: revision, str(obligation): 1})
+        reply = call(engine, scope, cmd, snap.etag)
+        assert reply.status == 201 and len(reply.body["changes"]) == 2
+        assert reply.body["changes"][0]["kind"] == "ledger_posted"
+        assert reply.body["changes"][0]["payload"]["signed_minor"] == amount
+        assert reply.body["changes"][1]["kind"] == "upsert"
+        assert reply.body["changes"][1]["ordinal"] == 1
+        assert reply.body["revision"] == snap.body["revision"] + 1
+        repeated = call(engine, scope, cmd, snap.etag)
+        assert repeated.status == 200 and repeated.body["replayed"] is True
+        with finance_transaction(engine, verified_user_id=scope.user_id,
+                                 profile_id=scope.profile_id) as session:
+            posting = session.execute(text("""
+                SELECT signed_minor FROM ledger_postings
+                WHERE transaction_id=:id
+            """), {"id": txid}).scalar_one()
+            assert posting == amount
+            assert session.execute(text("""
+                SELECT count(*) FROM ledger_payment_links
+                WHERE settlement_id=:id
+            """), {"id": payment_fact}).scalar_one() == 1
+        page = get_finance_delta(
+            engine, scope=scope, since_revision=snap.body["revision"], page_revisions=1
+        )
+        assert page.body["next_since_revision"] == reply.body["revision"]
+        assert len(page.body["changes"]) == 2
+        assert [c["ordinal"] for c in page.body["changes"]] == [0, 1]
+    state = get_account_snapshot(engine, scope=scope)
+    assert state.body["entities"][0]["data"]["balance_minor"] == 11_300
+
+
+def test_loan_payment_debits_cash_atomically_and_blocks_invalid_strategy(context):
+    engine, scope = context
+    a, _ = add_account(engine, scope, opening=15_000)
+    loan_id, payment_id, txid = uuid4(), uuid4(), uuid4()
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        session.execute(text("""
+            INSERT INTO loans
+              (profile_id,id,title,opening_minor,payment_minor,apr_basis_points,
+               term_months,due_day,as_of_date)
+            VALUES (:p,:id,'Synthetic loan',50000,5000,1200,24,15,'2026-11-08')
+        """), {"p": scope.profile_id, "id": loan_id})
+    before = get_account_snapshot(engine, scope=scope)
+    cmd = make_command(before.body["revision"], "loan.payment.record", {
+        "transaction_id": str(txid), "fact_id": str(payment_id),
+        "account_id": a, "loan_id": str(loan_id), "amount_minor": 5000,
+        "paid_on": "2026-11-08", "strategy": "term",
+    }, {a: before.body["entities"][0]["entity_revision"], str(loan_id): 1})
+    posted = call(engine, scope, cmd, before.etag)
+    assert posted.status == 201 and len(posted.body["changes"]) == 2
+    assert posted.body["changes"][0]["payload"]["signed_minor"] == -5000
+    assert get_account_snapshot(engine, scope=scope).body["entities"][0]["data"]["balance_minor"] == 10_000
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        assert session.execute(text("""
+            SELECT amount_minor FROM loan_payments WHERE id=:p
+        """), {"p": payment_id}).scalar_one() == 5000
+        assert session.execute(text("""
+            SELECT loan_payment_id FROM ledger_payment_links WHERE transaction_id=:tx
+        """), {"tx": txid}).scalar_one() == payment_id
+
+    fresh = get_account_snapshot(engine, scope=scope)
+    bad = make_command(fresh.body["revision"], "loan.payment.record", {
+        **cmd["payload"], "transaction_id": str(uuid4()), "fact_id": str(uuid4()),
+        "strategy": "malicious",
+    }, {a: fresh.body["entities"][0]["entity_revision"], str(loan_id): 1})
+    with pytest.raises(FinanceCommandError) as exc:
+        call(engine, scope, bad, fresh.etag)
+    assert exc.value.code == "invalid_command"
+    assert get_account_snapshot(engine, scope=scope).body["revision"] == fresh.body["revision"]
+
+
+def test_linked_payment_commands_are_off_in_public_v1(context):
+    engine, scope = context
+    snap = get_account_snapshot(engine, scope=scope)
+    for action in ["settlement.payment.record", "loan.payment.record"]:
+        cmd = make_command(snap.body["revision"], action, {
+            "transaction_id": str(uuid4()), "fact_id": str(uuid4()),
+            "account_id": str(uuid4()), "amount_minor": 100,
+            "paid_on": "2026-11-08", "loan_id": str(uuid4()), "strategy": "term",
+        })
+        with pytest.raises(FinanceCommandError) as exc:
+            call(engine, scope, cmd, snap.etag, internal=False)
+        assert exc.value.code == "invalid_command"
