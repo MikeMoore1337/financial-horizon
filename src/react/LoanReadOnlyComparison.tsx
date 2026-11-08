@@ -150,6 +150,7 @@ export function LoanReadOnlyComparison({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const openButtonRef = useRef<HTMLButtonElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const csvRequest = useRef(0);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -210,6 +211,7 @@ export function LoanReadOnlyComparison({
     const file = input.files?.[0];
     input.value = '';
     if (!file) return;
+    const request = ++csvRequest.current;
     // Fail closed: a rejected file must not leave the last bank result visible.
     setLocalRows(null);
     setResult(null);
@@ -224,11 +226,13 @@ export function LoanReadOnlyComparison({
         allowMissingBalance: true,
       }) as BankScheduleRow[];
       if (parsed.length > 1499) throw new RangeError('Too many bank rows');
+      if (request !== csvRequest.current) return;
       const next = accepted ? prepareReadOnlyLoanComparison(snapshot, accepted, parsed) : null;
       setLocalRows(parsed);
       setResult(next);
       setRowsVisible(25);
     } catch {
+      if (request !== csvRequest.current) return;
       setFileError('Не удалось разобрать CSV. Проверьте даты и заголовки столбцов.');
     }
   }
@@ -296,6 +300,7 @@ export function LoanReadOnlyComparison({
               type="button"
               className="button-text"
               onClick={() => {
+                ++csvRequest.current;
                 const fallback = bankSchedule.length ? bankSchedule : null;
                 setLocalRows(null);
                 setResult(
