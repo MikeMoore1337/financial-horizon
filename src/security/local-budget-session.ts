@@ -30,6 +30,8 @@ export class LocalBudgetSession {
   }
 
   get selectedScope(): LocalScope | null { return this.#scope; }
+  /** Public fencing counter, not an auth credential. It changes on every lock/unlock. */
+  get lifecycleVersion(): number { return this.#generation; }
 
   /** Must be called with a verified session user ID or an explicit guest scope. */
   selectScope(scope: LocalScope): void {
