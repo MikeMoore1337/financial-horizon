@@ -35,6 +35,11 @@ function mustId(id: string, what: string): void {
     throw new RangeError(`${what} ID must be nonempty and contain no NUL`);
   }
 }
+function optionalBoolean(value: unknown, name: string): void {
+  if (value !== undefined && typeof value !== 'boolean') {
+    throw new RangeError(`${name} must be boolean when provided`);
+  }
+}
 function isIncome(plan: PlannedFlowDto): boolean { return plan.kind === 'income'; }
 
 function validOccurrence(plan: PlannedFlowDto, occurrenceDate: string): boolean {
@@ -75,6 +80,7 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
   const plans = new Map<string, PlannedFlowDto>();
   for (const plan of input.plans) {
     mustId(plan.id, 'Plan');
+    optionalBoolean(plan.cancelled, 'plan.cancelled');
     if (plans.has(plan.id)) throw new RangeError('Duplicate plan ID');
     if (!['income', 'obligation', 'irregular', 'loan'].includes(plan.kind)) {
       throw new RangeError('Unknown plan kind');
@@ -97,6 +103,7 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
   const overrides = new Map<string, OccurrenceOverrideDto>();
   let anchorLimit = end;
   for (const edit of input.overrides ?? []) {
+    optionalBoolean(edit.cancelled, 'override.cancelled');
     const plan = plans.get(edit.planId);
     if (!plan || !validOccurrence(plan, edit.occurrenceDate)) {
       throw new RangeError('Override references an unknown plan occurrence');
@@ -113,6 +120,7 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
   const actualIds = new Set<string>();
   for (const actual of input.actuals) {
     mustId(actual.id, 'Actual');
+    optionalBoolean(actual.voided, 'actual.voided');
     if (actualIds.has(actual.id)) throw new RangeError('Duplicate actual ID');
     actualIds.add(actual.id);
     const date = dayNumber(actual.date);
@@ -167,6 +175,7 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
   const reservedIds = new Set<string>();
   for (const reserve of input.reserves ?? []) {
     mustId(reserve.id, 'Reserve movement');
+    optionalBoolean(reserve.voided, 'reserve.voided');
     if (reservedIds.has(reserve.id)) throw new RangeError('Duplicate reserve movement ID');
     reservedIds.add(reserve.id);
     const day = dayNumber(reserve.date);

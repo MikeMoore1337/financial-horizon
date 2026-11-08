@@ -33,3 +33,5 @@ npm test
 CI runs Node.js 24. Tests contain only synthetic integers and deliberately include 20,000 ₽ - 25,000 ₽ = **-5,000 ₽ on the payment due date before salary**; other cases cover yearly rollover, leap dates, partial/voided payments, overdue debt, reserve releases, early payoff supplied by adapter and independent conservation checks.
 
 An explicitly supplied empty `untilDate` or occurrence override `date` is invalid; omit the property to use an open-ended recurrence or unchanged due date. Runtime validation does not treat empty strings as absent.
+
+Optional cancellation/void flags (`plan.cancelled`, `override.cancelled`, `actual.voided`, `reserve.voided`) require native JSON booleans when present. Strings such as `"false"`, numbers and `null` are rejected rather than truthiness-coerced; malformed imported records must not silently suppress planned payments, recorded cash movements or reserves. Omit the field when unset.
