@@ -13,8 +13,8 @@ from sqlalchemy import text
 
 from backend.finance_db.db import create_finance_engine, finance_transaction
 from backend.finance_db.ledger_service import (
-    FinanceCommandError, VerifiedFinanceScope, get_account_snapshot,
-    submit_account_command,
+    FinanceCommandError, VerifiedFinanceScope, ensure_verified_profile,
+    get_account_snapshot, submit_account_command,
 )
 
 
@@ -288,3 +288,50 @@ def test_rejects_unpublished_account_actions_in_public_v1(context):
         call(engine, scope, cmd, snap.etag, internal=False)
     assert exc.value.code == "invalid_command"
     assert get_account_snapshot(engine, scope=scope).body["revision"] == 0
+
+
+def test_profile_provisioning_is_stable_scoped_and_idempotent(context):
+    engine, _ = context
+    user_id = uuid4().hex
+    namespace = uuid4()  # Synthetic server-side static namespace.
+    scope = ensure_verified_profile(
+        engine, verified_user_id=user_id, server_namespace=namespace,
+    )
+    again = ensure_verified_profile(
+        engine, verified_user_id=user_id, server_namespace=namespace,
+    )
+    assert scope == again
+    assert isinstance(scope.profile_id, type(namespace))
+    assert get_account_snapshot(engine, scope=scope).body["revision"] == 0
+    with finance_transaction(engine, verified_user_id=user_id, profile_id=scope.profile_id) as s:
+        assert s.execute(text("""
+            SELECT count(*) FROM finance_profiles WHERE id=:id
+        """), {"id": scope.profile_id}).scalar_one() == 1
+
+    stranger = ensure_verified_profile(
+        engine, verified_user_id=uuid4().hex, server_namespace=namespace,
+    )
+    assert stranger.profile_id != scope.profile_id
+    with pytest.raises(FinanceCommandError) as exc:
+        get_account_snapshot(engine, scope=VerifiedFinanceScope(stranger.user_id, scope.profile_id))
+    assert exc.value.code == "forbidden"
+    with pytest.raises(ValueError):
+        ensure_verified_profile(engine, verified_user_id="made-up-id", server_namespace=namespace)
+
+
+def test_untrusted_account_kind_and_missing_opening_never_raise_unhandled_type_errors(context):
+    engine, scope = context
+    snap = get_account_snapshot(engine, scope=scope)
+    for invalid in [
+        {"id": str(uuid4()), "name": "X", "kind": {"name": "bank"},
+         "currency": "RUB", "opening_minor": 0},
+        {"id": str(uuid4()), "name": "X", "kind": "bank", "currency": "RUB"},
+        {"id": str(uuid4()), "name": "X", "kind": "bank",
+         "currency": "RUB", "opening_minor": True},
+    ]:
+        cmd = make_command(snap.body["revision"], "account.create", invalid)
+        with pytest.raises(FinanceCommandError) as exc:
+            call(engine, scope, cmd, snap.etag)
+        assert exc.value.code == "invalid_command"
+    assert get_account_snapshot(engine, scope=scope).body["revision"] == 0
+    assert ledger_counts(engine, scope) == (0, 0, 0, 0)
