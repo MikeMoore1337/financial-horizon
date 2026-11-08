@@ -126,6 +126,19 @@ def _safe_balance(amount: object) -> int:
     return value
 
 
+def derive_verified_scope(verified_user_id: str, server_namespace: UUID) -> VerifiedFinanceScope:
+    """Stable opaque profile UUID derived ONLY after session verification."""
+    if (not isinstance(verified_user_id, str)
+        or not re.fullmatch(r"[0-9a-f]{32}", verified_user_id)):
+        raise ValueError("A verified FH auth session is required")
+    if not isinstance(server_namespace, UUID):
+        raise ValueError("Server profile namespace must be configured")
+    return VerifiedFinanceScope(
+        verified_user_id,
+        uuid5(server_namespace, "financial-horizon:finance-profile:v1:" + verified_user_id),
+    )
+
+
 def ensure_verified_profile(
     engine: Engine, *, verified_user_id: str, server_namespace: UUID,
 ) -> VerifiedFinanceScope:
@@ -135,13 +148,8 @@ def ensure_verified_profile(
     alongside recovery materials. Not a user-entered UUID or secret token.
     Only call after actual AuthStore.current() authenticated this principal.
     """
-    if (not isinstance(verified_user_id, str)
-        or not re.fullmatch(r"[0-9a-f]{32}", verified_user_id)):
-        raise ValueError("A verified FH auth session is required")
-    if not isinstance(server_namespace, UUID):
-        raise ValueError("Server profile namespace must be configured")
-    profile_id = uuid5(server_namespace, "financial-horizon:finance-profile:v1:" + verified_user_id)
-    scope = VerifiedFinanceScope(verified_user_id, profile_id)
+    scope = derive_verified_scope(verified_user_id, server_namespace)
+    profile_id = scope.profile_id
     with finance_transaction(engine, verified_user_id=scope.user_id,
                              profile_id=scope.profile_id) as session:
         # RLS FOR ALL, including INSERT and ON CONFLICT, still applies.
