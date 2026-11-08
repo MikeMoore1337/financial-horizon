@@ -4,6 +4,7 @@
  */
 import {
   createLocalKeyset,
+  rotateLocalRecoveryKey,
   type EncryptedLocalRecordV1,
   type LocalKeysetV1,
   type LocalScope,
@@ -325,4 +326,65 @@ export async function compareAndSwapAtomicEncryptedCandidate(
     });
   } finally { db.close(); }
   return nextEpoch;
+}
+
+
+/**
+ * Atomic replacement of ONLY the recovery wrapping slot. Requires both an
+ * unlocked, scope-bound local session and the original LOCAL passphrase.
+ *
+ * The passphrase is deliberately mandatory, not an old recovery key: should
+ * the tab close after commit but before the secret can be shown, the owner can
+ * unlock with the unchanged passphrase and reissue again, without data loss.
+ * The encrypted snapshot, outbox, conflict inbox and epoch are NEVER touched.
+ */
+export async function rotateAtomicEncryptedRecoveryKey(
+  scope: LocalScope, session: LocalBudgetSession, passphrase: string,
+): Promise<{recoveryKey: string}> {
+  validScope(scope);
+  const lease = session.lifecycleVersion;
+  activeSession(session, scope, lease);
+  const original = await readPair(scope);
+  activeSession(session, scope, lease);
+  if (!original) throw Error('Защищённая копия отсутствует');
+  const pinned = JSON.stringify(original.keyset);
+  const rotated = await rotateLocalRecoveryKey(original.keyset, passphrase, scope);
+  activeSession(session, scope, lease);
+  const db = await openDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction([KEYSETS, BUNDLES], 'readwrite');
+      const currentKey = tx.objectStore(KEYSETS).get(scope);
+      const currentBundle = tx.objectStore(BUNDLES).get(scope);
+      let cause: Error | null = null;
+      currentBundle.onsuccess = () => {
+        try {
+          activeSession(session, scope, lease);
+          const keyset = currentKey.result as LocalKeysetV1 | undefined;
+          const bundle = currentBundle.result as ProtectedAtomicBundle | undefined;
+          if (!keyset || !bundle) throw Error('Защищённая копия отсутствует');
+          validateBundle(bundle, keyset, scope);
+          // No lost key rotation or concurrent outbox update; compare under
+          // the native readwrite lock, never around an async Web Crypto await.
+          if (JSON.stringify(keyset) !== pinned ||
+            bundle.epoch !== original.bundle.epoch ||
+            bundle.keyId !== original.bundle.keyId ||
+            bundle.schemaVersion !== original.bundle.schemaVersion) {
+            throw Error('Ключи или финансовые данные изменились в другой вкладке');
+          }
+          tx.objectStore(KEYSETS).put(rotated.keyset, scope);
+        } catch (error) {
+          cause = error instanceof Error ? error : Error('Ошибка смены ключа восстановления');
+          tx.abort();
+        }
+      };
+      tx.oncomplete = () => {
+        try { activeSession(session, scope, lease); resolve(); }
+        catch (error) { reject(error); }
+      };
+      tx.onerror = () => reject(cause || tx.error || Error('Ошибка смены ключа восстановления'));
+      tx.onabort = () => reject(cause || tx.error || Error('Смена ключа восстановления отменена'));
+    });
+  } finally { db.close(); }
+  return {recoveryKey: rotated.recoveryKey};
 }
