@@ -75,10 +75,14 @@ function assertPureJson(value: unknown, depth = 0, visited = new Set<object>()):
   visited.add(value);
   if (Array.isArray(value)) {
     if (Object.keys(value).length !== value.length ||
+      Object.getOwnPropertyNames(value).length !== value.length + 1 ||
       Object.getOwnPropertySymbols(value).length) throw Error('Некорректный финансовый массив');
     for (let i = 0; i < value.length; i++) {
-      if (!Object.hasOwn(value, i)) throw Error('Пропущенный элемент финансового массива');
-      assertPureJson(value[i], depth + 1, visited);
+      const descriptor = Object.getOwnPropertyDescriptor(value, i);
+      if (!descriptor || !('value' in descriptor)) {
+        throw Error('Недопустимый элемент финансового массива');
+      }
+      assertPureJson(descriptor.value, depth + 1, visited);
     }
   } else {
     const prototype = Object.getPrototypeOf(value);
@@ -87,7 +91,10 @@ function assertPureJson(value: unknown, depth = 0, visited = new Set<object>()):
       Object.getOwnPropertySymbols(value).length) {
       throw Error('Финансовые данные должны быть обычным JSON-объектом');
     }
-    for (const entry of Object.values(value)) assertPureJson(entry, depth + 1, visited);
+    for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(value))) {
+      if (!('value' in descriptor)) throw Error('Недопустимое свойство финансового JSON');
+      assertPureJson(descriptor.value, depth + 1, visited);
+    }
   }
   visited.delete(value);
 }

@@ -292,3 +292,19 @@ test('review P2: non-enumerable, symbol and class fields cannot be silently clon
   assert.equal(db.tables.get('keysets').size, 0);
   assert.equal(db.tables.get('bundles').size, 0);
 });
+
+
+test('financial arrays with hidden fields and accessor properties reject without loss', async () => {
+  const db = mount();
+  const hidden = clone(SOURCE);
+  Object.defineProperty(hidden.outbox, 'hiddenPayment', {value:9001, enumerable:false});
+  await assert.rejects(() => createAtomicEncryptedCandidate(USER_A, PASS, hidden), /финансовый массив/);
+
+  const getter = clone(SOURCE);
+  Object.defineProperty(getter.snapshot, 'interestCents', {
+    enumerable:true, get(){return 5000;},
+  });
+  await assert.rejects(() => createAtomicEncryptedCandidate(USER_A, PASS, getter), /финансового JSON/);
+  assert.equal(db.tables.get('bundles').size,0);
+  assert.equal(db.tables.get('keysets').size,0);
+});
