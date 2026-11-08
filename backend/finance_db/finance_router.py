@@ -162,11 +162,15 @@ def mount_finance_routes(
             return _finance_error(FinanceCommandError(
                 "invalid_command", "Слишком большой запрос", 413
             ))
-        raw = await request.body()
-        if len(raw) > BODY_LIMIT:
-            return _finance_error(FinanceCommandError(
-                "invalid_command", "Слишком большой запрос", 413
-            ))
+        # Chunked uploads may omit Content-Length. Never materialize the
+        # unbounded request body before enforcing the same 32 KiB quota.
+        raw = bytearray()
+        async for chunk in request.stream():
+            if len(chunk) + len(raw) > BODY_LIMIT:
+                return _finance_error(FinanceCommandError(
+                    "invalid_command", "Слишком большой запрос", 413
+                ))
+            raw.extend(chunk)
         try:
             body = json.loads(raw)
         except (ValueError, UnicodeDecodeError):
