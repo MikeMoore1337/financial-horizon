@@ -23,7 +23,7 @@
 .loan-comparison-dialog{width:min(660px,calc(100% - 28px));max-width:660px;max-height:min(90dvh,900px);padding:0;border:1px solid var(--line);border-radius:21px;box-shadow:0 18px 85px #0005;background:var(--surface);color:var(--ink);overflow-y:auto}
 .loan-comparison-dialog::backdrop{background:rgba(5,14,28,.76);backdrop-filter:blur(5px)}
 .loan-comparison-dialog-head{padding:19px 21px;display:flex;justify-content:space-between;align-items:center;gap:10px;border-bottom:1px solid var(--line)}
-.loan-comparison-dialog-head h2{font-size:21px;margin:0}
+.loan-comparison-dialog-head h3{font-size:21px;margin:0}
 .loan-comparison-dialog-body{padding:18px 21px}
 .loan-comparison-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}
 .loan-comparison-fields label{display:grid;gap:7px;font-size:12px;font-weight:650;min-width:0}
