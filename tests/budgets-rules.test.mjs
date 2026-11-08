@@ -126,3 +126,44 @@ test('invalid archive and amendment windows fail without mutating inputs',()=>{
   assert.throws(()=>apply(state,archive(4,1,'q','2026-02')),/inactive/);
   assert.deepEqual(state,frozen);
 });
+
+test('independent 250-sequence oracle preserves budget scope and history across 60 months', () => {
+  const ym = (i) => `${2026 + Math.floor(i / 12)}-${String(i % 12 + 1).padStart(2, '0')}`;
+  function independentOracle(state) {
+    for (let i = 0; i < 60; i++) {
+      const active = new Map();
+      for (const r of state.rules) {
+        const selected = ym(i) >= r.fromMonth
+          && (r.recurrence === 'monthly' || ym(i) === r.fromMonth)
+          && (r.endsBeforeMonth == null || ym(i) < r.endsBeforeMonth)
+          && (r.archivedFromMonth == null || ym(i) < r.archivedFromMonth);
+        if (!selected) continue;
+        const key = r.scope.kind === 'total' ? 'total' : `category:${r.scope.categoryId}`;
+        active.set(key, (active.get(key) ?? 0) + 1);
+      }
+      assert.ok([...active.values()].every(count => count <= 1));
+    }
+  }
+  for (let seed = 0; seed < 250; seed++) {
+    const first = seed % 35;
+    const split = first + 1 + seed % 5;
+    const archived = split + 1 + seed % 8;
+    let state = total();
+    let mutation = 0;
+    const cmd = (action, payload) => ({ action, payload,
+      clientMutationId: id(++mutation), baseRevision: state.revision });
+    const created = rule('budget-a', 10_000 + seed, { fromMonth: ym(first) });
+    state = apply(state, cmd('budget.create', { rule: created }));
+    independentOracle(state);
+    const previous = structuredClone(state);
+    state = apply(state, cmd('budget.amend', { ruleId: created.id,
+      effectiveFromMonth: ym(split), replacementId: 'budget-b', limitMinor: 15_000 + seed }));
+    independentOracle(state);
+    assert.deepEqual(previous.rules[0], created);
+    state = apply(state, cmd('budget.archive', { ruleId: 'budget-b',
+      archivedFromMonth: ym(archived) }));
+    independentOracle(state);
+    assertBudgetRuleState(JSON.parse(JSON.stringify(state)));
+    assert.equal(state.revision, 3);
+  }
+});
