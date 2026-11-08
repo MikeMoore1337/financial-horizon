@@ -11,19 +11,33 @@
 - Скрипт **не разрешает выбор Telegram**. Внутри канарейки Telegram всегда получает `FH_TELEGRAM_OAUTH_ENABLED=false`; остальные два из трёх провайдеров тоже выключены.
 - В реальном браузере использовать новое окно Инкогнито. Canaries и публичный домен имеют общий origin/cookie name, поэтому нельзя тестировать в обычном браузере с существующей email-сессией.
 
+## Повторное переключение Google после VK - диагностика и исправление (2026-11-08)
+
+Реальный Google вход ещё НЕ проверен. Владелец получил `CANARY_PRECONDITION_OR_SWITCH=FAILED` / `FAILURE_TYPE=CheckFailed`, а открытие `/api/auth/oauth/google/start` вернуло 404 «Этот способ входа недоступен».
+
+Обнаружен дефект самого скрипта: старое имя backup `oauth-canary-env-before-google-switch.env` закреплено за одним провайдером, и возврат к Google после прежней установки Google мог вызывать `CheckFailed` без переключения флагов. Это доказанный дефект кода, но **не подтверждённая пока причина конкретного отказа VPS**. Теперь новый root-only backup 0600 создаётся с уникальным именем при каждом переключении, существующие backup не перезаписываются.
+
+Новая версия имеет `--preflight` (только чтение, без рестарта), а при `CheckFailed` сообщает только `FAILURE_CODE` из безопасного набора констант без исключений, секретов и PII. При `TARGET_CREDENTIALS_NOT_STAGED` проверять наличие собственных Google client_id/secret только локально на VPS. При любом другом отказе не обходить проверки, не менять Caddy/production env и не удалять архивные backup. Пробовать browser Google OAuth можно только после `CANARY_PREFLIGHT=PASS` и `CANARY_SWITCH=PASS`.
+
 ## Этап A - тестируем Google
 
 Команда для авторизованного root-оператора, после проверки SHA-256:
 
 ```bash
-# Загрузить exact-commit версию скрипта, не использовать moving main:
+# Загрузить исправленный скрипт на отдельное имя из immutable commit.
+# Предыдущий операторский скрипт остаётся нетронутым.
 sudo curl --fail --location --silent --show-error \
-  https://raw.githubusercontent.com/MikeMoore1337/financial-horizon/d88346320db20767216c5df9a9c304c4234ac355/scripts/fh_oauth_owner_canary_switch.py \
-  -o /root/fh_oauth_owner_canary_switch.py
+  https://raw.githubusercontent.com/MikeMoore1337/financial-horizon/68ae8d54c0c6f2a301654624bbd0abfd4a1cbbbc/scripts/fh_oauth_owner_canary_switch.py \
+  -o /root/fh_oauth_owner_canary_switch_v2.py
 
-echo '16ef1a36735823dfc617ab38a4765a18d8a9d1e6a768315b835ee6b0d22c21ba  /root/fh_oauth_owner_canary_switch.py' | sudo sha256sum --check
-sudo chmod 600 /root/fh_oauth_owner_canary_switch.py
-sudo python3 /root/fh_oauth_owner_canary_switch.py --provider google
+echo 'fabb2dea0ad39d9570b458ac4d1af1a1c5102ec04c69b5a944415060188ccad0  /root/fh_oauth_owner_canary_switch_v2.py' | sudo sha256sum --check
+sudo chmod 600 /root/fh_oauth_owner_canary_switch_v2.py
+
+# Read-only preflight не изменяет env, SQLite, Caddy или systemd.
+sudo python3 /root/fh_oauth_owner_canary_switch_v2.py --provider google --preflight
+
+# Только после CANARY_PREFLIGHT=PASS:
+sudo python3 /root/fh_oauth_owner_canary_switch_v2.py --provider google
 ```
 
 **Ожидаемый технический результат** (не выдаёт доказательства реального входа):
@@ -43,11 +57,11 @@ REAL_OAUTH_LOGIN=NOT_YET_VERIFIED
 
 ## Этап B - Яндекс ID
 
-После реального Google PASS (подтверждённая тестовая серверная сессия, logout/repeat login) оператор выполняет `sudo python3 /root/fh_oauth_owner_canary_switch.py --provider yandex`. Тестируется `/api/auth/oauth/yandex/start`, стабильный `id`, ответный `client_id` именно FH-приложения, корректный logout. Никаких неявных объединений по email.
+После реального Google PASS (подтверждённая тестовая серверная сессия, logout/repeat login) оператор выполняет `sudo python3 /root/fh_oauth_owner_canary_switch_v2.py --provider yandex`. Тестируется `/api/auth/oauth/yandex/start`, стабильный `id`, ответный `client_id` именно FH-приложения, корректный logout. Никаких неявных объединений по email.
 
 ## Этап C - VK ID
 
-После Яндекс PASS выполняется `sudo python3 /root/fh_oauth_owner_canary_switch.py --provider vk`. Тестируется `/api/auth/oauth/vk/start`, связка `state` + `device_id`, токен/профиль, запрет конфликта чужой identity, logout. Скрипт не изменяет параметры VK-регистрации.
+После Яндекс PASS выполняется `sudo python3 /root/fh_oauth_owner_canary_switch_v2.py --provider vk`. Тестируется `/api/auth/oauth/vk/start`, связка `state` + `device_id`, токен/профиль, запрет конфликта чужой identity, logout. Скрипт не изменяет параметры VK-регистрации.
 
 ## Неподтверждённые релизные условия
 
