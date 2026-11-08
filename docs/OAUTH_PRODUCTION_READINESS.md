@@ -1,5 +1,56 @@
 # Financial Horizon #9 - production readiness and independent acceptance
 
+## Live SQLite and staged OAuth environment alignment - 2026-11-08
+
+Operator read-only evidence confirms:
+- Live email-auth MainPID has its own FH_AUTH_DATABASE_PATH, matching
+  /etc/financial-horizon/email-auth.env; the DB exists and is not the canary.
+- File and parent permissions are private, SQLite full integrity and FK checks
+  pass, and the users table has the expected seven-column pre-OAuth schema.
+- users.email is still NOT NULL; oauth_identities is not created.
+- The root-only staged /etc/financial-horizon/oauth.env has **zero**
+  FH_AUTH_DATABASE_PATH entries. All four provider flags and global OAuth
+  feature flag remain false; Google, Yandex and VK credentials are present.
+- Never substitute the template's default SQLite path or the canary SQLite.
+
+**One-blocker repair - bind only the staged env, NOT the live database:**
+
+The operator helper scripts/fh_oauth_bind_live_db.py reads the exact database
+path from the active fh-email-auth.service process environment. It verifies
+the known SQLite schema/integrity, root-only env permissions, credential presence,
+Telegram and every production OAuth flag OFF, and protected backup directory.
+On --apply, it writes a unique private 0600 backup of oauth.env and
+atomically appends **only** FH_AUTH_DATABASE_PATH using the observed live path.
+If the entry differs, flags are enabled, the DB is unexpectedly structured,
+or config is ambiguous, it rejects the change. No service restart, schema
+change, Caddy reload, or OAuth activation is performed.
+
+Pinned immutable script commit: 0f6a4978df466f3c4d6e2c725ca9ad3599d69479
+SHA-256: a3efc4ea3518f223aa13b9fd13abe791ef9c044a52173ad1b3f785d060dc9b93
+
+Operator-only commands on the actual VPS (not an unmapped sandbox):
+
+```bash
+sudo curl --fail --silent --show-error --location \
+  https://raw.githubusercontent.com/MikeMoore1337/financial-horizon/0f6a4978df466f3c4d6e2c725ca9ad3599d69479/scripts/fh_oauth_bind_live_db.py \
+  -o /root/fh_oauth_bind_live_db.py
+echo 'a3efc4ea3518f223aa13b9fd13abe791ef9c044a52173ad1b3f785d060dc9b93  /root/fh_oauth_bind_live_db.py' | sudo sha256sum --check
+sudo chmod 600 /root/fh_oauth_bind_live_db.py
+sudo python3 /root/fh_oauth_bind_live_db.py --preflight
+# Only after BIND_STATUS=READY_FOR_APPLY:
+sudo python3 /root/fh_oauth_bind_live_db.py --apply
+```
+
+Expected successful receipt: BIND_STATUS=PASS, OAUTH_DB_KEY_COUNT=1,
+OAUTH_DB_MATCH=YES, OAUTH_FLAGS_REMAIN_OFF=YES, TELEGRAM_DISABLED=YES,
+ROOT_ONLY_ENV_BACKUP=CREATED, SERVICES_RESTARTED=NO, DATABASE_MIGRATED=NO,
+CADDY_CHANGED=NO, SECRETS_PRINTED=NO.
+
+**STOP after binding** until fresh backup/restore, new-schema verification
+on a protected copy, offline migration in a release window, exact-HEAD
+security review, secure routing, and post-release testing are complete.
+No public OAuth buttons have been activated by this staging-only operation.
+
 Дата read-only инфраструктурного осмотра: 2026-11-07. **NO_GO для активации OAuth.** Это документ технической готовности, не квитанция деплоя или реального входа. Секреты не сохранялись в GitHub.
 
 ## Подтверждено на живом VPS (без изменения активного сервиса)
