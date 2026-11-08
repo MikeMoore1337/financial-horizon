@@ -12,6 +12,7 @@ import pytest
 from sqlalchemy import text
 
 from backend.finance_db.db import create_finance_engine, finance_transaction
+from backend.finance_db.snapshot import get_finance_delta
 from backend.finance_db.ledger_service import (
     FinanceCommandError, VerifiedFinanceScope, ensure_verified_profile,
     get_account_snapshot, submit_account_command,
