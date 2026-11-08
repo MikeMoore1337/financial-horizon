@@ -72,7 +72,9 @@ export async function prepareVerifiedAtomicCandidate(input: {
   // secret: createAtomicEncryptedCandidate's transaction fails on duplicates.
   const prepared = await createAtomicEncryptedCandidate(
     verified.scope, localPassphrase, {
-      snapshot: verified.snapshot, outbox: [], conflicts: [],
+      // migrateState has already validated this plain financial object at runtime.
+      snapshot: verified.snapshot as unknown as Record<string, unknown>,
+      outbox: [], conflicts: [],
     }, verified.snapshot.version,
   );
   const base = {
