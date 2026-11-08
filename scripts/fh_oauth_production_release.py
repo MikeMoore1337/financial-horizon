@@ -452,19 +452,38 @@ def rollout(sha: str) -> None:
     print("RELEASE_PREFLIGHT=PASS", flush=True)
     with tempfile.TemporaryDirectory(prefix="fh-oauth-release-") as workdir:
         source = source_archive(sha, Path(workdir))
-        new_backend = stage_backend(source, sha, old_backend)
-        new_static = stage_static(source, sha)
-        isolated_site = stage_isolated_python(auth_py, new_backend, source)
-        _, _, stage_process_env = running_process()
-        prepared_path = service_python_path(isolated_site, stage_process_env)
-        check_env = os.environ.copy()
-        check_env["PYTHONPATH"] = prepared_path
-        command([str(auth_py), "-c",
-                 "import fastapi, uvicorn, httpx, pwdlib, joserfc, cryptography"],
-                timeout=30, env=check_env,
-                failure_code="LIVE_PYTHON_WITH_STAGED_DEPS_FAILED")
-        command([sys.executable, "-m", "compileall", "-q", str(new_backend)],
-                timeout=45, failure_code="BACKEND_COMPILE_FAILED")
+        backend_candidate = BACKEND_ROOT / "releases" / sha
+        static_candidate = STATIC_ROOT / "releases" / sha
+        if (backend_candidate.exists() or backend_candidate.is_symlink() or
+                static_candidate.exists() or static_candidate.is_symlink()):
+            raise Gate("RELEASE_ALREADY_STAGED")
+        try:
+            new_backend = stage_backend(source, sha, old_backend)
+            new_static = stage_static(source, sha)
+            isolated_site = stage_isolated_python(auth_py, new_backend, source)
+            _, _, stage_process_env = running_process()
+            prepared_path = service_python_path(isolated_site, stage_process_env)
+            check_env = os.environ.copy()
+            check_env["PYTHONPATH"] = prepared_path
+            command([str(auth_py), "-c",
+                     "import fastapi, uvicorn, httpx, pwdlib, joserfc, cryptography"],
+                    timeout=30, env=check_env,
+                    failure_code="LIVE_PYTHON_WITH_STAGED_DEPS_FAILED")
+            command([sys.executable, "-m", "compileall", "-q", str(new_backend)],
+                    timeout=45, failure_code="BACKEND_COMPILE_FAILED")
+        except Exception:
+            # Only delete this run's unactivated candidates, never the
+            # symlinked live release or data; make failed staging retry-safe.
+            try:
+                if (current_release(BACKEND_ROOT) == old_backend and
+                        current_release(STATIC_ROOT) == old_static):
+                    for candidate in (backend_candidate, static_candidate):
+                        if candidate.is_dir() and not candidate.is_symlink():
+                            shutil.rmtree(candidate)
+                    print("FAILED_STAGING_CLEANED=YES", flush=True)
+            except Exception:
+                print("FAILED_STAGING_CLEANUP=UNVERIFIED", flush=True)
+            raise
         print("ISOLATED_PYTHON_DEPS=PASS", flush=True)
         print("LIVE_AUTH_PYTHON_UNMODIFIED=YES", flush=True)
         print("RELEASE_STAGED=PASS", flush=True)
