@@ -12,7 +12,7 @@ export type ReservePeriodHint =
     }
   | {
       readonly status: 'invalid';
-      readonly reason: 'out-of-range' | 'ambiguous' | 'oversized';
+      readonly reason: 'out-of-range' | 'ambiguous' | 'oversized' | 'unsupported';
       readonly confirmationRequired: true;
     };
 
@@ -41,6 +41,17 @@ export function parseReservePeriodHint(note: unknown): ReservePeriodHint | null 
     .trim();
   if (normalized.length > MAX_NOTE_LENGTH) {
     return { status: 'invalid', reason: 'oversized', confirmationRequired: true };
+  }
+
+  // Do not silently ignore an explicitly stated but unsupported frequency.
+  // Such spreadsheet rows must be reviewed rather than converted to a monthly bill.
+  const frequencyMarker = /(?:^|[^\p{L}\p{N}])(?:раз\s+в|каждые|каждый)\s+/gu;
+  const supportedPeriod = /^(?:\d+\s*(?:мес(?:\.|яц(?:ев|а)?)?|год(?:а|ов)?|лет)|полгода|квартал|год|месяц)(?!\p{L})/u;
+  for (const marker of normalized.matchAll(frequencyMarker)) {
+    const valueStart = (marker.index ?? 0) + marker[0].length;
+    if (!supportedPeriod.test(normalized.slice(valueStart))) {
+      return { status: 'invalid', reason: 'unsupported', confirmationRequired: true };
+    }
   }
 
   const values: number[] = [];
