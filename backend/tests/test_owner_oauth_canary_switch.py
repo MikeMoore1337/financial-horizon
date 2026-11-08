@@ -133,19 +133,19 @@ class ProviderSwitchTests(unittest.TestCase):
     def test_repeated_target_switches_preserve_private_backups(self):
         with tempfile.TemporaryDirectory() as directory:
             with mock.patch.object(switcher, 'ROOT_ONLY_BACKUPS', Path(directory)):
-                first = switcher.write_private_backup('google', 'FIRST-SYNTHETIC-ONLY\\n')
-                second = switcher.write_private_backup('google', 'SECOND-SYNTHETIC-ONLY\\n')
+                first = switcher.write_private_backup('google', 'FIRST-SYNTHETIC-ONLY\n')
+                second = switcher.write_private_backup('google', 'SECOND-SYNTHETIC-ONLY\n')
                 self.assertNotEqual(first, second)
-                self.assertEqual(first.read_text(), 'FIRST-SYNTHETIC-ONLY\\n')
-                self.assertEqual(second.read_text(), 'SECOND-SYNTHETIC-ONLY\\n')
+                self.assertEqual(first.read_text(), 'FIRST-SYNTHETIC-ONLY\n')
+                self.assertEqual(second.read_text(), 'SECOND-SYNTHETIC-ONLY\n')
                 self.assertEqual(first.stat().st_mode & 0o777, 0o600)
                 self.assertEqual(second.stat().st_mode & 0o777, 0o600)
                 self.assertFalse(first.is_symlink())
                 self.assertFalse(second.is_symlink())
 
     def test_preflight_is_read_only_and_has_no_secrets_in_output(self):
-        with mock.patch.object(switcher, 'check_static_guards', return_value=CANARY_SOURCE) as guard, \\
-                mock.patch.object(switcher, 'restart') as restart, \\
+        with mock.patch.object(switcher, 'check_static_guards', return_value=CANARY_SOURCE) as guard, \
+                mock.patch.object(switcher, 'restart') as restart, \
                 mock.patch('sys.stdout', new_callable=io.StringIO) as output:
             switcher.preflight('google')
             guard.assert_called_once_with('google')
@@ -157,8 +157,8 @@ class ProviderSwitchTests(unittest.TestCase):
 
     def test_failure_codes_never_echo_unknown_private_exception(self):
         secret = 'sensitive-token-must-not-be-printed'
-        with mock.patch('sys.argv', ['switcher', '--provider', 'google', '--preflight']), \\
-                mock.patch.object(switcher, 'preflight', side_effect=switcher.CheckFailed(secret)), \\
+        with mock.patch('sys.argv', ['switcher', '--provider', 'google', '--preflight']), \
+                mock.patch.object(switcher, 'preflight', side_effect=switcher.CheckFailed(secret)), \
                 mock.patch('sys.stdout', new_callable=io.StringIO) as output:
             self.assertEqual(switcher.main(), 1)
             self.assertIn('FAILURE_CODE=OTHER_CHECK_FAILED', output.getvalue())
