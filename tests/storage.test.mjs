@@ -7,10 +7,45 @@ test('IndexedDB adapter: atomic read-modify-write, no data in localStorage',asyn
   objectStoreNames:{contains:()=>true},
   createObjectStore:()=>{},
   transaction(name,mode){
-   const tx={oncomplete:null,onerror:null,onabort:null,abort(){queueMicrotask(()=>tx.onabort?.())},objectStore:()=>({
-    get(key){const req={};queueMicrotask(()=>{req.result=table.get(key)===undefined?undefined:structuredClone(table.get(key));req.onsuccess?.()});return req;},
-    put(value,key){table.set(key,structuredClone(value));queueMicrotask(()=>tx.oncomplete?.());}
-   })};return tx;
+   let pending=0,aborted=false,completed=false;
+   const staged=new Map();
+   const tx={
+    oncomplete:null,onerror:null,onabort:null,error:null,
+    abort(){if(aborted||completed)return;aborted=true;queueMicrotask(()=>tx.onabort?.());},
+    objectStore:()=>({
+     get(key){
+      const req={result:undefined,onsuccess:null,onerror:null};
+      schedule(()=>{
+       const value=staged.has(key)?staged.get(key):table.get(key);
+       req.result=value===undefined?undefined:structuredClone(value);
+       req.onsuccess?.();
+      });
+      return req;
+     },
+     put(value,key){
+      if(mode!=='readwrite')throw Error('readonly');
+      const copy=structuredClone(value);
+      schedule(()=>staged.set(key,copy));
+     }
+    })
+   };
+   function schedule(fn){
+    pending++;
+    queueMicrotask(()=>{
+     if(aborted)return;
+     try{fn()}catch(error){tx.error=error;tx.abort()}
+     finally{
+      pending--;
+      if(!pending&&!aborted)queueMicrotask(()=>{
+       if(pending||aborted||completed)return;
+       completed=true;
+       for(const [key,value] of staged)table.set(key,value);
+       tx.oncomplete?.();
+      });
+     }
+    });
+   }
+   return tx;
   }
  };
  globalThis.indexedDB={open:()=>{const req={};queueMicrotask(()=>{req.result=db;req.onsuccess?.()});return req;}};
