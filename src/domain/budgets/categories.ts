@@ -4,7 +4,7 @@
  * assertLedgerState checks. This module does not authorize an HTTP caller,
  * persist events or change an account, posting, or bank balance.
  */
-import type { BudgetOperation } from './index.ts';
+import { MAX_MINOR, type BudgetOperation } from './index.ts';
 import type { BudgetCategoryAssignment } from './ledger-adapter.ts';
 
 export interface BudgetCategoryEvent {
@@ -163,6 +163,15 @@ export function applyBudgetCategoryCommand(
   exactKeys(command.payload, ['transactionId', 'categoryId'], 'category command payload');
   id(command.payload.transactionId, 'transaction ID');
   category(command.payload.categoryId);
+  // Replay must remain valid after the original transaction was reversed or
+  // removed from a later authorized snapshot. No new write is made on replay.
+  // The server MUST still authenticate the profile before calling this function.
+  const fingerprint = canonical(command);
+  const prior = source.receipts.find(r => r.clientMutationId === command.clientMutationId);
+  if (prior) {
+    if (prior.requestFingerprint !== fingerprint) throw new Error('idempotency_key_reuse');
+    return { state: source, receipt: prior, replayed: true };
+  }
   if (!Array.isArray(operations)) throw new TypeError('Missing confirmed operations');
   const matching = operations.filter(op => op.id === command.payload.transactionId);
   if (matching.length !== 1) throw new Error('Unknown or ambiguous transaction');
@@ -170,14 +179,13 @@ export function applyBudgetCategoryCommand(
   if (operation.profileId !== source.profileId) throw new Error('Cross-profile transaction');
   if (operation.status !== 'confirmed' ||
     (operation.kind !== 'expense' && operation.kind !== 'payment') ||
-    !Number.isSafeInteger(operation.signedMinor) || operation.signedMinor >= 0) {
+    !Number.isSafeInteger(operation.signedMinor) || operation.signedMinor >= 0 ||
+    -operation.signedMinor > MAX_MINOR) {
     throw new Error('Only confirmed expense or debit payment may be reclassified');
   }
-  const fingerprint = canonical(command);
-  const prior = source.receipts.find(r => r.clientMutationId === command.clientMutationId);
-  if (prior) {
-    if (prior.requestFingerprint !== fingerprint) throw new Error('idempotency_key_reuse');
-    return { state: source, receipt: prior, replayed: true };
+  if (operations.some(op => op.kind === 'reversal' && op.status === 'confirmed' &&
+    op.reversedTransactionId === operation.id)) {
+    throw new Error('Cannot reclassify reversed expense');
   }
   if (source.revision !== command.baseRevision) throw new Error('stale_revision');
   if (source.revision === Number.MAX_SAFE_INTEGER) throw new RangeError('Category revision overflow');

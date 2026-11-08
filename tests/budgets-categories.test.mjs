@@ -130,3 +130,20 @@ test('category reassignment changes the category report, never the total or ledg
   assert.deepEqual(travel.categories.map(x=>x.spentMinor),[0,150_000]);
   assert.deepEqual(ledger,unchanged);
 });
+
+test('previously committed category command replays after the debit was reversed', () => {
+  const command=cmd(1,0,'expense-1','food');
+  const first=applyBudgetCategoryCommand(empty(),operations,command);
+  const laterLedger=[debit('expense-1'),debit('reversal-1',{
+    kind:'reversal',signedMinor:150_000,reversedTransactionId:'expense-1' })];
+  assert.throws(()=>apply(first.state,cmd(2,1,'expense-1','travel'),laterLedger),/Cannot reclassify reversed/);
+  const replay=applyBudgetCategoryCommand(first.state,laterLedger,command);
+  assert.equal(replay.replayed,true);
+  assert.strictEqual(replay.state,first.state);
+  assert.equal(replay.receipt.revision,1);
+});
+
+test('out-of-range signed amount cannot be reclassified', () => {
+  assert.throws(()=>apply(empty(),cmd(1,0,'expense-1','food'),
+    [debit('expense-1',{signedMinor:-1_000_000_000_001})]), /Only confirmed/);
+});
