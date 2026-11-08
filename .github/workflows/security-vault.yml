@@ -12,6 +12,8 @@ on:
       - 'tests/e2e/protected-atomic-candidate.spec.mjs'
       - 'tests/e2e/live-legacy-preflight.spec.mjs'
       - 'tests/e2e/verified-atomic-staging.spec.mjs'
+      - 'tests/e2e/protected-finance-adapter.spec.mjs'
+      - 'tests/protected-finance-adapter.test.mjs'
       - 'tests/verified-atomic-staging.test.mjs'
       - 'tests/live-legacy-preflight.test.mjs'
       - 'docs/security/LOCAL_STORAGE_ENCRYPTION.md'
@@ -20,6 +22,7 @@ on:
       - 'docs/security/ATOMIC_ENCRYPTED_CANDIDATE.md'
       - 'docs/security/LIVE_LEGACY_PREFLIGHT.md'
       - 'docs/security/VERIFIED_ATOMIC_STAGING.md'
+      - 'docs/security/PROTECTED_FINANCE_ADAPTER.md'
       - '.github/workflows/security-vault.yml'
   pull_request:
     branches: [main]
@@ -33,6 +36,8 @@ on:
       - 'tests/e2e/protected-atomic-candidate.spec.mjs'
       - 'tests/e2e/live-legacy-preflight.spec.mjs'
       - 'tests/e2e/verified-atomic-staging.spec.mjs'
+      - 'tests/e2e/protected-finance-adapter.spec.mjs'
+      - 'tests/protected-finance-adapter.test.mjs'
       - 'tests/verified-atomic-staging.test.mjs'
       - 'tests/live-legacy-preflight.test.mjs'
       - 'docs/security/LOCAL_STORAGE_ENCRYPTION.md'
@@ -41,6 +46,7 @@ on:
       - 'docs/security/ATOMIC_ENCRYPTED_CANDIDATE.md'
       - 'docs/security/LIVE_LEGACY_PREFLIGHT.md'
       - 'docs/security/VERIFIED_ATOMIC_STAGING.md'
+      - 'docs/security/PROTECTED_FINANCE_ADAPTER.md'
       - '.github/workflows/security-vault.yml'
 permissions:
   contents: read
@@ -57,4 +63,4 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx --no-install tsc -p src/security/tsconfig.json
-      - run: node --test tests/local-vault.test.mjs tests/local-vault-legacy-backup.test.mjs tests/protected-staging.test.mjs tests/protected-legacy-backup.test.mjs tests/local-budget-session.test.mjs tests/protected-atomic-candidate.test.mjs tests/live-legacy-preflight.test.mjs tests/verified-atomic-staging.test.mjs
+      - run: node --test tests/local-vault.test.mjs tests/local-vault-legacy-backup.test.mjs tests/protected-staging.test.mjs tests/protected-legacy-backup.test.mjs tests/local-budget-session.test.mjs tests/protected-atomic-candidate.test.mjs tests/live-legacy-preflight.test.mjs tests/verified-atomic-staging.test.mjs tests/protected-finance-adapter.test.mjs
