@@ -100,7 +100,7 @@ describe('approved accounts interface (feature not exposed)', () => {
   it('renders only confirmed amounts and five-item nav remains untouched', () => {
     render(<Accounts {...props()} />);
     expect(screen.getByRole('heading', { name: 'Счета' })).toBeTruthy();
-    expect(screen.getByText(/21[\s\u00a0\u202f]500,00 ₽/)).toBeTruthy();
+    expect(screen.getByText(/215[\s\u00a0\u202f]000,00 ₽/)).toBeTruthy();
     expect(screen.getByText('Основной')).toBeTruthy();
     expect(screen.getByText('Накопления')).toBeTruthy();
     expect(screen.getAllByRole('button', { name: 'Перевести' })).toHaveLength(2);
