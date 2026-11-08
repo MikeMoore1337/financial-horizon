@@ -6,6 +6,7 @@ import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.
 import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
 import {createScreenRoot} from './src/react/ScreenRoot.tsx';
+import {createAppShellRoots} from './src/react/AppShell.tsx';
 
 const $=sel=>document.querySelector(sel);
 const svg=name=>`<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-${name}"></use></svg>`;
@@ -19,9 +20,17 @@ const emailSession=createEmailSession();
 let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
 const GUEST_MODE_KEY='fh-guest-session-v2';
 let screenRoot=null;
+let navRoots=null;
+function getAuthAccess(){
+ if(guestMode)return {kind:'guest'};
+ return {kind:'account',accountId:activeUserId||'',verifiedUserId:emailSession.userId||null,sessionValid:Boolean(emailSession.email)};
+}
+let storageStatusMessage='Браузер может удалить данные при очистке хранилища. Делайте резервные копии.';
+let storageStatusRequest=0;
 function revokeDisplayedLedger(){
  state=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
+ if(navRoots){navRoots.unmount();navRoots=null;}
  $('#main').replaceChildren();
 }
 const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
@@ -35,18 +44,19 @@ async function mutate(change,msg='Сохранено на устройстве',
 function stampFormRevision(form){form.dataset.stateRevision=String(state.revision);}
 function revisionForForm(form){const revision=Number(form.dataset.stateRevision);if(!Number.isSafeInteger(revision)||revision<0)throw Error('Не удалось определить версию записи. Откройте форму повторно.');return revision;}
 function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#172336':'#ffffff';$('#theme-toggle').innerHTML=svg(mode==='dark'?'sun':'moon');$('#theme-toggle').setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}
-function navigation(view){ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings'&&!guestMode)void refreshEmailSession();}
+function navigation(view){ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings'){void renderStorageStatus();if(!guestMode)void refreshEmailSession();}}
 function render(){
  if(!state)return;
  $('#toolbar-title').textContent=titles[ui.view];
- document.querySelectorAll('[data-view]').forEach(el=>{const active=el.dataset.view===ui.view;el.classList.toggle('active',active);el.setAttribute('aria-current',active?'page':'false');});
+ if(!navRoots)navRoots=createAppShellRoots($('.sidebar-nav'),$('.bottom-nav'));
+ navRoots.render(ui.view);
  const main=$('#main');
- if(ui.view==='calendar'||ui.view==='overview'){
-  if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main);}
+ if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'||ui.view==='settings'){
+  if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main,getAuthAccess);}
   if(ui.view==='calendar'){
    const events=monthEvents(),totals=monthTotals(events);
    screenRoot.render({view:'calendar',props:{events,month:ui.month,selectedDate:ui.selectedDate,currentDate:today(),monthTitle:monthLabel(ui.month),netPlanCents:totals.netPlanCents,netFactCents:totals.netFactCents,formatDate,rubles}});
-  }else{
+  }else if(ui.view==='overview'){
    const currentDate=today(),events=monthEvents(),totals=monthTotals(events);
    const upcoming=events.filter(event=>event.date>=currentDate).slice(0,4);
    const groups=new Map();
@@ -60,14 +70,61 @@ function render(){
    const loanSummary=loan?{id:loan.id,title:loan.title,outstandingCents:snapshot.outstandingCents,monthlyCents:snapshot.monthlyCents,months:snapshot.months,
     percent:Math.max(0,Math.min(100,Math.round((1-snapshot.outstandingCents/loan.openingCents)*100)))}:null;
    screenRoot.render({view:'overview',props:{currentDate,monthTitle:monthLabel(ui.month),hasData:hasData(),totals,categories,upcoming,loan:loanSummary,rubles,formatDate}});
+  }else if(ui.view==='obligations'){
+   const items=state.entries.filter(isActive)
+    .filter(e=>ui.filter==='all'||(ui.filter==='regular'&&e.recurrence!=='once')||
+     (ui.filter==='once'&&e.recurrence==='once')||(ui.filter==='income'&&e.kind==='income'))
+    .sort((a,b)=>a.date.localeCompare(b.date));
+   const rows=items.map(entry=>{
+    const payments=state.settlements.filter(s=>s.entryId===entry.id&&s.occurrence===ui.month&&!s.voidedAt);
+    return {id:entry.id,title:entry.title,kind:entry.kind,category:entry.category,
+     recurrence:entry.recurrence,amountCents:entry.amountCents,
+     date:entry.recurrence==='once'?entry.date:dayInMonth(ui.month,Number(entry.date.slice(-2))),
+     payments,paidCents:payments.reduce((sum,p)=>sum+p.amountCents,0)};
+   });
+   const totals=monthTotals(monthEvents());
+   screenRoot.render({view:'obligations',props:{rows,month:ui.month,monthTitle:monthLabel(ui.month),
+    filter:ui.filter,expandedEntry:ui.expandedEntry,currentDate:today(),
+    expenseCents:totals.expenseCents,expensePaidCents:totals.expensePaidCents,rubles,formatDate}});
+  }else if(ui.view==='loans'){
+   const loans=state.loans.filter(isActive);
+   if(!loans.find(loan=>loan.id===ui.selectedLoan))ui.selectedLoan=loans[0]?.id||null;
+   const projected=loans.map(loan=>({loan,snapshot:loanLedger(loan,state.loanPayments)}));
+   const summaries=projected.map(({loan,snapshot})=>({
+    id:loan.id,title:loan.title,outstandingCents:snapshot.outstandingCents,
+    monthlyCents:snapshot.monthlyCents,months:snapshot.months,
+    paidPercent:Math.max(0,Math.min(100,Math.round((1-snapshot.outstandingCents/loan.openingCents)*100))),
+   }));
+   const current=projected.find(item=>item.loan.id===ui.selectedLoan);
+   const summary=summaries.find(item=>item.id===ui.selectedLoan);
+   const selected=current&&summary?{
+    ...summary,apr:current.loan.apr,dueDay:current.loan.dueDay,
+    projectedEnd:current.snapshot.projectedEnd,
+    scheduleCount:current.loan.schedule?.length||0,
+    scheduleSource:current.loan.scheduleSource||'CSV',
+    schedule:current.loan.schedule?.slice(0,4)||[],
+    history:state.loanPayments.filter(payment=>payment.loanId===current.loan.id)
+     .sort((a,b)=>b.date.localeCompare(a.date)||b.createdAt.localeCompare(a.createdAt)),
+   }:null;
+   screenRoot.render({view:'loans',props:{loans:summaries,selected,currentDate:today(),rubles,formatDate}});
+  }else{
+   const archived=[
+    ...state.entries.filter(x=>x.deletedAt).map(item=>({id:item.id,title:item.title,entity:'entry'})),
+    ...state.loans.filter(x=>x.deletedAt).map(item=>({id:item.id,title:item.title,entity:'loan'})),
+   ];
+   const audit=state.audit.slice(-8).reverse().map((item,index)=>({
+    id:item.id||item.date+'-'+index,description:item.description,date:item.date.slice(0,10),
+   }));
+   screenRoot.render({view:'settings',props:{
+    currentDate:today(),categories:state.categories,archived,audit,storageMessage:storageStatusMessage,
+    formatDate,
+   }});
   }
  }else{
   if(screenRoot){screenRoot.unmount();screenRoot=null;}
-  const sections={obligations:renderObligations,loans:renderLoans,settings:renderSettings};
-  main.innerHTML=sections[ui.view]();
+  main.textContent='Неизвестный раздел';
  }
  syncAccountControls();
- if(ui.view==='settings')void renderStorageStatus();
 }
 function syncAccountControls(){
  const signedIn=Boolean(emailSession.email);
@@ -115,101 +172,6 @@ async function logoutEmailAccount(){
 }
 function pageHead(title,subtitle,actions=''){return `<header class="page-header"><div><div class="eyebrow">${formatDate(today())} · Личные финансы</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div><div class="header-tools">${actions}</div></header>`;}
 const action=(type,label,kind='button-primary',props='')=>`<button class="${kind}" data-action="${type}" ${props}>${label}</button>`;
-function entryRecord(entry){
- const date=entry.recurrence==='once'?entry.date:dayInMonth(ui.month,Number(entry.date.slice(-2)));
- const occurrence=ui.month;
- const actual=state.settlements.filter(s=>s.entryId===entry.id&&s.occurrence===occurrence&&!s.voidedAt);
- const status=`<span class="pill ${actual.length?'pill-paid':''}">${actual.length?`Внесено ${rubles(actual.reduce((a,b)=>a+b.amountCents,0))}`:'План'}</span>`;
- const buttons=`<button class="mini-action" data-action="settle" data-id="${escapeHtml(entry.id)}" data-month="${ui.month}" aria-label="Отметить сумму">${svg('check')}</button><button class="mini-action" data-action="edit-entry" data-id="${escapeHtml(entry.id)}" aria-label="Изменить">${svg('edit')}</button><button class="mini-action" data-action="archive-entry" data-id="${escapeHtml(entry.id)}" aria-label="Удалить">${svg('trash')}</button>`;
- const more=ui.expandedEntry===entry.id && actual.length?`<div style="padding:10px 15px;background:var(--soft);border-radius:12px">${actual.map(p=>`<div class="archive-row"><div>${formatDate(p.date)} · ${rubles(p.amountCents)}</div><span>${action('edit-settlement','Изменить','button-text',`data-id="${escapeHtml(p.id)}"`)} ${action('void-settlement','Отменить','button-text',`data-id="${escapeHtml(p.id)}"`)}</span></div>`).join('')}</div>`:'';
- return `<tr><td><div class="record-title">${escapeHtml(entry.title)}</div><div class="record-sub">${escapeHtml(entry.category||'Без категории')} ${entry.recurrence!=='once'?'· '+({monthly:'Каждый месяц',yearly:'Ежегодно'}[entry.recurrence]||''):''}</div></td><td>${formatDate(date)}</td><td>${status}</td><td class="money-cell ${entry.kind==='income'?'pos':''}">${entry.kind==='income'?'+':'−'}${rubles(entry.amountCents)}</td><td class="record-actions">${buttons}</td></tr>${more?`<tr><td colspan="5">${more}</td></tr>`:''}`;
-}
-function mobileEntry(entry){
- const payments=state.settlements.filter(s=>s.entryId===entry.id&&s.occurrence===ui.month&&!s.voidedAt);
- const actual=payments.reduce((a,b)=>a+b.amountCents,0);
- const date=entry.recurrence==='once'?entry.date:dayInMonth(ui.month,Number(entry.date.slice(-2)));
- return `<div class="record-mobile-row"><div class="list-icon">${svg(entry.kind==='income'?'download':'calendar')}</div><div><strong>${escapeHtml(entry.title)}</strong><small>${formatDate(date)} · ${escapeHtml(entry.category)}</small><small>${payments.length?`Факт ${rubles(actual)}`:'Ожидается'}</small></div><div><div class="record-mobile-amount ${entry.kind==='income'?'pos':''}">${entry.kind==='income'?'+':'−'}${rubles(entry.amountCents)}</div><div class="record-mobile-actions"><button class="mini-action" data-action="settle" data-id="${escapeHtml(entry.id)}" data-month="${ui.month}" aria-label="Отметить оплату">${svg('check')}</button><button class="mini-action" data-action="edit-entry" data-id="${escapeHtml(entry.id)}" aria-label="Изменить">${svg('edit')}</button><button class="mini-action" data-action="archive-entry" data-id="${escapeHtml(entry.id)}" aria-label="Удалить">${svg('trash')}</button></div>${payments.length?`<button class="button-text" style="font-size:12px" data-action="expand-entry" data-id="${escapeHtml(entry.id)}">История</button>`:''}</div></div>${ui.expandedEntry===entry.id?payments.map(p=>`<div class="archive-row" style="padding:10px">${rubles(p.amountCents)} · ${formatDate(p.date)}<span>${action('edit-settlement','Править','button-text',`data-id="${escapeHtml(p.id)}"`)}${action('void-settlement','Отмена','button-text',`data-id="${escapeHtml(p.id)}"`)}</span></div>`).join(''):''}`;
-}
-function renderObligations(){
- const items=state.entries.filter(isActive).filter(e=>ui.filter==='all'||(ui.filter==='regular'&&e.recurrence!=='once')||(ui.filter==='once'&&e.recurrence==='once')||(ui.filter==='income'&&e.kind==='income')).sort((a,b)=>a.date.localeCompare(b.date));
- const total=monthTotals(monthEvents());
- return pageHead('Обязательства','Доходы и расходы. Полный учёт запланированных и фактических сумм',`${action('new-entry',`${svg('plus')} Добавить`,'button-primary')}`)+`
- <div class="kpi-grid" style="max-width:760px;margin:0 0 20px"><div class="surface kpi"><div class="kpi-label">Расходы по плану</div><div class="kpi-num">${rubles(total.expenseCents)}</div></div><div class="surface kpi"><div class="kpi-label">Оплачено фактически</div><div class="kpi-num pos">${rubles(total.expensePaidCents)}</div></div></div>
- <div class="filter-bar"><div class="segment">${[['all','Все'],['regular','Регулярные'],['once','Разовые'],['income','Доходы']].map(([key,label])=>`<button class="${ui.filter===key?'selected':''}" data-action="filter" data-filter="${key}" aria-pressed="${ui.filter===key}">${label}</button>`).join('')}</div><span class="small-hint">${items.length} записей · ${monthLabel(ui.month)}</span></div>
- <div class="surface">${items.length?`<table class="records-table"><thead><tr><th>Название</th><th>Дата</th><th>Состояние</th><th style="text-align:right">Сумма</th><th></th></tr></thead><tbody>${items.map(entryRecord).join('')}</tbody></table><div class="records-mobile">${items.map(mobileEntry).join('')}</div>`:`<div class="empty-panel">${svg('list')}<h3>Здесь пока нет записей</h3><p>Добавляйте регулярные платежи, зарплату или разовые расходы. Их можно изменять и архивировать.</p>${action('new-entry','Добавить запись','button-primary')}</div>`}</div><p class="small-hint" style="margin-top:13px">Кредиты учитываются в общем финансовом плане и на странице «Кредиты». Архивирование сохраняет историю.</p>`;
-}
-function renderLoanHistory(loan,snapshot){
- const rows=state.loanPayments.filter(x=>x.loanId===loan.id).sort((a,b)=>b.date.localeCompare(a.date)||b.createdAt.localeCompare(a.createdAt));
- if(!rows.length)return '<p class="small-hint">Фактических платежей пока нет. Они появятся здесь после внесения.</p>';
- return `<div style="overflow-x:auto"><table class="compact-table"><thead><tr><th>Дата</th><th>Сумма</th><th>Статус</th><th></th></tr></thead><tbody>${rows.map(p=>`<tr><td>${formatDate(p.date)}</td><td>${rubles(p.amountCents)}</td><td>${p.voidedAt?'<span class="pill">Отменён</span>':'<span class="pill pill-paid">Учтён</span>'}</td><td>${p.voidedAt?'':action('void-payment','Отменить','button-text',`data-id="${escapeHtml(p.id)}"`)}</td></tr>`).join('')}</tbody></table></div>`;
-}
-function renderLoans(){
- const loans=state.loans.filter(isActive);if(!loans.find(l=>l.id===ui.selectedLoan))ui.selectedLoan=loans[0]?.id||null;
- const selected=loans.find(l=>l.id===ui.selectedLoan);const snap=selected?loanLedger(selected,state.loanPayments):null;
- return pageHead('Кредиты и ипотека','Остатки долга, реальные платежи и приблизительный прогноз погашения',`${action('new-loan',`${svg('plus')} Кредит`,'button-primary')}`)+`
- ${loans.length?`<div class="loan-grid"><div>${loans.map(l=>{const s=loanLedger(l,state.loanPayments);const paid=Math.max(0,Math.min(100,Math.round((1-s.outstandingCents/l.openingCents)*100)));return `<button class="loan-card ${l.id===ui.selectedLoan?'selected':''}" data-action="select-loan" data-id="${escapeHtml(l.id)}" aria-pressed="${l.id===ui.selectedLoan}"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><span class="title">${escapeHtml(l.title)}</span><span class="pill">${paid}% закрыто</span></div><div class="balance">${rubles(s.outstandingCents)}</div><div class="progress-track"><div class="progress-fill" style="width:${paid}%"></div></div><div class="small-hint" style="margin-top:10px">${rubles(s.monthlyCents)} / мес. · ${s.months??'—'} мес. приблизительно</div></button>`}).join('')}</div><div class="surface loan-detail"><div class="section-title" style="margin-top:0"><h2>${escapeHtml(selected.title)}</h2><span class="pill">${selected.apr}% годовых</span></div><div class="eyebrow">Текущий расчётный долг</div><div class="hero-amount" style="font-size:39px">${rubles(snap.outstandingCents)}</div><div class="loan-stats"><div><span>Плановый платёж</span><strong>${rubles(snap.monthlyCents)}</strong></div><div><span>Осталось ориентировочно</span><strong>${snap.months===null?'Нет расчёта':snap.months+' мес.'}</strong></div><div><span>Предполагаемая дата</span><strong>${snap.projectedEnd?formatDate(snap.projectedEnd):'Не определена'}</strong></div><div><span>День платежа</span><strong>${selected.dueDay}-е число</strong></div></div><div class="loan-actions">${action('pay',`${svg('plus')} Внести платёж`,'button-primary',`data-id="${escapeHtml(selected.id)}"`)}${action('edit-loan',`${svg('edit')} Изменить`,'button-secondary',`data-id="${escapeHtml(selected.id)}"`)}${action('schedule-import','Импорт графика CSV','button-secondary',`data-id="${escapeHtml(selected.id)}"`)}${action('archive-loan','В архив','button-secondary',`data-id="${escapeHtml(selected.id)}"`)}</div><div class="info-card" style="margin-top:14px"><strong style="font-size:13px">Расчёт по аннуитетной модели</strong><p class="small-hint" style="margin:7px 0 0">Не учитывает индивидуальные банковские правила, ежедневные проценты, комиссии и просрочки. Итоговые даты проверяйте по официальному графику.</p></div>${selected.schedule?.length?`<div class="section-title"><h2>Импортированный график</h2>${action('clear-schedule','Удалить график','button-text',`data-id="${escapeHtml(selected.id)}"`)}</div><span class="pill">${selected.schedule.length} строк</span><p class="small-hint">Источник: ${escapeHtml(selected.scheduleSource||'CSV')}. График хранится на устройстве для сверки с прогнозом; автоматически не подменяет факты.</p><div style="overflow:auto"><table class="compact-table"><tr><th>Дата</th><th>Платёж</th><th>Остаток</th></tr>${selected.schedule.slice(0,4).map(r=>`<tr><td>${formatDate(r.date)}</td><td>${rubles(r.amountCents)}</td><td>${rubles(r.balanceCents)}</td></tr>`).join('')}</table></div>`:''}<div class="loan-history"><h3>История оплат</h3>${renderLoanHistory(selected,snap)}</div></div></div>`:`<div class="surface empty-panel">${svg('credit')}<h3>Кредитов пока нет</h3><p>Можно добавить ипотеку, остаток и параметры платежа. График обновится после каждого сохранённого фактического платежа.</p>${action('new-loan','Добавить ипотеку или кредит','button-primary')}</div>`}`;
-}
-function renderSettings(){
- const deleted=[...state.entries.filter(x=>x.deletedAt).map(x=>({...x,entity:'entry'})),...state.loans.filter(x=>x.deletedAt).map(x=>({...x,entity:'loan'}))];
- const panelIcon=name=>'<div class="settings-symbol" aria-hidden="true">'+svg(name)+'</div>';
- return pageHead('Настройки','Безопасность, данные и управление записями')+`<div class="settings-grid">
- <section class="surface settings-card" data-settings-card="security">
-  ${panelIcon('shield')}<div class="settings-card-body">
-   <h2>Локальная безопасность</h2>
-   <p>Финансовые записи хранятся в этом браузере и не передаются на сервер. В приватном режиме они могут быть удалены после закрытия окна.</p>
-   <div class="setting-actions">${action('persist',`${svg('lock')} Запросить постоянное хранение`,'button-secondary')}</div>
-   <p id="storage-status" class="small-hint settings-footnote" role="status">Браузер может удалить данные при очистке хранилища. Делайте резервные копии.</p>
-  </div>
- </section>
- <section class="surface settings-card" data-settings-card="backup">
-  ${panelIcon('download')}<div class="settings-card-body">
-   <h2>Зашифрованная копия</h2>
-   <p>Сохраните записи в зашифрованный файл (AES-256-GCM) для переноса на другое устройство или восстановления.</p>
-   <div class="setting-actions">${action('backup',`${svg('download')} Скачать копию`,'button-primary')}${action('restore',`${svg('upload')} Восстановить`,'button-secondary')}</div>
-  </div>
- </section>
- <section class="surface settings-card" data-settings-card="import">
-  ${panelIcon('sheet')}<div class="settings-card-body">
-   <h2>Импорт из Excel</h2>
-   <p>Выберите XLSX для предварительного просмотра. Файл обрабатывается в браузере, текущие записи не заменяются.</p>
-   <div class="setting-actions">${action('excel-import',`${svg('upload')} Выбрать файл`,'button-secondary')}</div>
-   <p class="small-hint settings-footnote">Поддерживается шаблон с доходами и кредитами. Перед импортом проверьте суммы, даты и остатки.</p>
-  </div>
- </section>
- <section class="surface settings-card" data-settings-card="categories">
-  ${panelIcon('tag')}<div class="settings-card-body">
-   <h2>Категории</h2>
-   <p>Добавляйте, переименовывайте и удаляйте категории. Используемую категорию сначала замените в записях.</p>
-   <div class="category-items">${state.categories.map(x=>`<span class="category-chip"><span class="category-name">${escapeHtml(x)}</span><button type="button" data-action="edit-category" data-category="${escapeHtml(x)}" aria-label="Переименовать категорию ${escapeHtml(x)}" title="Переименовать">${svg('edit')}</button><button type="button" data-action="delete-category" data-category="${escapeHtml(x)}" aria-label="Удалить категорию ${escapeHtml(x)}" title="Удалить">${svg('trash')}</button></span>`).join('')}</div>
-   <form id="category-form" class="category-add"><input name="name" maxlength="40" required aria-label="Новая категория" placeholder="Название категории"><button class="button-primary" type="submit">Добавить</button></form>
-  </div>
- </section>
- <section class="surface settings-card" data-settings-card="archive">
-  ${panelIcon('archive')}<div class="settings-card-body">
-   <h2>Архив записей</h2>
-   <p>Удалённые записи остаются в архиве и доступны для восстановления.</p>
-   <div class="archive-list">${deleted.length?deleted.map(x=>`<div class="archive-row"><span>${escapeHtml(x.title)}</span>${action('restore-item','Восстановить','button-text',`data-id="${escapeHtml(x.id)}" data-entity="${x.entity}"`)}</div>`).join(''):'<div class="small-hint">Архив пуст.</div>'}</div>
-  </div>
- </section>
- <section class="surface settings-card" data-settings-card="history">
-  ${panelIcon('database')}<div class="settings-card-body">
-   <h2>Пример и история</h2>
-   <p>Загрузите пример записей для знакомства с интерфейсом или очистите бухгалтерию.</p>
-   <div class="setting-actions">${action('sample','Загрузить пример','button-secondary')}${action('clear','Очистить бухгалтерию','button-secondary danger-zone')}</div>
-   <details class="settings-history"><summary>Последние изменения${state.audit.length?' ('+Math.min(state.audit.length,8)+')':''}</summary>
-    <div class="archive-list">${state.audit.slice(-8).reverse().map(x=>`<div class="archive-row"><span>${escapeHtml(x.description)}</span><span class="muted">${formatDate(x.date.slice(0,10))}</span></div>`).join('')||'<div class="small-hint">Пока изменений нет.</div>'}</div>
-   </details>
-  </div>
- </section>
- <section class="surface settings-card settings-install" data-settings-card="install">
-  ${panelIcon('smartphone')}<div class="settings-card-body">
-   <h2>Установка приложения</h2>
-   <p>Установите приложение через меню браузера. На iPhone используйте «Поделиться» → «На экран Домой», на Mac - «Добавить в Dock». Данные разных устройств автоматически не объединяются.</p>
-   <div class="setting-actions">${action('install','Установить (где поддерживается)','button-secondary')}</div>
-  </div>
- </section>
- </div>`;
-}
 function openDialog(sel){
  const dlg=$(sel);if(!dlg||dlg.open)return;
  const focused=document.activeElement;
@@ -345,9 +307,18 @@ async function handleAction(button){
  }
 }
 async function renderStorageStatus(){
- if(ui.view!=='settings')return;
- const info=await storageStatus();const el=$('#storage-status');if(!el)return;
- el.textContent=info.persistent===true?'Постоянное хранение браузером разрешено. Экспорт копий всё равно обязателен для надёжности.':'Постоянное хранение не подтверждено. Очистка данных сайта может уничтожить бухгалтерию.';
+ if(ui.view!=='settings'||!state)return;
+ const request=++storageStatusRequest;
+ try{
+  const info=await storageStatus();
+  if(request!==storageStatusRequest||ui.view!=='settings'||!state)return;
+  const next=info.persistent===true
+   ?'Постоянное хранение браузером разрешено. Экспорт копий всё равно обязателен для надёжности.'
+   :'Постоянное хранение не подтверждено. Очистка данных сайта может уничтожить бухгалтерию.';
+  if(next!==storageStatusMessage){storageStatusMessage=next;render();}
+ }catch(error){
+  if(ui.view==='settings')toast('Не удалось проверить состояние хранилища','error');
+ }
 }
 async function previewExcelImport(file){
  if(!file)return;
@@ -445,6 +416,7 @@ async function onFormSubmit(event){
    const title=form.elements.namedItem('name').value.trim();if(!title||title.length>40)throw Error('Название категории должно быть от 1 до 40 символов');
    if(state.categories.some(x=>x.toLowerCase()===title.toLowerCase()))throw Error('Такая категория уже существует');
    await mutate(s=>{s.categories.push(title);audit(s,'category',`Добавлена категория: ${title}`);},'Категория добавлена');
+   if(form.isConnected)form.reset();
   }
   if(form.getAttribute('id')==='password-form'){
    const password=form.elements.password.value;

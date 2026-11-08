@@ -1,0 +1,38 @@
+name: security-vault
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/security/**'
+      - 'tests/local-vault*.test.mjs'
+      - 'tests/protected-*.test.mjs'
+      - 'tests/e2e/protected-staging.spec.mjs'
+      - 'docs/security/LOCAL_STORAGE_ENCRYPTION.md'
+      - 'docs/security/PROTECTED_STAGING.md'
+      - '.github/workflows/security-vault.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/security/**'
+      - 'tests/local-vault*.test.mjs'
+      - 'tests/protected-*.test.mjs'
+      - 'tests/e2e/protected-staging.spec.mjs'
+      - 'docs/security/LOCAL_STORAGE_ENCRYPTION.md'
+      - 'docs/security/PROTECTED_STAGING.md'
+      - '.github/workflows/security-vault.yml'
+permissions:
+  contents: read
+jobs:
+  isolated-crypto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npx --no-install tsc -p src/security/tsconfig.json
+      - run: node --test tests/local-vault.test.mjs tests/local-vault-legacy-backup.test.mjs tests/protected-staging.test.mjs tests/protected-legacy-backup.test.mjs
