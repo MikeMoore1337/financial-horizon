@@ -373,7 +373,9 @@ export function applyLedgerCommand(source: LedgerState, command: LedgerCommand, 
       if (originals.length < 1 || originals.length > 2) throw new Error('Исходные проводки повреждены');
       const inverse = originals.map(p => [accountForWrite(state, p.accountId, command, true), -p.signedMinor] as [Account, number]);
       post(state, transaction(state, context, payload.id, 'reversal', payload.occurredOn, payload.reason, original.id), inverse);
-      original.entityRevision++;
+      // The original ledger transaction is append-only in PostgreSQL #66.
+      // Concurrency is protected by profile and account revisions plus the
+      // unique reversal link; do not UPDATE the original journal row.
       affectedId = payload.id;
       break;
     }
@@ -417,7 +419,9 @@ export function applyLedgerCommand(source: LedgerState, command: LedgerCommand, 
       }
       post(state, transaction(state, context, payload.reversalId, 'reversal', payload.occurredOn, payload.reason, original.id), oldAccounts);
       post(state, transaction(state, context, next.id, next.kind, next.occurredOn, next.note), replacementAccounts);
-      original.entityRevision++;
+      // The original ledger transaction is append-only in PostgreSQL #66.
+      // Concurrency is protected by profile and account revisions plus the
+      // unique reversal link; do not UPDATE the original journal row.
       affectedId = next.id;
       break;
     }
