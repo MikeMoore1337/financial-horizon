@@ -56,14 +56,18 @@ function safeInteger(value: number, minimum: number, maximum: number, name: stri
   }
 }
 function validContents(value: ProtectedAtomicContents): void {
-  if (!value || typeof value !== 'object' || Array.isArray(value) ||
-    Object.keys(value).length !== 3 ||
+  // Never access a caller-supplied property before inspecting descriptors:
+  // a getter may mutate the queue or hide amounts as a side effect.
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw Error('Некорректное содержимое защищённой локальной копии');
+  }
+  assertPureJson(value);
+  if (Object.keys(value).length !== 3 ||
     Object.keys(value).some(key => !['snapshot', 'outbox', 'conflicts'].includes(key)) ||
     !value.snapshot || typeof value.snapshot !== 'object' || Array.isArray(value.snapshot) ||
     !Array.isArray(value.outbox) || !Array.isArray(value.conflicts)) {
     throw Error('Некорректное содержимое защищённой локальной копии');
   }
-  assertPureJson(value);
 }
 /** Reject lossy serialization: undefined, nonfinite values, custom objects or cycles. */
 function assertPureJson(value: unknown, depth = 0, visited = new Set<object>()): void {
@@ -74,7 +78,9 @@ function assertPureJson(value: unknown, depth = 0, visited = new Set<object>()):
   if (visited.has(value)) throw Error('Циклические ссылки в финансовых данных');
   visited.add(value);
   if (Array.isArray(value)) {
-    if (Object.keys(value).length !== value.length ||
+    // structuredClone strips Array subclass prototypes and inherited fields.
+    if (Object.getPrototypeOf(value) !== Array.prototype ||
+      Object.keys(value).length !== value.length ||
       Object.getOwnPropertyNames(value).length !== value.length + 1 ||
       Object.getOwnPropertySymbols(value).length) throw Error('Некорректный финансовый массив');
     for (let i = 0; i < value.length; i++) {

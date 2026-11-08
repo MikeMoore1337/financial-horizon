@@ -308,3 +308,51 @@ test('financial arrays with hidden fields and accessor properties reject without
   assert.equal(db.tables.get('bundles').size,0);
   assert.equal(db.tables.get('keysets').size,0);
 });
+
+
+test('review P2: Array subclasses and custom prototypes are rejected before clone and CAS', async () => {
+  const db = mount();
+  class PaymentQueue extends Array {
+    get inheritedAmountCents(){return 12345;}
+  }
+  const custom = clone(SOURCE);
+  const queue = new PaymentQueue();
+  queue.push(...custom.outbox);
+  custom.outbox = queue;
+  await assert.rejects(() => createAtomicEncryptedCandidate(USER_A, PASS, custom), /финансовый массив/);
+  assert.equal(db.tables.get('bundles').size, 0);
+
+  await createAtomicEncryptedCandidate(USER_A, PASS, SOURCE);
+  const session = await unlock(USER_A);
+  await assert.rejects(() => compareAndSwapAtomicEncryptedCandidate(USER_A, session, 0, 2, custom),
+    /финансовый массив/);
+  assert.equal((await readAtomicEncryptedCandidate(USER_A, session)).epoch, 0);
+  assert.deepEqual((await readAtomicEncryptedCandidate(USER_A, session)).outbox, SOURCE.outbox);
+});
+
+test('review P2: top-level accessor is rejected without executing its mutation', async () => {
+  const db = mount();
+  const malicious = clone(SOURCE);
+  let getters = 0;
+  Object.defineProperty(malicious, 'snapshot', {
+    enumerable:true, configurable:true,
+    get(){
+      getters++;
+      this.outbox = [];
+      Object.defineProperty(this, 'snapshot', {
+        value:clone(SOURCE.snapshot), enumerable:true, configurable:true, writable:true,
+      });
+      return this.snapshot;
+    },
+  });
+  await assert.rejects(() => createAtomicEncryptedCandidate(USER_A, PASS, malicious), /финансового JSON/);
+  assert.equal(getters, 0, 'validation must not invoke a hostile accessor');
+  assert.equal(db.tables.get('bundles').size, 0);
+
+  await createAtomicEncryptedCandidate(USER_A, PASS, SOURCE);
+  const session = await unlock(USER_A);
+  await assert.rejects(() => compareAndSwapAtomicEncryptedCandidate(USER_A, session, 0, 2, malicious),
+    /финансового JSON/);
+  assert.equal(getters, 0);
+  assert.deepEqual((await readAtomicEncryptedCandidate(USER_A, session)).outbox, SOURCE.outbox);
+});
