@@ -439,7 +439,16 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
                 "kind": fact_kind, "obligation_id": str(fact_source),
                 "occurrence_on": occurrence.isoformat(),
                 "paid_on": paid_on.isoformat(), "amount_minor": amount,
-                "direction": source["direction"],
+                "direction": source["direction"], "voided_at": None,
+                "entity": {
+                    "id": str(fact_id), "entity_revision": 1, "kind": "settlement",
+                    "data": {
+                        "obligation_id": str(fact_source),
+                        "occurrence_on": occurrence.isoformat(),
+                        "paid_on": paid_on.isoformat(), "amount_minor": amount,
+                        "voided_at": None,
+                    },
+                },
             }
         else:
             source = session.execute(text("""
@@ -468,6 +477,14 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
                 "kind": fact_kind, "loan_id": str(fact_source),
                 "paid_on": paid_on.isoformat(),
                 "amount_minor": amount, "strategy": strategy,
+                "voided_at": None,
+                "entity": {
+                    "id": str(fact_id), "entity_revision": 1, "kind": "loan_payment",
+                    "data": {
+                        "loan_id": str(fact_source), "paid_on": paid_on.isoformat(),
+                        "amount_minor": amount, "strategy": strategy, "voided_at": None,
+                    },
+                },
             }
         _post(session, p, target, "payment", scope.user_id, paid_on,
               [(acc, signed)])
