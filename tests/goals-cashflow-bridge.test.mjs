@@ -136,3 +136,29 @@ test('control characters cannot produce malformed #36 movement identifiers',()=>
 function fundingWithInvalidEventId() {
   return put(fresh(),'deposit\0bad','2026-02-01',10_000);
 }
+
+test('historical #36 cashflow ignores not-yet-created goal but includes it after creation', () => {
+  const present = fresh('g1', { openingCents: 50_000 });
+  const future = fresh('later', { on: '2026-04-01', openingCents: 150_000 });
+  const bonds = [...binding, { goalId: 'later', accountId: 'bank' }];
+  const earlier = withGoalCashflowSources(source(), [present, future], bonds);
+  assert.equal(earlier.reserves.length, 1);
+  assert.equal(earlier.reserves[0].openingReservedCents, 0);
+  assert.equal(earlier.reserveMovements.filter(r => r.status === 'actual')
+    .reduce((sum, r) => sum + r.amountCents, 0), 50_000);
+  assert.ok(earlier.reserveMovements.every(r => !r.id.includes('later')));
+  const later = withGoalCashflowSources(source({ asOfDate: '2026-04-02' }), [present, future], bonds);
+  assert.equal(later.reserves.length, 2);
+  assert.equal(later.reserveMovements.filter(r => r.status === 'actual')
+    .reduce((sum, r) => sum + r.amountCents, 0), 200_000);
+});
+
+test('future-created goal still undergoes strict journal validation at historical as-of', () => {
+  const future = fresh('later', { on: '2026-04-01' });
+  const corrupted = structuredClone(future);
+  corrupted.events.push({ id: 'invalid', type: 'contribution', on: '2026-04-10',
+    amountCents: -1, funding: 'virtual' });
+  assert.throws(() => buildGoalCashflowBundle([corrupted], source(), [
+    { goalId: 'later', accountId: 'bank' },
+  ]), /integer number of kopecks/);
+});
