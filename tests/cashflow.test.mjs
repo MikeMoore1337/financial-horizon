@@ -322,6 +322,14 @@ test('validation refuses impossible monthly cadence and malicious future reserve
     status: 'actual', kind: 'allocate', amountCents: 100 }] })), /Future reserve/);
 });
 
+test('factual reserve movements beyond the horizon are rejected rather than silently ignored', () => {
+  assert.throws(() => forecastCashflow(base({
+    horizonMonths: 1,
+    reserves: [{ id: 'future-hidden', date: '2027-05-12', kind: 'allocate',
+      amountCents: 100, status: 'actual' }],
+  })), /Future reserve/);
+});
+
 test('same-day planned reserve release can support overdue payment without changing confirmed cash', () => {
   const result = forecastCashflow(base({
     openingReservedCents: 100_000,

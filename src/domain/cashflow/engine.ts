@@ -163,10 +163,13 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
     if (!['allocate', 'release'].includes(reserve.kind) || !['actual', 'planned'].includes(reserve.status)) {
       throw new RangeError('Invalid reserve movement kind or status');
     }
-    if (reserve.voided || day < opening || day > end) continue;
-    if (reserve.status === 'actual' && day > asOf) {
+    // Validate facts even if they fall outside the selected forecast horizon.
+    // A caller must not be able to hide a future factual reserve booking by
+    // choosing a shorter horizon (the same rule already applies to cash facts).
+    if (!reserve.voided && reserve.status === 'actual' && day > asOf) {
       throw new RangeError('Future reserve movement cannot be factual');
     }
+    if (reserve.voided || day < opening || day > end) continue;
     const delta = reserve.kind === 'allocate' ? reserve.amountCents : -reserve.amountCents;
     const bucket = dayBucket(reserve.date);
     if (reserve.status === 'actual') bucket.actualReserve = addCents(bucket.actualReserve, delta);
