@@ -8,7 +8,7 @@ test('React toolbar delegates add and theme without duplicate financial writes',
   await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
   await page.locator('#top-add').click();
   await expect(page.locator('#entry-dialog')).toBeVisible();
-  await page.locator('#entry-form button[value="cancel"]').click();
+  await page.locator('#entry-form').getByRole('button', { name: 'Отмена' }).click();
   await expect(page.locator('#entry-dialog')).not.toBeVisible();
   await page.locator('#theme-toggle').click();
   const theme = await page.locator('body').getAttribute('data-theme');
