@@ -229,12 +229,15 @@ def source_archive(sha: str, target: Path) -> Path:
     root.mkdir(mode=0o700)
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
         names = archive.getnames()
-        prefix = "financial-horizon-" + sha
-        if not names or any(n != prefix and not n.startswith(prefix + "/")
-                            for n in names):
+        roots = {name.partition("/")[0] for name in names}
+        if len(roots) != 1 or not next(iter(roots)).startswith("financial-horizon-"):
+            raise Gate("SOURCE_ARCHIVE_UNEXPECTED")
+        prefix = next(iter(roots))
+        if not names or any(name != prefix and not name.startswith(prefix + "/")
+                            for name in names):
             raise Gate("SOURCE_ARCHIVE_UNEXPECTED")
         archive.extractall(root, filter="data")
-    content = root / ("financial-horizon-" + sha)
+    content = root / prefix
     if not (content / "backend/fh_auth/app.py").is_file() or \
             not (content / "account-oauth.js").is_file():
         raise Gate("SOURCE_CONTENT_MISSING")
