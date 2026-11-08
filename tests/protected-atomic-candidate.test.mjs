@@ -4,6 +4,7 @@ import {LocalBudgetSession} from '../src/security/local-budget-session.ts';
 import {
   ATOMIC_ENCRYPTED_DB, createAtomicEncryptedCandidate, getAtomicEncryptedKeyset,
   readAtomicEncryptedCandidate, compareAndSwapAtomicEncryptedCandidate,
+  rotateAtomicEncryptedRecoveryKey,
 } from '../src/security/protected-atomic-candidate.ts';
 
 const PASS = 'secure local phrase test 2026';
@@ -18,7 +19,8 @@ const clone = value => structuredClone(value);
 
 function fakeIndexedDb() {
   const tables = new Map([['keysets', new Map()], ['bundles', new Map()]]);
-  let failBundlePut = false;
+  let failBundlePut = false, failKeysetPut = false;
+  let logoutAfterKeysetPut = null;
   const db = {
     close(){},
     onversionchange: null,
@@ -50,8 +52,16 @@ function fakeIndexedDb() {
             put(value, key){
               if (mode !== 'readwrite') throw Error('readonly');
               if (name === 'bundles' && failBundlePut) throw Error('injected bundle write failure');
+              if (name === 'keysets' && failKeysetPut) throw Error('injected keyset write failure');
               const pinned = clone(value);
               schedule(() => table.set(key, pinned));
+              if (name === 'keysets' && logoutAfterKeysetPut) {
+                const selected = logoutAfterKeysetPut;
+                logoutAfterKeysetPut = null;
+                // Runs between the scheduled IDB put and the IDB oncomplete,
+                // deterministically reproducing the reviewer-found race.
+                queueMicrotask(() => selected.logout());
+              }
               return {};
             },
           };
@@ -77,6 +87,8 @@ function fakeIndexedDb() {
     },
   };
   return {tables, set failBundlePut(value){failBundlePut=value;},
+    set failKeysetPut(value){failKeysetPut=value;},
+    set logoutAfterKeysetPut(value){logoutAfterKeysetPut=value;},
     open(name, version){
       assert.equal(name, ATOMIC_ENCRYPTED_DB);
       assert.equal(version, 1);
@@ -355,4 +367,99 @@ test('review P2: top-level accessor is rejected without executing its mutation',
     /финансового JSON/);
   assert.equal(getters, 0);
   assert.deepEqual((await readAtomicEncryptedCandidate(USER_A, session)).outbox, SOURCE.outbox);
+});
+
+
+test('atomic recovery reissue invalidates old recovery while preserving ciphertext, epoch and outbox', async () => {
+  const db = mount();
+  const created = await createAtomicEncryptedCandidate(USER_A, PASS, SOURCE);
+  const oldKeyset = clone(db.tables.get('keysets').get(USER_A));
+  const oldBundle = clone(db.tables.get('bundles').get(USER_A));
+  const session = await unlock(USER_A);
+  const result = await rotateAtomicEncryptedRecoveryKey(USER_A, session, PASS);
+  assert.equal(result.recoveryKey.length, 43);
+  assert.notEqual(result.recoveryKey, created.recoveryKey);
+  const afterKeyset = await getAtomicEncryptedKeyset(USER_A);
+  assert.equal(afterKeyset.keyId, oldKeyset.keyId);
+  assert.deepEqual(afterKeyset.passphrase, oldKeyset.passphrase);
+  assert.notDeepEqual(afterKeyset.recovery, oldKeyset.recovery);
+  assert.deepEqual(db.tables.get('bundles').get(USER_A), oldBundle, 'rotation cannot rewrite finance or outbox');
+  const oldSession = new LocalBudgetSession();oldSession.selectScope(USER_A);
+  await assert.rejects(() => oldSession.unlock(afterKeyset,{recoveryKey:created.recoveryKey}),/Неверный ключ/);
+  const recovered = new LocalBudgetSession();recovered.selectScope(USER_A);
+  await recovered.unlock(afterKeyset,{recoveryKey:result.recoveryKey});
+  const data = await readAtomicEncryptedCandidate(USER_A,recovered);
+  assert.deepEqual(data.outbox,SOURCE.outbox);
+  assert.deepEqual(data.conflicts,SOURCE.conflicts);
+  assert.deepEqual(data.snapshot,SOURCE.snapshot);
+  assert.equal(data.epoch,0);
+});
+
+test('invalid recovery reissue password or cross-account scope does not alter stored keys', async () => {
+  const db = mount();
+  const created = await createAtomicEncryptedCandidate(USER_A,PASS,SOURCE);
+  const old = clone(db.tables.get('keysets').get(USER_A));
+  const session = await unlock(USER_A);
+  await assert.rejects(() => rotateAtomicEncryptedRecoveryKey(USER_A,session,'incorrect local phrase 2026'),/Неверный ключ/);
+  await assert.rejects(() => rotateAtomicEncryptedRecoveryKey(USER_B,session,PASS),/заблокирован/);
+  assert.deepEqual(db.tables.get('keysets').get(USER_A),old);
+  const fresh=new LocalBudgetSession();fresh.selectScope(USER_A);
+  await fresh.unlock(await getAtomicEncryptedKeyset(USER_A),{recoveryKey:created.recoveryKey});
+  assert.equal(fresh.state,'unlocked');
+});
+
+test('aborted recovery keyset write keeps the previous recovery credential usable', async () => {
+  const db=mount();
+  const created=await createAtomicEncryptedCandidate(USER_A,PASS,SOURCE);
+  const before=clone(db.tables.get('keysets').get(USER_A));
+  const session=await unlock(USER_A);
+  db.failKeysetPut=true;
+  await assert.rejects(() => rotateAtomicEncryptedRecoveryKey(USER_A,session,PASS),/injected keyset write failure/);
+  db.failKeysetPut=false;
+  assert.deepEqual(db.tables.get('keysets').get(USER_A),before);
+  const fresh=new LocalBudgetSession();fresh.selectScope(USER_A);
+  await fresh.unlock(await getAtomicEncryptedKeyset(USER_A),{recoveryKey:created.recoveryKey});
+  assert.deepEqual((await readAtomicEncryptedCandidate(USER_A,fresh)).outbox,SOURCE.outbox);
+});
+
+test('logout during recovery KDF rejects and retains the last committed keyset', async () => {
+  const db=mount();
+  const created=await createAtomicEncryptedCandidate(USER_A,PASS,SOURCE);
+  const before=clone(db.tables.get('keysets').get(USER_A));
+  const session=await unlock(USER_A);
+  const inflight=rotateAtomicEncryptedRecoveryKey(USER_A,session,PASS);
+  session.logout();
+  await assert.rejects(inflight,/заблокирован/);
+  assert.deepEqual(db.tables.get('keysets').get(USER_A),before);
+  const fresh=new LocalBudgetSession();fresh.selectScope(USER_A);
+  await fresh.unlock(await getAtomicEncryptedKeyset(USER_A),{recoveryKey:created.recoveryKey});
+  assert.equal(fresh.state,'unlocked');
+});
+
+test('offline recovery rotation never sends financial data or local credentials to a server', async () => {
+  mount();
+  await createAtomicEncryptedCandidate(USER_A,PASS,SOURCE);
+  const session=await unlock(USER_A);
+  const prior=globalThis.fetch;
+  globalThis.fetch=async()=>{throw Error('network must not be used')};
+  try {
+    const result=await rotateAtomicEncryptedRecoveryKey(USER_A,session,PASS);
+    assert.equal(result.recoveryKey.length,43);
+  } finally {globalThis.fetch=prior;}
+});
+
+
+test('review P2: logout between keyset put and transaction commit aborts the recovery rotation', async () => {
+  const db=mount();
+  const created=await createAtomicEncryptedCandidate(USER_A,PASS,SOURCE);
+  const previous=clone(db.tables.get('keysets').get(USER_A));
+  const session=await unlock(USER_A);
+  db.logoutAfterKeysetPut=session;
+  await assert.rejects(() => rotateAtomicEncryptedRecoveryKey(USER_A,session,PASS),/заблокирован|отменена/);
+  assert.equal(session.state,'unselected');
+  assert.deepEqual(db.tables.get('keysets').get(USER_A),previous,
+    'no recovery key may be revoked by a cancelled native transaction');
+  const original=new LocalBudgetSession();original.selectScope(USER_A);
+  await original.unlock(await getAtomicEncryptedKeyset(USER_A),{recoveryKey:created.recoveryKey});
+  assert.deepEqual((await readAtomicEncryptedCandidate(USER_A,original)).outbox,SOURCE.outbox);
 });

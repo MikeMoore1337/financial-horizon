@@ -55,7 +55,7 @@ export function compareLocalBankCsv(contract, csvText, includeDeltas = false) {
     throw new TypeError('Invalid calculation options');
   }
   const calculated = calculateLoan(contract.terms, events, options);
-  const imported = parseSchedule(csvText);
+  const imported = parseSchedule(csvText, { allowMissingBalance: true });
   const reconciliation = reconcileLoanSchedule(calculated, imported);
   const differences = reconciliation.rows.filter(row => row.differs);
   const missingBreakdownRows = reconciliation.rows

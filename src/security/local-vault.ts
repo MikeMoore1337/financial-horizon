@@ -273,3 +273,29 @@ export async function changeLocalPassphrase(keyset: LocalKeysetV1, credential: {
   try { return {...pinned, passphrase: await newPassphraseSlot(raw, newPassphrase, pinned.scope, pinned.keyId)}; }
   finally { raw.fill(0); }
 }
+/**
+ * Reissues the independently generated recovery secret when the owner still
+ * knows the LOCAL passphrase. The existing DEK and encrypted records remain
+ * unchanged. A caller must atomically persist the returned keyset before
+ * displaying the new one-time recovery secret. No storage side effects here.
+ *
+ * Requiring the passphrase makes an interrupted rotation recoverable using
+ * that same passphrase even if the new recovery secret was never displayed.
+ */
+export async function rotateLocalRecoveryKey(
+  keyset: LocalKeysetV1, passphrase: string, expectedScope: LocalScope,
+): Promise<{keyset: LocalKeysetV1; recoveryKey: string}> {
+  const pinned = structuredClone(keyset);
+  validateKeyset(pinned); scopeValid(expectedScope);
+  if (pinned.scope !== expectedScope) throw Error('Нельзя открыть бюджет другого пользователя');
+  // Pin the credential as a scalar before any Web Crypto await.
+  const raw = await unlockRaw(pinned, {passphrase});
+  const secret = random(32);
+  try {
+    const replacement = await newRecoverySlot(raw, secret, pinned.scope, pinned.keyId);
+    return {keyset: {...pinned, recovery: replacement}, recoveryKey: b64(secret)};
+  } finally {
+    secret.fill(0);
+    raw.fill(0);
+  }
+}
