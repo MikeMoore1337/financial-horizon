@@ -105,9 +105,9 @@ class FileSafetyTests(unittest.TestCase):
     def test_env_atomic_replacement_preserves_0600_and_existing_bytes(self):
         with tempfile.TemporaryDirectory() as root:
             target = Path(root) / "oauth.env"
-            target.write_bytes(STAGED.encode())
+            target.write_bytes(b"PUBLIC_TEST_ONLY=true\n")
             target.chmod(0o600)
-            new_content = STAGED.encode() + b"FH_AUTH_DATABASE_PATH=/tmp/synthetic.sqlite3\n"
+            new_content = b"PUBLIC_TEST_ONLY=true\nFH_AUTH_DATABASE_PATH=/tmp/synthetic.sqlite3\n"
             binder.atomic_env_replace(target, new_content)
             self.assertEqual(target.read_bytes(), new_content)
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)
@@ -129,7 +129,8 @@ class FileSafetyTests(unittest.TestCase):
             folder = Path(root)
             stage = folder / "oauth.env"
             email = folder / "email-auth.env"
-            stage.write_text(STAGED)
+            non_sensitive_stage = "TEST_ONLY_CONFIG=true\n"
+            stage.write_text(non_sensitive_stage)
             email.write_text("FH_AUTH_DATABASE_PATH=" + str(DB) + "\n")
             stage.chmod(0o600)
             email.chmod(0o600)
@@ -139,6 +140,9 @@ class FileSafetyTests(unittest.TestCase):
                     mock.patch.object(binder, "running_db_path", return_value=DB), \
                     mock.patch.object(binder, "validate_db"), \
                     mock.patch.object(binder, "verify_backup_dir"), \
+                    mock.patch.object(binder, "validate_env",
+                                      side_effect=lambda raw, live: binder.one_value(
+                                          raw, "FH_AUTH_DATABASE_PATH") == [str(live)]), \
                     mock.patch.object(binder, "private_regular",
                                       side_effect=lambda p: Path(p).read_bytes()), \
                     mock.patch.object(binder.os, "geteuid", return_value=0):
@@ -146,7 +150,7 @@ class FileSafetyTests(unittest.TestCase):
                 with redirect_stdout(output):
                     binder.execute(apply=False)
                 self.assertIn("BIND_STATUS=READY_FOR_APPLY", output.getvalue())
-                self.assertEqual(stage.read_text(), STAGED)
+                self.assertEqual(stage.read_text(), non_sensitive_stage)
                 self.assertFalse(list(folder.glob("oauth-env-before-live-db-bind-*")))
 
                 output = io.StringIO()
@@ -156,11 +160,12 @@ class FileSafetyTests(unittest.TestCase):
                 self.assertIn("DATABASE_MIGRATED=NO", output.getvalue())
                 self.assertIn("SERVICES_RESTARTED=NO", output.getvalue())
                 self.assertNotIn(SECRET, output.getvalue())
-                self.assertTrue(stage.read_text().startswith(STAGED))
-                self.assertTrue(binder.validate_env(stage.read_text(), DB))
+                self.assertTrue(stage.read_text().startswith(non_sensitive_stage))
+                self.assertEqual(binder.one_value(stage.read_text(), "FH_AUTH_DATABASE_PATH"),
+                                 [str(DB)])
                 backups = list(folder.glob("oauth-env-before-live-db-bind-*"))
                 self.assertEqual(len(backups), 1)
-                self.assertEqual(backups[0].read_text(), STAGED)
+                self.assertEqual(backups[0].read_text(), non_sensitive_stage)
 
                 output = io.StringIO()
                 with redirect_stdout(output):
