@@ -177,13 +177,24 @@ def mount_finance_routes(
             return _finance_error(FinanceCommandError(
                 "invalid_command", "Некорректный JSON", 422
             ))
-        try:
-            result = await run_in_threadpool(
-                submit_account_command, engine, scope=verified, command=body,
+        # Body streaming can take arbitrarily long, while a different browser
+        # revokes the current SQLite session. Re-check after the complete body
+        # is received, inside the SAME worker just before the PostgreSQL call.
+        # Fail closed on a changed principal; the first lookup is NOT a durable
+        # authorization decision for a delayed write.
+        def submit_with_fresh_session():
+            fresh = scope(request)
+            if fresh != verified:
+                raise HTTPException(status_code=401, detail="Сеанс изменился")
+            return submit_account_command(
+                engine, scope=fresh, command=body,
                 if_match=request.headers.get("if-match", ""),
                 idempotency_key=request.headers.get("idempotency-key", ""),
-                allow_internal=False,  # Never enable unpublished account CRUD from client.
+                allow_internal=False,  # Never expose internal CRUD through v1.
             )
+
+        try:
+            result = await run_in_threadpool(submit_with_fresh_session)
             return _finance_response(result)
         except FinanceCommandError as exc:
             return _finance_error(exc)
