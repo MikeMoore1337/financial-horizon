@@ -154,6 +154,10 @@ export function LoanReadOnlyComparison({ snapshot, bankSchedule, rubles, formatD
     const file = input.files?.[0];
     input.value = '';
     if (!file) return;
+    // Fail closed: a rejected file must not leave the last bank result visible.
+    setLocalRows(null);
+    setResult(null);
+    setRowsVisible(25);
     setFileError('');
     if (!/\.csv$/i.test(file.name) || file.size === 0 || file.size > 1_000_000) {
       setFileError('Нужен CSV размером от 1 байта до 1 МБ.');
