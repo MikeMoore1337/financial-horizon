@@ -1,0 +1,28 @@
+name: temporary-pr39-format-probe
+on:
+  push:
+    branches:
+      - feat/39-approved-react-bank-comparison
+permissions:
+  contents: read
+jobs:
+  format-only:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Print scoped Prettier output for manual reviewed application
+        run: |
+          npx prettier --write src/react/LoanReadOnlyComparison.tsx tests/react/loans.test.tsx
+          node --input-type=module - <<'NODE'
+          import { readFileSync } from 'node:fs';
+          for (const path of ['src/react/LoanReadOnlyComparison.tsx','tests/react/loans.test.tsx']) {
+            process.stdout.write('FH39_FORMAT_BEGIN '+path+' '+readFileSync(path).toString('base64')+' FH39_FORMAT_END\n');
+          }
+          NODE
