@@ -183,3 +183,59 @@ test('real browser File API keeps CSV bytes local and renders hostile descriptio
   expect(result.overflow).toBe(false);
   watcher.assertClean();
 });
+
+
+test('two sheets in one XLSX retain distinct source IDs on identical physical rows', async ({ page }, testInfo) => {
+  const watcher = await setup(page, testInfo);
+  const encoded = makeFixture(testInfo, '--two-sheets');
+  const result = await page.evaluate(async ({ encoded, accounts }) => {
+    const mod = await import('/__bank-parser/index.ts');
+    const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+    const one = await mod.readBankStatementFile(bytes, { filename: 'synthetic.xlsx', sheetName: 'Выписка' });
+    const two = await mod.readBankStatementFile(bytes, { filename: 'synthetic.xlsx', sheetName: 'Другой лист' });
+    const options = { accounts, mapping: mod.suggestColumnMapping(one.headers).mapping };
+    const a = await mod.normalizeBankStatement(one, options);
+    const b = await mod.normalizeBankStatement(two, options);
+    const repeat = await mod.normalizeBankStatement(one, options);
+    return {
+      digestEqual: one.fileDigest === two.fileDigest,
+      keyA: a.rows[0].operation.sourceKey, keyB: b.rows[0].operation.sourceKey,
+      repeatEqual: repeat.rows[0].operation.sourceKey === a.rows[0].operation.sourceKey,
+      rowA: a.rows[0].rowNumber, rowB: b.rows[0].rowNumber,
+    };
+  }, { encoded, accounts });
+  expect(result.digestEqual).toBe(true);
+  expect(result.rowA).toBe(2);
+  expect(result.rowB).toBe(2);
+  expect(result.keyA).not.toBe(result.keyB);
+  expect(result.repeatEqual).toBe(true);
+  watcher.assertClean();
+});
+
+test('XLSX omitted trailing optional cells do not cause false row width errors', async ({ page }, testInfo) => {
+  const watcher = await setup(page, testInfo);
+  const encoded = makeFixture(testInfo, '--missing-trailing');
+  const result = await page.evaluate(async ({ encoded, accounts }) => {
+    const mod = await import('/__bank-parser/index.ts');
+    const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+    const table = await mod.readBankStatementFile(bytes, { filename: 'synthetic.xlsx' });
+    const preview = await mod.normalizeBankStatement(table, {
+      mapping: mod.suggestColumnMapping(table.headers).mapping, accounts,
+    });
+    return {
+      headers: table.headers.length, width: table.rows[0].cells.length,
+      accepted: preview.accepted, first: preview.rows[0].operation?.amountCents,
+      category: preview.rows[0].operation?.category,
+      externalId: preview.rows[0].operation?.externalId,
+      wrongWidth: preview.rows[0].warnings.some(w => w.code === 'ROW_WIDTH'),
+    };
+  }, { encoded, accounts });
+  expect(result.headers).toBe(8);
+  expect(result.width).toBe(8);
+  expect(result.accepted).toBe(3);
+  expect(result.first).toBe(123450);
+  expect(result.category).toBe(null);
+  expect(result.externalId).toBe(null);
+  expect(result.wrongWidth).toBe(false);
+  watcher.assertClean();
+});

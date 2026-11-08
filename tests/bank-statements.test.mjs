@@ -704,3 +704,42 @@ test('a proposed ready operation with an error warning is blocked at confirmatio
     }] }],
   }, [key]), /Нельзя проводить/);
 });
+
+
+test('a split credit/debit direction cannot be overridden by an opposite type column', async () => {
+  const table = await readBankStatementFile(input(
+    'date;credit;debit;type;account;description\n' +
+    '2026-11-07;0;100;income;Основной;Неверный доход\n' +
+    '2026-11-08;100;0;expense;Основной;Неверный расход\n' +
+    '2026-11-09;0;100;expense;Основной;Верный расход\n' +
+    '2026-11-10;100;0;income;Основной;Верный доход\n',
+  ));
+  const { mapping } = suggestColumnMapping(table.headers);
+  const preview = await normalizeBankStatement(table, { mapping, accounts });
+  assert.equal(preview.accepted, 2);
+  assert.equal(preview.rejected, 2);
+  assert.equal(preview.inflowCents, 10000);
+  assert.equal(preview.outflowCents, 10000);
+  assert.ok(preview.rows[0].warnings.some(w => w.code === 'SIGN_KIND_CONFLICT'));
+  assert.ok(preview.rows[1].warnings.some(w => w.code === 'SIGN_KIND_CONFLICT'));
+  assert.equal(reconcileBankStatement(preview, []).invalid, 2);
+  const keys = preview.rows.slice(0, 2).map(row => row.operation?.sourceKey).filter(Boolean);
+  assert.equal(keys.length, 0);
+});
+
+test('source key uses XLSX sheet identity while preserving determinism', async () => {
+  const csv = await readBankStatementFile(input(base +
+    '07.11.2026;-100;Тест;Основной;;расход;Питание;SAME-1\n',
+  ));
+  const first = { ...csv, format: 'xlsx', sheetName: 'Ноябрь', dateSystem: '1900' };
+  const second = { ...first, sheetName: 'Декабрь' };
+  const opts = { mapping: suggestColumnMapping(csv.headers).mapping, accounts, categories: ['Питание'] };
+  const a = await normalizeBankStatement(first, opts);
+  const b = await normalizeBankStatement(second, opts);
+  const replay = await normalizeBankStatement(first, opts);
+  assert.notEqual(a.rows[0].operation.sourceKey, b.rows[0].operation.sourceKey);
+  assert.equal(a.rows[0].operation.sourceKey, replay.rows[0].operation.sourceKey);
+  assert.equal(reconcileBankStatement(b, [{
+    ...a.rows[0].operation, id: 'already-imported',
+  }]).duplicates, 0);
+});

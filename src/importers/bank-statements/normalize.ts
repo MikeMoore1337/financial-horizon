@@ -266,8 +266,11 @@ export async function normalizeBankStatement(
       if (!specified) err('UNKNOWN_KIND', 'Неизвестный тип операции', 'kind');
       else {
         kind = specified;
-        if (mapping.amount !== undefined && specified !== 'transfer' &&
-            ((isNegative && specified === 'income') || (!isNegative && specified === 'expense' && rawKind.startsWith('-')))) {
+        if (specified !== 'transfer' &&
+            ((isNegative && specified === 'income') ||
+             (!isNegative && specified === 'expense' && mapping.amount === undefined))) {
+          // Split debit/credit columns definitively establish the direction.
+          // Single unsigned-amount columns may use a separate kind column.
           err('SIGN_KIND_CONFLICT', 'Направление суммы противоречит типу', 'kind');
         }
       }
@@ -327,7 +330,9 @@ export async function normalizeBankStatement(
     const fingerprint = await sha256(JSON.stringify([
       accountId, date.iso, kind, amountCents, targetId, norm(description), 'RUB',
     ]));
-    const sourceKey = await sha256(table.fileDigest + '\u001f' + row);
+    const sourceKey = await sha256(JSON.stringify([
+      'bank-row-v2', table.fileDigest, table.format === 'xlsx' ? table.sheetName || '' : '', row,
+    ]));
     if (sourceKeys.has(fingerprint)) note('REPEATED_CONTENT', 'Совпадающая операция внутри файла - требуется сверка');
     else sourceKeys.set(fingerprint, row);
     const operation: NormalizedBankOperation = {

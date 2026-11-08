@@ -243,7 +243,16 @@ export async function readBankXlsx(
   const header = sorted[headerIndex];
   if (!header) bad('Отсутствует заголовок XLSX');
   const headers = header.cells.map(x => x === undefined || x === null ? '' : String(x));
-  const rows = sorted.slice(headerIndex + 1);
+  // XLSX commonly omits empty trailing cells from the sheet XML. Retain
+  // real excess columns as a structural error, but pad missing optional cells
+  // so the normalized table has the same width as its declared header.
+  const rows = sorted.slice(headerIndex + 1).map(source => ({
+    ...source,
+    cells: source.cells.length >= headers.length
+      ? source.cells
+      : [...source.cells,
+        ...Array.from({ length: headers.length - source.cells.length }, () => null)],
+  }));
   const warnings = [...parsed.warnings];
   if (headerIndex > 0) warnings.push({ code: 'SKIPPED_PREAMBLE', severity: 'info',
     row: header.rowNumber, message: 'Строки перед выбранным заголовком пропущены' });

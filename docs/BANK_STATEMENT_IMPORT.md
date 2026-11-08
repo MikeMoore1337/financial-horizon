@@ -104,3 +104,5 @@ are deliberately left unchanged.
 - **Acceptance pending:** design approval; #33 financial ledger contract;
   real persisted idempotency, cancellation, mobile/desktop UI and production
   verification. Until then use a draft PR, no merge/deploy/Issue closure.
+
+Additional parsing rules: a split credit/debit column determines transaction direction and a conflicting explicit kind blocks the row. For XLSX, sourceKey includes a stable sheet identity in addition to file digest and physical row, preventing cross-sheet collisions. Missing trailing optional XLSX cells are treated as blank (but surplus columns and malformed CSV widths remain invalid).

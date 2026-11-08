@@ -44,6 +44,10 @@ def main() -> None:
         ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
         '<sheets><sheet name="Выписка" sheetId="1" r:id="rId1"/></sheets></workbook>'
     )
+    if variant == "--two-sheets":
+        workbook = workbook.replace(
+            "</sheets>", '<sheet name="Другой лист" sheetId="2" r:id="rId2"/></sheets>'
+        )
     if variant == "--1904":
         workbook = workbook.replace("<sheets>", '<workbookPr date1904="1"/><sheets>')
     relationships = (
@@ -53,6 +57,13 @@ def main() -> None:
         ' Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"'
         ' Target="worksheets/sheet1.xml"/></Relationships>'
     )
+    if variant == "--two-sheets":
+        relationships = relationships.replace(
+            "</Relationships>",
+            '<Relationship Id="rId2"'
+            ' Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"'
+            ' Target="worksheets/sheet2.xml"/></Relationships>',
+        )
     rows = [
         row(1, HEADERS),
         row(2, [
@@ -84,6 +95,11 @@ def main() -> None:
                 "Тестовая операция", "Основной", "", "расход", "Питание", "PM-1",
             ], numeric={0, 1}),
         ]
+    if variant == "--missing-trailing":
+        rows[1] = row(2, [
+            date_serial(date(2026, 11, 7)), "-1234.50",
+            "Синтетическая покупка", "Основной", "", "расход",
+        ], numeric={0, 1})
     if variant == "--duplicate-row":
         rows.append(rows[1])
     if variant == "--too-many-rows":
@@ -99,6 +115,13 @@ def main() -> None:
         zf.writestr("xl/workbook.xml", workbook)
         zf.writestr("xl/_rels/workbook.xml.rels", relationships)
         zf.writestr("xl/worksheets/sheet1.xml", worksheet)
+        if variant == "--two-sheets":
+            zf.writestr(
+                "xl/worksheets/sheet2.xml",
+                worksheet.replace("SYN-001", "SECOND-001")
+                .replace("Синтетическая покупка", "Вторая операция")
+                .replace("-1234.50", "-777.00"),
+            )
         if variant == "--external":
             zf.writestr("xl/externalLinks/externalLink1.xml", "<externalLink/>")
         if variant == "--bomb":
