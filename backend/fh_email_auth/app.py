@@ -79,7 +79,11 @@ def create_app(
             if len(await request.body())>4096:
                 return JSONResponse({"detail":"Слишком большой запрос"},status_code=413)
         response=await call_next(request)
-        response.headers["Cache-Control"]="no-store"
+        # Finance v1 responses need private,no-store; keep old auth contract.
+        response.headers["Cache-Control"]=(
+            "private, no-store" if request.url.path.startswith("/api/finance/")
+            else "no-store"
+        )
         response.headers["Referrer-Policy"]="no-referrer"
         response.headers["X-Content-Type-Options"]="nosniff"
         return response
