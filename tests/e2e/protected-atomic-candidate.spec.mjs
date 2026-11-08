@@ -22,7 +22,7 @@ test('native IDB atomic encrypted offline snapshot, outbox, CAS, restart and tam
     ['/__e2e_atomic_session__.js', sessionJS],
     ['/__e2e_atomic_store__.js', atomicJS],
   ]);
-  await page.route('**/__e2e_atomic_*.js', route => route.fulfill({
+  await context.route('**/__e2e_atomic_*.js', route => route.fulfill({
     status:200, contentType:'text/javascript',
     body:scripts.get(new URL(route.request().url()).pathname),
     headers:{'Cache-Control':'no-store'},
@@ -74,6 +74,59 @@ test('native IDB atomic encrypted offline snapshot, outbox, CAS, restart and tam
   });
   expect(original).toEqual({correct:true, epoch:1, conflict:true, blocked:true, noPlaintext:true});
 
+  // A genuine second tab shares the browser's native IDB but not the first
+  // tab's in-memory vault. Both start from epoch 1 and try different payments.
+  const secondTab = await context.newPage();
+  secondTab.on('pageerror', error => errors.push(error.message));
+  await secondTab.goto('/__e2e__/ready');
+  const commitInTab = (tab, id) => tab.evaluate(async ({id}) => {
+    const db = await import('/__e2e_atomic_store__.js');
+    const {LocalBudgetSession} = await import('/__e2e_atomic_session__.js');
+    const scope = 'guest:atomic-browser-qa';
+    const keyset = await db.getAtomicEncryptedKeyset(scope);
+    const session = new LocalBudgetSession();
+    session.selectScope(scope);
+    await session.unlock(keyset, {passphrase:'independent offline atomic test phrase 2026'});
+    try {
+      const current = await db.readAtomicEncryptedCandidate(scope, session);
+      const changed = {
+        snapshot: current.snapshot,
+        outbox: [...current.outbox, {id, amountCents:123}],
+        conflicts: current.conflicts,
+      };
+      try {
+        await db.compareAndSwapAtomicEncryptedCandidate(scope, session, 1, 2, changed);
+        return {status:'written'};
+      } catch (error) {
+        return {status:'rejected', reason:String(error.message)};
+      }
+    } finally { session.logout(); }
+  }, {id});
+  const competing = await Promise.all([
+    commitInTab(page, 'TAB_ONE_PAYMENT'),
+    commitInTab(secondTab, 'TAB_TWO_PAYMENT'),
+  ]);
+  expect(competing.filter(x => x.status === 'written')).toHaveLength(1);
+  expect(competing.filter(x => x.status === 'rejected')).toHaveLength(1);
+  expect(competing.find(x => x.status === 'rejected').reason).toContain('другой вкладке');
+
+  const afterRace = await page.evaluate(async () => {
+    const db = await import('/__e2e_atomic_store__.js');
+    const {LocalBudgetSession} = await import('/__e2e_atomic_session__.js');
+    const scope = 'guest:atomic-browser-qa';
+    const session = new LocalBudgetSession();
+    session.selectScope(scope);
+    await session.unlock(await db.getAtomicEncryptedKeyset(scope),
+      {passphrase:'independent offline atomic test phrase 2026'});
+    try {
+      const value = await db.readAtomicEncryptedCandidate(scope, session);
+      return {epoch:value.epoch, queue:value.outbox.length, tabPayments:value.outbox
+        .filter(x => x.id === 'TAB_ONE_PAYMENT' || x.id === 'TAB_TWO_PAYMENT').length};
+    } finally {session.logout();}
+  });
+  expect(afterRace).toEqual({epoch:2, queue:3, tabPayments:1});
+  await secondTab.close();
+
   await page.reload();
   await page.evaluate(async () => {
     globalThis.__atomic = await import('/__e2e_atomic_store__.js');
@@ -123,7 +176,7 @@ test('native IDB atomic encrypted offline snapshot, outbox, CAS, restart and tam
       };
     });
     expect(reopened).toEqual({offline:true, wrongDenied:true, tamperDenied:true,
-      epoch:1, queue:2, amount:123456789, locked:true});
+      epoch:2, queue:3, amount:123456789, locked:true});
   } finally {await context.setOffline(false);}
   expect(errors).toEqual([]);
 });
