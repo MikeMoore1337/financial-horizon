@@ -496,7 +496,7 @@ REVOKE ALL ON FUNCTION finance.guard_obligation_direction() FROM PUBLIC;
 CREATE FUNCTION finance.lock_obligation_for_settlement()
 RETURNS trigger LANGUAGE plpgsql
 SET search_path = finance, pg_catalog
-AS $
+AS $fh_settlement_lock$
 DECLARE
   current_direction varchar(8);
 BEGIN
@@ -509,7 +509,7 @@ BEGIN
       USING ERRCODE='23503';
   END IF;
   RETURN NEW;
-END $;
+END $fh_settlement_lock$;
 CREATE TRIGGER serialize_settlement_obligation_direction
   BEFORE INSERT ON settlements
   FOR EACH ROW EXECUTE FUNCTION finance.lock_obligation_for_settlement();
