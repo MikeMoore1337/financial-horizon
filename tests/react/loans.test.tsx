@@ -147,8 +147,10 @@ function confirmSyntheticContract(annualRate = '12') {
   change('rounding', 'HALF_UP');
   change('scheduleType', 'annuity');
   change('installmentBasis', 'fixed-contractual');
-  fireEvent.click(form.querySelector<HTMLInputElement>('[name="agreementConfirmed"]')!);
-  fireEvent.click(form.querySelector<HTMLInputElement>('[name="openingBalanceDateConfirmed"]')!);
+  for (const name of ['agreementConfirmed', 'openingBalanceDateConfirmed']) {
+    const box = form.querySelector<HTMLInputElement>(`[name="${name}"]`)!;
+    if (!box.checked) fireEvent.click(box);
+  }
   fireEvent.submit(form);
 }
 
