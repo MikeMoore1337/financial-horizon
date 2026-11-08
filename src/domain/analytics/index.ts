@@ -9,3 +9,8 @@ export type {
 } from './types.ts';
 export { toAnalyticsTransactions, buildLedgerAnalyticsReport } from './ledger-adapter.ts';
 export type { LedgerAnalyticsSnapshot, AnalyticsCategoryAssignment, LedgerAnalyticsInput } from './ledger-adapter.ts';
+export { compareAnalyticsToBudgets } from './budget-comparison.ts';
+export type {
+  AnalyticsBudgetComparison, BudgetCategoryComparison, BudgetMonthComparison,
+  BudgetUsageSnapshot, MonthlyBudgetSnapshot,
+} from './budget-comparison.ts';
