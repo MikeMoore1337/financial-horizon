@@ -223,6 +223,15 @@ export async function rollbackAllScopesToV1(){
    const cursor=req.result;
    if(!cursor)return;
    const key=cursor.key;
+   // A protected cutover marker forbids ANY downgrade of the legacy database.
+   // A global rollback must fail atomically even when only one scope is fenced:
+   // otherwise its former plaintext snapshot could silently become active.
+   // Abort reverts cursor updates that may have been staged earlier in this tx.
+   if(typeof key==='string'&&key.startsWith(FENCE_PREFIX)){
+    failure=Error('Откат запрещён: найден защищённый финансовый профиль. Используйте проверенное восстановление.');
+    try{tx.abort();}catch{}
+    return;
+   }
    if(key===KEY||key===GUEST_KEY||(typeof key==='string'&&key.startsWith('account-state-v2:'))){
     try{
      const value=validateState(cursor.value);
