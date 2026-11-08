@@ -159,3 +159,35 @@ async def test_yandex_user_info_rejects_foreign_client_identifier(profile_client
             OAuthProvider("yandex", "financial-horizon-client", "synthetic-secret"),
             claim, "test-code", transport=httpx.MockTransport(transport)
         )
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("error_payload", [
+    {"error": "invalid_grant", "error_description": "synthetic sensitive error details"},
+    {"error": {"code": "invalid_client", "message": "synthetic private detail"}},
+])
+async def test_telegram_http_200_error_envelope_rejected_without_token_fetch(error_payload):
+    """Reject OAuth errors even when an IdP incorrectly uses HTTP 200.
+
+    No arbitrary provider-supplied error strings may be surfaced to the caller.
+    """
+    requested = []
+
+    def transport(request):
+        requested.append(request.url.path)
+        assert request.url.host == "oauth.telegram.org"
+        assert request.url.path == "/token"
+        return httpx.Response(200, json=error_payload)
+
+    transaction = Claim(
+        "telegram", "v" * 48, "n" * 40,
+        "https://fin-horizon.mikemoore.top/api/auth/oauth/telegram/callback",
+    )
+    with pytest.raises(ProviderError, match="^Provider rejected authorization$") as exc:
+        await exchange_provider(
+            OAuthProvider("telegram", "123456789", "synthetic-secret"),
+            transaction, "synthetic-one-time-code",
+            transport=httpx.MockTransport(transport),
+        )
+    assert requested == ["/token"]  # No JWKS or profile fetch after OAuth error.
+    assert "synthetic sensitive" not in str(exc.value)
+    assert "synthetic private" not in str(exc.value)
