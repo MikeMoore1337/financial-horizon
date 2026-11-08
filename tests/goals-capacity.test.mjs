@@ -140,3 +140,28 @@ test('reject malformed calendar, excessive lists, missing currency and malicious
   assert.throws(()=>reconcileGoalCapacity(input({accounts:[{...account('bank',10_000),currency:'USD'}]})),/cross-scope/);
   assert.throws(()=>reconcileGoalCapacity(input({ledgerRevision:-1})),/revision/);
 });
+
+
+test('historical snapshot ignores valid goals not yet created, but validates their entire journal', () => {
+  const future = createGoal({
+    id:'future', eventId:'future-created', title:'Next season', on:'2026-04-01',
+    openingCents:8_000_000, targetCents:12_000_000, targetDate:'2027-04-01',
+  });
+  const old = goal('g1', 1_000_000);
+  const historical = input({
+    goals:[old, future],
+    bindings:[{goalId:'g1',accountId:'bank'},{goalId:'future',accountId:'bank'}],
+  });
+  assert.equal(row(historical).voluntaryGoalCents,1_000_000);
+  assert.equal(row(historical).availableCents,7_000_000);
+  const afterCreation = input({ ...historical, asOfDate:'2026-04-02' });
+  assert.equal(row(afterCreation).voluntaryGoalCents,9_000_000);
+  assert.equal(row(afterCreation).availableCents,-1_000_000);
+  // Do not treat the future goal as trusted solely because its creation is later.
+  const corrupt = structuredClone(future);
+  corrupt.events.push({id:'bad',on:'2026-04-02',type:'contribution',
+    amountCents:-1,funding:'virtual'});
+  assert.throws(() => reconcileGoalCapacity(input({
+    ...historical, goals:[old,corrupt],
+  })),/integer number of kopecks/);
+});

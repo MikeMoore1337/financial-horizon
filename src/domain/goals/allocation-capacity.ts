@@ -127,18 +127,21 @@ export function reconcileGoalCapacity(input: GoalCapacityInput): GoalCapacityRes
     cash.set(account.id, account.balanceCents);
   }
 
+  // Validate *every* journal, including future-created goals, before any historical
+  // projection. Their opening allocation is not factual until the creation date.
+  goalLedgerLinks(input.goals); // Also detects duplicate #33 links across goals.
   const goalIds = new Set<string>();
-  // Read the event histories (including voids) before checking whether cash is available.
-  // Never rely on the saved balance submitted by a client in place of a journal replay.
   const balances = new Map<string, number>();
   for (const goal of input.goals) {
     if (!goal || typeof goal !== 'object') throw new TypeError('Invalid goal record');
     id(goal.id, 'goal ID');
     if (goalIds.has(goal.id)) throw new Error('Duplicate goal ID');
     goalIds.add(goal.id);
-    balances.set(goal.id, calculateGoal(goal, input.asOfDate).savedCents);
+    const created = goal.events[0]; // Proven to be 'create' by the full journal replay.
+    if (!created || created.type !== 'create') throw new TypeError('Invalid goal creation');
+    const saved = created.on > input.asOfDate ? 0 : calculateGoal(goal, input.asOfDate).savedCents;
+    balances.set(goal.id, saved);
   }
-  goalLedgerLinks(input.goals); // Reject a single posted movement linked to two goals.
 
   const linked = new Set<string>();
   for (const binding of input.bindings) {

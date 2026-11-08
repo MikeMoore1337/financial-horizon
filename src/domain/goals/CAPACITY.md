@@ -12,7 +12,9 @@ or bank postings. It cannot authorize an authenticated user by itself.
   them from planned income minus planned expense. Cash can be negative; it is
   not silently clamped or replaced by zero.
 - `goals` are the entire saved per-scope immutable journals; the guard replays
-  only entries effective on/before `asOfDate`. It includes earmarked funds for
+  only entries effective on/before `asOfDate`. The entire journal is always
+  validated, but a goal created after `asOfDate` contributes **zero** to the
+  historical balance. It includes earmarked funds for
   active, completed **and archived** goals until a real release/use journal
   event is recorded. Goal status alone does **not** release funds.
 - `bindings` map each goal to exactly one existing account. The API/provider
