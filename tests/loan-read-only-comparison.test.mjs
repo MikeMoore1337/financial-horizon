@@ -126,3 +126,34 @@ test('unresolved closure date is not promoted to proof of a fully settled bank l
   assert.equal(result.bankComparison.exactMatch, false);
   assert.equal(result.bankParityVerified, false);
 });
+
+test('bank fees remain unallocated differences, never part of mortgage principal', () => {
+  const withFee = bank.map((row, index) => index === 0
+    ? { ...row, amountCents: row.amountCents + 50 } : row);
+  const result = prepareReadOnlyLoanComparison(legacy, approved, withFee);
+  assert.equal(result.status, 'differences');
+  assert.equal(result.bankComparison.rows[0].bankUnallocatedCents, 50);
+  assert.equal(result.bankComparison.rows[0].amountDeltaCents, -50);
+  assert.equal(result.plan.rows[0].principalCents, 497_218);
+  assert.equal(result.plan.rows[0].balanceCents, 502_782);
+});
+
+test('identical full rows for an unclosed loan are insufficient closure evidence', () => {
+  const tooSmall = { ...legacy, paymentCents: 1 };
+  const first = prepareReadOnlyLoanComparison(tooSmall, approved);
+  assert.equal(first.status, 'no-bank-schedule');
+  assert.equal(first.plan.complete, false);
+  const synthetic = first.plan.rows.map(row => ({
+    date: row.date,
+    amountCents: row.amountCents,
+    interestCents: row.interestCents,
+    principalCents: row.principalCents,
+    balanceCents: row.balanceCents,
+  }));
+  const compared = prepareReadOnlyLoanComparison(tooSmall, approved, synthetic);
+  assert.equal(compared.bankComparison.matchingKnownFields, true);
+  assert.equal(compared.bankComparison.comparisonComplete, true);
+  assert.equal(compared.bankComparison.exactMatch, false);
+  assert.equal(compared.status, 'incomplete-bank-evidence');
+  assert.equal(compared.bankParityVerified, false);
+});
