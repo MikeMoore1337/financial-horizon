@@ -7,7 +7,7 @@ import { observe, visitGuest, scopedState } from './helpers.mjs';
 // This does not alter the production build, application, Service Worker or UI.
 test.use({ serviceWorkers: 'block' });
 
-const SOURCES = new Set(['index', 'engine', 'math', 'reconcile', 'types', 'legacy-preview']);
+const SOURCES = new Set(['index', 'engine', 'math', 'reconcile', 'types', 'legacy-preview', 'read-only-comparison']);
 
 test('loan domain executes in Chromium and WebKit with exact cents and no IndexedDB mutation', async ({ page, context }) => {
   const watcher = await observe(context, page);
@@ -33,7 +33,7 @@ test('loan domain executes in Chromium and WebKit with exact cents and no Indexe
   await visitGuest(page);
   const before = await scopedState(page, 'state');
   const result = await page.evaluate(async () => {
-    const { calculateLoan, reconcileLoanSchedule, prepareLegacyLoanPreview } = await import('/fh-loan-qa/index.js');
+    const { calculateLoan, reconcileLoanSchedule, prepareLegacyLoanPreview, prepareReadOnlyLoanComparison } = await import('/fh-loan-qa/index.js');
     const terms = {
       principalCents: 1_000_000, startDate: '2026-01-01',
       firstDueDate: '2026-02-01', termMonths: 2,
@@ -69,6 +69,16 @@ test('loan domain executes in Chromium and WebKit with exact cents and no Indexe
       rounding: 'HALF_UP', scheduleType: 'annuity',
       installmentBasis: 'fixed-contractual',
     });
+    const viewModel = prepareReadOnlyLoanComparison({
+      openingCents: 1_000_000, paymentCents: 507_410, termMonths: 2,
+      dueDay: 31, asOfDate: '2026-01-01',
+    }, {
+      agreementConfirmed: true, openingBalanceDateConfirmed: true,
+      firstDueDate: '2026-02-01', dueDayAnchor: 1,
+      annualRateMicroPercent: 12_000_000, dayCount: 'ACT/365F',
+      rounding: 'HALF_UP', scheduleType: 'annuity',
+      installmentBasis: 'fixed-contractual',
+    }, expected);
     const anchoredDates = approved.terms
       ? calculateLoan(approved.terms, [], { mode: 'plan' }).rows.map(row => row.date)
       : [];
@@ -81,6 +91,8 @@ test('loan domain executes in Chromium and WebKit with exact cents and no Indexe
       amendedPlannedCents: amended.rows.map(row => row.plannedPaymentCents),
       amendedPaidCents: amended.rows.map(row => row.amountCents),
       dates: planned.rows.map(row => row.date),
+      previewStatus: viewModel.status,
+      previewBankParity: viewModel.bankParityVerified,
       unconfirmed: unconfirmed.status,
       unconfirmedTerms: unconfirmed.terms,
       approvedStatus: approved.status,
@@ -97,6 +109,8 @@ test('loan domain executes in Chromium and WebKit with exact cents and no Indexe
   });
   expect(result.dates).toEqual(['2026-02-01', '2026-03-01']);
   expect(result.unconfirmed).toBe('needs-confirmation');
+  expect(result.previewStatus).toBe('numerical-match');
+  expect(result.previewBankParity).toBe(false);
   expect(result.unconfirmedTerms).toBeNull();
   expect(result.approvedStatus).toBe('ready');
   expect(result.approvedStoredDataChanged).toBe(false);
