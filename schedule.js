@@ -20,15 +20,17 @@ function dateFrom(x){const raw=String(x).trim();let m=raw.match(/^(\d{4})-(\d{2}
  const [y,mo,d]=m.slice(1).map(Number);const parsed=new Date(Date.UTC(y,mo-1,d));
  if(parsed.getUTCFullYear()!==y||parsed.getUTCMonth()+1!==mo||parsed.getUTCDate()!==d)throw Error('Несуществующая дата в графике: '+raw.slice(0,25));
  return `${String(y).padStart(4,'0')}-${String(mo).padStart(2,'0')}-${String(d).padStart(2,'0')}`;}
-export function parseSchedule(text){
+export function parseSchedule(text,{allowMissingBalance=false}={}){
+ if(typeof allowMissingBalance!=='boolean')throw TypeError('Неизвестный режим разбора графика');
  const rows=parseCsv(text);if(rows.length<2||rows.length>1500)throw Error('Ожидается CSV с заголовком и 1-1499 строками');
  const fields={date:['дата','датаплатежа','date'],amount:['платеж','суммаплатежа','amount','payment'],interest:['проценты','interest'],principal:['основнойдолг','телокредита','principal'],balance:['остаток','остатокдолга','balance']};
  const header=rows[0].map(normalize);const index={};
  for(const [key,names] of Object.entries(fields))index[key]=header.findIndex(h=>names.includes(h));
- if(index.date<0||index.amount<0||index.balance<0)throw Error('Не найдены колонки «Дата», «Платёж» и «Остаток»');
+ if(index.date<0||index.amount<0||(!allowMissingBalance&&index.balance<0))throw Error(allowMissingBalance?'Не найдены колонки «Дата» и «Платёж»':'Не найдены колонки «Дата», «Платёж» и «Остаток»');
  let last='';const items=rows.slice(1).map((r,i)=>{
  const date=dateFrom(r[index.date]);if(last && date<=last)throw Error(`Даты графика не возрастают, строка ${i+2}`);last=date;
- const amountCents=cents(r[index.amount]);const balanceCents=cents(r[index.balance]);
+ const amountCents=cents(r[index.amount]);const balanceRaw=index.balance>=0?r[index.balance]:undefined;
+ const balanceCents=allowMissingBalance&&(balanceRaw===undefined||!String(balanceRaw).trim())?null:cents(balanceRaw);
  return {date,amountCents,balanceCents,interestCents:index.interest>=0 && r[index.interest] ? cents(r[index.interest]):null,principalCents:index.principal>=0 && r[index.principal] ? cents(r[index.principal]):null};
  });
  return items;
