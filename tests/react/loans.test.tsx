@@ -261,9 +261,9 @@ describe('Approved bank reconciliation UI - opt-in and no financial writes', () 
         'расхождения',
       ),
     );
-    expect(document.querySelector('[data-testid="loan-comparison-source"]')?.textContent ?? '').not.toContain(
-      'SENSITIVE',
-    );
+    expect(
+      document.querySelector('[data-testid="loan-comparison-source"]')?.textContent ?? '',
+    ).not.toContain('SENSITIVE');
     expect(sample.selected).toEqual(before);
     fireEvent.click(screen.getByRole('button', { name: 'Сбросить локальный CSV' }));
     expect(document.querySelector('.loan-comparison-status')?.textContent).toContain(
