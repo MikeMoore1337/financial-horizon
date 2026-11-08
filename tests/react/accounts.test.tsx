@@ -167,6 +167,21 @@ describe('approved accounts interface (feature not exposed)', () => {
     expect(send).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('button', { name: 'Подтвердить перевод' }).hasAttribute('disabled')).toBe(true);
   });
+  it('never emits two mutations on rapid repeated confirmation', async () => {
+    let finish: (() => void) | undefined;
+    const onTransfer = vi.fn().mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+    const data = props({ onTransfer });
+    render(<Accounts {...data} />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Перевести' })[0]!);
+    fireEvent.change(screen.getByLabelText('Сумма в рублях'), { target: { value: '1 000,00' } });
+    fireEvent.change(screen.getByLabelText('Дата перевода'), { target: { value: '2026-11-08' } });
+    const confirm = screen.getByRole('button', { name: 'Подтвердить перевод' });
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+    expect(onTransfer).toHaveBeenCalledTimes(1);
+    finish?.();
+    await waitFor(() => expect(data.onRefresh).toHaveBeenCalledTimes(1));
+  });
   it('keeps the new screen inaccessible without a caller route, and blocks invalid auth', () => {
     const host = document.createElement('main');
     document.body.append(host);
