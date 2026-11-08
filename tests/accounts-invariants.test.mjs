@@ -26,9 +26,9 @@ function transfer(s, from, to, amount, transactionId = u()) {
 function payment(s, accountId, amountMinor, loanId = u(), transactionId = u()) {
   return run(s, 'payment.record', {
     id: transactionId, accountId, amountMinor, link: { loanPaymentId: loanId }, occurredOn: '2026-11-07',
-  }, revisions(s, accountId), {
+  }, { ...revisions(s, accountId), [loanId]: 1 }, {
     profileId: s.profileId, id: loanId, source: 'loanPayment',
-    direction: 'expense', amountMinor, voidedAt: null,
+    direction: 'expense', amountMinor, entityRevision: 1, voidedAt: null,
   });
 }
 function fixture() {
