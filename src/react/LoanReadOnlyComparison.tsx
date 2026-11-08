@@ -151,6 +151,8 @@ export function LoanReadOnlyComparison({
   const openButtonRef = useRef<HTMLButtonElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const csvRequest = useRef(0);
+  // In-flight file reads always use the last *committed* user-confirmed contract.
+  const acceptedRef = useRef<ExplicitLoanTermsSelection | null>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -197,6 +199,7 @@ export function LoanReadOnlyComparison({
       const comparison = run(rules, rows);
       if (comparison.status === 'needs-confirmation')
         throw new Error('Недостаточно договорных условий');
+      acceptedRef.current = rules;
       setAccepted(rules);
       setError('');
       close();
@@ -227,7 +230,9 @@ export function LoanReadOnlyComparison({
       }) as BankScheduleRow[];
       if (parsed.length > 1499) throw new RangeError('Too many bank rows');
       if (request !== csvRequest.current) return;
-      const next = accepted ? prepareReadOnlyLoanComparison(snapshot, accepted, parsed) : null;
+      // The user may have confirmed or changed bank rules while file.text() ran.
+      const latestRules = acceptedRef.current;
+      const next = latestRules ? prepareReadOnlyLoanComparison(snapshot, latestRules, parsed) : null;
       setLocalRows(parsed);
       setResult(next);
       setRowsVisible(25);
