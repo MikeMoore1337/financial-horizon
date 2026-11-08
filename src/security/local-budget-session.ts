@@ -33,12 +33,15 @@ export class LocalBudgetSession {
 
   /** Must be called with a verified session user ID or an explicit guest scope. */
   selectScope(scope: LocalScope): void {
+    // An invalid *new* identity must not leave the previous account unlocked.
+    // Always revoke the old identity before validating the replacement.
+    this.lock();
+    this.#scope = null;
     if (typeof scope !== 'string' || !VALID_SCOPE.test(scope)) {
       throw Error('Некорректная область локального бюджета');
     }
     // Even reselecting the same scope requires a fresh local unlock. Do not
     // infer encryption-key possession from a refreshed server auth cookie.
-    this.lock();
     this.#scope = scope;
   }
 

@@ -159,3 +159,16 @@ test('in-flight encryption cannot publish ciphertext after lock', async () => {
   session.lock();
   await assert.rejects(inFlight, /заблокирован/);
 });
+
+
+test('invalid new identity fails closed instead of retaining the previous account', async () => {
+  const {keyset} = await make(USER_A);
+  const session = new LocalBudgetSession();
+  session.selectScope(USER_A);
+  await session.unlock(keyset, {passphrase: PASSWORD});
+  assert.equal(session.state, 'unlocked');
+  assert.throws(() => session.selectScope('account:malformed'), /область/);
+  assert.equal(session.state, 'unselected');
+  assert.equal(session.selectedScope, null);
+  await assert.rejects(() => session.encrypt(FINANCE, CONTEXT), /заблокирован/);
+});
