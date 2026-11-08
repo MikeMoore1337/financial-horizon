@@ -143,3 +143,20 @@ test('traversal and malformed sensitive inputs fail closed without source leakag
   assert.doesNotMatch(run.stderr + run.stdout, new RegExp(secret));
   await assert.rejects(() => verifyBankLoanReferences(path));
 });
+
+test('batch verifier counts missing bank balance as incomplete without exposing private rows', async t => {
+  const partial = 'Date;Payment;Interest;Principal\n' +
+    '2026-02-01;300,00;0,00;300,00\n' +
+    '2026-03-01;300,00;0,00;300,00\n' +
+    '2026-04-01;300,00;0,00;300,00\n';
+  const data = await workspace(t, [firstBank, partial]);
+  const run = invoke(await save(data));
+  assert.equal(run.status, 2, run.stderr);
+  const result = JSON.parse(run.stdout);
+  assert.equal(result.arithmeticMatches, 1);
+  assert.equal(result.incompleteReferences, 1);
+  assert.equal(result.notExactReferences, 1);
+  assert.equal(result.allArithmeticExact, false);
+  assert.equal(result.bankParityVerified, false);
+  assert.doesNotMatch(run.stdout, /300,00|reference-|contract\.json/);
+});
