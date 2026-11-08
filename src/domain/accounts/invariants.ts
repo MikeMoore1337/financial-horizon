@@ -79,6 +79,9 @@ export function assertLedgerState(state: LedgerState): void {
     }
     requireDate(tx.occurredOn);
     requireRevision(tx.entityRevision, false);
+    // finance.ledger_transactions is append-only in PostgreSQL #66. A posted
+    // transaction is inserted at revision 1 and can never be revised in place.
+    if (tx.entityRevision !== 1) throw new Error('Проведённая операция должна быть неизменной');
     if (tx.kind === 'reversal') requireUUID(tx.reversedTransactionId);
     else if (tx.reversedTransactionId !== null) throw new Error('Ссылка на отмену у обычной операции');
     transactions.set(tx.id, tx);
