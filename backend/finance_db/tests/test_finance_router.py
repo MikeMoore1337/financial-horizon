@@ -230,3 +230,99 @@ def test_public_v1_rejects_unapproved_account_creation_and_cross_scope_data(auth
         assert first_account not in other_state.text
         assert other_state.json()["entities"] == []
         assert second_user != first_user
+
+
+def test_two_authenticated_sessions_sync_the_same_server_ledger_without_double_post(auth_finance):
+    first, app, mail, _, engine, namespace = auth_finance
+    owner_id = authenticate(first, mail, "sync@example.invalid")
+    assert bootstrap(first).status_code == 200
+    scope = derive_verified_scope(owner_id, namespace)
+    from_id = seed(engine, scope, 20_000)
+    to_id = seed(engine, scope, 1_000)
+
+    with TestClient(app) as second:
+        login = second.post("/api/auth/email/login", headers={"Origin": ORIGIN}, json={
+            "email": "sync@example.invalid", "password": PASS,
+        })
+        assert login.status_code == 200
+        assert bootstrap(second).status_code == 200
+        assert first.cookies.get("fh_finance_session") != second.cookies.get("fh_finance_session")
+        initial_first = first.get("/api/finance/v1/state")
+        initial_second = second.get("/api/finance/v1/state")
+        assert initial_first.status_code == initial_second.status_code == 200
+        assert initial_first.json()["profile_id"] == initial_second.json()["profile_id"]
+        assert initial_first.json()["revision"] == initial_second.json()["revision"]
+        assert initial_first.headers["ETag"] == initial_second.headers["ETag"]
+
+        revision = initial_first.json()["revision"]
+        versions = {e["id"]: e["entity_revision"] for e in initial_first.json()["entities"]}
+        mutation = str(uuid4())
+        command = {
+            "schema_version": 1, "client_mutation_id": mutation,
+            "base_revision": revision, "action": "account.transfer",
+            "expected_entity_revisions": {
+                from_id: versions[from_id], to_id: versions[to_id],
+            },
+            "payload": {
+                "from_account_id": from_id, "to_account_id": to_id,
+                "amount_minor": 2_500, "occurred_on": "2026-11-08",
+            },
+        }
+        headers = {
+            "Origin": ORIGIN,
+            "If-Match": initial_first.headers["ETag"],
+            "Idempotency-Key": mutation,
+        }
+        written = first.post("/api/finance/v1/commands", json=command, headers=headers)
+        assert written.status_code == 201
+        # Simulates offline-reconnect retry from the other browser.
+        replay = second.post("/api/finance/v1/commands", json=command, headers=headers)
+        assert replay.status_code == 200 and replay.json()["replayed"] is True
+        latest = second.get("/api/finance/v1/state")
+        assert latest.json()["revision"] == revision + 1
+        balances = {
+            e["id"]: e["data"]["balance_minor"]
+            for e in latest.json()["entities"] if e["kind"] == "account"
+        }
+        assert balances == {from_id: 17_500, to_id: 3_500}
+        changes = second.get(f"/api/finance/v1/changes?since_revision={revision}")
+        assert changes.status_code == 200
+        assert changes.json()["next_since_revision"] == revision + 1
+
+        # A second writer using the old snapshot must not silently overwrite cash.
+        different = {**command, "client_mutation_id": str(uuid4())}
+        stale_headers = {**headers, "Idempotency-Key": different["client_mutation_id"]}
+        conflict = second.post("/api/finance/v1/commands", json=different, headers=stale_headers)
+        assert conflict.status_code == 412 and conflict.json()["code"] == "stale_revision"
+        assert first.get("/api/finance/v1/state").json()["revision"] == revision + 1
+
+
+def test_session_revocation_invalidates_finance_cookie_on_second_device(auth_finance):
+    first, app, mail, _, _, _ = auth_finance
+    authenticate(first, mail, "revocation@example.invalid")
+    assert bootstrap(first).status_code == 200
+    with TestClient(app) as second:
+        login = second.post("/api/auth/email/login", headers={"Origin": ORIGIN}, json={
+            "email": "revocation@example.invalid", "password": PASS,
+        })
+        assert login.status_code == 200
+        assert bootstrap(second).status_code == 200
+        assert second.get("/api/finance/v1/state").status_code == 200
+        logout_others = first.post(
+            "/api/auth/email/logout-others", headers={"Origin": ORIGIN}, json={},
+        )
+        assert logout_others.status_code == 200
+        assert first.get("/api/finance/v1/state").status_code == 200
+        # Raw finance cookie remains in remote browser, but the backend SQLite
+        # token is revoked, so PostgreSQL must not be consulted as that principal.
+        assert second.get("/api/finance/v1/state").status_code == 401
+        mutation = str(uuid4())
+        assert second.post("/api/finance/v1/commands", headers={
+            "Origin": ORIGIN, "If-Match": '"dummy"',
+            "Idempotency-Key": mutation,
+        }, json={
+            "schema_version": 1, "client_mutation_id": mutation,
+            "base_revision": 0, "action": "transaction.reverse",
+            "expected_entity_revisions": {},
+            "payload": {"transaction_id": str(uuid4()), "reason": "revoked"},
+        }).status_code == 401
