@@ -1,4 +1,6 @@
 export { calculateLoan } from './engine.ts';
+export { prepareLegacyLoanPreview } from './legacy-preview.ts';
+export type { ExplicitLoanTermsSelection, LegacyLoanPreviewGate, MissingLoanAcceptance, StoredLoanSnapshot } from './legacy-preview.ts';
 export { reconcileLoanSchedule } from './reconcile.ts';
 export { calendarDays, interestNumerator, INTEREST_DENOMINATOR, roundFraction } from './math.ts';
 export type {
