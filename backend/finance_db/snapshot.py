@@ -212,7 +212,7 @@ def get_finance_delta(
                 "ordinal": int(item["ordinal"]),
                 "kind": item["kind"],
                 "entity_id": str(item["entity_id"]),
-                "entity_revision": int(payload.pop("entity_revision", 1)),
+                "entity_revision": int(payload.pop("_entity_revision", 1)),
                 "payload": _as_json(payload),
             })
         return FinanceResult(200, {
