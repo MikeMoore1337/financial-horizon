@@ -307,8 +307,13 @@ def get_finance_delta(
         upper = int(selected[-1]) if selected else since_revision
         if (any(int(rev) != since_revision + index
                 for index, rev in enumerate(selected, start=1))
-            or (not selected and since_revision < current)):
-            # Never advance the offline cursor over a missing committed revision.
+            or (not has_more and upper < current)):
+            # A non-empty selected page can still hide a missing *tail*:
+            # profile revision=3, journal=[1] would incorrectly claim
+            # has_more=false and tempt #68 clients to stop at revision 1.
+            # On a final page we MUST have reached the authoritative
+            # profile revision, not merely the last available log row.
+            # Never acknowledge an incomplete committed journal.
             raise FinanceCommandError("service_unavailable", "Журнал содержит пропуск", 503)
         rows = session.execute(text("""
             SELECT revision,ordinal,schema_version,kind,entity_id,payload

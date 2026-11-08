@@ -361,6 +361,41 @@ def test_missing_delta_revision_is_not_silently_skipped(env):
     assert res.json()["code"] == "service_unavailable"
 
 
+@pytest.mark.parametrize("page_limit", [1, 50])
+def test_trailing_delta_gap_never_reports_false_end_of_journal(env, page_limit):
+    """A nonempty last page still must reach the actual profile revision.
+
+    Regression: journal=[1], profile revision=3, since=0 previously returned
+    200 has_more=false, to_revision=3, next_since_revision=1. A client could
+    silently treat that as a complete sync while missing committed changes.
+    """
+    uid, token = env["first"]
+    env["account"](uid, opening=1234)  # Real receipt + journal revision 1.
+    state = snapshot(env, token)
+    assert state.json()["revision"] == 1
+    scoped = env["scope"](uid)
+    with finance_transaction(env["engine"], verified_user_id=uid,
+                             profile_id=scoped.profile_id) as db:
+        db.execute(text("""
+            UPDATE finance_profiles SET revision=revision+2 WHERE id=:p
+        """), {"p": scoped.profile_id})
+    client = env["client"](token)
+    missing_tail = client.get("/api/finance/v1/changes", params={
+        "since_revision": 0, "limit_revisions": page_limit,
+    })
+    assert missing_tail.status_code == 503, missing_tail.text
+    assert missing_tail.json()["code"] == "service_unavailable"
+    assert "has_more" not in missing_tail.json()
+    assert "next_since_revision" not in missing_tail.json()
+    assert snapshot(env, token).json()["revision"] == 3
+    # Existing 410 behaviour for legitimately compacted history is separate.
+    missing_from_latest = client.get("/api/finance/v1/changes", params={
+        "since_revision": 1,
+    })
+    assert missing_from_latest.status_code == 503
+    assert missing_from_latest.json()["code"] == "service_unavailable"
+
+
 def test_compacted_delta_requires_snapshot_410(env):
     uid, token = env["first"]
     env["account"](uid)
