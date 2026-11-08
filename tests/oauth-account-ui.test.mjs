@@ -66,18 +66,18 @@ test('only authorized, signed-out providers appear in fixed approved visual orde
  assert.equal(screen.root.dataset.ready,'true');
  const anchors=screen.buttons.children[0].children;
  assert.deepEqual(anchors.map(a=>a.href),[
-  './api/auth/oauth/telegram/start',
   './api/auth/oauth/google/start',
   './api/auth/oauth/yandex/start',
   './api/auth/oauth/vk/start'
  ]);
  assert.deepEqual(anchors.map(a=>a.children[1].textContent),[
-  'Войти через Telegram','Войти через Google','Войти через Яндекс ID','Войти через VK ID'
+  'Войти через Google','Войти через Яндекс ID','Войти через VK ID'
  ]);
  assert.deepEqual(anchors.map(a=>a.children[0].src),[
-  './assets/providers/telegram.svg','./assets/providers/google.svg',
+  './assets/providers/google.svg',
   './assets/providers/yandex.svg','./assets/providers/vk.svg'
  ]);
+ assert.equal(anchors.some(a=>a.href.includes('/telegram/')),false);
  for(const a of anchors){
   assert.equal(a.tag,'a');
   assert.equal(a.children[0].alt,'');
