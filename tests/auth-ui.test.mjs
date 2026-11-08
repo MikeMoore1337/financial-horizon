@@ -5,9 +5,11 @@ import {allowedProviderIds, providerHref, providerLabel} from '../auth-ui.js';
 
 const read=name=>readFileSync(new URL('../'+name,import.meta.url),'utf8');
 
-test('only the four permitted independent OAuth providers have fixed start URLs',()=>{
+test('only the three production-approved OAuth providers have fixed start URLs',()=>{
  const ids=allowedProviderIds({enabled:true,providers:['vk','telegram','fake','google','yandex']});
- assert.deepEqual(ids,['telegram','google','yandex','vk']);
+ assert.deepEqual(ids,['google','yandex','vk']);
+ assert.throws(()=>providerHref('telegram'));
+ assert.equal(providerLabel('telegram'),null);
  assert.deepEqual(allowedProviderIds({enabled:false,providers:['google']}),[]);
  assert.deepEqual(allowedProviderIds(null),[]);
  for(const provider of ids){
