@@ -20,7 +20,7 @@ async function setup(page, testInfo) {
     if (request.method() !== 'GET') posts.push(request.url());
   });
   const moduleSource = new Map(
-    ['index.ts', 'csv.ts', 'xlsx.ts', 'normalize.ts', 'reconcile.ts', 'types.ts']
+    ['index.ts', 'csv.ts', 'xlsx.ts', 'normalize.ts', 'reconcile.ts', 'audit.ts', 'types.ts']
       .map(name => [name, ts.transpileModule(
         readFileSync(resolve('src/importers/bank-statements', name), 'utf8'),
         { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } },

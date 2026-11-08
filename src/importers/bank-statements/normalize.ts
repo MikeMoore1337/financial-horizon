@@ -9,7 +9,7 @@ const FIELDS: MappableField[] = [
   'targetAccount', 'category', 'currency', 'kind', 'externalId',
 ];
 const ALIASES: Readonly<Record<MappableField, readonly string[]>> = {
-  date: ['дата', 'датаоперации', 'датапроведения', 'дататранзакции', 'датавремяоперации',
+  date: ['дата', 'датаоперации', 'датапроведения', 'дататранзакции', 'датавремяоперации', 'датаивремяоперации',
     'date', 'bookingdate', 'transactiondate', 'operationdate', 'posteddate', 'valuedate'],
   amount: ['сумма', 'суммаоперации', 'суммаввалютесчета', 'суммаввалютеоперации',
     'amount', 'sum', 'transactionamount', 'amountinaccountcurrency'],
