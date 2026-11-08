@@ -223,6 +223,12 @@ export function calculateBudgetReport(input: {
     if (!original || original.kind === 'reversal' || original.status !== 'confirmed') {
       throw new Error('Orphan or invalid budget reversal');
     }
+    // #33 forbids reversing a linked payment without atomically voiding its
+    // underlying settlement/loan fact. Protect direct callers as well as the
+    // read-only #33 adapter so a still-paid bill cannot disappear from spending.
+    if (original.kind === 'payment') {
+      throw new Error('Linked payment reversal requires atomic fact cancellation');
+    }
     if (reversedIds.has(original.id)) throw new Error('Double reversal');
     if (op.signedMinor !== -original.signedMinor) throw new Error('Reversal amount mismatch');
     reversedIds.add(original.id);

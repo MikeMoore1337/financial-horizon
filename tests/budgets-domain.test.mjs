@@ -178,3 +178,13 @@ test('duplicate transactions, invalid reversals, cross-profile inputs and bad da
   assert.throws(() => calc([], [total(100, { endsBeforeMonth: '2026-01' })]), /Invalid rule end month/);
   assert.throws(() => calc([], [total(), { ...total(), id: 'duplicate' }]), /Overlapping/);
 });
+
+test('direct calculation rejects reversal of a linked payment until fact void is atomic (#33/#67)', () => {
+  const payment = { ...expense('linked', -12_345), kind: 'payment', sourceFactId: 'settlement:fact-a' };
+  const reversal = { id: 'undo-linked', profileId, occurredOn: '2026-02-02',
+    kind: 'reversal', status: 'confirmed', signedMinor: 12_345, categoryId: null,
+    reversedTransactionId: 'linked' };
+  assert.equal(calc([payment]).total.spentMinor, 12_345);
+  assert.throws(() => calc([payment, reversal]), /Linked payment reversal requires atomic/);
+  assert.throws(() => calc([reversal, payment]), /Linked payment reversal requires atomic/);
+});
