@@ -138,6 +138,27 @@ class ReleaseContracts(unittest.TestCase):
                     release.source_archive(SHA, Path(root))
             self.assertEqual(result.exception.code, "SOURCE_ARCHIVE_UNEXPECTED")
 
+    def test_caddy_atomic_update_preserves_permissions(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / "site.caddy"
+            path.write_text("before")
+            path.chmod(0o640)
+            release.atomic_file(path, b"after", None)
+            self.assertEqual(path.read_bytes(), b"after")
+            self.assertEqual(path.stat().st_mode & 0o777, 0o640)
+
+    def test_rollback_backups_are_unique_and_root_only_mode(self):
+        with tempfile.TemporaryDirectory() as root:
+            with mock.patch.object(release, "BACKUPS", Path(root)):
+                release.save_private_release_receipt("caddy", b"BEFORE\n")
+                release.save_private_release_receipt("caddy", b"AGAIN\n")
+            files = list(Path(root).glob("fh-oauth-release-caddy-*.backup"))
+            self.assertEqual(len(files), 2)
+            self.assertEqual({p.read_bytes() for p in files},
+                             {b"BEFORE\n", b"AGAIN\n"})
+            self.assertTrue(all(p.stat().st_mode & 0o777 == 0o600
+                                for p in files))
+
     def test_one_command_without_apply_only_checks_preflight(self):
         with mock.patch.object(release, "preflight", return_value=None) as check, \
              mock.patch.object(release, "rollout") as deployed, \
