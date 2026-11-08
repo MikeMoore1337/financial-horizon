@@ -57,6 +57,12 @@ for (const [text, reason] of [
   ['раз в квартал или раз в полгода', 'ambiguous'],
   ['Ежегодно; каждые 3 месяца', 'ambiguous'],
   ['Счёт за январь: ' + 'x'.repeat(2100), 'oversized'],
+  ['раз в 2 недели', 'unsupported'],
+  ['Раз в 3 дня', 'unsupported'],
+  ['раз в -3 мес', 'unsupported'],
+  ['раз в 1,5 месяца', 'unsupported'],
+  ['каждые 3 месяца, но раз в 2 недели', 'unsupported'],
+  ['ежегодно, но каждый -1 год', 'unsupported'],
 ]) {
   test('XLSX uncertain recurrence stays invalid, never auto-converted: ' + text.slice(0, 40), () => {
     assert.deepEqual(parseReservePeriodHint(text), invalid(reason));
@@ -69,8 +75,6 @@ for (const note of [
   'Примечание без периодичности',
   '2026 год',
   '2 мес',
-  'раз в 2 недели',
-  'Раз в 3 дня',
   'В мае и августе',
   null,
   undefined,
