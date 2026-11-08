@@ -173,3 +173,18 @@ test('scope revocation during a synchronous finance mutation aborts its transact
  assert.deepEqual(mock.table.get('account-state-v2:'+accountA),source);
  assert.equal((await s.readState()).entries.length,0);
 });
+
+test('explicit session-loss or logout revocation blocks the old legacy budget until new selection',async()=>{
+ const mock=browserDatabase();
+ globalThis.indexedDB=mock;
+ const s=await import('../storage.js?scope-revocation-logout');
+ await s.selectStateScope(accountA);
+ await s.updateState(value=>value.entries.push(entry('private-before-logout')));
+ s.revokeStateScope();
+ await assert.rejects(()=>s.readState(),/профиль изменён/);
+ await assert.rejects(()=>s.updateState(()=>{}),/профиль изменён/);
+ await s.selectStateScope(accountB);
+ assert.equal((await s.readState()).entries.length,0);
+ await s.selectStateScope(accountA);
+ assert.equal((await s.readState()).entries[0].title,'private-before-logout');
+});
