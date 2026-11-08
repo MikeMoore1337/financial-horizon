@@ -198,3 +198,15 @@ transfer/reversal and safe operation after an explicit reserve release.
 
 This rule still needs agreement with the #68 sync client before public cloud
 activation. The server remains feature OFF until #66/#70 release gates.
+
+## Machine-checkable API candidate for #68
+
+The current implementation's precise JSON, session bootstrap, snapshot 206
+paging, status codes and 4 exposed actions are described in
+[`finance-v1-http-candidate.openapi.json`](finance-v1-http-candidate.openapi.json).
+This file is a **feature-off candidate**. It does NOT amend the accepted
+`docs/architecture/finance-sync-v1.openapi.json` until #65/#68 client
+agreement, and it intentionally does not invent a funding account for the
+unimplemented fifth action `loan.payment.record`. The independent contract
+regression verifies action/payload declarations match Pydantic and ensures
+unsafe actions cannot silently become publicly exposed.
