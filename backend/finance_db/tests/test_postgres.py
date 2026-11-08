@@ -502,3 +502,107 @@ def test_loan_payment_is_always_negative(runtime):
         ), {"tx": good}).scalar_one() == -100
     with pytest.raises(IntegrityError):
         record_loan_payment(100)
+
+
+def test_settlement_insert_waits_for_concurrent_direction_change(runtime):
+    """INSERT must use FOR UPDATE, not compatible FK KEY SHARE."""
+    oid = uuid4()
+    with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as s:
+        s.execute(text("""
+            INSERT INTO obligations (profile_id,id,title,direction,amount_minor,starts_on)
+            VALUES (:p,:oid,'Concurrent direction change','income',125,current_date)
+        """), {"p": PROFILE_A, "oid": oid})
+
+    changed, release = threading.Event(), threading.Event()
+
+    def change_direction():
+        with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as s:
+            s.execute(text("""
+                UPDATE obligations SET direction='expense'
+                WHERE profile_id=:p AND id=:oid
+            """), {"p": PROFILE_A, "oid": oid})
+            changed.set()
+            if not release.wait(timeout=5):
+                raise TimeoutError("Synthetic direction-change lock was not released")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        task = pool.submit(change_direction)
+        assert changed.wait(timeout=3)
+        try:
+            with pytest.raises(DBAPIError) as exc:
+                with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as s:
+                    s.execute(text("SET LOCAL lock_timeout = '200ms'"))
+                    s.execute(text("""
+                        INSERT INTO settlements
+                          (profile_id,id,obligation_id,occurrence_on,paid_on,amount_minor)
+                        VALUES (:p,:sid,:oid,current_date,current_date,125)
+                    """), {"p": PROFILE_A, "sid": uuid4(), "oid": oid})
+            assert exc.value.orig.sqlstate == "55P03"
+        finally:
+            release.set()
+        task.result(timeout=5)
+    with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as s:
+        assert s.execute(text("""
+            SELECT direction FROM obligations WHERE profile_id=:p AND id=:oid
+        """), {"p": PROFILE_A, "oid": oid}).scalar_one() == "expense"
+        assert s.execute(text("""
+            SELECT count(*) FROM settlements WHERE profile_id=:p AND obligation_id=:oid
+        """), {"p": PROFILE_A, "oid": oid}).scalar_one() == 0
+
+
+def test_settlement_lock_prevents_concurrent_direction_update(runtime):
+    """An open income settlement+positive ledger posting bars a direction UPDATE."""
+    oid, sid, txid = uuid4(), uuid4(), uuid4()
+    with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as s:
+        s.execute(text("""
+            INSERT INTO obligations (profile_id,id,title,direction,amount_minor,starts_on)
+            VALUES (:p,:oid,'Concurrent paid obligation','income',125,current_date)
+        """), {"p": PROFILE_A, "oid": oid})
+
+    inserted, release = threading.Event(), threading.Event()
+
+    def commit_income_settlement():
+        with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as s:
+            s.execute(text("""
+                INSERT INTO settlements
+                  (profile_id,id,obligation_id,occurrence_on,paid_on,amount_minor)
+                VALUES (:p,:sid,:oid,current_date,current_date,125)
+            """), {"p": PROFILE_A, "sid": sid, "oid": oid})
+            insert_ledger(s, txid, "payment", [(ACCOUNT_A1, 125)])
+            s.execute(text("""
+                INSERT INTO ledger_payment_links(profile_id,transaction_id,settlement_id)
+                VALUES (:p,:tx,:sid)
+            """), {"p": PROFILE_A, "tx": txid, "sid": sid})
+            inserted.set()
+            if not release.wait(timeout=5):
+                raise TimeoutError("Synthetic settlement lock was not released")
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        task = pool.submit(commit_income_settlement)
+        assert inserted.wait(timeout=3)
+        try:
+            with pytest.raises(DBAPIError) as exc:
+                with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as s:
+                    s.execute(text("SET LOCAL lock_timeout = '200ms'"))
+                    s.execute(text("""
+                        UPDATE obligations SET direction='expense'
+                        WHERE profile_id=:p AND id=:oid
+                    """), {"p": PROFILE_A, "oid": oid})
+            assert exc.value.orig.sqlstate == "55P03"
+        finally:
+            release.set()
+        task.result(timeout=5)
+
+    with pytest.raises(DBAPIError):
+        with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as s:
+            s.execute(text("""
+                UPDATE obligations SET direction='expense'
+                WHERE profile_id=:p AND id=:oid
+            """), {"p": PROFILE_A, "oid": oid})
+    with finance_transaction(runtime, verified_user_id=USER_A, profile_id=PROFILE_A) as s:
+        assert s.execute(text("""
+            SELECT direction FROM obligations WHERE profile_id=:p AND id=:oid
+        """), {"p": PROFILE_A, "oid": oid}).scalar_one() == "income"
+        assert s.execute(text("""
+            SELECT signed_minor FROM ledger_postings WHERE profile_id=:p AND transaction_id=:tx
+        """), {"p": PROFILE_A, "tx": txid}).scalar_one() == 125

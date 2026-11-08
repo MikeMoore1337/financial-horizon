@@ -144,6 +144,10 @@ docker compose -f deploy/postgres/compose.yml config --quiet ||
   deny "Invalid isolated production Compose configuration"
 docker compose -f deploy/postgres/compose.yml up -d --wait db ||
   deny "PostgreSQL failed to reach healthcheck"
+# Docker daemon must NEVER restart this DB automatically before LUKS2 unlock.
+# Subsequent startups use guarded-start.sh (or the optional supervised unit).
+[[ "$(docker inspect fh-finance-postgres --format '{{.HostConfig.RestartPolicy.Name}}')" = no ]] ||
+  deny "Unsafe Docker daemon auto-restart: encrypted mount check could be bypassed"
 docker compose -f deploy/postgres/compose.yml --profile ops run --build --rm migrator ||
   deny "Alembic migration failure; preserve volume for investigation"
 

@@ -488,6 +488,33 @@ CREATE TRIGGER protect_settled_obligation_direction
   FOR EACH ROW EXECUTE FUNCTION finance.guard_obligation_direction();
 REVOKE ALL ON FUNCTION finance.guard_obligation_direction() FROM PUBLIC;
 
+-- Serialize the creation of a settlement against a simultaneous UPDATE of
+-- obligations.direction. The ordinary FK takes KEY SHARE, which does NOT
+-- conflict with an UPDATE of non-key columns. Without the explicit FOR UPDATE,
+-- a positive immutable ledger posting could become linked to an obligation
+-- changed to expense by a concurrent transaction.
+CREATE FUNCTION finance.lock_obligation_for_settlement()
+RETURNS trigger LANGUAGE plpgsql
+SET search_path = finance, pg_catalog
+AS $fh_settlement_lock$
+DECLARE
+  current_direction varchar(8);
+BEGIN
+  SELECT o.direction INTO current_direction
+    FROM finance.obligations o
+    WHERE o.profile_id=NEW.profile_id AND o.id=NEW.obligation_id
+    FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'settlement obligation is missing'
+      USING ERRCODE='23503';
+  END IF;
+  RETURN NEW;
+END $fh_settlement_lock$;
+CREATE TRIGGER serialize_settlement_obligation_direction
+  BEFORE INSERT ON settlements
+  FOR EACH ROW EXECUTE FUNCTION finance.lock_obligation_for_settlement();
+REVOKE ALL ON FUNCTION finance.lock_obligation_for_settlement() FROM PUBLIC;
+
 -- Audit and journal are append-only even if a privileged grant is accidentally
 -- broadened later. Corrections require a compensating transaction.
 CREATE FUNCTION finance.reject_audit_mutation()

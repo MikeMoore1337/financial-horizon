@@ -62,6 +62,25 @@ fi
 echo "CI_NO_PSQL_PASSWORD_ARGV_PASS"
 docker compose -f deploy/postgres/compose.yml config --quiet
 docker compose -f deploy/postgres/compose.yml up -d --wait --wait-timeout 35 db
+# Actual container restart policy is part of the security boundary. A daemon
+# restart while LUKS2 is locked MUST leave PostgreSQL stopped, never let
+# Docker silently start it against the unencrypted host mount directory.
+db_restart_policy="$(docker inspect fh-finance-postgres --format '{{.HostConfig.RestartPolicy.Name}}')"
+test "$db_restart_policy" = no || {
+  echo "ERROR: finance DB bypasses the encrypted-volume startup gate" >&2
+  exit 1
+}
+echo "CI_FINANCE_DAEMON_AUTO_RESTART_DISABLED_PASS"
+# Validate that future production restarts have an independent host-level
+# LUKS2 preflight; merely setting a safe Docker policy is not enough.
+unit=deploy/postgres/systemd/fh-finance-postgres.service
+grep -Fq 'RequiresMountsFor=/srv/financial-horizon-finance/pgdata' "$unit"
+grep -Fq 'ConditionPathIsMountPoint=/srv/financial-horizon-finance/pgdata' "$unit"
+grep -Fq 'guarded-start.sh' "$unit"
+grep -Fq 'storage-preflight.sh' deploy/postgres/scripts/guarded-start.sh
+grep -Fq 'FH_FINANCE_APPROVED_SHA' deploy/postgres/scripts/guarded-start.sh
+bash -n deploy/postgres/scripts/guarded-start.sh
+echo "CI_GUARDED_START_SYSTEMD_LUKS_GATE_PASS"
 docker compose -f deploy/postgres/compose.yml --profile ops run --rm --build migrator
 version="$(docker exec -u postgres fh-finance-postgres \
   psql -U postgres -d fh_finance -Atc 'SELECT version_num FROM finance.alembic_version')"

@@ -244,3 +244,67 @@ SCRAM-хэши в каталоге ролей. Параметры
 `log_statement=none` и `log_min_duration_statement=-1` обязательны;
 включать логирование SQL с параметрами паролей на этапе начальной
 инициализации запрещено.
+
+
+## P1: запрет незашифрованного повторного запуска PostgreSQL после reboot
+
+**Безопасное поведение - STOP, а не plaintext fallback.** В Compose отключён
+restart: unless-stopped; теперь restart: "no". Docker daemon НЕ должен
+автоматически запускать PostgreSQL до разблокировки отдельного LUKS2-тома:
+в противном случае существующий mountpoint на корневом диске позволил бы
+создать второй незашифрованный кластер, минуя первоначальный preflight.
+
+- Первый запуск только через production-deploy.sh с проверкой PR #79,
+  независимого APPROVED, точного SHA, 4/4 CI, LUKS2, offsite и secrets.
+  После Compose up проверяется фактическая Docker RestartPolicy.Name == no.
+- Каждый последующий ручной запуск только через
+  deploy/postgres/scripts/guarded-start.sh из чистого проверенного checkout.
+  Требуется root, FH_FINANCE_APPROVED_SHA равный реальному HEAD и строгий
+  LUKS2 storage-preflight до и после Compose up. При отсутствии тома FAIL.
+- Для контролируемого запуска при boot есть отдельный, выключенный по
+  умолчанию, deploy/postgres/systemd/fh-finance-postgres.service. Systemd
+  unit зависит от отдельного mountpoint, вызывает лишь guarded-start.sh
+  и при остановке не удаляет контейнер, базу, volume или журналы.
+  Автоматически включать service до полноценной production-приёмки нельзя.
+
+Только после настоящего production выпуска и настройки защищённого файла
+/etc/financial-horizon/finance/start.env (root, 0600) с переменными:
+
+- FH_FINANCE_CHECKOUT_DIR - абсолютный каталог чистого production checkout
+  точного слитого SHA, не другого проекта;
+- FH_FINANCE_APPROVED_SHA - проверенный 40-символьный release SHA;
+- FH_FINANCE_DATA_DIR=/srv/financial-horizon-finance/pgdata;
+- FH_FINANCE_MAPPER_NAME=fh-finance-pg;
+- FH_FINANCE_SECRETS_DIR=/etc/financial-horizon/finance/secrets.
+
+Оператор может установить unit в /etc/systemd/system/ и после
+systemd-analyze verify выполнить systemctl daemon-reload и
+systemctl enable --now fh-finance-postgres. Перед включением проверить
+fstab/crypttab, отключённый том, последующее успешное монтирование,
+отсутствие Docker auto-restart и готовность отката. Пароли/ключи LUKS2
+никогда не записывать в unit/start.env или GitHub.
+
+При недоступном LUKS2 PostgreSQL остаётся ОСТАНОВЛЕННОЙ. Команды
+docker start fh-finance-postgres и docker compose up db в обход guard
+на production запрещены. Проверять live reboot без отдельного разрешения
+и независимых резервных копий недопустимо.
+
+**Границы доказательств:** CI проверяет фактическую политику рестарта
+одноразового контейнера, guarded-start и systemd mountpoint guard, но не
+подтверждает поведение настоящего VPS после reboot, encryption-at-rest,
+offsite восстановление или RTO. Эти проверки - обязательный gate #66/#70.
+
+## P2: конкурентный settlement против смены направления обязательства
+
+Старый guard_obligation_direction() запрещал последовательное изменение
+направления после оплаты, однако FK KEY SHARE совместим с изменением
+неключевого поля direction у обязательства. Новый BEFORE INSERT trigger
+finance.lock_obligation_for_settlement() использует SELECT ... FOR UPDATE
+строки обязательства, удерживая блокировку до COMMIT. Создание оплаты и
+изменение направления теперь сериализованы в обоих порядках; проверка
+знака проводки остаётся отложенной до COMMIT.
+
+Новые интеграционные тесты на настоящей PostgreSQL с двумя соединениями
+и ограниченным lock_timeout проверяют обе последовательности: ни смена
+до оплаты, ни оплата до смены не допускают расхождения направления и
+подписанной исторической проводки.
