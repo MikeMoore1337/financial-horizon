@@ -81,7 +81,7 @@ export function prepareReadOnlyLoanComparison(
     };
   }
   const bankComparison = reconcileLoanSchedule(plan, bankRows);
-  const status: ReadOnlyLoanComparison['status'] =
+  const status: Exclude<LoanComparisonStatus, 'needs-confirmation'> =
     bankComparison.exactMatch ? 'numerical-match'
     : bankComparison.matchingKnownFields
       ? 'incomplete-bank-evidence'
