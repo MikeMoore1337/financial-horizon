@@ -147,6 +147,7 @@ export function assertBudgetRuleState(state: BudgetRuleState): void {
     if (receipt.revision !== position + 1) throw new Error('Budget receipt sequence mismatch');
     if (mutations.has(receipt.clientMutationId)) throw new Error('Duplicate budget receipt');
     mutations.add(receipt.clientMutationId);
+    assertReceiptFingerprint(receipt, position, state.profileId);
     if (!ids.has(receipt.affectedRuleId)) throw new Error('Orphan budget receipt');
   }
 }
@@ -167,6 +168,61 @@ function canonical(value: unknown): string {
   const result = JSON.stringify(value);
   if (result === undefined) throw new TypeError('Invalid command field');
   return result;
+}
+
+/**
+ * Verify the canonical local request represented by each receipt after JSON
+ * restoration. This does not authenticate the receipt or replace the server's
+ * SHA-256 fingerprint and transactional change log (#67).
+ */
+function assertReceiptFingerprint(
+  receipt: BudgetRuleReceipt, position: number, profileId: string,
+): void {
+  let candidate: unknown;
+  try {
+    candidate = JSON.parse(receipt.requestFingerprint);
+  } catch {
+    throw new TypeError('Invalid budget receipt fingerprint');
+  }
+  exactKeys(candidate, ['action', 'payload', 'clientMutationId', 'baseRevision'], 'receipt command');
+  const command = candidate as BudgetRuleCommand;
+  if (command.clientMutationId !== receipt.clientMutationId ||
+    command.baseRevision !== position ||
+    canonical(command) !== receipt.requestFingerprint) {
+    throw new Error('Budget receipt fingerprint mismatch');
+  }
+  switch (command.action) {
+    case 'budget.create':
+      exactKeys(command.payload, ['rule'], 'receipt create payload');
+      checkRule(command.payload.rule, profileId);
+      if (command.payload.rule.id !== receipt.affectedRuleId) {
+        throw new Error('Budget receipt affected rule mismatch');
+      }
+      break;
+    case 'budget.amend': {
+      exactKeys(command.payload,
+        ['ruleId', 'effectiveFromMonth', 'replacementId', 'limitMinor'], 'receipt amend payload');
+      const { ruleId, effectiveFromMonth, replacementId, limitMinor } = command.payload;
+      nonblank(ruleId, 'receipt amended rule ID');
+      nonblank(replacementId, 'receipt replacement rule ID');
+      month(effectiveFromMonth);
+      money(limitMinor);
+      if (receipt.affectedRuleId !== ruleId && receipt.affectedRuleId !== replacementId) {
+        throw new Error('Budget receipt affected rule mismatch');
+      }
+      break;
+    }
+    case 'budget.archive':
+      exactKeys(command.payload, ['ruleId', 'archivedFromMonth'], 'receipt archive payload');
+      nonblank(command.payload.ruleId, 'receipt archived rule ID');
+      month(command.payload.archivedFromMonth);
+      if (command.payload.ruleId !== receipt.affectedRuleId) {
+        throw new Error('Budget receipt affected rule mismatch');
+      }
+      break;
+    default:
+      throw new TypeError('Invalid budget receipt action');
+  }
 }
 
 export function applyBudgetRuleCommand(

@@ -171,3 +171,25 @@ test('independent 250-sequence oracle preserves budget scope and history across 
     assert.equal(state.revision, 3);
   }
 });
+
+
+test('restored rule receipts reject malformed or reattributed idempotency fingerprints', () => {
+  const state = apply(total(), create(1, 0, rule()));
+  const receipt = state.receipts[0];
+  const stored = JSON.parse(receipt.requestFingerprint);
+  const invalid = [
+    'not-json',
+    '{}',
+    JSON.stringify({ ...stored, clientMutationId: id(2) }),
+    JSON.stringify({ ...stored, baseRevision: 7 }),
+    JSON.stringify({ ...stored, payload: { rule: { ...stored.payload.rule, id: 'other' } } }),
+    JSON.stringify({ ...stored, unexpected: true }),
+  ];
+  for (const fingerprint of invalid) {
+    const tampered = structuredClone(state);
+    tampered.receipts[0].requestFingerprint = fingerprint;
+    assert.throws(() => assertBudgetRuleState(tampered));
+    assert.deepEqual(state.rules, [rule()]);
+  }
+  assertBudgetRuleState(structuredClone(state));
+});
