@@ -5,20 +5,26 @@ on:
     paths:
       - 'src/security/**'
       - 'tests/local-vault*.test.mjs'
+      - 'tests/local-budget-session.test.mjs'
       - 'tests/protected-*.test.mjs'
       - 'tests/e2e/protected-staging.spec.mjs'
+      - 'tests/e2e/local-budget-session.spec.mjs'
       - 'docs/security/LOCAL_STORAGE_ENCRYPTION.md'
       - 'docs/security/PROTECTED_STAGING.md'
+      - 'docs/security/APPROVED_LOCAL_UNLOCK_FLOW.md'
       - '.github/workflows/security-vault.yml'
   pull_request:
     branches: [main]
     paths:
       - 'src/security/**'
       - 'tests/local-vault*.test.mjs'
+      - 'tests/local-budget-session.test.mjs'
       - 'tests/protected-*.test.mjs'
       - 'tests/e2e/protected-staging.spec.mjs'
+      - 'tests/e2e/local-budget-session.spec.mjs'
       - 'docs/security/LOCAL_STORAGE_ENCRYPTION.md'
       - 'docs/security/PROTECTED_STAGING.md'
+      - 'docs/security/APPROVED_LOCAL_UNLOCK_FLOW.md'
       - '.github/workflows/security-vault.yml'
 permissions:
   contents: read
@@ -35,4 +41,4 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx --no-install tsc -p src/security/tsconfig.json
-      - run: node --test tests/local-vault.test.mjs tests/local-vault-legacy-backup.test.mjs tests/protected-staging.test.mjs tests/protected-legacy-backup.test.mjs
+      - run: node --test tests/local-vault.test.mjs tests/local-vault-legacy-backup.test.mjs tests/protected-staging.test.mjs tests/protected-legacy-backup.test.mjs tests/local-budget-session.test.mjs
