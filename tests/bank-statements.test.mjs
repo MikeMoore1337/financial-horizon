@@ -749,3 +749,95 @@ test('source key uses XLSX sheet identity while preserving determinism', async (
     ...a.rows[0].operation, id: 'already-imported',
   }]).duplicates, 0);
 });
+
+
+test('large overlapping import reconciles with bounded ledger reads and preserved statuses', () => {
+  let inspected = 0;
+  const existing = Array.from({ length: 2500 }, (_, i) => new Proxy({
+    id: 'posted-' + i, sourceKey: 'previous-' + i,
+    externalId: 'bank-previous-' + i, fingerprint: 'old-content-' + i,
+    accountId: 'checking', targetAccountId: null,
+    date: '2026-11-08', amountCents: 500, kind: 'expense',
+    category: 'Питание', currency: 'RUB', description: 'Синтетический расход',
+  }, {
+    get(target, key, receiver) {
+      if (['sourceKey', 'externalId', 'fingerprint', 'accountId'].includes(String(key))) {
+        inspected++;
+      }
+      return Reflect.get(target, key, receiver);
+    },
+  }));
+  const rows = Array.from({ length: 1500 }, (_, i) => ({
+    rowNumber: i + 2, warnings: [],
+    operation: {
+      sourceRow: i + 2, sourceKey: 'new-' + i,
+      externalId: 'bank-new-' + i, fingerprint: 'new-content-' + i,
+      accountId: 'checking', targetAccountId: null,
+      date: '2026-11-08', amountCents: 500, kind: 'expense',
+      category: 'Питание', currency: 'RUB',
+      description: 'Синтетический расход',
+    },
+  }));
+  rows[0].operation.sourceKey = 'previous-10';
+  rows[1].operation.externalId = 'bank-previous-11';
+  rows[2].operation.fingerprint = 'old-content-12';
+  rows[3].operation.sourceKey = 'previous-13';
+  rows[3].operation.amountCents = 600;
+  rows[4].operation.externalId = 'bank-previous-14';
+  rows[4].operation.amountCents = 600;
+  rows[6].operation.fingerprint = rows[5].operation.fingerprint;
+  rows[8].operation.externalId = rows[7].operation.externalId;
+  const snapshot = {
+    fileDigest: 'synthetic-only', mapping: {}, rows, warnings: [],
+    accepted: rows.length, rejected: 0,
+    inflowCents: 0, outflowCents: rows.length * 500, transfersCents: 0,
+  };
+  const result = reconcileBankStatement(snapshot, existing);
+  assert.deepEqual(result.rows.slice(0, 9).map(x => x.status), [
+    'duplicate', 'duplicate', 'possible-duplicate', 'invalid', 'invalid',
+    'ready', 'possible-duplicate', 'ready', 'invalid',
+  ]);
+  assert.deepEqual(result.rows.slice(0, 3).map(x => x.existingIds), [
+    ['posted-10'], ['posted-11'], ['posted-12'],
+  ]);
+  assert.equal(result.rows.length, 1500);
+  assert.equal(result.duplicates, 2);
+  assert.equal(result.invalid, 3);
+  assert.equal(result.possibleDuplicates, 2);
+  assert.equal(result.ready, 1493);
+  // On an unindexed O(N*M) implementation this would exceed 10 million reads.
+  // Do not use fragile elapsed-time limits on shared CI runners.
+  assert.ok(inspected < 100000, 'Excessive ledger reads: ' + inspected);
+});
+
+test('indexed reconciliation detects both directions of transfers across bank statements', () => {
+  const expense = {
+    sourceRow: 2, sourceKey: 'transfer-a', externalId: 'leg-a',
+    fingerprint: 'transfer-out', accountId: 'checking',
+    targetAccountId: 'savings', date: '2026-11-08', amountCents: 9500,
+    kind: 'transfer', currency: 'RUB', description: 'Между своими',
+    category: null,
+  };
+  const incoming = {
+    ...expense, sourceRow: 3, sourceKey: 'transfer-b', externalId: 'leg-b',
+    fingerprint: 'transfer-in', accountId: 'savings',
+    targetAccountId: 'checking', description: 'Встречный перевод',
+  };
+  const preview = {
+    fileDigest: 'synthetic', mapping: {}, warnings: [],
+    rows: [{ rowNumber: 3, warnings: [], operation: incoming }],
+    accepted: 1, rejected: 0, inflowCents: 0, outflowCents: 0,
+    transfersCents: 9500,
+  };
+  const result = reconcileBankStatement(preview, [{ id: 'saved-transfer', ...expense }]);
+  assert.equal(result.possibleDuplicates, 1);
+  assert.deepEqual(result.rows[0].existingIds, ['saved-transfer']);
+  const sameFile = reconcileBankStatement({
+    ...preview,
+    rows: [
+      { rowNumber: 2, warnings: [], operation: expense },
+      { rowNumber: 3, warnings: [], operation: incoming },
+    ],
+  }, []);
+  assert.deepEqual(sameFile.rows.map(x => x.status), ['ready', 'possible-duplicate']);
+});
