@@ -1,0 +1,36 @@
+/* #39: opt-in local comparison; inherits the approved light/dark application tokens. */
+.loan-comparison{margin-top:23px;padding-top:20px;border-top:1px solid var(--line);min-width:0}
+.loan-comparison-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.loan-comparison-head h3{margin:0 0 5px;font-size:17px;letter-spacing:-.3px}
+.loan-comparison-head .small-hint{margin:0}
+.loan-comparison-actions{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:16px 0 10px}
+.loan-comparison-status{padding:13px 15px;margin:15px 0;border-radius:13px;border:1px solid var(--line);background:var(--soft);font-size:13px;line-height:1.6;color:var(--ink)}
+.loan-comparison-status.is-incomplete{border-color:color-mix(in srgb,var(--accent) 40%,var(--line))}
+.loan-comparison-status.is-matching{border-color:color-mix(in srgb,var(--green) 40%,var(--line))}
+.loan-comparison-status.is-different{border-color:color-mix(in srgb,var(--red) 45%,var(--line))}
+.loan-comparison-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:15px 0}
+.loan-comparison-metrics>div{background:var(--soft);border-radius:13px;padding:13px;min-width:0}
+.loan-comparison-metrics span{display:block;color:var(--sub);font-size:11px;line-height:1.5;margin-bottom:6px}
+.loan-comparison-metrics strong{font-size:17px;overflow-wrap:anywhere}
+.loan-comparison-table-scroll{max-width:100%;overflow-x:auto;border:1px solid var(--line);border-radius:12px;margin:12px 0}
+.loan-comparison-table-scroll table{min-width:780px}
+.loan-comparison-table-scroll caption{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.loan-comparison-table-scroll th,.loan-comparison-table-scroll td{padding:11px 10px;white-space:nowrap;text-align:left;font-variant-numeric:tabular-nums}
+.loan-comparison-table-scroll th:last-child,.loan-comparison-table-scroll td:last-child{text-align:left}
+.loan-comparison-delta,.loan-comparison-error{color:var(--red)}
+.loan-comparison-unknown{color:var(--sub)}
+.loan-comparison-error{font-size:13px;line-height:1.5;margin:9px 0}
+.loan-comparison-dialog{width:min(660px,calc(100% - 28px));max-width:660px;max-height:min(90dvh,900px);padding:0;border:1px solid var(--line);border-radius:21px;box-shadow:0 18px 85px #0005;background:var(--surface);color:var(--ink);overflow-y:auto}
+.loan-comparison-dialog::backdrop{background:rgba(5,14,28,.76);backdrop-filter:blur(5px)}
+.loan-comparison-dialog-head{padding:19px 21px;display:flex;justify-content:space-between;align-items:center;gap:10px;border-bottom:1px solid var(--line)}
+.loan-comparison-dialog-head h2{font-size:21px;margin:0}
+.loan-comparison-dialog-body{padding:18px 21px}
+.loan-comparison-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}
+.loan-comparison-fields label{display:grid;gap:7px;font-size:12px;font-weight:650;min-width:0}
+.loan-comparison-fields input,.loan-comparison-fields select{display:block;width:100%;height:44px;min-width:0;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink);font:inherit;font-size:14px}
+.loan-comparison-fields input[readonly]{color:var(--sub);cursor:not-allowed}
+.loan-comparison-confirm{display:flex;align-items:flex-start;gap:10px;margin-top:16px;font-size:13px;line-height:1.5}
+.loan-comparison-confirm input{width:20px;height:20px;flex-shrink:0;accent-color:var(--accent)}
+.loan-comparison-dialog-actions{padding:15px 21px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:9px;flex-wrap:wrap}
+.loan-comparison :focus-visible,.loan-comparison-dialog :focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+@media(max-width:650px){.loan-comparison-fields,.loan-comparison-metrics{grid-template-columns:1fr}.loan-comparison-dialog-head,.loan-comparison-dialog-body,.loan-comparison-dialog-actions{padding:15px}.loan-comparison-dialog{max-height:92dvh}.loan-comparison-actions .button-primary,.loan-comparison-actions .button-secondary{white-space:normal;text-align:center}}
