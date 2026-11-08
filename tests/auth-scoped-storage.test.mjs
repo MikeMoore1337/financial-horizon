@@ -109,3 +109,67 @@ test('no legacy data means a fresh account ledger with a committed owner marker'
  await s.selectStateScope(null);
  assert.equal((await s.readState()).entries.length,0);
 });
+
+test('failed account selection irrevocably drops the previously selected account',async()=>{
+ const mock=browserDatabase();
+ globalThis.indexedDB=mock;
+ const s=await import('../storage.js?scope-revocation-invalid');
+ await s.selectStateScope(accountA);
+ await s.updateState(value=>value.entries.push(entry('account-A-private')));
+ assert.equal((await s.readState()).entries[0].title,'account-A-private');
+ await assert.rejects(()=>s.selectStateScope('not-a-verified-id'),/подтверждённый аккаунт/);
+ await assert.rejects(()=>s.readState(),/профиль изменён/);
+ await assert.rejects(()=>s.updateState(()=>{}),/профиль изменён/);
+ await s.selectStateScope(accountB);
+ assert.equal((await s.readState()).entries.length,0);
+ await s.selectStateScope(accountA);
+ assert.equal((await s.readState()).entries[0].title,'account-A-private');
+});
+
+test('fenced target account cannot leave the previously viewed ledger accessible',async()=>{
+ const mock=browserDatabase();
+ globalThis.indexedDB=mock;
+ const s=await import('../storage.js?scope-revocation-fenced');
+ await s.selectStateScope(accountA);
+ await s.updateState(value=>value.entries.push(entry('private-A')));
+ const keyB='account-state-v2:'+accountB;
+ mock.table.set('encrypted-cutover-fence-v1:'+keyB,{version:1,format:'test-marker'});
+ await assert.rejects(()=>s.selectStateScope(accountB),/заблокирована для перехода/);
+ await assert.rejects(()=>s.readState(),/профиль изменён/);
+ await assert.rejects(()=>s.updateState(()=>{}),/профиль изменён/);
+ mock.table.delete('encrypted-cutover-fence-v1:'+keyB);
+ await s.selectStateScope(accountB);
+ assert.equal((await s.readState()).entries.length,0);
+ await s.selectStateScope(accountA);
+ assert.equal((await s.readState()).entries[0].title,'private-A');
+});
+
+test('two overlapping account selections cannot install a stale identity',async()=>{
+ const mock=browserDatabase();
+ globalThis.indexedDB=mock;
+ const s=await import('../storage.js?scope-revocation-overlap');
+ const slow=s.selectStateScope(accountA);
+ const winner=s.selectStateScope(accountB);
+ await assert.rejects(slow,/профиль изменён/);
+ assert.equal(await winner,'account-state-v2:'+accountB);
+ await s.updateState(value=>value.entries.push(entry('B-only')));
+ assert.equal((await s.readState()).entries[0].title,'B-only');
+ assert.equal(mock.table.has('account-state-v2:'+accountA),false);
+});
+
+test('scope revocation during a synchronous finance mutation aborts its transaction',async()=>{
+ const mock=browserDatabase();
+ globalThis.indexedDB=mock;
+ const s=await import('../storage.js?scope-revocation-atomic');
+ await s.selectStateScope(accountA);
+ await s.updateState(value=>value.entries.push(entry('original')));
+ const source=structuredClone(mock.table.get('account-state-v2:'+accountA));
+ let switchToB=null;
+ await assert.rejects(()=>s.updateState(value=>{
+  value.entries[0].title='FORBIDDEN_PENDING_PAYMENT';
+  switchToB=s.selectStateScope(accountB);
+ }),/профиль изменён|Операция отменена|transaction|aborted/i);
+ assert.equal(await switchToB,'account-state-v2:'+accountB);
+ assert.deepEqual(mock.table.get('account-state-v2:'+accountA),source);
+ assert.equal((await s.readState()).entries.length,0);
+});
