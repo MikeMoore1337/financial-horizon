@@ -43,13 +43,13 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements-finance.txt
       - name: Install pinned PostgreSQL test dependencies
-        run: python -m pip install -r backend/requirements-finance.txt 'pytest>=8,<10' 'bandit>=1.8,<2'
+        run: python -m pip install -r backend/requirements-finance.txt -r backend/requirements-test.txt 'bandit>=1.8,<2'
       - name: Provision synthetic roles and isolated database
         run: python backend/finance_db/tests/bootstrap_ci.py
       - name: Apply reviewed schema
         run: alembic -c backend/finance_db/alembic.ini upgrade head
       - name: Run real PostgreSQL ledger and tenant-isolation integration
-        run: python -m pytest -q backend/finance_db/tests/
+        run: python -m pytest -q backend/finance_db/tests/ backend/tests/
       - name: Compile and security-scan the new finance service
         run: |
           python -m compileall -q backend/finance_db
