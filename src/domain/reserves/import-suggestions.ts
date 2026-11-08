@@ -47,9 +47,13 @@ export function parseReservePeriodHint(note: unknown): ReservePeriodHint | null 
   // Such spreadsheet rows must be reviewed rather than converted to a monthly bill.
   const frequencyMarker = /(?:^|[^\p{L}\p{N}])(?:раз\s+в|каждые|каждый)\s+/gu;
   const supportedPeriod = /^(?:\d+\s*(?:мес(?:\.|яц(?:ев|а)?)?|год(?:а|ов)?|лет)|полгода|квартал|год|месяц)(?!\p{L})/u;
-  const trailingPeriod = /^\s*\(?\s*(?:(или|либо|и|\/|\+|,)\s*)?(?:[-+]?\d+(?:[.,]\d+)?\s*)?(?:мес(?:\.|яц(?:ев|а)?)?|год(?:а|ов)?|лет|полгода|квартал)(?!\p{L})/u;
+  // A bare "год оплаты" or "месяц оплаты" is explanatory metadata, not
+  // a second duration. Require a numeric count unless there is an explicit
+  // alternative connector before a standalone duration word.
+  const trailingCountedPeriod = /^\s*\(?\s*(?:(или|либо|и|\/|\+|,)\s*)?[-+]?\d+(?:[.,]\d+)?\s*(?:мес(?:\.|яц(?:ев|а)?)?|год(?:а|ов)?|лет)(?!\p{L})/u;
+  const trailingNamedAlternative = /^\s*\(?\s*(или|либо|и|\/|\+)\s*(?:месяц|год|полгода|квартал)(?!\p{L})/u;
   const invalidContinuation = (rest: string): ReservePeriodHint | null => {
-    const tail = trailingPeriod.exec(rest);
+    const tail = trailingCountedPeriod.exec(rest) ?? trailingNamedAlternative.exec(rest);
     if (!tail) return null;
     const alternative = tail[1] === 'или' || tail[1] === 'либо' || tail[1] === '/';
     return {
