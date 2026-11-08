@@ -186,7 +186,7 @@ def get_finance_delta(
         current = int(profile["revision"])
         minimum = int(profile["min_available_revision"])
         if since_revision < minimum:
-            raise FinanceCommandError("snapshot_required", "Необходим новый снимок", 409, current)
+            raise FinanceCommandError("snapshot_required", "Необходим новый снимок", 410, current)
         if since_revision > current:
             raise FinanceCommandError("invalid_command", "Ревизия опережает сервер", 422)
         revs = session.execute(text("""
