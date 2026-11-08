@@ -13,10 +13,10 @@ const revokeEnd=app.indexOf('\nconst hasData=',revokeStart);
 assert.ok(revokeStart>=0&&revokeEnd>revokeStart);
 const handler=app.slice(revokeStart,revokeEnd)+'\n'+app.slice(start,end);
 
-function invoke({email='test@example.com',logout,initialBusy=false}={}){
+function invoke({email='test@example.com',userId=email?'a'.repeat(32):null,logout,initialBusy=false}={}){
  const events=[];
  const session={
-  email,userId:email?'a'.repeat(32):null,busy:initialBusy,
+  email,userId,busy:initialBusy,
   async logout(){
    events.push('logout-request');
    return logout?logout(session):true;
@@ -28,6 +28,7 @@ function invoke({email='test@example.com',logout,initialBusy=false}={}){
   activeUserId:'a'.repeat(32),
   authBroadcast:null,
   screenRoot:{unmount:()=>events.push('react-unmount')},
+  navRoots:{unmount:()=>events.push('nav-unmount')},
   $:()=>({replaceChildren:()=>events.push('ledger-cleared')}),
   GUEST_MODE_KEY:'fh-guest-session-v2',
   sessionStorage:{removeItem:key=>events.push('storage-remove:'+key)},
@@ -45,13 +46,24 @@ test('successful logout returns to the login page after server confirmation',asy
  const ui=invoke({logout:async session=>{session.email=null;session.userId=null;return true;}});
  await ui.run();
  assert.equal(ui.session.email,null);
+ assert.equal(ui.session.userId,null);
  assert.equal(ui.events.filter(x=>x==='logout-request').length,1);
  assert.equal(ui.events.filter(x=>x==='redirect:./account.html').length,1);
  assert.ok(ui.events.indexOf('logout-request')<ui.events.indexOf('redirect:./account.html'));
  assert.ok(ui.events.indexOf('react-unmount')>ui.events.indexOf('logout-request'));
  assert.ok(ui.events.indexOf('react-unmount')<ui.events.indexOf('redirect:./account.html'));
+ assert.ok(ui.events.indexOf('nav-unmount')<ui.events.indexOf('redirect:./account.html'));
  assert.ok(ui.events.indexOf('ledger-cleared')<ui.events.indexOf('redirect:./account.html'));
  assert.ok(!ui.events.includes('render'),'Do not leave user on the ledger after logout');
+});
+
+test('OAuth-only account without email can log out',async()=>{
+ const ui=invoke({email:null,userId:'a'.repeat(32),logout:async session=>{session.userId=null;return true;}});
+ await ui.run();
+ assert.equal(ui.session.userId,null);
+ assert.ok(ui.events.includes('logout-request'));
+ assert.ok(ui.events.includes('nav-unmount'));
+ assert.ok(ui.events.includes('redirect:./account.html'));
 });
 
 test('failed logout keeps ledger open and shows an error',async()=>{

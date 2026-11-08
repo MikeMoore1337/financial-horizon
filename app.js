@@ -6,6 +6,7 @@ import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.
 import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
 import {createScreenRoot} from './src/react/ScreenRoot.tsx';
+import {createAppShellRoots} from './src/react/AppShell.tsx';
 
 const $=sel=>document.querySelector(sel);
 const svg=name=>`<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-${name}"></use></svg>`;
@@ -19,11 +20,17 @@ const emailSession=createEmailSession();
 let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
 const GUEST_MODE_KEY='fh-guest-session-v2';
 let screenRoot=null;
+let navRoots=null;
+function getAuthAccess(){
+ if(guestMode)return {kind:'guest'};
+ return {kind:'account',accountId:activeUserId||'',verifiedUserId:emailSession.userId||null,sessionValid:Boolean(emailSession.userId)};
+}
 let storageStatusMessage='Браузер может удалить данные при очистке хранилища. Делайте резервные копии.';
 let storageStatusRequest=0;
 function revokeDisplayedLedger(){
  state=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
+ if(navRoots){navRoots.unmount();navRoots=null;}
  $('#main').replaceChildren();
 }
 const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
@@ -41,10 +48,11 @@ function navigation(view){ui.view=view;$('.sidebar')?.classList.remove('open');w
 function render(){
  if(!state)return;
  $('#toolbar-title').textContent=titles[ui.view];
- document.querySelectorAll('[data-view]').forEach(el=>{const active=el.dataset.view===ui.view;el.classList.toggle('active',active);el.setAttribute('aria-current',active?'page':'false');});
+ if(!navRoots)navRoots=createAppShellRoots($('.sidebar-nav'),$('.bottom-nav'));
+ navRoots.render(ui.view);
  const main=$('#main');
  if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'||ui.view==='settings'){
-  if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main);}
+  if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main,getAuthAccess);}
   if(ui.view==='calendar'){
    const events=monthEvents(),totals=monthTotals(events);
    screenRoot.render({view:'calendar',props:{events,month:ui.month,selectedDate:ui.selectedDate,currentDate:today(),monthTitle:monthLabel(ui.month),netPlanCents:totals.netPlanCents,netFactCents:totals.netFactCents,formatDate,rubles}});
