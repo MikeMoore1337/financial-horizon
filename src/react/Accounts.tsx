@@ -109,7 +109,8 @@ export function Accounts({
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const derived = useMemo(() => {
-    if (status === 'locked' || !snapshot || !activeProfileId || !reservedMinorByAccount) {
+    if (status === 'locked' || status === 'loading' || status === 'error' ||
+      !snapshot || !activeProfileId || !reservedMinorByAccount) {
       return { model: null, invalid: false };
     }
     try {
