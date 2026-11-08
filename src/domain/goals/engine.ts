@@ -76,12 +76,20 @@ function validateChanges(changes: GoalChanges): void {
   }
   if ('plannedFunding' in changes) funding(changes.plannedFunding);
 }
+function knownKeys(value: object, allowed: readonly string[]): void {
+  if (Object.keys(value).some((key) => !allowed.includes(key))) {
+    throw new TypeError('Unexpected field in goal event');
+  }
+}
 function validateNewEvent(event: GoalEvent): void {
   if (!event || typeof event !== 'object') throw new TypeError('Invalid goal event');
   nonBlank(event.id, 'Event ID');
   assertGoalDate(event.on);
+  const base = ['id', 'on', 'type'];
   switch (event.type) {
     case 'create':
+      knownKeys(event, [...base, 'title', 'category', 'targetCents', 'targetDate',
+        'openingCents', 'monthlyCents', 'plannedFunding']);
       nonBlank(event.title, 'Title');
       category(event.category);
       money(event.targetCents, 'Target', true);
@@ -91,9 +99,12 @@ function validateNewEvent(event: GoalEvent): void {
       funding(event.plannedFunding);
       break;
     case 'update':
+      knownKeys(event, [...base, 'changes']);
       validateChanges(event.changes);
       break;
     case 'contribution':
+      knownKeys(event, [...base, 'amountCents', 'funding', 'ledgerMovementId',
+        'forDueOn', 'idempotencyKey']);
       money(event.amountCents, 'Contribution', true);
       funding(event.funding);
       if (event.forDueOn !== undefined) assertGoalDate(event.forDueOn);
@@ -101,16 +112,20 @@ function validateNewEvent(event: GoalEvent): void {
       validateMovementReference(event.funding, event.ledgerMovementId);
       break;
     case 'use':
+      knownKeys(event, [...base, 'amountCents', 'usage', 'ledgerMovementId',
+        'idempotencyKey']);
       money(event.amountCents, 'Amount used', true);
       if (!USE_KINDS.includes(event.usage)) throw new TypeError('Invalid usage kind');
       if (event.idempotencyKey !== undefined) nonBlank(event.idempotencyKey, 'Idempotency key');
       validateMovementReference(event.usage, event.ledgerMovementId);
       break;
     case 'skip':
+      knownKeys(event, [...base, 'dueOn', 'reason']);
       assertGoalDate(event.dueOn);
       if (event.reason !== undefined) nonBlank(event.reason, 'Skip reason', 500);
       break;
     case 'void':
+      knownKeys(event, [...base, 'eventId', 'reason', 'ledgerReversalId']);
       nonBlank(event.eventId, 'Reversed event ID');
       nonBlank(event.reason, 'Reversal reason', 500);
       if (event.ledgerReversalId !== undefined) nonBlank(event.ledgerReversalId, 'Ledger reversal ID');
@@ -119,6 +134,7 @@ function validateNewEvent(event: GoalEvent): void {
     case 'reopen':
     case 'archive':
     case 'restore':
+      knownKeys(event, base);
       break;
     default:
       throw new TypeError('Unknown goal event type');

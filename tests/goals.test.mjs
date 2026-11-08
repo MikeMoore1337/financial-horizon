@@ -301,3 +301,17 @@ test('factual reached date is preserved until increased goal or withdrawal reset
   assert.equal(calculateGoal(fresh({ openingCents: 12_000_000 }), '2026-06-01').reachedOn,
     '2026-01-01');
 });
+
+
+test('unrecognized event fields cannot corrupt a JSON-serializable financial journal', () => {
+  const goal = fresh();
+  assert.throws(() => applyGoalEvent(goal, {
+    id: 'unknown-field', type: 'contribution', on: '2026-02-01',
+    amountCents: 100, funding: 'virtual', externalState: { secret: 'not allowed' },
+  }), /Unexpected field/);
+  assert.throws(() => applyGoalEvent(goal, {
+    id: 'unknown-bigint', type: 'update', on: '2026-02-01',
+    changes: { targetCents: 12_000_000, unsafe: 123n },
+  }), /unknown goal update/i);
+  assert.equal(JSON.parse(JSON.stringify(goal)).events.length, 1);
+});
