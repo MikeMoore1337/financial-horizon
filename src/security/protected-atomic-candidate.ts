@@ -343,6 +343,7 @@ export async function rotateAtomicEncryptedRecoveryKey(
 ): Promise<{recoveryKey: string}> {
   validScope(scope);
   const lease = session.lifecycleVersion;
+  const signal = session.lifecycleSignal;
   activeSession(session, scope, lease);
   const original = await readPair(scope);
   activeSession(session, scope, lease);
@@ -354,6 +355,17 @@ export async function rotateAtomicEncryptedRecoveryKey(
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction([KEYSETS, BUNDLES], 'readwrite');
+      // Abort a still-active native transaction synchronously on logout,
+      // account switch or manual lock. A postcommit logout cannot be rolled
+      // back, but the LOCAL passphrase remains valid for reissue.
+      let committed = false;
+      const stopPending = () => {
+        if (committed) return;
+        try { tx.abort(); } catch { /* transaction already committed or aborted */ }
+      };
+      const cleanup = () => signal.removeEventListener('abort', stopPending);
+      signal.addEventListener('abort', stopPending, {once: true});
+      if (signal.aborted) stopPending();
       const currentKey = tx.objectStore(KEYSETS).get(scope);
       const currentBundle = tx.objectStore(BUNDLES).get(scope);
       let cause: Error | null = null;
@@ -379,11 +391,20 @@ export async function rotateAtomicEncryptedRecoveryKey(
         }
       };
       tx.oncomplete = () => {
+        committed = true;
+        cleanup();
         try { activeSession(session, scope, lease); resolve(); }
         catch (error) { reject(error); }
       };
-      tx.onerror = () => reject(cause || tx.error || Error('Ошибка смены ключа восстановления'));
-      tx.onabort = () => reject(cause || tx.error || Error('Смена ключа восстановления отменена'));
+      tx.onerror = () => {
+        cleanup();
+        reject(cause || tx.error || Error('Ошибка смены ключа восстановления'));
+      };
+      tx.onabort = () => {
+        cleanup();
+        reject(cause || (signal.aborted ? Error('Локальный бюджет заблокирован') : null) ||
+          tx.error || Error('Смена ключа восстановления отменена'));
+      };
     });
   } finally { db.close(); }
   return {recoveryKey: rotated.recoveryKey};

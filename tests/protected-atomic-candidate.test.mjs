@@ -20,6 +20,7 @@ const clone = value => structuredClone(value);
 function fakeIndexedDb() {
   const tables = new Map([['keysets', new Map()], ['bundles', new Map()]]);
   let failBundlePut = false, failKeysetPut = false;
+  let logoutAfterKeysetPut = null;
   const db = {
     close(){},
     onversionchange: null,
@@ -54,6 +55,13 @@ function fakeIndexedDb() {
               if (name === 'keysets' && failKeysetPut) throw Error('injected keyset write failure');
               const pinned = clone(value);
               schedule(() => table.set(key, pinned));
+              if (name === 'keysets' && logoutAfterKeysetPut) {
+                const selected = logoutAfterKeysetPut;
+                logoutAfterKeysetPut = null;
+                // Runs between the scheduled IDB put and the IDB oncomplete,
+                // deterministically reproducing the reviewer-found race.
+                queueMicrotask(() => selected.logout());
+              }
               return {};
             },
           };
@@ -80,6 +88,7 @@ function fakeIndexedDb() {
   };
   return {tables, set failBundlePut(value){failBundlePut=value;},
     set failKeysetPut(value){failKeysetPut=value;},
+    set logoutAfterKeysetPut(value){logoutAfterKeysetPut=value;},
     open(name, version){
       assert.equal(name, ATOMIC_ENCRYPTED_DB);
       assert.equal(version, 1);
@@ -437,4 +446,20 @@ test('offline recovery rotation never sends financial data or local credentials 
     const result=await rotateAtomicEncryptedRecoveryKey(USER_A,session,PASS);
     assert.equal(result.recoveryKey.length,43);
   } finally {globalThis.fetch=prior;}
+});
+
+
+test('review P2: logout between keyset put and transaction commit aborts the recovery rotation', async () => {
+  const db=mount();
+  const created=await createAtomicEncryptedCandidate(USER_A,PASS,SOURCE);
+  const previous=clone(db.tables.get('keysets').get(USER_A));
+  const session=await unlock(USER_A);
+  db.logoutAfterKeysetPut=session;
+  await assert.rejects(() => rotateAtomicEncryptedRecoveryKey(USER_A,session,PASS),/заблокирован|отменена/);
+  assert.equal(session.state,'unselected');
+  assert.deepEqual(db.tables.get('keysets').get(USER_A),previous,
+    'no recovery key may be revoked by a cancelled native transaction');
+  const original=new LocalBudgetSession();original.selectScope(USER_A);
+  await original.unlock(await getAtomicEncryptedKeyset(USER_A),{recoveryKey:created.recoveryKey});
+  assert.deepEqual((await readAtomicEncryptedCandidate(USER_A,original)).outbox,SOURCE.outbox);
 });
