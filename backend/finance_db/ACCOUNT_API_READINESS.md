@@ -83,3 +83,45 @@ No paid API, proprietary runtime, personal finance data or cross-project token.
 ### Internal atomic payment facts (feature OFF)
 
 The SQL core also supports internal-only settlement.payment.record and loan.payment.record commands: in one RLS-locked SQL transaction it inserts the verified obligation/loan fact, **exactly one signed ledger posting**, one uniquely constrained payment link, one receipt and two ordered change_log rows under **one** finance revision. No separate debit can be accidentally applied by the operation itself. The accepted public v1 HTTP router refuses these unpublished action names; their final UI/API semantics and safe cancellation must be version-reviewed with #6/#39/#67. This is not a claim that payments are live.
+
+
+## Independent-review fixes in SQL synchronization (NOT LIVE)
+
+The PR #98 reviewer found three concrete integration defects:
+
+1. The ledger delta formerly omitted the original transaction date, signed
+   postings and updated account revisions. Each ledger_posted event now
+   persists a complete transaction entity (including occurred_on, posted_at,
+   reversed_transaction_id, note, signed postings and any payment link) and
+   the full images of all affected accounts (entity revisions, balances,
+   reserves, archive state). These images are saved in the same change_log
+   revision and receipt. A real PostgreSQL test replays a transfer and
+   compensating reversal into a second-device replica and checks parity
+   with the authoritative snapshot.
+
+2. The old 5,000-transaction hard limit caused permanent HTTP 503 on an
+   append-only profile with 5,001 transactions. The snapshot reader now
+   supports bounded kind+UUID keyset pages: default 1,000 entities, max
+   5,000, with next_cursor continuation. Partial pages return HTTP 206
+   explicitly; the final page returns HTTP 200. The cursor pins the same
+   profile revision and returns 412 if another device wrote in between.
+   No transaction's signed postings or payment link are split across pages.
+   Invalid cursors fail with 422. A synthetic PostgreSQL test rebuilds the
+   complete snapshot of 5,001 posted income transactions (5,002 entities).
+
+3. Synchronous SQL writes in an async HTTP function could block the ASGI
+   event loop while PostgreSQL waits on a profile lock. The command route
+   now executes SQLite rate limits and PostgreSQL writes with
+   run_in_threadpool. A regression test holds an isolated financial worker
+   while checking that a concurrent real authenticated GET is still served.
+
+**Contract gate:** The accepted design-only OpenAPI v1 Snapshot has
+additionalProperties=false and only HTTP 200; the HTTP 206/next_cursor
+pagination extension is PROPOSED, not yet an agreed published v1 contract.
+The finance router is opt-in and disabled in production. Before activation,
+approve the revised versioned OpenAPI with #65/#67/#68 and implement client
+continuation (including cursor stale handling). Returning 206 for a partial
+page intentionally stops old clients from silently treating an incomplete
+financial state as complete. A cursor is a position marker, not an
+authorization token; every request still requires a verified FH session
+and PostgreSQL FORCE RLS.
