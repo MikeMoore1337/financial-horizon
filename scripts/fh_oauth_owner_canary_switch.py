@@ -17,6 +17,7 @@ import sqlite3
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from urllib.parse import urlsplit
 
@@ -214,6 +215,42 @@ def restart() -> None:
                    stderr=subprocess.DEVNULL)
 
 
+def write_private_backup(target: str, contents: str) -> Path:
+    """Create a new root-only backup on EVERY switch; never overwrite an older one."""
+    fd, filename = tempfile.mkstemp(
+        prefix=f'oauth-canary-env-before-{target}-switch-',
+        suffix='.env', dir=ROOT_ONLY_BACKUPS,
+    )
+    path = Path(filename)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as out:
+            out.write(contents)
+            out.flush()
+            os.fsync(out.fileno())
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        path.unlink(missing_ok=True)
+        raise
+    return path
+
+
+def preflight(target: str) -> None:
+    """Read-only precondition check, no environment edits or service restarts."""
+    before = check_static_guards(target)
+    current = [p for p in PROVIDERS if parse_env(before).get(
+        f'FH_{p.upper()}_OAUTH_ENABLED') == 'true']
+    if len(current) != 1:
+        raise CheckFailed('Expected exactly one enabled test provider')
+    print('CANARY_PREFLIGHT=PASS')
+    print('CURRENT_PROVIDER=' + current[0])
+    print('TARGET_PROVIDER=' + target)
+    print('BACKUP_POLICY=UNIQUE_PER_SWITCH')
+
+
 def switch(target: str) -> None:
     before = check_static_guards(target)
     old = parse_env(before)
@@ -226,14 +263,7 @@ def switch(target: str) -> None:
         verify_target(target)
         print('CANARY_SWITCH=ALREADY_ACTIVE')
         return
-    backup = ROOT_ONLY_BACKUPS / ('oauth-canary-env-before-' + target + '-switch.env')
-    if backup.exists() or backup.is_symlink():
-        raise CheckFailed('Unique backup already exists; refusing overwrite')
-    fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, 'w', encoding='utf-8') as out:
-        out.write(before)
-        out.flush()
-        os.fsync(out.fileno())
+    write_private_backup(target, before)
     atomic_replace(CANARY_CONFIG, after)
     try:
         restart()
@@ -262,16 +292,44 @@ def switch(target: str) -> None:
     print('REAL_OAUTH_LOGIN=NOT_YET_VERIFIED')
 
 
+# Only known, constant reasons are rendered. Never print private env values.
+SAFE_FAILURE_CODES = {
+    'Target provider credentials not staged': 'TARGET_CREDENTIALS_NOT_STAGED',
+    'Production OAuth flag unexpectedly enabled': 'PRODUCTION_OAUTH_FLAG_CHANGED',
+    'Production provider flag unexpectedly enabled': 'PRODUCTION_PROVIDER_FLAG_CHANGED',
+    'Canary points at non-canary database': 'CANARY_DATABASE_PATH_CHANGED',
+    'Canary and live databases must differ': 'DATABASE_ISOLATION_FAILED',
+    'Isolated test database integrity error': 'CANARY_DATABASE_INTEGRITY_FAILED',
+    'Canary not migrated for OAuth-only accounts': 'CANARY_SCHEMA_NOT_READY',
+    'Root-only backup directory missing': 'BACKUP_DIRECTORY_NOT_PRIVATE',
+    'Unrecognized canary service configuration': 'CANARY_UNIT_CHANGED',
+    'Owner-only reverse-proxy gate not verified': 'CADDY_OWNER_GATE_CHANGED',
+    'Expected exactly one enabled test provider': 'INVALID_CURRENT_PROVIDER_SELECTION',
+    'Missing/invalid provider flag': 'INVALID_PROVIDER_FLAGS',
+    'Isolated OAuth canary must already be enabled': 'CANARY_NOT_ENABLED',
+    'Canary readiness/provider list did not match': 'CANARY_READINESS_FAILED',
+    'Selected provider start redirect unexpected': 'PROVIDER_START_REDIRECT_FAILED',
+    'Isolated canary switch failed; do not test OAuth': 'SWITCH_ROLLBACK_REQUIRED',
+}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--provider', choices=TESTABLE, required=True)
+    parser.add_argument('--preflight', action='store_true',
+                        help='Read-only validation; do not switch the provider')
     args = parser.parse_args()
     try:
-        switch(args.provider)
+        if args.preflight:
+            preflight(args.provider)
+        else:
+            switch(args.provider)
     except (CheckFailed, OSError, subprocess.SubprocessError, sqlite3.Error) as exc:
-        # Don't include arbitrary file paths or subprocess stderr in error output.
+        # Never print untrusted exception messages, files, credentials or stderr.
         print('CANARY_PRECONDITION_OR_SWITCH=FAILED')
         print('FAILURE_TYPE=' + type(exc).__name__)
+        if isinstance(exc, CheckFailed):
+            print('FAILURE_CODE=' + SAFE_FAILURE_CODES.get(str(exc), 'OTHER_CHECK_FAILED'))
         return 1
     return 0
 
