@@ -779,6 +779,7 @@ test('large overlapping import reconciles with bounded ledger reads and preserve
     },
   }));
   rows[0].operation.sourceKey = 'previous-10';
+  rows[0].operation.externalId = 'bank-previous-10';
   rows[1].operation.externalId = 'bank-previous-11';
   rows[2].operation.fingerprint = 'old-content-12';
   rows[3].operation.sourceKey = 'previous-13';
