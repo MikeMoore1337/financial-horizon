@@ -88,7 +88,7 @@ test('rejects invalid reversal relationships and double counting', () => {
   assert.throws(() => report([original, reversed, { ...reversed, id: 'r2' }]), /двойная компенсация/);
   assert.throws(() => report([original, { ...reversed, signedMinor: 3999 }]), /не соответствует/);
   assert.throws(() => report([original, { ...reversed, categoryId: 'fake' }]), /не соответствует/);
-  assert.throws(() => report([{ ...original, voidedAt: '2026-01-02' }, reversed]), /двойная компенсация/);
+  assert.throws(() => report([{ ...original, voidedAt: '2026-01-02T00:00:00.000Z' }, reversed]), /двойная компенсация/);
 });
 
 test('month boundaries and leap-day input validation are UTC-independent', () => {
@@ -177,7 +177,7 @@ test('category shares sum exactly to 10000 basis points, ignoring refunds in pie
 });
 
 test('CSV export is local, aggregate-only, quotes delimiters and neutralizes formula injection', () => {
-  const attacks = ['=2+2', '\t+HYPERLINK(1)', '   -cmd', '\u200b@SUM(1)', '";\n=1+1'];
+  const attacks = ['=2+2', '\t+HYPERLINK(1)', '   -cmd', '\u200b@SUM(1)', '\u200e=FORMULA', '\u2063@SUM(1)', '\u0000=FORMULA', '";\n=1+1'];
   const x = report(attacks.map((name, i) => tx(`expense${i}`, '2026-01-01', 'expense', -100, `cat${i}`)), {
     categories: attacks.map((name, i) => ({ id: `cat${i}`, name })),
   });
@@ -187,6 +187,9 @@ test('CSV export is local, aggregate-only, quotes delimiters and neutralizes for
   assert.ok(csv.includes('"\'\t+HYPERLINK(1)"'));
   assert.ok(csv.includes('"\'   -cmd"'));
   assert.ok(csv.includes('"\'\u200b@SUM(1)"'));
+  assert.ok(csv.includes('"\'\u200e=FORMULA"'));
+  assert.ok(csv.includes('"\'\u2063@SUM(1)"'));
+  assert.ok(csv.includes('"\'\u0000=FORMULA"'));
   assert.ok(csv.includes('""";\n=1+1"')); // Quoted embedded quote and linebreak.
   assert.doesNotMatch(csv, /actorUserId|profileId|clientMutationId|accountId/);
   assert.ok(csv.endsWith('\r\n'));
@@ -213,4 +216,45 @@ test('strict validation rejects floats, unsafe sums, duplicates, invalid plans a
   assert.throws(() => report([], { plans: [{ ...plan, amountMinor: -1 }] }), RangeError);
   assert.throws(() => report([], { categories: [{ id: 'a', name: 'A' }, { id: 'a', name: 'B' }] }), RangeError);
   assert.throws(() => buildAnalyticsReport({ from: '2026-01-01', to: '2026-01-01', transactions: null }), TypeError);
+});
+
+
+test('plan/fact never claims saving or overspending without actual history', () => {
+  const plans = [
+    { id: 'jan', month: '2026-01', direction: 'expense', scope: 'total', amountMinor: 10000 },
+    { id: 'feb', month: '2026-02', direction: 'expense', scope: 'total', amountMinor: 15000 },
+  ];
+  const empty = buildAnalyticsReport({ from: '2026-01-01', to: '2026-01-31',
+    transactions: [], plans });
+  assert.equal(empty.monthly[0].expenseVarianceMinor, null);
+  assert.equal(empty.totals.expenseVarianceMinor, null);
+  const exported = exportAnalyticsCsv(empty);
+  assert.ok(exported.includes('"2026-01";"месяц";"";;;;;10000;;"нет"'));
+
+  const partial = buildAnalyticsReport({ from: '2026-01-01', to: '2026-02-28',
+    transactions: [tx('jan-actual', '2026-01-15', 'expense', -3000)], plans });
+  assert.equal(partial.monthly[0].expenseVarianceMinor, -7000);
+  assert.equal(partial.monthly[1].expenseVarianceMinor, null);
+  assert.equal(partial.totals.expenseVarianceMinor, null);
+
+  const complete = buildAnalyticsReport({ from: '2026-01-01', to: '2026-02-28',
+    transactions: [tx('jan-actual', '2026-01-15', 'expense', -3000),
+      tx('feb-actual', '2026-02-14', 'income', 100)], plans });
+  assert.equal(complete.monthly[1].expenseVarianceMinor, -15000);
+  assert.equal(complete.totals.expenseVarianceMinor, -22000);
+});
+
+test('reject malformed void timestamps rather than silently dropping real expenses', () => {
+  for (const invalid of ['yes', '2026-02-01', '2026-02-30T00:00:00.000Z',
+    '2026-01-01T25:00:00.000Z', '2026-01-01T00:00:00Z']) {
+    assert.throws(() => report([tx('void', '2026-01-01', 'expense', -100, null,
+      { voidedAt: invalid })]), /дата отмены/);
+  }
+});
+
+test('CSV refuses unsafe category net rather than losing kopecks', () => {
+  const fabricated = structuredClone(report([expense]));
+  fabricated.categories[0].incomeMinor = Number.MAX_SAFE_INTEGER;
+  fabricated.categories[0].expenseMinor = -Number.MAX_SAFE_INTEGER;
+  assert.throws(() => exportAnalyticsCsv(fabricated), /переполнение/);
 });

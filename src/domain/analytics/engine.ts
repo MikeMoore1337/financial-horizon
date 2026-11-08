@@ -33,6 +33,12 @@ function isoMonth(value: string): void {
     throw new RangeError('Неверный календарный месяц');
   }
 }
+function isoInstant(value: string): void {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+      || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value) {
+    throw new RangeError('Неверная дата отмены финансовой операции');
+  }
+}
 function nonempty(value: string): void {
   if (typeof value !== 'string' || !value.trim()) throw new TypeError('Не указан идентификатор или название');
 }
@@ -61,7 +67,7 @@ function requireUniqueTransactions(input: readonly AnalyticsTransaction[]): Map<
     isoDate(tx.date);
     money(tx.signedMinor, true);
     if (tx.categoryId !== undefined && tx.categoryId !== null) nonempty(tx.categoryId);
-    if (tx.voidedAt !== undefined && tx.voidedAt !== null) nonempty(tx.voidedAt);
+    if (tx.voidedAt !== undefined && tx.voidedAt !== null) isoInstant(tx.voidedAt);
     if (transactions.has(tx.id)) throw new RangeError('Двойной учёт: повторяющийся идентификатор');
     switch (tx.kind) {
       case 'income':
@@ -218,7 +224,9 @@ export function buildAnalyticsReport(input: AnalyticsInput): AnalyticsReport {
   const monthly = [...monthMap.values()];
   for (const row of monthly) {
     row.netMinor = safeAdd(row.incomeMinor, -row.expenseMinor);
-    if (row.plannedExpenseMinor !== null) row.expenseVarianceMinor = safeAdd(row.expenseMinor, -row.plannedExpenseMinor);
+    if (row.hasActual && row.plannedExpenseMinor !== null) {
+      row.expenseVarianceMinor = safeAdd(row.expenseMinor, -row.plannedExpenseMinor);
+    }
   }
   for (const plan of plans.values()) {
     if (plan.scope === 'category' && plan.direction === 'expense' && monthMap.has(plan.month)) {
@@ -231,6 +239,10 @@ export function buildAnalyticsReport(input: AnalyticsInput): AnalyticsReport {
       ? plans.get(`${month}|expense|category|${row.categoryId ?? ''}`)?.amountMinor ?? null : null);
     row.plannedExpenseMinor = sumKnown(values);
   }
+  // A category may have a positive income and a negative expense (historic refund).
+  // Reject a net value that cannot be represented in integer kopecks, even when
+  // totals across other categories happen to cancel the overflow.
+  for (const row of categories) safeAdd(row.incomeMinor, -row.expenseMinor);
   positiveShares(categories);
   categories.sort((a, b) => b.expenseMinor - a.expenseMinor || compare(key(a.categoryId), key(b.categoryId)));
   const topExpenses = categories.filter(x => x.expenseMinor > 0).slice(0, 5).map(x => ({ ...x }));
@@ -241,7 +253,8 @@ export function buildAnalyticsReport(input: AnalyticsInput): AnalyticsReport {
   const totals = {
     hasActual: monthly.some(x => x.hasActual), incomeMinor, expenseMinor,
     netMinor: safeAdd(incomeMinor, -expenseMinor), plannedIncomeMinor, plannedExpenseMinor,
-    expenseVarianceMinor: plannedExpenseMinor === null ? null : safeAdd(expenseMinor, -plannedExpenseMinor),
+    expenseVarianceMinor: !monthly.every(row => row.hasActual) || plannedExpenseMinor === null
+      ? null : safeAdd(expenseMinor, -plannedExpenseMinor),
   };
   return {
     period: { from: input.from, to: input.to }, totals, monthly, categories, topExpenses,
