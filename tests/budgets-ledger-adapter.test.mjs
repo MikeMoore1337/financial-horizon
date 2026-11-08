@@ -112,3 +112,29 @@ test('duplicate settlement fact referenced by two payments is rejected', () => {
     ]);
   assert.throws(() => toBudgetOperations(ledger), /duplicate settled payment/);
 });
+
+
+test('linked payment cancellation without atomically voided fact fails closed (#33)', () => {
+  const ledger = snapshot([
+    tx('pay', 'payment', '2026-01-15'),
+    tx('undo', 'reversal', '2026-02-15', 'pay'),
+  ], [post('pay', 'bank-a', -10_000), post('undo', 'bank-a', 10_000)], [
+    { profileId, transactionId: 'pay', settlementId: 'fact-a' },
+  ]);
+  assert.throws(() => toBudgetOperations(ledger), /linked payment reversal requires atomic/);
+});
+
+test('payment link must carry exactly one valid fact key, even with malformed second field', () => {
+  const base = snapshot([tx('pay', 'payment')], [post('pay', 'bank-a', -100)]);
+  for (const link of [
+    { transactionId: 'pay', settlementId: 'ok', loanPaymentId: '' },
+    { transactionId: 'pay', settlementId: 'ok', loanPaymentId: 100 },
+    { transactionId: 'pay', settlementId: '', loanPaymentId: 'ok' },
+    { transactionId: 'pay', settlementId: '' },
+    { transactionId: 'pay', settlementId: null },
+    { transactionId: 'pay', loanPaymentId: 5 },
+  ]) {
+    assert.throws(() => toBudgetOperations({ ...base,
+      paymentLinks: [{ profileId, ...link }] }), /ambiguous payment link|invalid payment fact ID/);
+  }
+});
