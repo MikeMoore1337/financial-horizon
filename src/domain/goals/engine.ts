@@ -522,6 +522,25 @@ export function goalInstallments(goal: GoalRecord, asOf: string): GoalInstallmen
   const prepared = prepareJournal(goal);
   const snapshot = calculateGoalPrepared(goal, asOf, prepared);
   const dates = goalDueDates(snapshot.createdOn, snapshot.targetDate);
+  // A never-edited goal has no payments, skips or reversals. Compute historical
+  // automatic plans directly instead of O(months²) replay on long horizons.
+  if (goal.events.length === 1) {
+    const initial = prepared.created;
+    const remainingInitial = Math.max(0, initial.targetCents - initial.openingCents);
+    return dates.map((dueOn, index) => {
+      const elapsed = dueOn <= asOf;
+      const remainingMonths = dates.length - index;
+      const historic = initial.monthlyCents ?? (remainingInitial === 0 ? 0 : Number(
+        (BigInt(remainingInitial) + BigInt(remainingMonths) - 1n) / BigInt(remainingMonths),
+      ));
+      return {
+        dueOn,
+        plannedCents: elapsed ? historic : snapshot.monthlyCents,
+        actualCents: 0,
+        status: snapshot.reached ? 'unnecessary' : elapsed ? 'missed' : 'upcoming',
+      };
+    });
+  }
   const skipped = skippedDates(goal, asOf);
   const voided = effectiveVoids(goal, asOf);
   const allocated = new Map<string, number>();
@@ -583,6 +602,22 @@ export function goalLedgerLinks(goals: readonly GoalRecord[]): GoalLedgerLink[] 
     }
   }
   return all;
+}
+
+/** Efficient next unpaid date for goal cards; does not replay historical installments. */
+export function goalNextInstallmentOn(goal: GoalRecord, asOf: string): string | null {
+  const snapshot = calculateGoal(goal, asOf);
+  if (snapshot.status !== 'active' || snapshot.reached) return null;
+  const skips = skippedDates(goal, asOf);
+  const assigned = prepaidInstallments(goal, asOf);
+  for (const dueOn of goalDueDates(snapshot.createdOn, snapshot.targetDate)) {
+    if (dueOn <= asOf || skips.has(dueOn)) continue;
+    const paid = assigned.get(dueOn) ?? 0;
+    // An installment fully prepaid early should not appear as the next obligation.
+    if (paid > 0 && paid >= snapshot.monthlyCents) continue;
+    return dueOn;
+  }
+  return null;
 }
 
 /** Informational #36 proposals only: never create an expense or account transaction here. */

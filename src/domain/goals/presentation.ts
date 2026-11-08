@@ -3,7 +3,7 @@
  * It does not own persistence, account cash, bank operations or React rendering.
  * A real UI must treat savings as earmarked funds, NEVER as a bank balance.
  */
-import { calculateGoal, goalInstallments, goalJournal, goalLedgerLinks } from './engine.ts';
+import { calculateGoal, goalInstallments, goalJournal, goalLedgerLinks, goalNextInstallmentOn } from './engine.ts';
 import { assertGoalDate } from './calendar.ts';
 import type {
   GoalCategory, GoalEvent, GoalInstallment, GoalRecord, GoalSnapshot, GoalStatus,
@@ -77,11 +77,7 @@ function indicator(snapshot: GoalSnapshot): GoalDeadlineIndicator {
   return 'unknown';
 }
 
-function toCard(snapshot: GoalSnapshot, installments: readonly GoalInstallment[]): GoalCardModel {
-  const next = snapshot.status !== 'active' || snapshot.reached
-    ? undefined
-    : installments.find((row) => row.dueOn > snapshot.asOf &&
-        (row.status === 'upcoming' || row.status === 'partial'));
+function toCard(snapshot: GoalSnapshot, nextInstallmentOn: string | null): GoalCardModel {
   return {
     id: snapshot.id,
     title: snapshot.title,
@@ -93,7 +89,7 @@ function toCard(snapshot: GoalSnapshot, installments: readonly GoalInstallment[]
     progressBasisPoints: snapshot.progressBasisPoints,
     targetDate: snapshot.targetDate,
     monthlyCents: snapshot.monthlyCents,
-    nextInstallmentOn: next?.dueOn ?? null,
+    nextInstallmentOn,
     projectedCompletionDate: snapshot.projectedCompletionDate,
     deadline: indicator(snapshot),
     earmarkedNotCash: true,
@@ -145,8 +141,7 @@ export function buildGoalsScreenModel(
     if (!goal || ids.has(goal.id)) throw new Error('Duplicate or missing goal ID');
     ids.add(goal.id);
     const snapshot = calculateGoal(goal, asOf);
-    const installments = goalInstallments(goal, asOf);
-    const card = toCard(snapshot, installments);
+    const card = toCard(snapshot, goalNextInstallmentOn(goal, asOf));
     entries.push({ goal, snapshot, card });
     earmarkedCents = addCents(earmarkedCents, snapshot.savedCents);
     if (snapshot.status === 'active') activeCount += 1;

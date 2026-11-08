@@ -101,3 +101,13 @@ test('screen list rejects unbounded goal counts before processing', () => {
   const goals = Array.from({ length: 501 }, (_, i) => goal('g' + i, 'Goal ' + i));
   assert.throws(() => buildGoalsScreenModel(goals, '2026-01-01'), /excessive/);
 });
+
+
+test('next installment skips fully prepaid future periods without re-evaluating history', () => {
+  const g = event(goal('g1','Подушка'), 'prepay', 'contribution', '2026-01-10', {
+    amountCents: 1_000_000, funding: 'virtual', forDueOn: '2026-02-01',
+  });
+  const view = buildGoalsScreenModel([g], '2026-01-15');
+  assert.equal(view.cards[0].nextInstallmentOn, '2026-03-01');
+  assert.equal(view.selected.installments[0].status, 'paid');
+});

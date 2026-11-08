@@ -28,6 +28,7 @@ export type {
   GoalUsage,
   GoalVoided,
 } from './types.ts';
+export { goalNextInstallmentOn } from './engine.ts';
 export { buildGoalsScreenModel } from './presentation.ts';
 export type {
   GoalCardModel, GoalDeadlineIndicator, GoalDetailModel, GoalHistoryModel,
