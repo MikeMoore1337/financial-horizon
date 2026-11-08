@@ -177,5 +177,5 @@ test('local CLI: no balance column yields partial evidence, never an exact match
   assert.equal(result.arithmeticExactMatch, false);
   assert.equal(result.missingBreakdownRows, 2);
   assert.equal(result.bankParityVerified, false);
-  assert.doesNotMatch(run.stdout, /5074,10|5027,82|bank\\.csv/);
+  assert.doesNotMatch(run.stdout, /5074,10|5027,82|bank\.csv/);
 });
