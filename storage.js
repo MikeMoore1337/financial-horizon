@@ -17,6 +17,10 @@ function beginScopeSelection(){
  activeKey=null;
  return {epoch:scopeEpoch,signal:scopeController.signal};
 }
+/** Explicit logout/session-revocation hook: drop the legacy scope immediately. */
+export function revokeStateScope(){
+ beginScopeSelection();
+}
 function assertScope(epoch,key){
  if(key===null||epoch!==scopeEpoch||key!==activeKey)
   throw Error(REVOKED_MESSAGE);
