@@ -111,8 +111,8 @@ The PR #98 reviewer found three concrete integration defects:
 
 3. Synchronous SQL writes in an async HTTP function could block the ASGI
    event loop while PostgreSQL waits on a profile lock. The command route
-   now executes SQLite rate limits and PostgreSQL writes with
-   run_in_threadpool. A regression test holds an isolated financial worker
+   now executes SQLite rate limits, FH AuthStore.current session lookup
+   and PostgreSQL writes with run_in_threadpool. A regression test holds an isolated financial worker
    while checking that a concurrent real authenticated GET is still served.
 
 **Contract gate:** The accepted design-only OpenAPI v1 Snapshot has
