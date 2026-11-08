@@ -228,3 +228,48 @@ test('optional schedule fields only accept null, missing, or nonnegative integer
  delete optionalMissing.loans[0].schedule[0].principalCents;
  assert.doesNotThrow(()=>migrateState(optionalMissing));
 });
+
+const CUTOVER_FENCE='encrypted-cutover-fence-v1:';
+
+test('a legacy cutover marker blocks reads, writes and v1 auto-migration without data loss',async()=>{
+ const original=v1();
+ const db=browserDatabase({state:original});
+ const s=await scopedStorage(db);
+ db.table.set(CUTOVER_FENCE+'state',{format:'cutover-marker',version:1});
+ await assert.rejects(()=>s.readState(),/заблокирована для перехода/);
+ await assert.rejects(()=>s.updateState(()=>{}),/заблокирована для перехода/);
+ assert.deepEqual(db.table.get('state'),original,'no hidden v1->v2 rewrite while fenced');
+ // A real rollback may clear this marker only after independently verifying data.
+ db.table.delete(CUTOVER_FENCE+'state');
+ assert.equal((await s.readState()).version,2);
+ assert.equal((await s.updateState(()=>{})).revision,1);
+});
+
+test('a fenced account blocks scoped reads, writes and account re-selection, not other accounts',async()=>{
+ const a='a'.repeat(32),b='b'.repeat(32);
+ const keyA='account-state-v2:'+a,keyB='account-state-v2:'+b;
+ const db=browserDatabase({[keyA]:emptyState(),[keyB]:emptyState()});
+ const s=await scopedStorage(db);
+ await s.selectStateScope(a);
+ const original=structuredClone(db.table.get(keyA));
+ db.table.set(CUTOVER_FENCE+keyA,{format:'cutover-marker',version:1});
+ await assert.rejects(()=>s.readState(),/заблокирована для перехода/);
+ await assert.rejects(()=>s.updateState(()=>{}),/заблокирована для перехода/);
+ await assert.rejects(()=>s.selectStateScope(a),/заблокирована для перехода/);
+ assert.deepEqual(db.table.get(keyA),original);
+ await s.selectStateScope(b);
+ assert.equal((await s.readState()).version,2);
+ assert.equal((await s.updateState(()=>{})).revision,1);
+ assert.deepEqual(db.table.get(keyA),original,'writes to B must not touch A');
+});
+
+test('a fenced original ledger cannot be silently copied by a newly verified account',async()=>{
+ const a='a'.repeat(32);
+ const source=v1();
+ const db=browserDatabase({state:source,[CUTOVER_FENCE+'state']:{format:'cutover-marker',version:1}});
+ const s=await scopedStorage(db);
+ await assert.rejects(()=>s.selectStateScope(a),/заблокирована для перехода/);
+ assert.equal(db.table.has('account-state-v2:'+a),false);
+ assert.equal(db.table.has('legacy-account-claim-v2'),false);
+ assert.deepEqual(db.table.get('state'),source);
+});
