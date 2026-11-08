@@ -34,7 +34,12 @@ export async function readProtectedFinance(
   const sealed = await readAtomicEncryptedCandidate(scope, session);
   if (!sealed) throw Error('Защищённый локальный бюджет отсутствует');
   if (sealed.schemaVersion !== 2) throw Error('Неподдерживаемая версия защищённого бюджета');
-  // The encrypted snapshot must itself use the same domain schema version.
+  // Compare the ORIGINAL payload version, before migrateState can upgrade v1
+  // in memory. A v1 snapshot mislabeled as a v2 encrypted envelope must not
+  // silently become writable under an incorrect schema contract.
+  if (sealed.snapshot.version !== sealed.schemaVersion) {
+    throw Error('Версия финансового снимка не совпадает с защищённым контейнером');
+  }
   const state = migrateState(sealed.snapshot);
   if (state.version !== sealed.schemaVersion) {
     throw Error('Версия финансового снимка не совпадает с защищённым контейнером');

@@ -13,7 +13,7 @@ import { calculateLoan, reconcileLoanSchedule } from '../src/domain/loans/index.
 const CONTRACT_LIMIT = 128 * 1024;
 const CSV_LIMIT = 1024 * 1024;
 
-async function readLimited(path, limit) {
+export async function readLimited(path, limit) {
   // Keep the read bounded even for a huge file, a FIFO or a file being edited:
   // never read the full content into memory before enforcing its byte limit.
   // Open once, non-blocking and without following symlinks where supported.

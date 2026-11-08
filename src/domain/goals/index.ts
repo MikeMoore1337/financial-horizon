@@ -36,3 +36,10 @@ export type {
 } from './presentation.ts';
 export { buildGoalCashflowBundle, withGoalCashflowSources } from './cashflow-bridge.ts';
 export type { GoalAccountBinding, GoalCashflowBundle } from './cashflow-bridge.ts';
+
+export {
+  encodeGoalsSnapshot, decodeGoalsSnapshot, decodeOptionalGoalsSnapshot,
+  GOALS_SNAPSHOT_SCHEMA, GOALS_SNAPSHOT_VERSION, MAX_GOALS_PER_SNAPSHOT,
+  MAX_GOAL_EVENTS_PER_SNAPSHOT, MAX_GOALS_SNAPSHOT_BYTES,
+} from './snapshot.ts';
+export type { GoalsSnapshotV1 } from './snapshot.ts';
