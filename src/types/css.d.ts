@@ -1,0 +1,1 @@
+// Vite handles CSS imports at build time; no runtime values are exported.\ndeclare module '*.css';\n
