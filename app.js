@@ -1,5 +1,5 @@
 import {cents,rubles,numberInput,monthKey,monthIndex,shiftMonth,monthLabel,dayInMonth,loanLedger,previewLoanPayment,getMonthEvents,monthTotals,createSampleState,isActive,emptyState,payoffMonths} from './finance.js';
-import {readState,updateState,replaceState,askPersistentStorage,storageStatus,selectStateScope} from './storage.js?rev=auth-scopes-v18';
+import {readState,updateState,replaceState,askPersistentStorage,storageStatus,selectStateScope,revokeStateScope} from './storage.js?rev=auth-scopes-v18';
 import {encryptBackup,decryptBackup} from './backup.js';
 import {parseSchedule} from './schedule.js';
 import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.js';
@@ -23,15 +23,24 @@ let screenRoot=null;
 let navRoots=null;
 function getAuthAccess(){
  if(guestMode)return {kind:'guest'};
- return {kind:'account',accountId:activeUserId||'',verifiedUserId:emailSession.userId||null,sessionValid:Boolean(emailSession.email)};
+ return {kind:'account',accountId:activeUserId||'',verifiedUserId:emailSession.userId||null,sessionValid:Boolean(emailSession.userId)};
 }
 let storageStatusMessage='Браузер может удалить данные при очистке хранилища. Делайте резервные копии.';
 let storageStatusRequest=0;
 function revokeDisplayedLedger(){
+ revokeStateScope(); // invalidate pending IDB reads/writes before clearing the UI
  state=null;
+ restoreFile=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
  if(navRoots){navRoots.unmount();navRoots=null;}
  $('#main').replaceChildren();
+ // Modal forms and previews live OUTSIDE #main; reset alone can retain
+ // programmatically inserted finance titles, choices and payment schedules.
+ // Every caller immediately redirects to the account page.
+ for(const dialog of document.querySelectorAll('dialog')){
+  if(dialog.open)dialog.close();
+  dialog.replaceChildren();
+ }
 }
 const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
 const monthEvents=()=>getMonthEvents(state,ui.month);
@@ -103,6 +112,13 @@ function render(){
     scheduleCount:current.loan.schedule?.length||0,
     scheduleSource:current.loan.scheduleSource||'CSV',
     schedule:current.loan.schedule?.slice(0,4)||[],
+    bankSchedule:current.loan.schedule||[],
+    legacySnapshot:{
+     openingCents:current.loan.openingCents,paymentCents:current.loan.paymentCents,
+     termMonths:current.loan.termMonths,dueDay:current.loan.dueDay,
+     asOfDate:current.loan.asOfDate,
+    },
+    stateRevision:state.revision,
     history:state.loanPayments.filter(payment=>payment.loanId===current.loan.id)
      .sort((a,b)=>b.date.localeCompare(a.date)||b.createdAt.localeCompare(a.createdAt)),
    }:null;
@@ -127,7 +143,7 @@ function render(){
  syncAccountControls();
 }
 function syncAccountControls(){
- const signedIn=Boolean(emailSession.email);
+ const signedIn=Boolean(emailSession.userId);
  const toolbarButton=$('#account-logout-toolbar');
  toolbarButton.hidden=!signedIn;
  toolbarButton.disabled=emailSession.busy;
@@ -140,7 +156,7 @@ async function refreshEmailSession(){
  if(sessionValidation)return sessionValidation;
  const pending=(async()=>{
   const verified=await emailSession.refresh();
-  if(!verified||emailSession.userId!==activeUserId||!emailSession.email){
+  if(!verified||emailSession.userId!==activeUserId){
    revokeDisplayedLedger();
    window.location.replace('./account.html');
    return false;
@@ -153,7 +169,7 @@ async function refreshEmailSession(){
  finally{if(sessionValidation===pending)sessionValidation=null;}
 }
 async function logoutEmailAccount(){
- if(busy||!emailSession.email||emailSession.busy)return;
+ if(busy||!emailSession.userId||emailSession.busy)return;
  const pending=emailSession.logout();
  syncAccountControls();
  try{
@@ -473,7 +489,7 @@ function bindEvents(){
    render();
   })().catch(()=>window.location.replace('./account.html'));
  });
- try{channel=new BroadcastChannel('financial-horizon-updates');channel.onmessage=async()=>{try{state=await readState();render();}catch(e){fail(e);}};}catch{}
+ try{channel=new BroadcastChannel('financial-horizon-updates');channel.onmessage=async()=>{if(!state)return;try{state=await readState();render();}catch(e){fail(e);}};}catch{}
 }
 async function init(){
  try{themeSet(localStorage.getItem('fh-theme')||((window.matchMedia?.('(prefers-color-scheme: dark)').matches)?'dark':'light'));}catch{themeSet('light');}
@@ -481,6 +497,12 @@ async function init(){
  if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(()=>{});
  try{
   const url=new URL(window.location.href);
+  // A successful OAuth callback replaces guest mode with the verified account.
+  if(url.searchParams.get('auth')==='success'){
+   try{sessionStorage.removeItem(GUEST_MODE_KEY);}catch{}
+   url.searchParams.delete('auth');
+   history.replaceState(null,'',url.pathname+url.search+url.hash);
+  }
   if(url.searchParams.get('guest')==='1'){
    guestMode=true;
    try{sessionStorage.setItem(GUEST_MODE_KEY,'1');}catch{}

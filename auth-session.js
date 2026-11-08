@@ -13,7 +13,7 @@ export function createEmailSession(request=fetch){
     if(!response.ok)return false;
     const result=await response.json();
     if(current!==revision)return false;
-    const valid=result?.authenticated===true&&typeof result.user?.email==='string'&&typeof result.user?.id==='string'&&/^[a-f0-9]{32}$/.test(result.user.id);
+    const valid=result?.authenticated===true&&typeof result.user?.id==='string'&&/^[a-f0-9]{32}$/.test(result.user.id)&&(result.user.email===null||typeof result.user.email==='string');
     email=valid?result.user.email:null;
     userId=valid?result.user.id:null;
     return true;
@@ -23,7 +23,7 @@ export function createEmailSession(request=fetch){
    }
   },
   async logout(){
-   if(busy||!email)return false;
+   if(busy||!userId)return false;
    busy=true;
    ++revision; // Invalidate any previously started /me request.
    try{

@@ -43,3 +43,9 @@ export {
   MAX_GOAL_EVENTS_PER_SNAPSHOT, MAX_GOALS_SNAPSHOT_BYTES,
 } from './snapshot.ts';
 export type { GoalsSnapshotV1 } from './snapshot.ts';
+
+export { reconcileGoalCapacity, assertGoalCapacity } from './allocation-capacity.ts';
+export type {
+  GoalCapacityAccount, MandatoryCapacityReserve, GoalCapacityInput,
+  AccountCapacityRow, GoalCapacityResult,
+} from './allocation-capacity.ts';

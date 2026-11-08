@@ -111,11 +111,15 @@ export function buildGoalCashflowBundle(
   const beforeOpening = prevDay(source.openingDate);
   for (const goal of goals) {
     const first = goal.events[0];
-    if (!first || first.type !== 'create' || first.on > source.asOfDate) {
-      throw new RangeError('Future or malformed goal cannot be treated as a confirmed reserve');
+    if (!first || first.type !== 'create') {
+      throw new TypeError('Malformed goal creation');
     }
     const accountId = bound.get(goal.id);
     if (!accountId) throw new TypeError('Missing goal account binding');
+    // A full-journal validation above still applies, but a goal that did not
+    // exist at this historical as-of date must not create factual or planned
+    // reservations. This matches the shared #37/#6 capacity snapshot semantics.
+    if (first.on > source.asOfDate) continue;
     const prior = beforeOpening && first.on <= beforeOpening
       ? calculateGoal(goal, beforeOpening).savedCents : 0;
     openingReserves.push({
