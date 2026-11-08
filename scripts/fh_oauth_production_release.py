@@ -87,10 +87,18 @@ def replace_flags(raw: bytes) -> bytes:
     return data
 
 
-def atomic_file(path: Path, data: bytes, mode: int = 0o600) -> None:
+def atomic_file(path: Path, data: bytes, mode: int | None = 0o600) -> None:
+    existing = None
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise Gate("ATOMIC_TARGET_NOT_REGULAR")
+        existing = path.stat()
     fd, name = tempfile.mkstemp(prefix=".fh-oauth-", dir=path.parent)
     try:
-        os.fchmod(fd, mode)
+        if existing is not None:
+            os.fchown(fd, existing.st_uid, existing.st_gid)
+        os.fchmod(fd, stat.S_IMODE(existing.st_mode) if mode is None and existing else
+                  (mode if mode is not None else 0o600))
         with os.fdopen(fd, "wb") as stream:
             stream.write(data)
             stream.flush()
@@ -402,7 +410,7 @@ def rollout(sha: str) -> None:
                     if time.monotonic() >= deadline:
                         raise Gate("AUTH_READY_TIMEOUT")
                     time.sleep(0.5)
-            atomic_file(CADDY_SITE, new_caddy.encode("utf-8"), 0o644)
+            atomic_file(CADDY_SITE, new_caddy.encode("utf-8"), None)
             command(["caddy", "validate", "--config", str(CADDY_MAIN)], timeout=30)
             command(["systemctl", "reload", "caddy.service"], timeout=30)
             switch_release(STATIC_ROOT, new_static)
@@ -434,7 +442,7 @@ def rollout(sha: str) -> None:
                 # Never restore an old DB and lose any post-migration sessions.
                 try:
                     atomic_file(OAUTH_ENV, old_env)
-                    atomic_file(CADDY_SITE, old_caddy.encode("utf-8"), 0o644)
+                    atomic_file(CADDY_SITE, old_caddy.encode("utf-8"), None)
                     if DROPIN.exists():
                         DROPIN.unlink()
                     switch_release(BACKEND_ROOT, old_backend)
