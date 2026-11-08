@@ -98,11 +98,15 @@ def mount_finance_routes(
         path = request.url.path
         if path.startswith("/api/finance/v1/") or path == "/api/auth/email/finance/session":
             code, message = {
-                401: ("unauthorized", "Войдите в аккаунт"),
+                401: ("unauthenticated", "Войдите в аккаунт"),
                 403: ("forbidden", "Доступ запрещён"),
                 429: ("rate_limited", "Превышен лимит запросов"),
                 503: ("service_unavailable", "Финансовый сервис недоступен"),
-            }.get(error.status_code, ("http_error", "Запрос отклонён"))
+            }.get(
+                error.status_code,
+                ("service_unavailable", "Финансовый сервис недоступен")
+                if error.status_code >= 500 else ("invalid_command", "Запрос отклонён"),
+            )
             return _finance_error(FinanceCommandError(code, message, error.status_code))
         return await http_exception_handler(request, error)
 

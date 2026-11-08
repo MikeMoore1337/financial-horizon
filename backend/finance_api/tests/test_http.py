@@ -1005,7 +1005,7 @@ def test_finance_http_auth_origin_rate_and_outage_use_stable_error_envelope(env,
             denied = anonymous.get(path)
             assert denied.status_code == 401, denied.text
             assert set(denied.json()) == {"code", "message"}
-            assert denied.json()["code"] == "unauthorized"
+            assert denied.json()["code"] == "unauthenticated"
             assert denied.headers["cache-control"] == "private, no-store"
             assert denied.headers["x-content-type-options"] == "nosniff"
         unsafe = anonymous.post("/api/auth/email/finance/session",

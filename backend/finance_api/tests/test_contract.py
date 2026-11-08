@@ -97,6 +97,10 @@ def test_protocol_documents_auth_rate_bounds_pagination_and_exact_conflicts():
     assert "next_cursor" in candidate["components"]["schemas"]["Snapshot"]["properties"]
     assert "allocations_by_account" in candidate["components"]["schemas"]["Entity"]["x-reserve-addendum"]
     assert candidate["x-reserve-pair-page-max"] == 10000
+    allowed_errors = set(candidate["components"]["schemas"]["Error"]["properties"]["code"]["enum"])
+    assert {"unauthenticated", "forbidden", "rate_limited",
+            "service_unavailable", "invalid_command"} <= allowed_errors
+    assert "unauthorized" not in allowed_errors
     changes = paths["/api/finance/v1/changes"]["get"]
     assert {"200", "401", "410", "422", "429", "503"} <= set(changes["responses"])
     cmd = paths["/api/finance/v1/commands"]["post"]
