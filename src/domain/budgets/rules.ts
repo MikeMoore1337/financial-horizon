@@ -147,8 +147,8 @@ export function assertBudgetRuleState(state: BudgetRuleState): void {
     if (receipt.revision !== position + 1) throw new Error('Budget receipt sequence mismatch');
     if (mutations.has(receipt.clientMutationId)) throw new Error('Duplicate budget receipt');
     mutations.add(receipt.clientMutationId);
-    assertReceiptFingerprint(receipt, position, state.profileId);
     if (!ids.has(receipt.affectedRuleId)) throw new Error('Orphan budget receipt');
+    assertReceiptFingerprint(receipt, position, state.profileId);
   }
 }
 
