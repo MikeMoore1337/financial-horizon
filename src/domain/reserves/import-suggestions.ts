@@ -50,10 +50,25 @@ export function parseReservePeriodHint(note: unknown): ReservePeriodHint | null 
   // A bare "год оплаты" or "месяц оплаты" is explanatory metadata, not
   // a second duration. Require a numeric count unless there is an explicit
   // alternative connector before a standalone duration word.
+  // Scan the full suffix: payment-year explanations can appear before a later
+  // competing interval (e.g. "ежегодно (год оплаты 2026) или 1 квартал").
   const trailingCountedPeriod = /^\s*\(?\s*(?:(или|либо|и|\/|\+|,)\s*)?(?:[-+]?\d+(?:[.,]\d+)?|один|одна|одно|два|две|три|четыре|пять)\s*(?:мес(?:\.|яц(?:ев|а)?)?|год(?:а|ов)?|лет|квартал(?:а|ов)?|полгода|недел(?:я|и|ь|ю)|дн(?:я|ей|и)|день)(?!\p{L})/u;
   const trailingNamedAlternative = /^\s*\(?\s*(или|либо|и|\/|\+)\s*(?:месяц|год|полгода|квартал)(?!\p{L})/u;
+  // Explanatory payment-year/month metadata may precede an actual competing
+  // interval. Strip only one bounded, well-formed annotation for the immediate
+  // check; separately look for explicit alternatives anywhere in the suffix.
+  const explanatoryPrefix = /^\s*\(\s*(?:год|месяц)\s+оплаты(?!\p{L})[^()]{0,80}\)\s*/u;
+  const laterConnector = /(?<![\p{L}\p{N}])(?:или|либо|и|\/|\+)(?!\p{L})/gu;
   const invalidContinuation = (rest: string): ReservePeriodHint | null => {
-    const tail = trailingCountedPeriod.exec(rest) ?? trailingNamedAlternative.exec(rest);
+    const immediate = rest.replace(explanatoryPrefix, '');
+    let tail = trailingCountedPeriod.exec(immediate) ?? trailingNamedAlternative.exec(immediate);
+    if (!tail) {
+      for (const connector of rest.matchAll(laterConnector)) {
+        const afterConnector = rest.slice(connector.index ?? 0);
+        tail = trailingCountedPeriod.exec(afterConnector) ?? trailingNamedAlternative.exec(afterConnector);
+        if (tail) break;
+      }
+    }
     if (!tail) return null;
     const alternative = tail[1] === 'или' || tail[1] === 'либо' || tail[1] === '/';
     return {
