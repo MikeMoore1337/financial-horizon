@@ -58,7 +58,7 @@
 Для обезличенной приёмки можно выполнить **только на своём компьютере**:
 
 ```bash
-node scripts/compare-bank-loan.mjs ./private/loan-contract.json ./private/bank-schedule.csv --json --details
+node scripts/compare-bank-loan.mjs ./private-data/loan-contract.json ./private-data/bank-schedule.csv --json --details
 ```
 
 Формат `loan-contract.json` (полностью синтетический пример, не реальный договор):
@@ -81,6 +81,8 @@ node scripts/compare-bank-loan.mjs ./private/loan-contract.json ./private/bank-s
   "options": { "mode": "plan" }
 }
 ```
+
+Папка `private-data/` уже исключена из Git через `.gitignore`. Создавайте её на своём устройстве, не сохраняйте реальные файлы в публичной ветке или в протоколах CI.
 
 CSV использует уже существующие заголовки `Дата;Платёж;Проценты;Основной долг;Остаток`, либо английские аналоги. По умолчанию `options.mode='plan'`; режимы `actual` и `forecast` требуют `asOfDate`. В режиме `plan` фактические оплаты **не воспроизводятся** (выводится `factualPaymentsIgnored`), поэтому банковские фактические движения нужно анализировать отдельно.
 
