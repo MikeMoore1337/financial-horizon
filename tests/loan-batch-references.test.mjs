@@ -158,5 +158,5 @@ test('batch verifier counts missing bank balance as incomplete without exposing 
   assert.equal(result.notExactReferences, 1);
   assert.equal(result.allArithmeticExact, false);
   assert.equal(result.bankParityVerified, false);
-  assert.doesNotMatch(run.stdout, /300,00|reference-|contract\\.json/);
+  assert.doesNotMatch(run.stdout, /300,00|reference-|contract\.json/);
 });
