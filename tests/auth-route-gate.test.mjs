@@ -21,7 +21,9 @@ test('ledger validates authenticated identity before reading any user records',(
  assert.ok(revoke.includes('navRoots.unmount()'));
  assert.ok(revoke.includes("$('#main').replaceChildren()"));
  assert.ok(revoke.includes("document.querySelectorAll('dialog')"),'modal copies of old financial data must be cleared');
- assert.match(app,/if\(!verified\|\|emailSession\.userId!==activeUserId\|\|!emailSession\.email\)\{\s*revokeDisplayedLedger\(\);\s*window\.location\.replace\('\.\/account\.html'\);/);
+ assert.match(app,/if\(!verified\|\|emailSession\.userId!==activeUserId\)\{\s*revokeDisplayedLedger\(\);\s*window\.location\.replace\('\.\/account\.html'\);/);
+ assert.doesNotMatch(app,/emailSession\.userId!==activeUserId\|\|!emailSession\.email/);
+ assert.match(app,/sessionValid:Boolean\(emailSession\.userId\)/);
  assert.match(app,/authBroadcast\.onmessage/);
 });
 
