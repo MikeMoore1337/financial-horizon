@@ -527,3 +527,41 @@ test('uppercase aliases of existing finance UUIDs cannot create another account'
   assert.equal(s.accounts.length, 1);
   assert.equal(totalBalanceMinor(s), 500);
 });
+
+test('reversal and correction preserve immutable SQL ledger transaction rows', () => {
+  let s = create(emptyLedger(id(1)), id(2), 10_000);
+  s = record(s, id(2), 'expense', -500, id(3));
+  const original = structuredClone(s.transactions.find(tx => tx.id === id(3)));
+  assert.equal(original.entityRevision, 1);
+
+  const reversed = reverse(s, id(3), id(4));
+  assert.deepEqual(reversed.transactions.find(tx => tx.id === id(3)), original);
+  assert.equal(reversed.transactions.find(tx => tx.id === id(4)).entityRevision, 1);
+  assert.equal(reversed.accounts[0].entityRevision, s.accounts[0].entityRevision + 1);
+  assert.equal(reversed.revision, s.revision + 1);
+  assert.throws(() => reverse(reversed, id(3), id(5)), /уже отменена/);
+
+  const corrected = apply(s, 'transaction.correct', {
+    originalTransactionId: id(3), reversalId: id(6),
+    reason: 'Уточнена сумма', occurredOn: '2026-11-07',
+    replacement: {
+      id: id(7), kind: 'expense', accountId: id(2),
+      signedMinor: -700, occurredOn: '2026-11-07',
+    },
+  }, expectFor(s, id(2), id(3)));
+  assert.deepEqual(corrected.transactions.find(tx => tx.id === id(3)), original);
+  assert.equal(corrected.transactions.find(tx => tx.id === id(6)).entityRevision, 1);
+  assert.equal(corrected.transactions.find(tx => tx.id === id(7)).entityRevision, 1);
+  assert.equal(corrected.revision, s.revision + 1);
+  assert.equal(accountBalanceMinor(corrected, id(2)), 9_300);
+  assert.deepEqual(s.transactions.find(tx => tx.id === id(3)), original);
+});
+
+test('snapshot rejects modifying a posted transaction entity revision in place', () => {
+  let s = create(emptyLedger(id(1)), id(2), 1_000);
+  s = record(s, id(2), 'expense', -200, id(3));
+  const tampered = structuredClone(s);
+  tampered.transactions[0].entityRevision = 2;
+  assert.throws(() => totalBalanceMinor(tampered), /Проведённая операция должна быть неизменной/);
+  assert.equal(accountBalanceMinor(s, id(2)), 800);
+});
