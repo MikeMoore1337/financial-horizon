@@ -9,9 +9,17 @@ on:
       - 'tests/protected-*.test.mjs'
       - 'tests/e2e/protected-staging.spec.mjs'
       - 'tests/e2e/local-budget-session.spec.mjs'
+      - 'tests/e2e/protected-atomic-candidate.spec.mjs'
+      - 'tests/e2e/live-legacy-preflight.spec.mjs'
+      - 'tests/e2e/verified-atomic-staging.spec.mjs'
+      - 'tests/verified-atomic-staging.test.mjs'
+      - 'tests/live-legacy-preflight.test.mjs'
       - 'docs/security/LOCAL_STORAGE_ENCRYPTION.md'
       - 'docs/security/PROTECTED_STAGING.md'
       - 'docs/security/APPROVED_LOCAL_UNLOCK_FLOW.md'
+      - 'docs/security/ATOMIC_ENCRYPTED_CANDIDATE.md'
+      - 'docs/security/LIVE_LEGACY_PREFLIGHT.md'
+      - 'docs/security/VERIFIED_ATOMIC_STAGING.md'
       - '.github/workflows/security-vault.yml'
   pull_request:
     branches: [main]
@@ -22,9 +30,17 @@ on:
       - 'tests/protected-*.test.mjs'
       - 'tests/e2e/protected-staging.spec.mjs'
       - 'tests/e2e/local-budget-session.spec.mjs'
+      - 'tests/e2e/protected-atomic-candidate.spec.mjs'
+      - 'tests/e2e/live-legacy-preflight.spec.mjs'
+      - 'tests/e2e/verified-atomic-staging.spec.mjs'
+      - 'tests/verified-atomic-staging.test.mjs'
+      - 'tests/live-legacy-preflight.test.mjs'
       - 'docs/security/LOCAL_STORAGE_ENCRYPTION.md'
       - 'docs/security/PROTECTED_STAGING.md'
       - 'docs/security/APPROVED_LOCAL_UNLOCK_FLOW.md'
+      - 'docs/security/ATOMIC_ENCRYPTED_CANDIDATE.md'
+      - 'docs/security/LIVE_LEGACY_PREFLIGHT.md'
+      - 'docs/security/VERIFIED_ATOMIC_STAGING.md'
       - '.github/workflows/security-vault.yml'
 permissions:
   contents: read
@@ -41,4 +57,4 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx --no-install tsc -p src/security/tsconfig.json
-      - run: node --test tests/local-vault.test.mjs tests/local-vault-legacy-backup.test.mjs tests/protected-staging.test.mjs tests/protected-legacy-backup.test.mjs tests/local-budget-session.test.mjs
+      - run: node --test tests/local-vault.test.mjs tests/local-vault-legacy-backup.test.mjs tests/protected-staging.test.mjs tests/protected-legacy-backup.test.mjs tests/local-budget-session.test.mjs tests/protected-atomic-candidate.test.mjs tests/live-legacy-preflight.test.mjs tests/verified-atomic-staging.test.mjs

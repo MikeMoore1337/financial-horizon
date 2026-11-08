@@ -8,3 +8,6 @@ export type {
   LoanResult, LoanRow, LoanRunOptions, LoanTerms, PaymentChangeEvent, PaymentEvent, RateChangeEvent,
   RepaymentStrategy, Rounding, ScheduleReconciliation, ScheduleType,
 } from './types.ts';
+
+export { prepareReadOnlyLoanComparison } from './read-only-comparison.ts';
+export type { LoanComparisonStatus, ReadOnlyLoanComparison } from './read-only-comparison.ts';
