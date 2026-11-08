@@ -2,7 +2,7 @@
 
 Do NOT mount directly on production or accept scope IDs from HTTP.
 A trusted auth adapter must resolve the FH email session before invoking this.
-Only the approved v1 transfer/reverse commands may be exposed as v1 routes;
+Only the approved v1 planning/transfer/reverse commands may be exposed as v1 routes;
 the other actions below are internal v2 candidates for review.
 """
 from __future__ import annotations
@@ -14,6 +14,7 @@ import json
 import re
 from typing import Any, Mapping
 from uuid import UUID, uuid4, uuid5
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -27,11 +28,11 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]
 _STRONG_ETAG_RE = re.compile(r'^"[^"\r\n]{1,254}"$')
 _TYPES = frozenset(("bank", "card", "cash", "savings", "other"))
 _INTERNAL_ACTIONS = frozenset((
-    "account.create", "account.update", "account.archive", "account.unarchive",
+    "obligation.create", "account.create", "account.update", "account.archive", "account.unarchive",
     "transaction.record", "account.transfer", "transaction.reverse",
-    "settlement.payment.record", "loan.payment.record",
+    "settlement.payment.record", "loan.payment.record", "reserve.allocate",
 ))
-_PUBLIC_V1_ACTIONS = frozenset(("account.transfer", "transaction.reverse"))
+_PUBLIC_V1_ACTIONS = frozenset(("obligation.create", "account.transfer", "reserve.allocate", "transaction.reverse"))
 
 
 class FinanceCommandError(ValueError):
@@ -282,6 +283,26 @@ def _account_sync_entity(session: Session, profile_id: UUID, account_id: UUID) -
     }
 
 
+def _reserve_sync_entity(session: Session, profile_id: UUID, reserve_id: UUID) -> dict[str, Any]:
+    """Full server-owned reserve image including the committed allocation total."""
+    row = session.execute(text("""
+        SELECT r.id,r.entity_revision,r.title,r.target_minor,r.target_on,r.archived_at,
+          COALESCE((SELECT SUM(a.delta_minor) FROM reserve_allocations a
+            WHERE a.profile_id=r.profile_id AND a.reserve_id=r.id),0) AS allocated_minor
+        FROM reserves r WHERE r.profile_id=:p AND r.id=:id
+    """), {"p": profile_id, "id": reserve_id}).mappings().one()
+    return {
+        "id": str(row["id"]), "entity_revision": int(row["entity_revision"]),
+        "kind": "reserve",
+        "data": {
+            "title": row["title"], "target_minor": int(row["target_minor"]),
+            "target_on": row["target_on"].isoformat() if row["target_on"] else None,
+            "archived_at": row["archived_at"].isoformat() if row["archived_at"] else None,
+            "allocated_minor": _safe_balance(row["allocated_minor"]),
+        },
+    }
+
+
 def _transaction_sync_entity(session: Session, profile_id: UUID, txid: UUID) -> dict[str, Any]:
     """Immutable transaction with exact historical date and complete signed effects."""
     row = session.execute(text("""
@@ -329,7 +350,58 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
     change_payload: dict[str, Any] = {}
     extra_changes: list[tuple[str, UUID, int, dict[str, Any]]] = []
 
-    if action == "account.create":
+    if action == "obligation.create":
+        required = {
+            "title", "direction", "amount_minor", "starts_on",
+            "timezone", "recurrence_unit", "recurrence_every",
+        }
+        _shape(payload, required, required)
+        if versions:
+            raise _reject("Создание обязательства не имеет предыдущих ревизий сущностей")
+        title = payload["title"]
+        if not isinstance(title, str) or not title.strip() or len(title) > 160:
+            raise _reject("Некорректное название обязательства")
+        direction = payload["direction"]
+        if not isinstance(direction, str) or direction not in ("income", "expense"):
+            raise _reject("Недопустимое направление обязательства")
+        amount = _integer(payload["amount_minor"], 0, MAX_MINOR)
+        starts = _date(payload["starts_on"])
+        tz = payload["timezone"]
+        if not isinstance(tz, str) or not 1 <= len(tz) <= 64:
+            raise _reject("Недопустимый часовой пояс")
+        try:
+            ZoneInfo(tz)
+        except (ValueError, KeyError, ZoneInfoNotFoundError):
+            raise _reject("Недопустимый часовой пояс") from None
+        recurrence = payload["recurrence_unit"]
+        if not isinstance(recurrence, str) or recurrence not in ("none", "month", "year"):
+            raise _reject("Недопустимая периодичность")
+        every = _integer(payload["recurrence_every"], 1, 120)
+        target = uuid4()  # Server-generated entity ID retained in the stored receipt.
+        session.execute(text("""
+            INSERT INTO obligations
+              (profile_id,id,title,direction,amount_minor,starts_on,
+               timezone,recurrence_unit,recurrence_every)
+            VALUES (:p,:id,:title,:direction,:amount,:starts,:tz,:recurrence,:every)
+        """), {
+            "p": p, "id": target, "title": title.strip(),
+            "direction": direction, "amount": amount, "starts": starts,
+            "tz": tz, "recurrence": recurrence, "every": every,
+        })
+        affected_revision = 1
+        change_payload = {
+            "entity": {
+                "id": str(target), "kind": "obligation", "entity_revision": 1,
+                "data": {
+                    "title": title.strip(), "direction": direction,
+                    "amount_minor": amount, "starts_on": starts.isoformat(),
+                    "timezone": tz, "recurrence_unit": recurrence,
+                    "recurrence_every": every, "category": None,
+                    "deleted_at": None,
+                },
+            },
+        }
+    elif action == "account.create":
         _shape(payload, {"id", "name", "kind", "currency", "opening_minor"},
                {"id", "name", "kind", "currency", "opening_minor"})
         target = _uuid(payload["id"])
@@ -508,6 +580,75 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             link_field: str(fact_id),
         }
         extra_changes.append(("upsert", fact_id, 1, fact_payload))
+    elif action == "reserve.allocate":
+        required = {"reserve_id", "account_id", "delta_minor"}
+        _shape(payload, required, required)
+        target = _uuid(payload["reserve_id"])
+        account_id = _uuid(payload["account_id"])
+        delta = _integer(payload["delta_minor"], -MAX_MINOR, MAX_MINOR)
+        if delta == 0:
+            raise _reject("Нулевое изменение резерва запрещено")
+        account = _account(session, p, account_id, versions)
+        reserve = session.execute(text("""
+            SELECT entity_revision,target_minor,archived_at FROM reserves
+            WHERE profile_id=:p AND id=:id FOR UPDATE
+        """), {"p": p, "id": target}).mappings().one_or_none()
+        if reserve is None or reserve["archived_at"] is not None:
+            raise FinanceCommandError("semantic_conflict", "Резерв недоступен", 409)
+        _require_revision(versions, target, reserve["entity_revision"])
+        pair = _safe_balance(session.execute(text("""
+            SELECT COALESCE(SUM(delta_minor),0) FROM reserve_allocations
+            WHERE profile_id=:p AND reserve_id=:reserve AND account_id=:account
+        """), {"p": p, "reserve": target, "account": account_id}).scalar_one())
+        reserve_total = _safe_balance(session.execute(text("""
+            SELECT COALESCE(SUM(delta_minor),0) FROM reserve_allocations
+            WHERE profile_id=:p AND reserve_id=:reserve
+        """), {"p": p, "reserve": target}).scalar_one())
+        account_reserved = _safe_balance(session.execute(text("""
+            SELECT COALESCE(SUM(delta_minor),0) FROM reserve_allocations
+            WHERE profile_id=:p AND account_id=:account
+        """), {"p": p, "account": account_id}).scalar_one())
+        account_balance = _safe_balance(session.execute(text("""
+            SELECT a.opening_minor + COALESCE((
+                SELECT SUM(t.signed_minor) FROM ledger_postings t
+                WHERE t.profile_id=a.profile_id AND t.account_id=a.id
+            ),0) FROM accounts a WHERE a.profile_id=:p AND a.id=:account
+        """), {"p": p, "account": account_id}).scalar_one())
+        if pair < 0 or reserve_total < 0 or account_reserved < 0:
+            raise FinanceCommandError("service_unavailable", "Некорректный остаток резерва", 503)
+        if pair + delta < 0:
+            raise FinanceCommandError("semantic_conflict", "Недостаточно средств в указанном резерве", 409)
+        if delta > 0 and (
+            reserve_total + delta > int(reserve["target_minor"])
+            or account_reserved + delta > account_balance
+        ):
+            raise FinanceCommandError("semantic_conflict", "Недостаточно доступных средств или превышена цель", 409)
+        allocation_id = uuid4()
+        session.execute(text("""
+            INSERT INTO reserve_allocations(profile_id,id,reserve_id,account_id,delta_minor)
+            VALUES (:p,:id,:reserve,:account,:delta)
+        """), {
+            "p": p, "id": allocation_id, "reserve": target,
+            "account": account_id, "delta": delta,
+        })
+        session.execute(text("""
+            UPDATE reserves SET entity_revision=entity_revision+1, updated_at=now()
+            WHERE profile_id=:p AND id=:id
+        """), {"p": p, "id": target})
+        session.execute(text("""
+            UPDATE accounts SET entity_revision=entity_revision+1, updated_at=now()
+            WHERE profile_id=:p AND id=:id
+        """), {"p": p, "id": account_id})
+        affected_revision = int(reserve["entity_revision"]) + 1
+        change_payload = {
+            "allocation_id": str(allocation_id),
+            "account_id": str(account_id), "delta_minor": delta,
+            "entity": _reserve_sync_entity(session, p, target),
+        }
+        extra_changes.append((
+            "upsert", account_id, int(account["entity_revision"]) + 1,
+            {"entity": _account_sync_entity(session, p, account_id)},
+        ))
     elif action == "account.transfer":
         _shape(payload, {"from_account_id", "to_account_id", "amount_minor", "occurred_on"},
                {"from_account_id", "to_account_id", "amount_minor", "occurred_on"})

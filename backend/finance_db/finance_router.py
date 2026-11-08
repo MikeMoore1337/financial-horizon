@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
+from backend.finance_api.contracts import parse_v1_command
 
 from .ledger_service import (
     FinanceCommandError, VerifiedFinanceScope, derive_verified_scope,
@@ -28,7 +29,6 @@ log = logging.getLogger("fh.finance_api")
 AUTH_COOKIE = "fh_email_session"
 FINANCE_COOKIE = "fh_finance_session"
 FINANCE_COOKIE_PATH = "/api/finance/v1"
-BODY_LIMIT = 32_768
 
 
 def _guard_origin(request: Request, origin: str) -> None:
@@ -40,6 +40,9 @@ def _guard_origin(request: Request, origin: str) -> None:
 
 
 def _finance_response(result) -> JSONResponse:
+    # Enforce transport quota for all snapshots, deltas and command receipts.
+    if len(json.dumps(result.body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > 2_000_000:
+        raise FinanceCommandError("service_unavailable", "Ответ превышает лимит", 503)
     return JSONResponse(
         result.body,
         status_code=result.status,
@@ -56,6 +59,22 @@ def _finance_error(error: FinanceCommandError) -> JSONResponse:
                         headers={"Cache-Control": "private, no-store", "Vary": "Cookie"})
 
 
+def _query_integer(request: Request, key: str, default: int | None,
+                   minimum: int, maximum: int) -> int:
+    values = request.query_params.getlist(key)
+    if len(values) > 1 or (not values and default is None):
+        raise FinanceCommandError("invalid_command", "Неверные параметры запроса", 422)
+    if not values:
+        return default
+    raw = values[0]
+    if len(raw) > 20 or not raw.isascii() or not raw.isdecimal():
+        raise FinanceCommandError("invalid_command", "Неверные параметры запроса", 422)
+    value = int(raw)
+    if value < minimum or value > maximum:
+        raise FinanceCommandError("invalid_command", "Параметр вне допустимых границ", 422)
+    return value
+
+
 def mount_finance_routes(
     app: FastAPI, *, engine: Engine, namespace: UUID, public_origin: str,
     auth_resolver: Callable[[str | None], dict | None],
@@ -66,12 +85,17 @@ def mount_finance_routes(
     auth_resolver MUST be FH AuthStore.current, never a header/body resolver.
     namespace is stable, server-owned and included in recoverable configuration.
     """
-    if engine is None or not isinstance(namespace, UUID) or not public_origin:
+    if (engine is None or engine.dialect.name != "postgresql"
+        or not isinstance(namespace, UUID) or not public_origin):
         raise ValueError("Finance routes require validated PostgreSQL and server namespace")
 
     def require_user(request: Request, *, finance_cookie: bool) -> str:
         cookie = request.cookies.get(FINANCE_COOKIE if finance_cookie else AUTH_COOKIE)
-        user = auth_resolver(cookie)
+        try:
+            user = auth_resolver(cookie)
+        except Exception as exc:
+            log.error("finance_session_resolution_failed category=%s", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="Сессия временно недоступна") from None
         if not user or not isinstance(user.get("id"), str):
             raise HTTPException(status_code=401, detail="Войдите в аккаунт")
         return user["id"]
@@ -80,8 +104,19 @@ def mount_finance_routes(
         return derive_verified_scope(require_user(request, finance_cookie=True), namespace)
 
     def rate(request: Request, action: str) -> None:
-        if rate_limiter is not None:
+        if rate_limiter is None:
+            # A public finance service must have a shared, cross-worker limiter.
+            raise HTTPException(status_code=503, detail="Финансовый сервис недоступен")
+        try:
             rate_limiter(request, action)
+        except HTTPException:
+            # Preserve existing 429 quota rejection; never mask it as 503.
+            raise
+        except Exception as exc:
+            # SQLite failures are not successful authentication or an open quota.
+            # Never print the database exception text or SQL parameter values.
+            log.error("finance_rate_store_failed category=%s", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="Финансовый сервис недоступен") from None
 
     @app.post("/api/auth/email/finance/session", include_in_schema=False)
     def begin_finance_session(request: Request, response: Response):
@@ -107,12 +142,19 @@ def mount_finance_routes(
     router = APIRouter(prefix="/api/finance/v1", include_in_schema=False)
 
     @router.get("/state")
-    def state(request: Request, cursor: str | None = None, limit_entities: int = 1_000):
+    def state(request: Request):
         rate(request, "finance-read")
         verified = scope(request)
         try:
+            if not set(request.query_params).issubset({"cursor", "limit_entities"}):
+                raise FinanceCommandError("invalid_command", "Недопустимый параметр снимка", 422)
+            cursor_values = request.query_params.getlist("cursor")
+            if len(cursor_values) > 1:
+                raise FinanceCommandError("invalid_command", "Дублирован курсор", 422)
+            cursor = cursor_values[0] if cursor_values else None
+            limit = _query_integer(request, "limit_entities", 1000, 1, 5000)
             return _finance_response(get_finance_snapshot(
-                engine, scope=verified, cursor=cursor, limit_entities=limit_entities,
+                engine, scope=verified, cursor=cursor, limit_entities=limit
             ))
         except FinanceCommandError as exc:
             return _finance_error(exc)
@@ -123,17 +165,16 @@ def mount_finance_routes(
             ))
 
     @router.get("/changes")
-    def changes(request: Request, since_revision: int, limit_revisions: int = 50):
+    def changes(request: Request):
         rate(request, "finance-read")
         verified = scope(request)
-        if not (1 <= limit_revisions <= 100):
-            return _finance_error(FinanceCommandError(
-                "invalid_command", "Неверный размер страницы", 422
-            ))
         try:
+            if not set(request.query_params).issubset({"since_revision", "limit_revisions"}):
+                raise FinanceCommandError("invalid_command", "Недопустимый параметр журнала", 422)
+            since = _query_integer(request, "since_revision", None, 0, (1 << 53) - 1)
+            limit = _query_integer(request, "limit_revisions", 50, 1, 100)
             return _finance_response(get_finance_delta(
-                engine, scope=verified, since_revision=since_revision,
-                page_revisions=limit_revisions,
+                engine, scope=verified, since_revision=since, page_revisions=limit,
             ))
         except FinanceCommandError as exc:
             return _finance_error(exc)
@@ -149,48 +190,24 @@ def mount_finance_routes(
         # Do not run SQLite rate limits or blocking PostgreSQL row locks in
         # the ASGI event loop; unrelated sessions must remain responsive.
         await run_in_threadpool(rate, request, "finance-write")
-        # AuthStore.current reads SQLite synchronously, too. Keep that IO off
-        # the ASGI event loop together with the PostgreSQL command execution.
         verified = await run_in_threadpool(scope, request)
-        media_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
-        if media_type != "application/json":
-            return _finance_error(FinanceCommandError(
-                "invalid_command", "Требуется application/json", 422
-            ))
-        length = request.headers.get("content-length")
-        if length and (not length.isdecimal() or int(length) > BODY_LIMIT):
-            return _finance_error(FinanceCommandError(
-                "invalid_command", "Слишком большой запрос", 413
-            ))
-        # Chunked uploads may omit Content-Length. Never materialize the
-        # unbounded request body before enforcing the same 32 KiB quota.
-        raw = bytearray()
-        async for chunk in request.stream():
-            if len(chunk) + len(raw) > BODY_LIMIT:
-                return _finance_error(FinanceCommandError(
-                    "invalid_command", "Слишком большой запрос", 413
-                ))
-            raw.extend(chunk)
         try:
-            body = json.loads(raw)
-        except (ValueError, UnicodeDecodeError):
-            return _finance_error(FinanceCommandError(
-                "invalid_command", "Некорректный JSON", 422
-            ))
-        # Body streaming can take arbitrarily long, while a different browser
-        # revokes the current SQLite session. Re-check after the complete body
-        # is received, inside the SAME worker just before the PostgreSQL call.
-        # Fail closed on a changed principal; the first lookup is NOT a durable
-        # authorization decision for a delayed write.
+            body = await parse_v1_command(request)
+        except FinanceCommandError as exc:
+            return _finance_error(exc)
+        # The request body may be delayed by network streaming. Revalidate the
+        # real SQLite AuthStore session after parsing, in the SAME worker as
+        # the SQL command. A logout/revocation during streaming must block the
+        # write instead of using the initial (now stale) scope.
         def submit_with_fresh_session():
-            fresh = scope(request)
-            if fresh != verified:
+            current = scope(request)
+            if current != verified:
                 raise HTTPException(status_code=401, detail="Сеанс изменился")
             return submit_account_command(
-                engine, scope=fresh, command=body,
+                engine, scope=current, command=body,
                 if_match=request.headers.get("if-match", ""),
                 idempotency_key=request.headers.get("idempotency-key", ""),
-                allow_internal=False,  # Never expose internal CRUD through v1.
+                allow_internal=False,  # Never enable unpublished internal CRUD.
             )
 
         try:

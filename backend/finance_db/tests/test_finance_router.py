@@ -345,12 +345,22 @@ def test_blocked_sql_command_never_stalls_unrelated_auth_requests(auth_finance):
             raise AssertionError("Test never released the simulated SQL lock")
         return FinanceResult(201, {"ok": True}, '"synthetic-test-etag"')
 
+    mutation_id = str(uuid4())
+    # A valid wire DTO must reach the mock SQL worker; an empty JSON is
+    # correctly rejected by the stricter v1 boundary before reaching it.
+    envelope = {
+        "schema_version": 1, "client_mutation_id": mutation_id,
+        "base_revision": 0, "action": "account.transfer",
+        "expected_entity_revisions": {},
+        "payload": {"from_account_id": str(uuid4()), "to_account_id": str(uuid4()),
+                    "amount_minor": 1, "occurred_on": "2026-11-08"},
+    }
     with patch("backend.finance_db.finance_router.submit_account_command", blocked_command):
         with ThreadPoolExecutor(max_workers=2) as pool:
             command = pool.submit(
                 client.post, "/api/finance/v1/commands",
-                json={}, headers={"Origin": ORIGIN, "Idempotency-Key": str(uuid4()),
-                                  "If-Match": '"synthetic-etag"'},
+                json=envelope, headers={"Origin": ORIGIN, "Idempotency-Key": mutation_id,
+                                        "If-Match": '"synthetic-etag"'},
             )
             assert entered.wait(timeout=3), "The finance worker did not start"
             try:
@@ -376,11 +386,15 @@ def test_finance_command_auth_session_lookup_uses_worker_not_asgi_event_loop():
         observed.append(get_ident())
         return {"id": "a" * 32} if token == "test-session" else None
 
-    # Invalid command is rejected before any finance DB call, so the real
-    # PostgreSQL engine is not needed for this scheduling-focused test.
+    # This test probes scheduler isolation only. Its invalid JSON never
+    # reaches SQL, so a dialect-only stub is safe here (the separate
+    # integration suite always uses actual disposable PostgreSQL).
+    from types import SimpleNamespace
+    dialect_only_engine = SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
     mount_finance_routes(
-        app, engine=object(), namespace=uuid4(), public_origin=ORIGIN,
+        app, engine=dialect_only_engine, namespace=uuid4(), public_origin=ORIGIN,
         auth_resolver=synthetic_auth, secure_cookie=False,
+        rate_limiter=lambda request, action: None,
     )
 
     @app.get("/synthetic-loop-thread")

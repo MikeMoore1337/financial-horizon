@@ -34,7 +34,7 @@ _ENTITY_FIELDS = {
         "imported_schedule", "deleted_at",
     )),
     "reserves": ("reserve", (
-        "title", "target_minor", "target_on", "archived_at",
+        "title", "target_minor", "target_on", "archived_at", "allocated_minor",
     )),
     "ledger_transactions": ("transaction", (
         "kind", "occurred_on", "note", "posted_at", "reversed_transaction_id",
@@ -61,8 +61,10 @@ _ENTITY_QUERIES = {
         "FROM loans WHERE profile_id=:p AND id>:after ORDER BY id LIMIT :n"
     ),
     "reserves": text(
-        "SELECT id,entity_revision,title,target_minor,target_on,archived_at "
-        "FROM reserves WHERE profile_id=:p AND id>:after ORDER BY id LIMIT :n"
+        "SELECT r.id,r.entity_revision,r.title,r.target_minor,r.target_on,r.archived_at, "
+        "COALESCE((SELECT SUM(a.delta_minor) FROM reserve_allocations a "
+        "WHERE a.profile_id=r.profile_id AND a.reserve_id=r.id),0) AS allocated_minor "
+        "FROM reserves r WHERE r.profile_id=:p AND r.id>:after ORDER BY r.id LIMIT :n"
     ),
     "ledger_transactions": text(
         "SELECT id,entity_revision,kind,occurred_on,note,posted_at,reversed_transaction_id "
@@ -288,23 +290,46 @@ def get_finance_delta(
         selected = revs[:page_revisions]
         has_more = len(revs) > page_revisions
         upper = int(selected[-1]) if selected else since_revision
+        if (any(int(rev) != since_revision + index
+                for index, rev in enumerate(selected, start=1))
+            or (not selected and since_revision < current)):
+            # Never advance the offline cursor over a missing committed revision.
+            raise FinanceCommandError("service_unavailable", "Журнал содержит пропуск", 503)
         rows = session.execute(text("""
-            SELECT revision,ordinal,kind,entity_id,payload
+            SELECT revision,ordinal,schema_version,kind,entity_id,payload
             FROM change_log WHERE profile_id=:p AND revision>:low AND revision<=:high
             ORDER BY revision,ordinal
         """), {"p": scope.profile_id, "low": since_revision,
                "high": upper}).mappings().all()
+        if len(rows) > 2_000:
+            raise FinanceCommandError("service_unavailable", "Страница журнала превышает лимит", 503)
         changes = []
+        next_ordinal = {int(rev): 0 for rev in selected}
         for item in rows:
-            payload = dict(item["payload"])
+            rev = int(item["revision"])
+            ordinal = int(item["ordinal"])
+            payload = item["payload"]
+            if (rev not in next_ordinal or ordinal != next_ordinal[rev]
+                or item["schema_version"] != 1
+                or item["kind"] not in ("upsert", "tombstone", "ledger_posted")
+                or not isinstance(item["entity_id"], UUID)
+                or not isinstance(payload, dict)):
+                raise FinanceCommandError("service_unavailable", "Журнал изменений повреждён", 503)
+            next_ordinal[rev] += 1
+            payload = dict(payload)
+            entity_revision = payload.pop("_entity_revision", None)
+            if type(entity_revision) is not int or not 1 <= entity_revision <= 2**53 - 1:
+                raise FinanceCommandError("service_unavailable", "Ревизия события отсутствует", 503)
             changes.append({
-                "revision": int(item["revision"]),
-                "ordinal": int(item["ordinal"]),
+                "revision": rev,
+                "ordinal": ordinal,
                 "kind": item["kind"],
                 "entity_id": str(item["entity_id"]),
-                "entity_revision": int(payload.pop("_entity_revision", 1)),
+                "entity_revision": entity_revision,
                 "payload": _as_json(payload),
             })
+        if any(count == 0 for count in next_ordinal.values()):
+            raise FinanceCommandError("service_unavailable", "Неполный журнал изменений", 503)
         return FinanceResult(200, {
             "schema_version": 1, "from_revision": since_revision,
             "to_revision": current, "next_since_revision": upper,

@@ -1,0 +1,1 @@
+"""Opt-in finance HTTP contracts and security helpers; no implicit routes."""
