@@ -390,3 +390,43 @@ test('missing or altered signed payment receipt must not hide a changed cash dir
   changed.receipts.at(-1).postedSignedMinor = 500;
   assert.throws(() => assertLedgerState(changed), /Квитанция не соответствует проводкам/);
 });
+
+test('monthly cash flow remains exact on 6000 transfers and cross-month compensation', () => {
+  const profileId = uuid(1);
+  const bankId = uuid(2);
+  const cashId = uuid(3);
+  const actorUserId = context(profileId).actorUserId;
+  const s = emptyLedger(profileId);
+  s.revision = 6005;
+  s.accounts = [
+    { id: bankId, profileId, name: 'Банк', kind: 'bank', currency: 'RUB', openingMinor: 100_000, entityRevision: 6004, archivedAt: null },
+    { id: cashId, profileId, name: 'Наличные', kind: 'cash', currency: 'RUB', openingMinor: 0, entityRevision: 6001, archivedAt: null },
+  ];
+  const tx = (id, kind, occurredOn, reversedTransactionId = null) => ({
+    id, profileId, kind, occurredOn, actorUserId, note: null, entityRevision: 1, reversedTransactionId,
+  });
+  const posting = (transactionId, accountId, signedMinor) =>
+    ({ profileId, transactionId, accountId, signedMinor });
+
+  for (let i = 0; i < 6000; i++) {
+    const transactionId = uuid(1000 + i);
+    s.transactions.push(tx(transactionId, 'transfer', '2026-11-07'));
+    s.postings.push(posting(transactionId, bankId, -1), posting(transactionId, cashId, 1));
+  }
+  const incomeId = uuid(9001), expenseId = uuid(9002), reversalId = uuid(9003);
+  s.transactions.push(
+    tx(incomeId, 'income', '2026-11-08'),
+    tx(expenseId, 'expense', '2026-11-08'),
+    tx(reversalId, 'reversal', '2026-12-01', incomeId),
+  );
+  s.postings.push(
+    posting(incomeId, bankId, 450),
+    posting(expenseId, bankId, -125),
+    posting(reversalId, bankId, -450),
+  );
+
+  assert.doesNotThrow(() => assertLedgerState(s));
+  assert.deepEqual(monthlyCashFlowMinor(s, '2026-11'), { incomeMinor: 450, expenseMinor: 125 });
+  assert.deepEqual(monthlyCashFlowMinor(s, '2026-12'), { incomeMinor: -450, expenseMinor: 0 });
+  assert.equal(totalBalanceMinor(s), 99_875);
+});
