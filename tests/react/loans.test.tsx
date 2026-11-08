@@ -52,10 +52,20 @@ const sample: LoansProps = {
       asOfDate: '2026-01-01',
     } as NonNullable<LoansProps['selected']>['legacySnapshot'],
     bankSchedule: [
-      { date: '2026-02-01', amountCents: 507_410, interestCents: 10_192,
-        principalCents: 497_218, balanceCents: 502_782 },
-      { date: '2026-03-01', amountCents: 507_410, interestCents: 4_628,
-        principalCents: 502_782, balanceCents: 0 },
+      {
+        date: '2026-02-01',
+        amountCents: 507_410,
+        interestCents: 10_192,
+        principalCents: 497_218,
+        balanceCents: 502_782,
+      },
+      {
+        date: '2026-03-01',
+        amountCents: 507_410,
+        interestCents: 4_628,
+        principalCents: 502_782,
+        balanceCents: 0,
+      },
     ],
     stateRevision: 1,
     history: [
@@ -119,14 +129,16 @@ describe('Loans React screen (pure presentation)', () => {
   });
 });
 
-
 function confirmSyntheticContract() {
   fireEvent.click(screen.getByRole('button', { name: 'Уточнить условия банка' }));
   const form = document.querySelector<HTMLFormElement>('.loan-comparison-dialog form')!;
   const change = (name: string, value: string) => {
-    fireEvent.change(form.querySelector<HTMLInputElement | HTMLSelectElement>(`[name="${name}"]`)!, {
-      target: { value },
-    });
+    fireEvent.change(
+      form.querySelector<HTMLInputElement | HTMLSelectElement>(`[name="${name}"]`)!,
+      {
+        target: { value },
+      },
+    );
   };
   change('firstDueDate', '2026-02-01');
   change('dueDayAnchor', '1');
@@ -152,15 +164,23 @@ describe('Approved bank reconciliation UI - opt-in and no financial writes', () 
 
   it('does not infer bank terms, dates, or mutate the legacy loan before confirmation', () => {
     const before = structuredClone(sample.selected);
-    render(<StrictMode><Loans {...sample} /></StrictMode>);
-    expect(document.querySelector('.loan-comparison-status')?.textContent).toContain('не подтверждены');
+    render(
+      <StrictMode>
+        <Loans {...sample} />
+      </StrictMode>,
+    );
+    expect(document.querySelector('.loan-comparison-status')?.textContent).toContain(
+      'не подтверждены',
+    );
     expect(document.querySelector('.loan-comparison-table-scroll')).toBeNull();
     expect(screen.getByText(/Расчёт по аннуитетной модели/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Уточнить условия банка' }));
     const dialog = document.querySelector<HTMLDialogElement>('.loan-comparison-dialog')!;
     expect(dialog.open).toBe(true);
     const form = dialog.querySelector<HTMLFormElement>('form')!;
-    expect(form.querySelector<HTMLInputElement>('input[type="date"][readonly]')?.value).toBe('2026-01-01');
+    expect(form.querySelector<HTMLInputElement>('input[type="date"][readonly]')?.value).toBe(
+      '2026-01-01',
+    );
     fireEvent.submit(form);
     expect(dialog.querySelector('[role="alert"]')?.textContent).toMatch(/Проверьте условия/);
     expect(document.querySelector('.loan-comparison-table-scroll')).toBeNull();
@@ -168,9 +188,15 @@ describe('Approved bank reconciliation UI - opt-in and no financial writes', () 
   });
 
   it('compares the full bank schedule to the kopeck but never confirms bank parity', () => {
-    render(<StrictMode><Loans {...sample} /></StrictMode>);
+    render(
+      <StrictMode>
+        <Loans {...sample} />
+      </StrictMode>,
+    );
     confirmSyntheticContract();
-    expect(document.querySelector('.loan-comparison-status')?.textContent).toContain('Числовое совпадение');
+    expect(document.querySelector('.loan-comparison-status')?.textContent).toContain(
+      'Числовое совпадение',
+    );
     expect(document.querySelectorAll('.loan-comparison-table-scroll tbody tr')).toHaveLength(2);
     expect(document.querySelector('.loan-comparison-metrics')?.textContent).toContain('Полная');
     expect(document.querySelector('.loan-comparison')?.textContent).toContain('не подтверждена');
@@ -183,7 +209,8 @@ describe('Approved bank reconciliation UI - opt-in and no financial writes', () 
       selected: {
         ...sample.selected!,
         bankSchedule: sample.selected!.bankSchedule.map((row, index) =>
-          index === 1 ? { ...row, amountCents: row.amountCents + 1 } : row),
+          index === 1 ? { ...row, amountCents: row.amountCents + 1 } : row,
+        ),
       },
     };
     const { rerender } = render(<Loans {...mismatch} />);
@@ -195,23 +222,33 @@ describe('Approved bank reconciliation UI - opt-in and no financial writes', () 
       ...sample,
       selected: {
         ...sample.selected!,
-        bankSchedule: sample.selected!.bankSchedule.map(({ date, amountCents, balanceCents }) =>
-          ({ date, amountCents, balanceCents })),
+        bankSchedule: sample.selected!.bankSchedule.map(({ date, amountCents, balanceCents }) => ({
+          date,
+          amountCents,
+          balanceCents,
+        })),
         stateRevision: 2,
       },
     };
     rerender(<Loans {...incomplete} />);
     confirmSyntheticContract();
-    expect(document.querySelector('.loan-comparison-status')?.textContent).toContain('недостаточно');
-    expect(document.querySelector('.loan-comparison-metrics')?.textContent).toContain('Не подтверждена');
-    expect(document.querySelector('.loan-comparison-table-scroll')?.textContent).toContain('Нет данных');
+    expect(document.querySelector('.loan-comparison-status')?.textContent).toContain(
+      'недостаточно',
+    );
+    expect(document.querySelector('.loan-comparison-metrics')?.textContent).toContain(
+      'Не подтверждена',
+    );
+    expect(document.querySelector('.loan-comparison-table-scroll')?.textContent).toContain(
+      'Нет данных',
+    );
   });
 
   it('allows an ephemeral locally selected CSV without persisting it or leaking names', async () => {
     const before = structuredClone(sample.selected);
     render(<Loans {...sample} />);
     confirmSyntheticContract();
-    const csv = 'Date;Payment;Interest;Principal;Balance\n' +
+    const csv =
+      'Date;Payment;Interest;Principal;Balance\n' +
       '2026-02-01;5074,10;101,92;4972,18;5027,82\n' +
       '2026-03-01;5074,11;46,28;5027,82;0,00\n';
     const localFile = new File([csv], 'SENSITIVE_BANK_NAME.csv', { type: 'text/csv' });
@@ -220,12 +257,18 @@ describe('Approved bank reconciliation UI - opt-in and no financial writes', () 
       target: { files: [localFile] },
     });
     await waitFor(() =>
-      expect(document.querySelector('.loan-comparison-status')?.textContent).toContain('расхождения'),
+      expect(document.querySelector('.loan-comparison-status')?.textContent).toContain(
+        'расхождения',
+      ),
     );
-    expect(document.querySelector('[data-testid="loan-comparison-source"]')?.textContent ?? '').not.toContain('SENSITIVE');
+    expect(document.querySelector('[data-testid="loan-comparison-source"]')?.textContent ?? '').not.toContain(
+      'SENSITIVE',
+    );
     expect(sample.selected).toEqual(before);
     fireEvent.click(screen.getByRole('button', { name: 'Сбросить локальный CSV' }));
-    expect(document.querySelector('.loan-comparison-status')?.textContent).toContain('Числовое совпадение');
+    expect(document.querySelector('.loan-comparison-status')?.textContent).toContain(
+      'Числовое совпадение',
+    );
   });
 
   it('discards ephemeral conditions when loan data revision or selected loan changes', () => {
@@ -234,8 +277,12 @@ describe('Approved bank reconciliation UI - opt-in and no financial writes', () 
     expect(document.querySelector('.loan-comparison-metrics')).not.toBeNull();
     rerender(<Loans {...sample} selected={{ ...sample.selected!, stateRevision: 2 }} />);
     expect(document.querySelector('.loan-comparison-metrics')).toBeNull();
-    rerender(<Loans {...sample} selected={{ ...sample.selected!, id: 'second', stateRevision: 2 }} />);
+    rerender(
+      <Loans {...sample} selected={{ ...sample.selected!, id: 'second', stateRevision: 2 }} />,
+    );
     expect(document.querySelector('.loan-comparison-metrics')).toBeNull();
-    expect(document.querySelector('.loan-comparison-status')?.textContent).toContain('не подтверждены');
+    expect(document.querySelector('.loan-comparison-status')?.textContent).toContain(
+      'не подтверждены',
+    );
   });
 });
