@@ -89,9 +89,18 @@ export function toBudgetOperations(
     if (!link || link.profileId !== snapshot.profileId || transactions.get(link.transactionId)?.kind !== 'payment') {
       fail('foreign or orphan payment link');
     }
-    const hasSettlement = typeof link.settlementId === 'string' && link.settlementId.length > 0;
-    const hasLoan = typeof link.loanPaymentId === 'string' && link.loanPaymentId.length > 0;
-    if (hasSettlement === hasLoan || links.has(link.transactionId)) fail('ambiguous payment link');
+    // Reject malformed dual-key links even when one value is empty/invalid.
+    // #33's PaymentLink union is exclusive; only the trusted ledger may create it.
+    const hasSettlementKey = Object.hasOwn(link, 'settlementId');
+    const hasLoanKey = Object.hasOwn(link, 'loanPaymentId');
+    if (hasSettlementKey === hasLoanKey || links.has(link.transactionId)) {
+      fail('ambiguous payment link');
+    }
+    const hasSettlement = hasSettlementKey && typeof link.settlementId === 'string'
+      && link.settlementId.length > 0;
+    const hasLoan = hasLoanKey && typeof link.loanPaymentId === 'string'
+      && link.loanPaymentId.length > 0;
+    if (!hasSettlement && !hasLoan) fail('invalid payment fact ID');
     const factId = hasSettlement ? `settlement:${link.settlementId}` : `loanPayment:${link.loanPaymentId}`;
     if (factIds.has(factId)) fail('duplicate settled payment fact');
     factIds.add(factId);
@@ -117,6 +126,12 @@ export function toBudgetOperations(
     const source = tx.kind === 'reversal' ? transactions.get(tx.reversedTransactionId!) : undefined;
     if (tx.kind === 'reversal' && (!source || source.kind === 'reversal')) {
       fail('missing reversal target');
+    }
+    // #33 explicitly prohibits a standalone reversal of linked payments. It
+    // would hide a posted expense while the obligation/loan remains settled.
+    // A future #67 atomic fact-void contract needs its own verified adapter.
+    if (tx.kind === 'reversal' && source?.kind === 'payment') {
+      fail('linked payment reversal requires atomic fact cancellation');
     }
     const expectedCount = tx.kind === 'transfer' || source?.kind === 'transfer' ? 2 : 1;
     if (rows.length !== expectedCount) fail('incorrect posting count');
