@@ -277,3 +277,77 @@ test('correction receipt rejects a reversal relinked to a different equally size
   reversal.reversedTransactionId = uuid(6);
   assert.throws(() => assertLedgerState(altered), /Квитанция исправления без нужной компенсирующей операции/);
 });
+
+test('payment receipt binds the exact settlement or loan fact and account debit', () => {
+  const original = fixture();
+  const command = JSON.parse(original.receipts.at(-1).requestFingerprint);
+  for (const modify of [
+    state => { state.paymentLinks[0].loanPaymentId = uuid(20); },
+    state => { delete state.paymentLinks[0].loanPaymentId; state.paymentLinks[0].settlementId = uuid(21); },
+  ]) {
+    const damaged = structuredClone(original);
+    modify(damaged);
+    assert.throws(() => assertLedgerState(damaged), /Квитанция не соответствует связи оплаты/);
+    assert.throws(() => applyLedgerCommand(damaged, command, context(damaged.profileId)),
+      /Квитанция не соответствует связи оплаты/);
+  }
+});
+
+test('standalone reversal receipt rejects another equally sized original', () => {
+  let s = create(emptyLedger(uuid(1)), uuid(2), 10_000);
+  for (const txId of [uuid(3), uuid(6)]) {
+    s = run(s, 'transaction.record', {
+      id: txId, accountId: uuid(2), kind: 'expense',
+      signedMinor: -500, occurredOn: '2026-11-07',
+    }, revisions(s, uuid(2)));
+  }
+  s = run(s, 'transaction.reverse', {
+    id: uuid(4), transactionId: uuid(3),
+    occurredOn: '2026-11-07', reason: 'Отмена',
+  }, revisions(s, uuid(2), uuid(3)));
+  const damaged = structuredClone(s);
+  damaged.transactions.find(tx => tx.id === uuid(4)).reversedTransactionId = uuid(6);
+  assert.throws(() => assertLedgerState(damaged), /Квитанция отмены указывает на другую/);
+});
+
+test('zero-sum altered transfer and smaller debit fail immutable receipt reconciliation', () => {
+  const original = fixture();
+  const altered = structuredClone(original);
+  altered.postings.find(p => p.transactionId === uuid(4) && p.signedMinor < 0).signedMinor = -7_000;
+  altered.postings.find(p => p.transactionId === uuid(4) && p.signedMinor > 0).signedMinor = 7_000;
+  assert.throws(() => assertLedgerState(altered), /Квитанция не соответствует проводкам/);
+
+  let expense = create(emptyLedger(uuid(1)), uuid(2), 10_000);
+  expense = run(expense, 'transaction.record', {
+    id: uuid(3), accountId: uuid(2), kind: 'expense',
+    signedMinor: -500, occurredOn: '2026-11-07',
+  }, revisions(expense, uuid(2)));
+  const corrupt = structuredClone(expense);
+  corrupt.postings[0].signedMinor = -200;
+  assert.throws(() => assertLedgerState(corrupt), /Квитанция не соответствует проводкам/);
+});
+
+test('changed account opening balance is rejected even when signed rows are otherwise valid', () => {
+  const s = fixture();
+  const corrupt = structuredClone(s);
+  corrupt.accounts[0].openingMinor += 700;
+  assert.throws(() => assertLedgerState(corrupt), /Квитанция создания не соответствует начальному остатку/);
+});
+
+test('correction receipt verifies replacement posting amount as well as its reversal', () => {
+  let s = create(emptyLedger(uuid(1)), uuid(2), 10_000);
+  s = run(s, 'transaction.record', {
+    id: uuid(3), accountId: uuid(2), kind: 'expense',
+    signedMinor: -500, occurredOn: '2026-11-07',
+  }, revisions(s, uuid(2)));
+  s = run(s, 'transaction.correct', {
+    originalTransactionId: uuid(3), reversalId: uuid(4), reason: 'Правка',
+    occurredOn: '2026-11-07', replacement: {
+      id: uuid(5), kind: 'expense', accountId: uuid(2),
+      signedMinor: -700, occurredOn: '2026-11-07',
+    },
+  }, revisions(s, uuid(2), uuid(3)));
+  const damaged = structuredClone(s);
+  damaged.postings.find(p => p.transactionId === uuid(5)).signedMinor = -800;
+  assert.throws(() => assertLedgerState(damaged), /Квитанция не соответствует проводкам/);
+});
