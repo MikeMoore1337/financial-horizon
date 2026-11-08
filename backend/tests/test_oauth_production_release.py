@@ -159,6 +159,123 @@ class ReleaseContracts(unittest.TestCase):
             self.assertTrue(all(p.stat().st_mode & 0o777 == 0o600
                                 for p in files))
 
+    def test_dependencies_are_installed_only_in_new_release_venv(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            release_dir = base / "releases" / SHA
+            release_dir.mkdir(parents=True)
+            source = base / "src"
+            requirements = source / "backend" / "requirements.txt"
+            requirements.parent.mkdir(parents=True)
+            requirements.write_text("fastapi>=0.115,<1\njoserfc>=1.8,<2\n")
+            active = base / "running-venv" / "bin" / "python"
+            isolated = release_dir / ".oauth-venv"
+            staged_py = isolated / "bin" / "python"
+            site = isolated / "lib" / "python3.12" / "site-packages"
+            calls = []
+
+            def fake_command(args, **kwargs):
+                calls.append((args, kwargs))
+                if args[1:3] == ["-m", "venv"]:
+                    staged_py.parent.mkdir(parents=True)
+                    staged_py.touch()
+                    site.mkdir(parents=True)
+                if len(args) > 2 and args[1] == "-c" and "sysconfig.get_path" in args[2]:
+                    return str(site).encode("utf-8") + b"\n"
+                return b""
+
+            with mock.patch.object(release, "command", side_effect=fake_command), \
+                    mock.patch.object(release.shutil, "which", return_value=None):
+                result = release.stage_isolated_python(active, release_dir, source)
+            self.assertEqual(result, str(site))
+            installs = [args for args, _ in calls if "-m" in args and "pip" in args]
+            self.assertEqual(len(installs), 1)
+            self.assertEqual(installs[0][0], str(staged_py))
+            self.assertIn("--require-virtualenv", installs[0])
+            self.assertFalse(any(args[0] == str(active) and "pip" in args
+                                 for args, _ in calls))
+
+    def test_failed_staging_removes_private_venv(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            source = base / "src"
+            path = source / "backend" / "requirements.txt"
+            path.parent.mkdir(parents=True)
+            path.write_text("fastapi>=0.115,<1\n")
+            dest = base / "releases" / SHA
+            dest.mkdir(parents=True)
+            venv = dest / ".oauth-venv"
+
+            def fail(args, **kwargs):
+                venv.mkdir()
+                raise release.Gate("ISOLATED_VENV_CREATION_FAILED")
+
+            with mock.patch.object(release, "command", side_effect=fail), \
+                    mock.patch.object(release.shutil, "which", return_value=None):
+                with self.assertRaises(release.Gate) as raised:
+                    release.stage_isolated_python(Path("/tmp/old/python"), dest, source)
+            self.assertEqual(raised.exception.code, "ISOLATED_VENV_CREATION_FAILED")
+            self.assertFalse(venv.exists())
+
+    def test_uv_install_works_without_pip_on_active_python(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            release_dir = base / "releases" / SHA
+            release_dir.mkdir(parents=True)
+            source = base / "src"
+            requirements = source / "backend" / "requirements.txt"
+            requirements.parent.mkdir(parents=True)
+            requirements.write_text("fastapi>=0.115,<1\n")
+            active = base / "running-venv" / "bin" / "python"
+            target = release_dir / ".oauth-venv"
+            staged_py = target / "bin" / "python"
+            site = target / "lib" / "python3.12" / "site-packages"
+            calls = []
+
+            def fake(args, **kwargs):
+                calls.append(args)
+                if len(args) > 1 and args[1] == "venv":
+                    staged_py.parent.mkdir(parents=True)
+                    staged_py.touch()
+                    site.mkdir(parents=True)
+                if len(args) > 2 and args[1] == "-c" and "sysconfig.get_path" in args[2]:
+                    return (str(site) + "\n").encode("utf-8")
+                return b""
+
+            with mock.patch.object(release, "command", side_effect=fake), \
+                    mock.patch.object(release.shutil, "which", return_value="/usr/local/bin/uv"):
+                resolved = release.stage_isolated_python(active, release_dir, source)
+            self.assertEqual(resolved, str(site))
+            self.assertIn(
+                ["/usr/local/bin/uv", "venv", "--python", str(active), str(target)],
+                calls,
+            )
+            self.assertIn(
+                ["/usr/local/bin/uv", "pip", "install", "--python",
+                 str(staged_py), "--no-progress", "-r", str(requirements)],
+                calls,
+            )
+            self.assertFalse(any(args[0] == str(active) and "pip" in args
+                                 for args in calls))
+
+    def test_staged_pythonpath_keeps_original_import_path(self):
+        site = "/opt/financial-horizon-auth/releases/" + SHA + "/.oauth-venv/lib/python3.12/site-packages"
+        self.assertEqual(
+            release.service_python_path(site, {"PYTHONPATH": "/opt/financial-horizon-auth/current/backend"}),
+            site + ":/opt/financial-horizon-auth/current/backend",
+        )
+        self.assertEqual(release.service_python_path(site, {}), site)
+        with self.assertRaises(release.Gate):
+            release.service_python_path(site, {"PYTHONPATH": "unexpected path with spaces"})
+
+    def test_python_failures_receive_stable_diagnostic_code(self):
+        result = mock.Mock(returncode=1, stdout=b"private data, never display")
+        with mock.patch.object(release.subprocess, "run", return_value=result):
+            with self.assertRaises(release.Gate) as error:
+                release.command(["/fake/venv/bin/python", "-m", "pip", "install"],
+                                failure_code="ISOLATED_DEPS_INSTALL_FAILED")
+            self.assertEqual(error.exception.code, "ISOLATED_DEPS_INSTALL_FAILED")
+
     def test_one_command_without_apply_only_checks_preflight(self):
         with mock.patch.object(release, "preflight", return_value=None) as check, \
              mock.patch.object(release, "rollout") as deployed, \
