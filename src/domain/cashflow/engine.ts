@@ -40,7 +40,7 @@ function isIncome(plan: PlannedFlowDto): boolean { return plan.kind === 'income'
 function validOccurrence(plan: PlannedFlowDto, occurrenceDate: string): boolean {
   const n = dayNumber(occurrenceDate);
   const start = dayNumber(plan.dueDate);
-  if (n < start || (plan.untilDate && n > dayNumber(plan.untilDate))) return false;
+  if (n < start || (plan.untilDate !== undefined && n > dayNumber(plan.untilDate))) return false;
   if (n === start) return true;
   if (!plan.everyMonths) return false;
   const months = (Number(occurrenceDate.slice(0, 4)) - Number(plan.dueDate.slice(0, 4))) * 12
@@ -85,7 +85,7 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
       || plan.everyMonths < 1 || plan.everyMonths > 60)) {
       throw new RangeError('everyMonths must be 1..60');
     }
-    if (plan.untilDate && dayNumber(plan.untilDate) < dayNumber(plan.dueDate)) {
+    if (plan.untilDate !== undefined && dayNumber(plan.untilDate) < dayNumber(plan.dueDate)) {
       throw new RangeError('untilDate must not precede dueDate');
     }
     if (plan.confidence !== undefined && !['confirmed', 'estimated'].includes(plan.confidence)) {
@@ -103,7 +103,7 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
     }
     const key = keyed(edit.planId, edit.occurrenceDate);
     if (overrides.has(key)) throw new RangeError('Duplicate occurrence override');
-    if (edit.date) dayNumber(edit.date);
+    if (edit.date !== undefined) dayNumber(edit.date);
     if (edit.amountCents !== undefined) cents(edit.amountCents, 'override.amountCents', true);
     overrides.set(key, edit);
     anchorLimit = Math.max(anchorLimit, dayNumber(edit.occurrenceDate));
@@ -195,7 +195,7 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
   let generated = 0;
   for (const plan of plans.values()) {
     if (plan.cancelled) continue;
-    const limit = plan.untilDate ? Math.min(anchorLimit, dayNumber(plan.untilDate)) : anchorLimit;
+    const limit = plan.untilDate !== undefined ? Math.min(anchorLimit, dayNumber(plan.untilDate)) : anchorLimit;
     const initial = dayNumber(plan.dueDate);
     for (let index = 0; ; index++) {
       const anchor = index === 0 ? plan.dueDate

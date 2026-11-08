@@ -413,3 +413,17 @@ test('composite identifiers cannot contain NUL separator characters', () => {
   assert.throws(() => forecastCashflow(base({ plans: [out('broken\0id', '2026-11-12', 100)] })), /NUL/);
   assert.throws(() => forecastCashflow(base({ actuals: [actual('bad\0id', '2026-11-08', 1, 'income')] })), /NUL/);
 });
+
+
+test('empty untilDate is rejected, not silently interpreted as unlimited recurrence', () => {
+  const input = base({ openingBalanceCents: 0, plans: [income('synthetic', '2026-11-09',
+    100, { everyMonths: 1, untilDate: '' })] });
+  assert.throws(() => forecastCashflow(input), /Invalid ISO/);
+});
+
+test('empty override date is rejected instead of silently retaining the original due date', () => {
+  const input = base({ plans: [out('bill', '2026-11-12', 100)], overrides: [
+    { planId: 'bill', occurrenceDate: '2026-11-12', date: '' },
+  ] });
+  assert.throws(() => forecastCashflow(input), /Invalid ISO/);
+});
