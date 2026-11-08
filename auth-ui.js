@@ -1,6 +1,5 @@
 /** Optional account area. Never sends IndexedDB data; guest mode is default. */
 const PROVIDER_LABELS = Object.freeze({
-  telegram: 'Войти через Telegram',
   google: 'Войти через Google',
   yandex: 'Войти через Яндекс ID',
   vk: 'Войти через VK ID',
@@ -75,7 +74,6 @@ export async function cloudLogout({fetcher=fetch}={}) {
 
 /** Approved design C - fail-closed OAuth choices below the existing email form. */
 const PROVIDER_ICONS=Object.freeze({
-  telegram:'./assets/providers/telegram.svg',
   google:'./assets/providers/google.svg',
   yandex:'./assets/providers/yandex.svg',
   vk:'./assets/providers/vk.svg'
