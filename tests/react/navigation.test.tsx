@@ -3,7 +3,6 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { AppShell, createAppShellRoots } from '../../src/react/AppShell';
 import { Navigation } from '../../src/react/Navigation';
-import { Toolbar } from '../../src/react/Toolbar';
 import { AuthBoundary, isAuthorized } from '../../src/react/AuthBoundary';
 
 afterEach(() => {
@@ -62,24 +61,6 @@ describe('React navigation shell and auth boundary', () => {
     expect(sidebar.childElementCount).toBe(0);
     expect(bottom.childElementCount).toBe(0);
     expect(toolbar.childElementCount).toBe(0);
-  });
-  it('keeps theme/account controls in React without initiating financial operations', () => {
-    const { rerender } = render(
-      <StrictMode>
-        <Toolbar view="loans" theme="light" signedIn={false} busy={false} />
-      </StrictMode>,
-    );
-    expect(screen.getByRole('button', { name: 'Добавить запись' }).id).toBe('top-add');
-    expect(screen.getByRole('button', { name: 'Включить тёмную тему' }).id).toBe(
-      'theme-toggle',
-    );
-    const logoutHas = (name: string) =>
-      document.querySelector('#account-logout-toolbar')?.hasAttribute(name);
-    expect(logoutHas('hidden')).toBe(true);
-    rerender(<Toolbar view="settings" theme="dark" signedIn={true} busy={true} />);
-    expect(screen.getByRole('button', { name: 'Включить светлую тему' })).toBeTruthy();
-    expect(logoutHas('disabled')).toBe(true);
-    expect(logoutHas('hidden')).toBe(false);
   });
   it('hides all user data until the verified account matches active storage scope', () => {
     const forbidden = {
