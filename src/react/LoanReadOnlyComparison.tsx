@@ -417,7 +417,7 @@ export function LoanReadOnlyComparison({
         <div className="loan-comparison-dialog-head">
           <div>
             <span className="eyebrow">Только предварительный расчёт</span>
-            <h2 id="loan-comparison-dialog-title">Условия банка</h2>
+            <h3 id="loan-comparison-dialog-title">Условия банка</h3>
           </div>
           <button
             className="button-secondary"
