@@ -73,11 +73,13 @@ describe('React navigation shell and auth boundary', () => {
     expect(screen.getByRole('button', { name: 'Включить тёмную тему' }).id).toBe(
       'theme-toggle',
     );
-    expect(document.querySelector('#account-logout-toolbar')?.hasAttribute('hidden')).toBe(true);
+    const logoutHas = (name: string) =>
+      document.querySelector('#account-logout-toolbar')?.hasAttribute(name);
+    expect(logoutHas('hidden')).toBe(true);
     rerender(<Toolbar view="settings" theme="dark" signedIn={true} busy={true} />);
     expect(screen.getByRole('button', { name: 'Включить светлую тему' })).toBeTruthy();
-    expect(document.querySelector('#account-logout-toolbar')?.hasAttribute('disabled')).toBe(true);
-    expect(document.querySelector('#account-logout-toolbar')?.hasAttribute('hidden')).toBe(false);
+    expect(logoutHas('disabled')).toBe(true);
+    expect(logoutHas('hidden')).toBe(false);
   });
   it('hides all user data until the verified account matches active storage scope', () => {
     const forbidden = {

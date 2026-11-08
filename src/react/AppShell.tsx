@@ -9,7 +9,11 @@ export function AppShell({ view, variant }: { view: FinanceView; variant: Naviga
   return <Navigation view={view} variant={variant} />;
 }
 
-export function createAppShellRoots(sidebar: HTMLElement, bottom: HTMLElement, header: HTMLElement) {
+export function createAppShellRoots(
+  sidebar: HTMLElement,
+  bottom: HTMLElement,
+  header: HTMLElement,
+) {
   if (new Set([sidebar, bottom, header]).size !== 3) {
     throw new Error('Distinct shell roots required');
   }
