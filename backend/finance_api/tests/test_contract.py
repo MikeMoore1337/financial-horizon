@@ -95,6 +95,8 @@ def test_protocol_documents_auth_rate_bounds_pagination_and_exact_conflicts():
     assert limits["schema"]["maximum"] == 5000
     assert {"200", "206", "401", "412", "422", "429", "503"} <= set(state["responses"])
     assert "next_cursor" in candidate["components"]["schemas"]["Snapshot"]["properties"]
+    assert "allocations_by_account" in candidate["components"]["schemas"]["Entity"]["x-reserve-addendum"]
+    assert candidate["x-reserve-pair-page-max"] == 10000
     changes = paths["/api/finance/v1/changes"]["get"]
     assert {"200", "401", "410", "422", "429", "503"} <= set(changes["responses"])
     cmd = paths["/api/finance/v1/commands"]["post"]

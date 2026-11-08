@@ -210,3 +210,23 @@ agreement, and it intentionally does not invent a funding account for the
 unimplemented fifth action `loan.payment.record`. The independent contract
 regression verifies action/payload declarations match Pydantic and ensures
 unsafe actions cannot silently become publicly exposed.
+
+
+## Exact reserve recovery and finance-only error envelope
+
+A reserve entity now contains sorted, nonzero
+`allocations_by_account: [{account_id, allocated_minor}]`, in both full
+snapshot pages and all reserve upsert delta/receipt images. Its sum is checked
+against `allocated_minor`; after 410 delta compaction a client can still
+determine **exactly which account can release which reservation**. More than
+10,000 pair balances in one requested page fail closed with 503 rather than
+silently truncate a financial snapshot. A separate pair-pagination contract
+is required before activating such profiles in production.
+
+Ordinary financial HTTPException statuses (401 expired/revoked session,
+403 unsafe Origin, 429 throttling, 503 failed AuthStore/rate store) return the
+machine-readable `{code,message}` envelope with `no-store` and
+`nosniff`. The existing non-finance FH email-auth routes retain their
+original FastAPI error shapes; this avoids a breaking login change. Real
+SQLite/PostgreSQL HTTP regressions cover these responses and two-account,
+two-reserve state recovery after a 410 journal compaction.

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from .db import finance_transaction
 from .ledger_service import (
     FinanceCommandError, FinanceResult, VerifiedFinanceScope, _opaque_etag,
-    _safe_balance,
+    _safe_balance, _reserve_pairs,
 )
 
 _MAX_PER_ENTITY = 5_000
@@ -218,6 +218,21 @@ def get_finance_snapshot(
                 })
                 if full_page:
                     break
+
+        # Reserve totals alone are not enough to reconstruct which account
+        # can safely release which earmarked funds after a 410 re-snapshot.
+        reserves = {
+            UUID(item["id"]): item
+            for item in entities if item["kind"] == "reserve"
+        }
+        allocations = _reserve_pairs(session, scope.profile_id, list(reserves))
+        for reserve_id, item in reserves.items():
+            pairs = allocations[reserve_id]
+            if sum(pair["allocated_minor"] for pair in pairs) != item["data"]["allocated_minor"]:
+                raise FinanceCommandError(
+                    "service_unavailable", "Неполное распределение резерва", 503
+                )
+            item["data"]["allocations_by_account"] = pairs
 
         # Only fetch postings and links for the transactions in this page,
         # not every historical transaction. This remains bounded at page_size*2.

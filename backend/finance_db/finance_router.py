@@ -14,6 +14,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from fastapi.exception_handlers import http_exception_handler
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
@@ -56,7 +57,8 @@ def _finance_error(error: FinanceCommandError) -> JSONResponse:
     if error.server_revision is not None:
         body["server_revision"] = error.server_revision
     return JSONResponse(body, status_code=error.status,
-                        headers={"Cache-Control": "private, no-store", "Vary": "Cookie"})
+                        headers={"Cache-Control": "private, no-store", "Vary": "Cookie",
+                                 "X-Content-Type-Options": "nosniff"})
 
 
 def _query_integer(request: Request, key: str, default: int | None,
@@ -88,6 +90,23 @@ def mount_finance_routes(
     if (engine is None or engine.dialect.name != "postgresql"
         or not isinstance(namespace, UUID) or not public_origin):
         raise ValueError("Finance routes require validated PostgreSQL and server namespace")
+
+    # The existing FH auth app has its own HTTPException wire shape.
+    # Only finance endpoints use code/message so #68 can decode 401/403/429/503
+    # consistently; leave every other auth endpoint byte-for-byte compatible.
+    async def finance_http_errors(request: Request, error: HTTPException):
+        path = request.url.path
+        if path.startswith("/api/finance/v1/") or path == "/api/auth/email/finance/session":
+            code, message = {
+                401: ("unauthorized", "Войдите в аккаунт"),
+                403: ("forbidden", "Доступ запрещён"),
+                429: ("rate_limited", "Превышен лимит запросов"),
+                503: ("service_unavailable", "Финансовый сервис недоступен"),
+            }.get(error.status_code, ("http_error", "Запрос отклонён"))
+            return _finance_error(FinanceCommandError(code, message, error.status_code))
+        return await http_exception_handler(request, error)
+
+    app.add_exception_handler(HTTPException, finance_http_errors)
 
     def require_user(request: Request, *, finance_cookie: bool) -> str:
         cookie = request.cookies.get(FINANCE_COOKIE if finance_cookie else AUTH_COOKIE)

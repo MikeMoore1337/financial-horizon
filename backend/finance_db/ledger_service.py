@@ -311,6 +311,48 @@ def _account_sync_entity(session: Session, profile_id: UUID, account_id: UUID) -
     }
 
 
+_MAX_RESERVE_PAIRS_PER_PAGE = 10_000
+
+
+def _reserve_pairs(
+    session: Session, profile_id: UUID, reserve_ids: list[UUID],
+) -> dict[UUID, list[dict[str, Any]]]:
+    """Full nonzero allocation by (reserve, account), sorted and RLS-scoped.
+
+    Never silently truncate: a profile requiring more than this bound needs an
+    explicitly paged protocol extension before production activation.
+    """
+    breakdown: dict[UUID, list[dict[str, Any]]] = {key: [] for key in reserve_ids}
+    if not reserve_ids:
+        return breakdown
+    rows = session.execute(text("""
+        SELECT reserve_id,account_id,SUM(delta_minor) AS amount
+        FROM reserve_allocations
+        WHERE profile_id=:p AND reserve_id=ANY(:ids)
+        GROUP BY reserve_id,account_id
+        HAVING SUM(delta_minor)<>0
+        ORDER BY reserve_id,account_id
+        LIMIT :limit
+    """), {
+        "p": profile_id, "ids": reserve_ids,
+        "limit": _MAX_RESERVE_PAIRS_PER_PAGE + 1,
+    }).mappings().all()
+    if len(rows) > _MAX_RESERVE_PAIRS_PER_PAGE:
+        raise FinanceCommandError(
+            "service_unavailable", "Требуется постраничная загрузка резервов", 503
+        )
+    for row in rows:
+        amount = _safe_balance(row["amount"])
+        if amount <= 0 or row["reserve_id"] not in breakdown:
+            raise FinanceCommandError(
+                "service_unavailable", "Неполное распределение резерва", 503
+            )
+        breakdown[row["reserve_id"]].append({
+            "account_id": str(row["account_id"]), "allocated_minor": amount,
+        })
+    return breakdown
+
+
 def _reserve_sync_entity(session: Session, profile_id: UUID, reserve_id: UUID) -> dict[str, Any]:
     """Full server-owned reserve image including the committed allocation total."""
     row = session.execute(text("""
@@ -327,6 +369,9 @@ def _reserve_sync_entity(session: Session, profile_id: UUID, reserve_id: UUID) -
             "target_on": row["target_on"].isoformat() if row["target_on"] else None,
             "archived_at": row["archived_at"].isoformat() if row["archived_at"] else None,
             "allocated_minor": _safe_balance(row["allocated_minor"]),
+            "allocations_by_account": _reserve_pairs(
+                session, profile_id, [reserve_id]
+            )[reserve_id],
         },
     }
 

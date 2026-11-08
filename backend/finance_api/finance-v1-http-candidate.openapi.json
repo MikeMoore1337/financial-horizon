@@ -648,7 +648,8 @@
           }
         },
         "x-reserve-addendum": {
-          "allocated_minor": "Integer sum of reserve allocations across all accounts; never an actual ledger cash movement."
+          "allocated_minor": "Integer sum of reserve allocations across all accounts; never an actual ledger cash movement.",
+          "allocations_by_account": "Sorted, nonzero [{account_id: UUID, allocated_minor: positive integer}] per reserve, including each account's releasable amount. Required in all reserve snapshot images and reserve delta images; totals alone are ambiguous after 410 compacted delta."
         },
         "x-account-addendum": {
           "balance_minor": "Integer actual balance including opening and posted ledger movements.",
@@ -1135,5 +1136,6 @@
   ],
   "x-deferred-actions": {
     "loan.payment.record": "The original accepted v1 payload contains no funding-account ID or transaction link. Do not infer account or silently claim a debit; future accepted versioned linked-payment DTO is required."
-  }
+  },
+  "x-reserve-pair-page-max": 10000
 }

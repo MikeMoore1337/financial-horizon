@@ -993,3 +993,125 @@ def test_transfer_reversal_cannot_take_money_earmarked_after_original_post(env):
     dest_entity = next(e for e in final.json()["entities"] if e["id"] == dest)
     assert dest_entity["data"]["reserved_minor"] == 200
     assert dest_entity["data"]["available_minor"] == 100
+
+
+def test_finance_http_auth_origin_rate_and_outage_use_stable_error_envelope(env, monkeypatch):
+    """AuthStore errors must use Error(code,message), not FastAPI's detail."""
+    from backend.fh_email_auth.store import Throttled
+
+    app = env["app"]
+    with TestClient(app, base_url=ORIGIN, raise_server_exceptions=False) as anonymous:
+        for path in ["/api/finance/v1/state", "/api/finance/v1/changes?since_revision=0"]:
+            denied = anonymous.get(path)
+            assert denied.status_code == 401, denied.text
+            assert set(denied.json()) == {"code", "message"}
+            assert denied.json()["code"] == "unauthorized"
+            assert denied.headers["cache-control"] == "private, no-store"
+            assert denied.headers["x-content-type-options"] == "nosniff"
+        unsafe = anonymous.post("/api/auth/email/finance/session",
+                                headers={"Origin": "https://invalid.example"}, json={})
+        assert unsafe.status_code == 403
+        assert unsafe.json()["code"] == "forbidden"
+        assert "detail" not in unsafe.json()
+
+    uid, token = env["first"]
+    client = env["client"](token)
+    original_limit = env["store"].limit
+
+    def blocked(*args, **kwargs):
+        raise Throttled()
+
+    monkeypatch.setattr(env["store"], "limit", blocked)
+    throttled = client.get("/api/finance/v1/state")
+    assert throttled.status_code == 429, throttled.text
+    assert set(throttled.json()) == {"code", "message"}
+    assert throttled.json()["code"] == "rate_limited"
+    assert throttled.headers["cache-control"] == "private, no-store"
+
+    def failed(*args, **kwargs):
+        raise RuntimeError("PRIVATE_SQLITE_FAILURE_SHOULD_NOT_LEAK")
+
+    monkeypatch.setattr(env["store"], "limit", failed)
+    outage = client.get("/api/finance/v1/state")
+    assert outage.status_code == 503
+    assert outage.json()["code"] == "service_unavailable"
+    assert "PRIVATE_SQLITE_FAILURE_SHOULD_NOT_LEAK" not in outage.text
+    monkeypatch.setattr(env["store"], "limit", original_limit)
+
+
+def test_snapshot_recovers_exact_reserve_allocation_pairs_after_delta_compaction(env):
+    """2 reserves x 2 accounts: aggregates alone cannot identify releasable pairs."""
+    uid, token = env["first"]
+    account_a = env["account"](uid, opening=1_000)
+    account_b = env["account"](uid, opening=600)
+    reserve_a = seed_synthetic_reserve(env, uid, target=800)
+    reserve_b = seed_synthetic_reserve(env, uid, target=600)
+    client = env["client"](token)
+    for reserve_id, account_id, amount in [
+        (reserve_a, account_a, 300),
+        (reserve_a, account_b, 200),
+        (reserve_b, account_a, 150),
+        (reserve_b, account_b, 100),
+    ]:
+        old = snapshot(env, token)
+        result = submit(client, old, reserve_command(old, reserve_id, account_id, amount))
+        assert result.status_code == 201, result.text
+        after = snapshot(env, token)
+        updated = {item["id"]: item for item in after.json()["entities"]}
+        assert result.json()["changes"][0]["payload"]["entity"] == updated[reserve_id]
+        assert result.json()["changes"][1]["payload"]["entity"] == updated[account_id]
+
+    current = snapshot(env, token)
+    entities = {item["id"]: item for item in current.json()["entities"]}
+    assert entities[reserve_a]["data"]["allocations_by_account"] == [
+        {"account_id": id, "allocated_minor": amount}
+        for id, amount in sorted([(account_a, 300), (account_b, 200)])
+    ]
+    assert entities[reserve_b]["data"]["allocations_by_account"] == [
+        {"account_id": id, "allocated_minor": amount}
+        for id, amount in sorted([(account_a, 150), (account_b, 100)])
+    ]
+    assert entities[reserve_a]["data"]["allocated_minor"] == 500
+    assert entities[reserve_b]["data"]["allocated_minor"] == 250
+    assert entities[account_a]["data"]["reserved_minor"] == 450
+    assert entities[account_b]["data"]["reserved_minor"] == 300
+
+    with finance_transaction(env["engine"], verified_user_id=uid,
+                             profile_id=env["scope"](uid).profile_id) as db:
+        db.execute(text("""
+            UPDATE finance_profiles SET min_available_revision=:min WHERE id=:p
+        """), {"min": current.json()["revision"],
+               "p": env["scope"](uid).profile_id})
+    unavailable_delta = client.get("/api/finance/v1/changes", params={"since_revision": 0})
+    assert unavailable_delta.status_code == 410
+    assert unavailable_delta.json()["code"] == "snapshot_required"
+
+    recovered = snapshot(env, token)
+    assert recovered.json()["entities"] == current.json()["entities"]
+    page_entities = {}
+    cursor = None
+    for _ in range(10):
+        params = {"limit_entities": 1}
+        if cursor:
+            params["cursor"] = cursor
+        part = client.get("/api/finance/v1/state", params=params)
+        assert part.status_code in (200, 206), part.text
+        for e in part.json()["entities"]:
+            page_entities[e["id"]] = e
+        cursor = part.json().get("next_cursor")
+        if not cursor:
+            break
+    else:
+        pytest.fail("Bounded snapshot cursor did not terminate")
+    assert page_entities == entities
+
+    rejected = submit(client, recovered, reserve_command(recovered, reserve_a, account_b, -201))
+    assert rejected.status_code == 409
+    assert rejected.json()["code"] == "semantic_conflict"
+    assert snapshot(env, token).json()["revision"] == current.json()["revision"]
+    allowed = submit(client, recovered, reserve_command(recovered, reserve_a, account_b, -200))
+    assert allowed.status_code == 201, allowed.text
+    final = {item["id"]: item for item in snapshot(env, token).json()["entities"]}
+    assert final[reserve_a]["data"]["allocations_by_account"] == [
+        {"account_id": account_a, "allocated_minor": 300}
+    ]
