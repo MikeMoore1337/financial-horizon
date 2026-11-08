@@ -1,0 +1,232 @@
+"""Finance API integration on disposable real PostgreSQL + real AuthStore SQLite."""
+from __future__ import annotations
+
+import os
+from uuid import uuid4
+
+from fastapi.testclient import TestClient
+import pytest
+
+from backend.fh_email_auth.app import create_app
+from backend.fh_email_auth.config import Settings
+from backend.fh_email_auth.store import AuthStore
+from backend.finance_db.db import create_finance_engine
+from backend.finance_db.ledger_service import (
+    derive_verified_scope, get_account_snapshot, submit_account_command,
+)
+
+ORIGIN = "http://127.0.0.1:8791"
+PASS = "A-strong-passphrase-98520!"
+
+
+class SyntheticMailer:
+    def __init__(self):
+        self.sent = []
+
+    def send(self, email, purpose, token):
+        self.sent.append((email, purpose, token))
+        return True
+
+    def latest(self, purpose):
+        return next(token for _, p, token in reversed(self.sent) if p == purpose)
+
+
+@pytest.fixture
+def auth_finance(tmp_path):
+    if os.environ.get("FH_FINANCE_CI_ALLOW_BOOTSTRAP") != "yes":
+        pytest.skip("Disposable real PostgreSQL and synthetic auth only")
+    config = Settings(
+        True, ORIGIN, tmp_path / "auth.sqlite", "h" * 48,
+        "synthetic-turnstile-secret", "synthetic-site",
+        "smtp.test.invalid", 465, "synthetic-user", "synthetic-password",
+        "noreply@test.invalid", True,
+    )
+    engine = create_finance_engine()
+    store = AuthStore(config.database_path)
+    mail = SyntheticMailer()
+    namespace = uuid4()  # Server-only stable namespace for this synthetic test.
+    app = create_app(
+        config=config, store=store, mailer=mail,
+        captcha=lambda secret, token, origin, action:
+            secret == "synthetic-turnstile-secret" and
+            origin == ORIGIN and token == "valid-" + action,
+        finance_engine=engine, finance_profile_namespace=namespace,
+    )
+    with TestClient(app) as client:
+        yield client, app, mail, store, engine, namespace
+    engine.dispose()
+
+
+def authenticate(client, mail, email="synthetic@example.invalid"):
+    response = client.post("/api/auth/email/register", headers={"Origin": ORIGIN}, json={
+        "email": email, "challenge": "valid-register",
+    })
+    assert response.status_code == 202
+    response = client.post("/api/auth/email/verify", headers={"Origin": ORIGIN}, json={
+        "token": mail.latest("verify"), "password": PASS,
+    })
+    assert response.status_code == 200
+    return client.get("/api/auth/email/me").json()["user"]["id"]
+
+
+def bootstrap(client):
+    return client.post("/api/auth/email/finance/session",
+                       headers={"Origin": ORIGIN}, json={})
+
+
+def seed(engine, scope, opening, kind="bank"):
+    snap = get_account_snapshot(engine, scope=scope)
+    acc = str(uuid4())
+    mutation = str(uuid4())
+    command = {
+        "schema_version": 1, "client_mutation_id": mutation,
+        "base_revision": snap.body["revision"],
+        "action": "account.create",
+        "expected_entity_revisions": {},
+        "payload": {
+            "id": acc, "name": "Synthetic account", "kind": kind,
+            "currency": "RUB", "opening_minor": opening,
+        },
+    }
+    result = submit_account_command(
+        engine, scope=scope, command=command, if_match=snap.etag,
+        idempotency_key=mutation, allow_internal=True,
+    )
+    assert result.status == 201
+    return acc
+
+
+def test_opt_in_finance_routes_reject_anonymous_requests_and_unsafe_origins(auth_finance):
+    client, _, mail, _, _, _ = auth_finance
+    assert bootstrap(client).status_code == 401
+    assert client.get("/api/finance/v1/state").status_code == 401
+    assert client.get("/api/finance/v1/changes?since_revision=0").status_code == 401
+    assert client.post("/api/finance/v1/commands",
+                       headers={"Origin": ORIGIN}, json={}).status_code == 401
+
+    authenticate(client, mail)
+    assert client.post("/api/auth/email/finance/session", json={}).status_code == 403
+    assert client.post("/api/auth/email/finance/session",
+                       headers={"Origin": "https://evil.invalid"}, json={}).status_code == 403
+    assert bootstrap(client).status_code == 200
+    assert client.get("/api/finance/v1/state").status_code == 200
+    assert client.post("/api/finance/v1/commands", json={}).status_code == 403
+    assert client.post("/api/finance/v1/commands",
+                       headers={"Origin": "https://evil.invalid"}, json={}).status_code == 403
+
+
+def test_session_bridge_is_scoped_cookie_and_logout_revokes_entire_finance_access(auth_finance):
+    client, _, mail, store, _, _ = auth_finance
+    authenticate(client, mail)
+    result = bootstrap(client)
+    assert result.status_code == 200
+    assert result.json()["ok"] is True
+    cookies = list(client.cookies.jar)
+    finance = next(c for c in cookies if c.name == "fh_finance_session")
+    auth = next(c for c in cookies if c.name == "fh_email_session")
+    assert auth.path == "/api/auth"
+    assert finance.path == "/api/finance/v1"
+    assert finance.get_nonstandard_attr("HttpOnly") is not None
+    assert finance.get_nonstandard_attr("SameSite") == "strict"
+    assert result.headers["cache-control"].find("no-store") >= 0
+
+    state = client.get("/api/finance/v1/state")
+    assert state.status_code == 200
+    assert state.headers["Cache-Control"] == "private, no-store"
+    assert state.headers["ETag"].startswith('"fh.1.0.')
+    assert state.json()["entities"] == []
+    assert "email" not in state.text and "synthetic@example.invalid" not in state.text
+    changes = client.get("/api/finance/v1/changes?since_revision=0")
+    assert changes.status_code == 200
+    assert changes.json()["changes"] == []
+
+    assert client.post("/api/auth/email/logout",
+                       headers={"Origin": ORIGIN}, json={}).status_code == 200
+    assert store.current(auth.value) is None
+    assert client.get("/api/finance/v1/state").status_code == 401
+
+
+def test_v1_transfer_idempotency_and_revision_conflict_from_real_authenticated_browser(auth_finance):
+    client, _, mail, _, engine, namespace = auth_finance
+    uid = authenticate(client, mail)
+    assert bootstrap(client).status_code == 200
+    scope = derive_verified_scope(uid, namespace)
+    a = seed(engine, scope, 10_000)
+    b = seed(engine, scope, 500, "cash")
+    state = client.get("/api/finance/v1/state")
+    assert state.status_code == 200
+    assert {x["kind"] for x in state.json()["entities"]} == {"account"}
+    etag = state.headers["etag"]
+    versions = {x["id"]: x["entity_revision"] for x in state.json()["entities"]}
+    mutation = str(uuid4())
+    command = {
+        "schema_version": 1, "client_mutation_id": mutation,
+        "base_revision": state.json()["revision"], "action": "account.transfer",
+        "expected_entity_revisions": {a: versions[a], b: versions[b]},
+        "payload": {
+            "from_account_id": a, "to_account_id": b,
+            "amount_minor": 1000, "occurred_on": "2026-11-08",
+        },
+    }
+    headers = {"Origin": ORIGIN, "If-Match": etag,
+               "Idempotency-Key": mutation}
+    posted = client.post("/api/finance/v1/commands", json=command, headers=headers)
+    assert posted.status_code == 201, posted.text
+    assert posted.json()["replayed"] is False
+    repeated = client.post("/api/finance/v1/commands", json=command, headers=headers)
+    assert repeated.status_code == 200
+    assert repeated.json()["replayed"] is True
+    assert repeated.json()["revision"] == posted.json()["revision"]
+
+    now = client.get("/api/finance/v1/state")
+    assert now.status_code == 200
+    accounts = {x["id"]: x["data"] for x in now.json()["entities"] if x["kind"] == "account"}
+    assert accounts[a]["balance_minor"] == 9000
+    assert accounts[b]["balance_minor"] == 1500
+    txs = [x for x in now.json()["entities"] if x["kind"] == "transaction"]
+    assert len(txs) == 1
+    assert sorted(x["signed_minor"] for x in txs[0]["data"]["postings"]) == [-1000, 1000]
+    assert client.get("/api/finance/v1/changes?since_revision=0").status_code == 200
+
+    other = {**command, "client_mutation_id": str(uuid4())}
+    old = client.post("/api/finance/v1/commands", json=other,
+                      headers={**headers, "Idempotency-Key": other["client_mutation_id"]})
+    assert old.status_code == 412
+    assert old.json()["code"] == "stale_revision"
+    changed = {**command, "payload": {**command["payload"], "amount_minor": 400}}
+    reuse = client.post("/api/finance/v1/commands", json=changed, headers=headers)
+    assert reuse.status_code == 409
+    assert reuse.json()["code"] == "idempotency_key_reuse"
+
+
+def test_public_v1_rejects_unapproved_account_creation_and_cross_scope_data(auth_finance):
+    client, app, mail, _, engine, namespace = auth_finance
+    first_user = authenticate(client, mail, "first@example.invalid")
+    assert bootstrap(client).status_code == 200
+    first_account = seed(engine, derive_verified_scope(first_user, namespace), 300)
+    before = client.get("/api/finance/v1/state")
+    mutation = str(uuid4())
+    draft = {
+        "schema_version": 1, "client_mutation_id": mutation,
+        "base_revision": before.json()["revision"], "action": "account.create",
+        "expected_entity_revisions": {}, "payload": {
+            "id": str(uuid4()), "name": "Unapproved",
+            "kind": "cash", "currency": "RUB", "opening_minor": 999,
+        },
+    }
+    res = client.post("/api/finance/v1/commands", json=draft, headers={
+        "Origin": ORIGIN, "If-Match": before.headers["ETag"],
+        "Idempotency-Key": mutation,
+    })
+    assert res.status_code == 422 and res.json()["code"] == "invalid_command"
+
+    # A separate browser with independent AuthStore session cannot read the first budget.
+    with TestClient(app) as other:
+        second_user = authenticate(other, mail, "second@example.invalid")
+        assert bootstrap(other).status_code == 200
+        other_state = other.get("/api/finance/v1/state")
+        assert other_state.status_code == 200
+        assert other_state.json()["profile_id"] != before.json()["profile_id"]
+        assert first_account not in other_state.text
+        assert other_state.json()["entities"] == []
+        assert second_user != first_user
