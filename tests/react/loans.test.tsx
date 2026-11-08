@@ -290,9 +290,9 @@ describe('Approved bank reconciliation UI - opt-in and no financial writes', () 
     confirmSyntheticContract();
     finishRead(csv);
     await waitFor(() =>
-      expect(document.querySelector('[data-testid="loan-comparison-source"]')?.textContent).toContain(
-        'Выбранный локальный CSV',
-      ),
+      expect(
+        document.querySelector('[data-testid="loan-comparison-source"]')?.textContent,
+      ).toContain('Выбранный локальный CSV'),
     );
     expect(document.querySelector('.loan-comparison-status')?.textContent).toContain(
       'Числовое совпадение',
@@ -322,13 +322,11 @@ describe('Approved bank reconciliation UI - opt-in and no financial writes', () 
     confirmSyntheticContract('0');
     finishRead(csv);
     await waitFor(() =>
-      expect(document.querySelector('[data-testid="loan-comparison-source"]')?.textContent).toContain(
-        'Выбранный локальный CSV',
-      ),
+      expect(
+        document.querySelector('[data-testid="loan-comparison-source"]')?.textContent,
+      ).toContain('Выбранный локальный CSV'),
     );
-    expect(document.querySelector('.loan-comparison-status')?.textContent).toContain(
-      'расхождения',
-    );
+    expect(document.querySelector('.loan-comparison-status')?.textContent).toContain('расхождения');
     expect(screen.queryByText('IN_FLIGHT_PRIVATE.csv')).toBeNull();
   });
 
