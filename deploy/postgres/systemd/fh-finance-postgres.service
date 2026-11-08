@@ -1,0 +1,26 @@
+[Unit]
+Description=Financial Horizon PostgreSQL (guarded LUKS2 startup)
+Documentation=README
+Requires=docker.service
+After=docker.service
+RequiresMountsFor=/srv/financial-horizon-finance/pgdata
+ConditionPathIsMountPoint=/srv/financial-horizon-finance/pgdata
+# Restarting Docker must not revive a container outside this reviewed guard.
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/financial-horizon/finance/start.env
+# start.env is owned by root, mode 0600, with reviewed checkout and exact SHA.
+# No Docker daemon restart policy is used; this command checks LUKS2 on EVERY start.
+ExecStart=/usr/bin/bash -c 'exec "$FH_FINANCE_CHECKOUT_DIR/deploy/postgres/scripts/guarded-start.sh"'
+ExecStop=-/usr/bin/docker stop --time=30 fh-finance-postgres
+TimeoutStartSec=180
+TimeoutStopSec=50
+UMask=0077
+NoNewPrivileges=true
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
