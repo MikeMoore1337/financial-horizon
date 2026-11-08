@@ -218,3 +218,21 @@ test('no network needed to update an offline encrypted budget and preserve its q
     assert.equal((await readProtectedFinance(A,session)).outbox.length,2);
   }finally{globalThis.fetch=prior}
 });
+
+
+test('review P2: rejecting async financial mutation leaves no orphaned rejection',async()=>{
+  const {session}=await setup();
+  let unhandled=0;
+  const observe=()=>{unhandled++};
+  process.on('unhandledRejection',observe);
+  try{
+    await assert.rejects(()=>updateProtectedFinance(A,session,
+      async()=>{await Promise.resolve();throw Error('mutator rejected unexpectedly')}),/Асинхронные операции/);
+    // Give Node a full turn in which any unhandled rejection would be emitted.
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(unhandled,0);
+    const stored=await readProtectedFinance(A,session);
+    assert.equal(stored.epoch,0);
+    assert.deepEqual(stored.outbox,[{id:'pending-1',amountCents:123}]);
+  }finally{process.off('unhandledRejection',observe)}
+});

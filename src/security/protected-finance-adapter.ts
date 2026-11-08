@@ -78,8 +78,12 @@ export async function updateProtectedFinance(
   const outbox = structuredClone(selected.outbox);
   const conflicts = structuredClone(selected.conflicts);
   const outcome = change(draft, outbox, conflicts) as unknown;
-  if (outcome && typeof outcome === 'object' && 'then' in outcome &&
-    typeof outcome.then === 'function') {
+  if (outcome && (typeof outcome === 'object' || typeof outcome === 'function') &&
+    'then' in outcome && typeof outcome.then === 'function') {
+    // A forbidden async callback may already return a rejected Promise. Attach
+    // a rejection handler before refusing the mutation, otherwise an orphaned
+    // rejection can crash Node or trigger browser unhandledrejection.
+    void Promise.resolve(outcome).catch(() => {});
     throw Error('Асинхронные операции внутри финансового обновления запрещены');
   }
   const updated = migrateState(draft);
