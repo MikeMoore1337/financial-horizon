@@ -167,6 +167,14 @@ describe('approved accounts interface (feature not exposed)', () => {
     expect(send).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('button', { name: 'Подтвердить перевод' }).hasAttribute('disabled')).toBe(true);
   });
+  it('keeps focus within the transfer dialog and supports Escape', () => {
+    render(<Accounts {...props()} />);
+    fireEvent.click(within(screen.getByText('Основной').closest('article')!).getByRole('button', { name: 'Перевести' }));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
   it('never emits two mutations on rapid repeated confirmation', async () => {
     let finish: (() => void) | undefined;
     const onTransfer = vi.fn().mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
