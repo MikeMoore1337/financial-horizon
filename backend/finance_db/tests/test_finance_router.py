@@ -126,7 +126,7 @@ def test_session_bridge_is_scoped_cookie_and_logout_revokes_entire_finance_acces
     auth = next(c for c in cookies if c.name == "fh_email_session")
     assert auth.path == "/api/auth"
     assert finance.path == "/api/finance/v1"
-    assert finance.get_nonstandard_attr("HttpOnly") is not None
+    assert "HttpOnly" in finance._rest
     assert finance.get_nonstandard_attr("SameSite") == "strict"
     assert result.headers["cache-control"].find("no-store") >= 0
 
