@@ -16,13 +16,6 @@ function matchesFinancialFields(saved: ExistingBankMovement, current: Normalized
     (saved.currency === undefined || saved.currency === current.currency);
 }
 
-function sameTransfer(a: NormalizedBankOperation, b: NormalizedBankOperation): boolean {
-  if (a.kind !== 'transfer' || b.kind !== 'transfer') return false;
-  return a.date === b.date && a.amountCents === b.amountCents && (
-    (a.accountId === b.accountId && a.targetAccountId === b.targetAccountId) ||
-    (a.accountId === b.targetAccountId && b.accountId === a.targetAccountId)
-  );
-}
 function possibleTransfer(m: ExistingBankMovement, n: NormalizedBankOperation): boolean {
   if (m.kind !== 'transfer' || n.kind !== 'transfer') return false;
   if (m.date !== n.date || m.amountCents !== n.amountCents) return false;
@@ -36,16 +29,51 @@ function possibleTransfer(m: ExistingBankMovement, n: NormalizedBankOperation): 
   );
 }
 
-/** Exact source keys/external IDs are duplicates; fuzzy matching needs user review. */
+/** Exact source keys/external IDs are duplicates; fuzzy matching needs user review.
+ * Indexes make reconciliation proportional to the file + relevant matches,
+ * rather than scanning the entire ledger once per statement row.
+ */
 export function reconcileBankStatement(
   preview: BankImportPreview, existing: readonly ExistingBankMovement[],
 ): ReconciliationResult {
-  const active = existing.filter(x => !x.voidedAt);
-  const previous: NormalizedBankOperation[] = [];
+  const bySource = new Map<string, ExistingBankMovement[]>();
+  const byBankId = new Map<string, ExistingBankMovement[]>();
+  const byFingerprint = new Map<string, ExistingBankMovement[]>();
+  const byTransferAccount = new Map<string, ExistingBankMovement[]>();
+  const ledgerOrder = new Map<ExistingBankMovement, number>();
+  const bucket = <T>(map: Map<string, T[]>, key: string, item: T) => {
+    const items = map.get(key);
+    if (items) items.push(item);
+    else map.set(key, [item]);
+  };
+  const identity = (...fields: (string | number | null | undefined)[]) =>
+    JSON.stringify(fields);
+  for (const movement of existing) {
+    if (movement.voidedAt) continue;
+    ledgerOrder.set(movement, ledgerOrder.size);
+    if (movement.sourceKey) bucket(bySource, movement.sourceKey, movement);
+    if (movement.externalId) {
+      bucket(byBankId, identity(movement.accountId, movement.externalId), movement);
+    }
+    if (movement.fingerprint) bucket(byFingerprint, movement.fingerprint, movement);
+    if (movement.kind === 'transfer') {
+      bucket(byTransferAccount,
+        identity(movement.date, movement.amountCents, movement.accountId), movement);
+    }
+  }
+
+  const seenBankIds = new Set<string>();
+  const seenFingerprints = new Set<string>();
+  const seenTransfers = new Set<string>();
+  const transferIdentity = (op: NormalizedBankOperation) => op.kind === 'transfer'
+    ? identity(op.date, op.amountCents,
+        ...[op.accountId, op.targetAccountId || ''].sort())
+    : null;
+
   const rows: ReconciledBankRow[] = preview.rows.map(row => {
     const op = row.operation;
     if (!op) return { ...row, status: 'invalid', existingIds: [] };
-    const sourceMatches = active.filter(x => x.sourceKey === op.sourceKey);
+    const sourceMatches = bySource.get(op.sourceKey) || [];
     if (sourceMatches.length) {
       const differs = sourceMatches.length !== 1 || sourceMatches.some(x =>
         !matchesFinancialFields(x, op) ||
@@ -60,8 +88,8 @@ export function reconcileBankStatement(
         } as const] : row.warnings,
       };
     }
-    const bankIdMatches = op.externalId ? active.filter(x =>
-      x.externalId === op.externalId && x.accountId === op.accountId) : [];
+    const bankKey = op.externalId ? identity(op.accountId, op.externalId) : null;
+    const bankIdMatches = bankKey ? byBankId.get(bankKey) || [] : [];
     if (bankIdMatches.length) {
       const changed = bankIdMatches.length !== 1 ||
         bankIdMatches.some(x => !matchesFinancialFields(x, op));
@@ -74,8 +102,7 @@ export function reconcileBankStatement(
         } as const] : row.warnings,
       };
     }
-    if (op.externalId && previous.some(x => x.externalId === op.externalId &&
-      x.accountId === op.accountId)) {
+    if (bankKey && seenBankIds.has(bankKey)) {
       return {
         ...row, status: 'invalid', existingIds: [],
         warnings: [...row.warnings, {
@@ -84,15 +111,31 @@ export function reconcileBankStatement(
         }],
       };
     }
-    const suspicious = active.filter(x =>
-      x.fingerprint === op.fingerprint || possibleTransfer(x, op),
-    );
-    const repeatInFile = previous.some(x => x.fingerprint === op.fingerprint || sameTransfer(x, op));
-    previous.push(op);
-    if (suspicious.length || repeatInFile) return {
-      ...row, status: 'possible-duplicate',
-      existingIds: [...new Set(suspicious.map(x => x.id))],
-    };
+
+    const candidates = new Set(byFingerprint.get(op.fingerprint) || []);
+    if (op.kind === 'transfer') {
+      for (const accountId of [op.accountId, op.targetAccountId]) {
+        if (!accountId) continue;
+        for (const candidate of byTransferAccount.get(
+          identity(op.date, op.amountCents, accountId)) || []) {
+          if (possibleTransfer(candidate, op)) candidates.add(candidate);
+        }
+      }
+    }
+    const suspicious = [...candidates].sort((a, b) =>
+      (ledgerOrder.get(a) ?? 0) - (ledgerOrder.get(b) ?? 0));
+    const transferKey = transferIdentity(op);
+    const repeatInFile = seenFingerprints.has(op.fingerprint) ||
+      (transferKey !== null && seenTransfers.has(transferKey));
+    if (bankKey) seenBankIds.add(bankKey);
+    seenFingerprints.add(op.fingerprint);
+    if (transferKey !== null) seenTransfers.add(transferKey);
+    if (suspicious.length || repeatInFile) {
+      return {
+        ...row, status: 'possible-duplicate',
+        existingIds: [...new Set(suspicious.map(x => x.id))],
+      };
+    }
     return { ...row, status: 'ready', existingIds: [] };
   });
   return {
