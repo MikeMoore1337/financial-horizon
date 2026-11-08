@@ -189,7 +189,8 @@ test('recovery key after a new instance; wrong password remains locked', async (
   const receipt = await createAtomicEncryptedCandidate(USER_A, PASS, SOURCE);
   const failed = new LocalBudgetSession();
   failed.selectScope(USER_A);
-  await assert.rejects(() => failed.unlock(await getAtomicEncryptedKeyset(USER_A),
+  const keyset = await getAtomicEncryptedKeyset(USER_A);
+  await assert.rejects(() => failed.unlock(keyset,
     {passphrase:'incorrect local phrase 2026'}), /Неверный ключ/);
   assert.equal(failed.state, 'locked');
   const recovered = await unlock(USER_A, {recoveryKey:receipt.recoveryKey});
@@ -256,4 +257,16 @@ test('no fetch/network for offline read and updates', async () => {
     await compareAndSwapAtomicEncryptedCandidate(USER_A, session, 0, 2, SOURCE);
     assert.equal((await readAtomicEncryptedCandidate(USER_A, session)).epoch, 1);
   } finally {globalThis.fetch = priorFetch;}
+});
+
+
+test('nested values that would silently disappear during JSON serialization are rejected', async () => {
+  const db = mount();
+  await assert.rejects(() => createAtomicEncryptedCandidate(USER_A, PASS,
+    {...clone(SOURCE), snapshot:{title:'ok', ignored:undefined}}), /JSON/);
+  await assert.rejects(() => createAtomicEncryptedCandidate(USER_A, PASS,
+    {...clone(SOURCE), snapshot:{title:'ok', value:Infinity}}), /JSON/);
+  await assert.rejects(() => createAtomicEncryptedCandidate(USER_A, PASS,
+    {...clone(SOURCE), snapshot:new Map([['title','lost']])}), /JSON-объектом/);
+  assert.equal(db.tables.get('bundles').size,0);
 });

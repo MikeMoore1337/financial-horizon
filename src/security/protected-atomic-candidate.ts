@@ -63,6 +63,33 @@ function validContents(value: ProtectedAtomicContents): void {
     !Array.isArray(value.outbox) || !Array.isArray(value.conflicts)) {
     throw Error('Некорректное содержимое защищённой локальной копии');
   }
+  assertPureJson(value);
+}
+/** Reject lossy serialization: undefined, nonfinite values, custom objects or cycles. */
+function assertPureJson(value: unknown, depth = 0, visited = new Set<object>()): void {
+  if (depth > 96) throw Error('Слишком глубокие финансовые данные');
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
+  if (typeof value === 'number' && Number.isFinite(value)) return;
+  if (typeof value !== 'object') throw Error('Недопустимое значение финансового JSON');
+  if (visited.has(value)) throw Error('Циклические ссылки в финансовых данных');
+  visited.add(value);
+  if (Array.isArray(value)) {
+    if (Object.keys(value).length !== value.length ||
+      Object.getOwnPropertySymbols(value).length) throw Error('Некорректный финансовый массив');
+    for (let i = 0; i < value.length; i++) {
+      if (!Object.hasOwn(value, i)) throw Error('Пропущенный элемент финансового массива');
+      assertPureJson(value[i], depth + 1, visited);
+    }
+  } else {
+    const prototype = Object.getPrototypeOf(value);
+    if ((prototype !== Object.prototype && prototype !== null) ||
+      Object.keys(value).length !== Object.getOwnPropertyNames(value).length ||
+      Object.getOwnPropertySymbols(value).length) {
+      throw Error('Финансовые данные должны быть обычным JSON-объектом');
+    }
+    for (const entry of Object.values(value)) assertPureJson(entry, depth + 1, visited);
+  }
+  visited.delete(value);
 }
 function exactKeys(value: unknown, names: readonly string[]): void {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
