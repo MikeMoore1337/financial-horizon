@@ -71,6 +71,50 @@ funds*, not external income or spending. #36 must combine these proposals with
 installments, and avoid counting both a goal proposal and its linked actual
 ledger operation. Actual expenses remain sourced exclusively from #33.
 
+## Draft mapping to open #33 / #36 contracts (NOT CONNECTED)
+
+These types were checked against **open, not yet merged** PR #84 (`src/domain/accounts/ledger.ts`)
+and PR #103 (`src/domain/cashflow/types.ts`). This is a proposed adapter contract,
+**not** an assertion that their APIs or persistence protocols are finalized:
+
+| Goal domain action | Verified #33 ledger operation | #36 projection input |
+| --- | --- | --- |
+| Virtual contribution | None; validate shared unallocated funds | One `ReserveMovementDto` `{ kind: 'allocate', status: 'actual' }` after a durable goal event |
+| Virtual release for later spending | None | One `{ kind: 'release', status: 'actual' }`; any separate purchase comes only from the booked #33 expense |
+| Real contribution between own accounts | An already committed `LedgerTransaction.kind: 'transfer'` with exactly two opposite account postings | Its transfer is not an external inflow/outflow; the **earmark** is one `allocate` movement, never a `BookedFlowDto` expense |
+| Withdrawal using own-account transfer | One verified transfer; zero external cashflow | The goal `release` is a reserve movement, not income |
+| Actual purchase using goal savings | One verified `expense`/posted payment and matching goal use | One cash expense via #33 actuals, plus one `release` of earmarking; no second expense |
+| Correct a virtual movement | Append-only void/reversal in the goal journal | Emit only the net canonical effective reserve event(s), never both the voided event and its compensation |
+| Correct a linked ledger movement | One already committed `reversal` referencing the original transaction | Normalize the pair to one logical corrected accounting fact and one reservation correction |
+| Unpaid planned contribution | No account posting | `{ kind: 'allocate', status: 'planned' }` sourced from `goalForecastReservations()` only |
+
+**Adapter invariants (required before enabling user writes):**
+
+1. The mapping of `GoalLedgerLink.expectedLedgerKind` to the actual #33
+   `LedgerTransaction.kind` is explicit (`account-transfer` -> `transfer`,
+   `expense` -> confirmed expense); reject unrelated kinds such as `adjustment`
+   or unverified `payment` even if signed amounts appear to match.
+2. The server must derive the authenticated profile and validate all transaction
+   IDs, posting account IDs, dates, reversal relationships, amounts, and ownership
+   from one authoritative revision. A client-supplied `ledgerMovementId` alone
+   is never confirmation. Link writes need atomicity or resumable reconciliation.
+3. Assign a globally unique deterministic movement ID to each emitted #36
+   `ReserveMovementDto` to prevent replays from duplicating reserves. Planned
+   future allocations represent only the **unpaid portion**, including any
+   prepayment assigned to that installment. Future events are estimates, not facts.
+4. A confirmed opening goal allocation from before the #36 `openingDate` belongs
+   in **one** `openingReservedCents` snapshot if actually earmarked; never include
+   it again as an actual `allocate` event from that date forward. Reconcile
+   voluntary goals and mandatory #6 reservations against the same account-level
+   available balance, without summing either into total bank cash.
+5. On goal withdrawal for a purchase, a ledger expense reduces bank cash once;
+   a goal release reduces locked funds once. If bank expense and release occur on
+   different dates, their ordering and observed balance must remain explicit.
+6. The current #36 `CashflowInputDto` and #33 domain are independent, read-only
+   candidates. Do **not** import their PR-only files, expose bank details in a
+   preview, or attach these DTOs to IndexedDB/React until joint contracts,
+   migrations, authorization and encrypted backup tests are reviewed.
+
 **Release:** This PR is domain-only. Production UI, migration, account linkage
 and backup/device QA remain separately gated behind #33/#36, approved design,
 independent review, exact-SHA CI, and an observed deployment/rollback receipt.
