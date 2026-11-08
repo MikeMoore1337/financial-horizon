@@ -51,6 +51,51 @@ on a protected copy, offline migration in a release window, exact-HEAD
 security review, secure routing, and post-release testing are complete.
 No public OAuth buttons have been activated by this staging-only operation.
 
+## Fresh production SQLite snapshot and restore rehearsal - 2026-11-08
+
+Owner confirmed the staged OAuth config binding on live host vps1777112993:
+`LIVE_DATABASE_PREFLIGHT=PASS`, `OAUTH_DB_MATCH=YES`, `BIND_STATUS=PASS`,
+`ROOT_ONLY_ENV_BACKUP=CREATED`, `OAUTH_FLAGS_REMAIN_OFF=YES`,
+`TELEGRAM_DISABLED=YES`, `SERVICES_RESTARTED=NO`, `DATABASE_MIGRATED=NO`,
+`CADDY_CHANGED=NO`. This is env-only staging, NOT the live schema migration.
+
+Next approved **non-disruptive** operation: fresh consistent backup +
+restore test of existing production auth SQLite. It uses only the database
+path discovered from the active `fh-email-auth.service` MainPID, validates
+email/OAuth environment agreement, privacy and all OAuth flags OFF, checks
+the seven-column pre-OAuth users schema, FK and integrity, and takes an online
+SQLite backup into a unique root-only 0600 file in
+`/var/backups/financial-horizon/`. A temporary private clone is restored
+from that snapshot and validated (full integrity, FK, schema, table counts
+and checksum). The clone is removed; the verified backup is retained.
+Financial IndexedDB is never accessed and the live SQLite is never written.
+
+Pinned source commit: `01f4a4ea1c24219a3c1bb2ecf3eccea60666c8dc`
+
+SHA-256 script: `081d30981b0e35d309515d28904e049d91a25e95176f0cedfb3c6721a75d5679`
+
+```bash
+sudo curl -fsSL \
+  https://raw.githubusercontent.com/MikeMoore1337/financial-horizon/01f4a4ea1c24219a3c1bb2ecf3eccea60666c8dc/scripts/fh_oauth_backup_drill.py \
+  -o /root/fh_oauth_backup_drill.py
+echo '081d30981b0e35d309515d28904e049d91a25e95176f0cedfb3c6721a75d5679  /root/fh_oauth_backup_drill.py' | sudo sha256sum --check
+sudo chmod 600 /root/fh_oauth_backup_drill.py
+sudo python3 /root/fh_oauth_backup_drill.py --preflight
+# Only after BACKUP_STATUS=READY:
+sudo python3 /root/fh_oauth_backup_drill.py --backup-drill
+```
+
+Expected: `CONSISTENT_BACKUP=CREATED`, `RESTORE_DRILL=PASS`,
+`SCHEMA_AND_FK=PASS`, `BACKUP_STATUS=PASS`,
+`LIVE_DATABASE_MODIFIED=NO`, `SERVICES_RESTARTED=NO`, `CADDY_CHANGED=NO`.
+
+**Limits**: this proves local snapshot consistency and a read-only restore
+but does NOT rehearse the migration script, verify remote/off-host recovery,
+test provider logout, enable public OAuth, or approve production rollout.
+Still require an off-host protected snapshot, offline migration rehearsal
+on a disposable restored copy with exact migration HEAD, and an explicit
+operator release gate before changing live SQLite or Caddy.
+
 Дата read-only инфраструктурного осмотра: 2026-11-07. **NO_GO для активации OAuth.** Это документ технической готовности, не квитанция деплоя или реального входа. Секреты не сохранялись в GitHub.
 
 ## Подтверждено на живом VPS (без изменения активного сервиса)
