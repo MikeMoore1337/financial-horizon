@@ -399,3 +399,33 @@ def test_finance_command_auth_session_lookup_uses_worker_not_asgi_event_loop():
         assert response.status_code == 422
         assert observed, "Finance scope must resolve the actual session"
         assert observed[-1] != event_loop_thread
+
+
+def test_chunked_finance_request_rejects_oversized_stream_without_length(auth_finance):
+    client, _, mail, _, _, _ = auth_finance
+    authenticate(client, mail)
+    assert bootstrap(client).status_code == 200
+
+    def large_chunks():
+        yield b'{"schema_version":1,'
+        for _ in range(10):
+            yield b" " * 4096
+
+    response = client.post("/api/finance/v1/commands", content=large_chunks(),
+                           headers={"Origin": ORIGIN,
+                                    "Content-Type": "application/json",
+                                    "Transfer-Encoding": "chunked"})
+    assert response.status_code == 413
+    assert response.json()["code"] == "invalid_command"
+    assert "Слишком большой запрос" in response.text
+
+    def small_chunks():
+        yield b"{"
+        yield b"}"
+
+    tiny = client.post("/api/finance/v1/commands", content=small_chunks(),
+                       headers={"Origin": ORIGIN,
+                                "Content-Type": "application/json",
+                                "Transfer-Encoding": "chunked"})
+    assert tiny.status_code == 422
+    assert tiny.json()["code"] == "invalid_command"
