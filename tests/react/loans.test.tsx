@@ -43,6 +43,20 @@ const sample: LoansProps = {
     scheduleCount: 1,
     scheduleSource: '<schedule.csv>',
     schedule: [{ date: '2026-12-15', amountCents: 20000, balanceCents: 730000 }],
+    legacySnapshot: {
+      openingCents: 1_000_000,
+      paymentCents: 507_410,
+      termMonths: 2,
+      dueDay: 1,
+      asOfDate: '2026-01-01',
+    } as NonNullable<LoansProps['selected']>['legacySnapshot'],
+    bankSchedule: [
+      { date: '2026-02-01', amountCents: 507_410, interestCents: 10_192,
+        principalCents: 497_218, balanceCents: 502_782 },
+      { date: '2026-03-01', amountCents: 507_410, interestCents: 4_628,
+        principalCents: 502_782, balanceCents: 0 },
+    ],
+    stateRevision: 1,
     history: [
       { id: 'p1', date: '2026-11-15', amountCents: 20000 },
       { id: 'p2', date: '2026-10-15', amountCents: 20000, voidedAt: '2026-10-16T00:00:00Z' },
