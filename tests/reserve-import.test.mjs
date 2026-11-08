@@ -73,6 +73,13 @@ for (const [text, reason] of [
   ['раз в 3 месяца (либо 6 месяцев)', 'ambiguous'],
   ['раз в 3 месяца и полгода', 'unsupported'],
   ['раз в 3 месяца, 6 месяцев', 'unsupported'],
+  ['ежегодно или 6 месяцев', 'ambiguous'],
+  ['ежемесячно или 3 месяца', 'ambiguous'],
+  ['ежегодно и 6 месяцев', 'unsupported'],
+  ['ежемесячно 3 месяца', 'unsupported'],
+  ['ежегодно (или 2 года)', 'ambiguous'],
+  ['каждый год или 6 месяцев', 'ambiguous'],
+  ['раз в полгода или 3 месяца', 'ambiguous'],
 ]) {
   test('XLSX uncertain recurrence stays invalid, never auto-converted: ' + text.slice(0, 40), () => {
     assert.deepEqual(parseReservePeriodHint(text), invalid(reason));
