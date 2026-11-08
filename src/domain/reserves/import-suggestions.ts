@@ -50,7 +50,7 @@ export function parseReservePeriodHint(note: unknown): ReservePeriodHint | null 
   // A bare "год оплаты" or "месяц оплаты" is explanatory metadata, not
   // a second duration. Require a numeric count unless there is an explicit
   // alternative connector before a standalone duration word.
-  const trailingCountedPeriod = /^\s*\(?\s*(?:(или|либо|и|\/|\+|,)\s*)?(?:[-+]?\d+(?:[.,]\d+)?|один|одна|одно|два|две|три|четыре|пять)\s*(?:мес(?:\.|яц(?:ев|а)?)?|год(?:а|ов)?|лет|квартал(?:а|ов)?|полгода|недел(?:я|и|ь|ю)|дн(?:я|ей|и))(?!\p{L})/u;
+  const trailingCountedPeriod = /^\s*\(?\s*(?:(или|либо|и|\/|\+|,)\s*)?(?:[-+]?\d+(?:[.,]\d+)?|один|одна|одно|два|две|три|четыре|пять)\s*(?:мес(?:\.|яц(?:ев|а)?)?|год(?:а|ов)?|лет|квартал(?:а|ов)?|полгода|недел(?:я|и|ь|ю)|дн(?:я|ей|и)|день)(?!\p{L})/u;
   const trailingNamedAlternative = /^\s*\(?\s*(или|либо|и|\/|\+)\s*(?:месяц|год|полгода|квартал)(?!\p{L})/u;
   const invalidContinuation = (rest: string): ReservePeriodHint | null => {
     const tail = trailingCountedPeriod.exec(rest) ?? trailingNamedAlternative.exec(rest);
