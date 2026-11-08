@@ -1,7 +1,19 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
-import { prepareReadOnlyLoanComparison, type ReadOnlyLoanComparison } from '../domain/loans/read-only-comparison.ts';
-import type { ExplicitLoanTermsSelection, StoredLoanSnapshot } from '../domain/loans/legacy-preview.ts';
-import type { BankScheduleRow, DayCount, Rounding, ScheduleDifference, ScheduleType } from '../domain/loans/types.ts';
+import {
+  prepareReadOnlyLoanComparison,
+  type ReadOnlyLoanComparison,
+} from '../domain/loans/read-only-comparison.ts';
+import type {
+  ExplicitLoanTermsSelection,
+  StoredLoanSnapshot,
+} from '../domain/loans/legacy-preview.ts';
+import type {
+  BankScheduleRow,
+  DayCount,
+  Rounding,
+  ScheduleDifference,
+  ScheduleType,
+} from '../domain/loans/types.ts';
 import { parseSchedule } from '../../schedule.js';
 import './loan-comparison.css';
 
@@ -47,7 +59,10 @@ function approvedRules(form: HTMLFormElement): ExplicitLoanTermsSelection {
   }
   const rate = fields.get('annualRate');
   if (typeof rate !== 'string') throw new RangeError('Укажите номинальную ставку');
-  if (fields.get('agreementConfirmed') !== 'on' || fields.get('openingBalanceDateConfirmed') !== 'on') {
+  if (
+    fields.get('agreementConfirmed') !== 'on' ||
+    fields.get('openingBalanceDateConfirmed') !== 'on'
+  ) {
     throw new RangeError('Подтвердите условия договора и дату чистого основного долга');
   }
   return {
@@ -64,30 +79,67 @@ function approvedRules(form: HTMLFormElement): ExplicitLoanTermsSelection {
 }
 
 function Delta({ value, rubles }: { value: number | null; rubles: (cents: number) => string }) {
-  return value === null ? <span className="loan-comparison-unknown">Нет данных</span>
-    : <span className={value === 0 ? '' : 'loan-comparison-delta'}>
-        {value < 0 ? '−' : value > 0 ? '+' : ''}{rubles(Math.abs(value))}
-      </span>;
+  return value === null ? (
+    <span className="loan-comparison-unknown">Нет данных</span>
+  ) : (
+    <span className={value === 0 ? '' : 'loan-comparison-delta'}>
+      {value < 0 ? '−' : value > 0 ? '+' : ''}
+      {rubles(Math.abs(value))}
+    </span>
+  );
 }
 
-function DifferenceRow({ row, rubles, formatDate }: {
+function DifferenceRow({
+  row,
+  rubles,
+  formatDate,
+}: {
   row: ScheduleDifference;
   rubles: LoanReadOnlyComparisonProps['rubles'];
   formatDate: LoanReadOnlyComparisonProps['formatDate'];
 }) {
-  return <tr>
-    <td>{row.period}</td>
-    <td>{row.imported?.date ? formatDate(row.imported.date) : row.calculated?.date ? formatDate(row.calculated.date) : 'Нет данных'}</td>
-    <td>{row.dateDifferenceDays === null ? 'Нет данных' : row.dateDifferenceDays === 0 ? '0' : String(row.dateDifferenceDays)}</td>
-    <td><Delta value={row.amountDeltaCents} rubles={rubles} /></td>
-    <td><Delta value={row.interestDeltaCents} rubles={rubles} /></td>
-    <td><Delta value={row.principalDeltaCents} rubles={rubles} /></td>
-    <td><Delta value={row.balanceDeltaCents} rubles={rubles} /></td>
-    <td><Delta value={row.bankUnallocatedCents} rubles={rubles} /></td>
-  </tr>;
+  return (
+    <tr>
+      <td>{row.period}</td>
+      <td>
+        {row.imported?.date
+          ? formatDate(row.imported.date)
+          : row.calculated?.date
+            ? formatDate(row.calculated.date)
+            : 'Нет данных'}
+      </td>
+      <td>
+        {row.dateDifferenceDays === null
+          ? 'Нет данных'
+          : row.dateDifferenceDays === 0
+            ? '0'
+            : String(row.dateDifferenceDays)}
+      </td>
+      <td>
+        <Delta value={row.amountDeltaCents} rubles={rubles} />
+      </td>
+      <td>
+        <Delta value={row.interestDeltaCents} rubles={rubles} />
+      </td>
+      <td>
+        <Delta value={row.principalDeltaCents} rubles={rubles} />
+      </td>
+      <td>
+        <Delta value={row.balanceDeltaCents} rubles={rubles} />
+      </td>
+      <td>
+        <Delta value={row.bankUnallocatedCents} rubles={rubles} />
+      </td>
+    </tr>
+  );
 }
 
-export function LoanReadOnlyComparison({ snapshot, bankSchedule, rubles, formatDate }: LoanReadOnlyComparisonProps) {
+export function LoanReadOnlyComparison({
+  snapshot,
+  bankSchedule,
+  rubles,
+  formatDate,
+}: LoanReadOnlyComparisonProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [accepted, setAccepted] = useState<ExplicitLoanTermsSelection | null>(null);
   const [result, setResult] = useState<ReadOnlyLoanComparison | null>(null);
@@ -119,8 +171,11 @@ export function LoanReadOnlyComparison({ snapshot, bankSchedule, rubles, formatD
   }, [dialogOpen]);
 
   const rows = localRows ?? (bankSchedule.length ? bankSchedule : null);
-  const sourceLabel = localRows ? 'Выбранный локальный CSV' :
-    bankSchedule.length ? 'Ранее импортированный полный CSV' : 'Нет банковского графика';
+  const sourceLabel = localRows
+    ? 'Выбранный локальный CSV'
+    : bankSchedule.length
+      ? 'Ранее импортированный полный CSV'
+      : 'Нет банковского графика';
 
   const close = () => {
     setDialogOpen(false);
@@ -139,7 +194,8 @@ export function LoanReadOnlyComparison({ snapshot, bankSchedule, rubles, formatD
     try {
       const rules = approvedRules(event.currentTarget);
       const comparison = run(rules, rows);
-      if (comparison.status === 'needs-confirmation') throw new Error('Недостаточно договорных условий');
+      if (comparison.status === 'needs-confirmation')
+        throw new Error('Недостаточно договорных условий');
       setAccepted(rules);
       setError('');
       close();
@@ -164,7 +220,9 @@ export function LoanReadOnlyComparison({ snapshot, bankSchedule, rubles, formatD
       return;
     }
     try {
-      const parsed = parseSchedule(await file.text(), { allowMissingBalance: true }) as BankScheduleRow[];
+      const parsed = parseSchedule(await file.text(), {
+        allowMissingBalance: true,
+      }) as BankScheduleRow[];
       if (parsed.length > 1499) throw new RangeError('Too many bank rows');
       const next = accepted ? prepareReadOnlyLoanComparison(snapshot, accepted, parsed) : null;
       setLocalRows(parsed);
@@ -177,95 +235,304 @@ export function LoanReadOnlyComparison({ snapshot, bankSchedule, rubles, formatD
 
   const comparison = result?.bankComparison ?? null;
   const status = result?.status;
-  const message = status === 'numerical-match'
-    ? 'Числовое совпадение по заданным параметрам - правила банка отдельно не подтверждены.'
-    : status === 'incomplete-bank-evidence'
-      ? 'Известные поля совпали, но банковских данных недостаточно для полной сверки.'
-      : status === 'differences'
-        ? 'Обнаружены расхождения между расчётом и банковским графиком.'
-        : status === 'no-bank-schedule'
-          ? 'План рассчитан. Загрузите полный банковский CSV для сверки.'
-          : 'Правила банка не подтверждены. Действует прежний приблизительный прогноз.';
-  const statusClass = status === 'differences' ? 'is-different' :
-    status === 'incomplete-bank-evidence' || status === 'no-bank-schedule' ? 'is-incomplete' :
-      status === 'numerical-match' ? 'is-matching' : '';
+  const message =
+    status === 'numerical-match'
+      ? 'Числовое совпадение по заданным параметрам - правила банка отдельно не подтверждены.'
+      : status === 'incomplete-bank-evidence'
+        ? 'Известные поля совпали, но банковских данных недостаточно для полной сверки.'
+        : status === 'differences'
+          ? 'Обнаружены расхождения между расчётом и банковским графиком.'
+          : status === 'no-bank-schedule'
+            ? 'План рассчитан. Загрузите полный банковский CSV для сверки.'
+            : 'Правила банка не подтверждены. Действует прежний приблизительный прогноз.';
+  const statusClass =
+    status === 'differences'
+      ? 'is-different'
+      : status === 'incomplete-bank-evidence' || status === 'no-bank-schedule'
+        ? 'is-incomplete'
+        : status === 'numerical-match'
+          ? 'is-matching'
+          : '';
 
-  return <>
-    <section className="loan-comparison" aria-labelledby="loan-comparison-heading">
-      <div className="loan-comparison-head">
-        <div>
-          <h3 id="loan-comparison-heading">Сверка графика по договору</h3>
-          <p className="small-hint">Отдельный расчёт без изменения кредита, истории платежей и счетов.</p>
-        </div>
-        <span className="pill">{status ? 'Предварительный план' : 'Условия не подтверждены'}</span>
-      </div>
-      <p className="small-hint">Подтвердите банковские правила и сравните рассчитанные суммы с полным CSV. Совпадение цифр само по себе не подтверждает точность модели для банка.</p>
-      <div className="loan-comparison-actions">
-        <button ref={openButtonRef} type="button" className="button-primary" onClick={() => { setError(''); setDialogOpen(true); }}>Уточнить условия банка</button>
-        <button type="button" className="button-secondary" onClick={() => fileRef.current?.click()}>Выбрать CSV для сверки</button>
-        {localRows ? <button type="button" className="button-text" onClick={() => {
-          const fallback = bankSchedule.length ? bankSchedule : null;
-          setLocalRows(null);
-          setResult(accepted ? prepareReadOnlyLoanComparison(snapshot, accepted, fallback) : null);
-          setRowsVisible(25);
-        }}>Сбросить локальный CSV</button> : null}
-      </div>
-      <input ref={fileRef} type="file" accept=".csv,text/csv" aria-label="Локальный банковский CSV для сверки" hidden onChange={onCsv} />
-      <p className="small-hint" data-testid="loan-comparison-source">Источник: {sourceLabel}. Полный график используется только для расчёта на устройстве.</p>
-      {fileError ? <p role="alert" className="loan-comparison-error">{fileError}</p> : null}
-      <div className={'loan-comparison-status ' + statusClass} role="status" aria-live="polite">{message}</div>
-      {result?.plan ? <>
-        <div className="loan-comparison-metrics">
-          <div><span>Периодов рассчитано</span><strong>{result.plan.rows.length}</strong></div>
-          <div><span>Строк с расхождением</span><strong>{comparison ? comparison.mismatchedRows : 'Нет CSV'}</strong></div>
-          <div><span>Полнота банковских данных</span><strong>{comparison?.comparisonComplete ? 'Полная' : 'Не подтверждена'}</strong></div>
-        </div>
-        {comparison ? <>
-          <div className="loan-comparison-table-scroll" role="region" aria-label="Разницы рассчитанного и банковского графиков" tabIndex={0}>
-            <table className="compact-table">
-              <caption>Δ = расчёт минус банковский график, суммы в копейках через формат рублей</caption>
-              <thead><tr>
-                <th>Взнос</th><th>Дата банка</th><th>Δ дней</th><th>Δ платёж</th><th>Δ проценты</th><th>Δ тело</th><th>Δ остаток</th><th>Прочее банка</th>
-              </tr></thead>
-              <tbody>{comparison.rows.slice(0, rowsVisible).map(row =>
-                <DifferenceRow key={row.period} row={row} rubles={rubles} formatDate={formatDate} />)}</tbody>
-            </table>
+  return (
+    <>
+      <section className="loan-comparison" aria-labelledby="loan-comparison-heading">
+        <div className="loan-comparison-head">
+          <div>
+            <h3 id="loan-comparison-heading">Сверка графика по договору</h3>
+            <p className="small-hint">
+              Отдельный расчёт без изменения кредита, истории платежей и счетов.
+            </p>
           </div>
-          {comparison.rows.length > rowsVisible ? <button type="button" className="button-secondary" onClick={() => setRowsVisible(count => count + 25)}>Показать ещё строки</button> : null}
-          <p className="small-hint">Сравнено {comparison.rows.length} строк, отображено {Math.min(rowsVisible, comparison.rows.length)}. Нет данных - не ноль; комиссии не списываются повторно.</p>
-        </> : null}
-        <p className="small-hint">Фактические платежи не переносились в новый расчёт. Банковская идентичность не подтверждена.</p>
-      </> : null}
-    </section>
+          <span className="pill">
+            {status ? 'Предварительный план' : 'Условия не подтверждены'}
+          </span>
+        </div>
+        <p className="small-hint">
+          Подтвердите банковские правила и сравните рассчитанные суммы с полным CSV. Совпадение цифр
+          само по себе не подтверждает точность модели для банка.
+        </p>
+        <div className="loan-comparison-actions">
+          <button
+            ref={openButtonRef}
+            type="button"
+            className="button-primary"
+            onClick={() => {
+              setError('');
+              setDialogOpen(true);
+            }}
+          >
+            Уточнить условия банка
+          </button>
+          <button
+            type="button"
+            className="button-secondary"
+            onClick={() => fileRef.current?.click()}
+          >
+            Выбрать CSV для сверки
+          </button>
+          {localRows ? (
+            <button
+              type="button"
+              className="button-text"
+              onClick={() => {
+                const fallback = bankSchedule.length ? bankSchedule : null;
+                setLocalRows(null);
+                setResult(
+                  accepted ? prepareReadOnlyLoanComparison(snapshot, accepted, fallback) : null,
+                );
+                setRowsVisible(25);
+              }}
+            >
+              Сбросить локальный CSV
+            </button>
+          ) : null}
+        </div>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".csv,text/csv"
+          aria-label="Локальный банковский CSV для сверки"
+          hidden
+          onChange={onCsv}
+        />
+        <p className="small-hint" data-testid="loan-comparison-source">
+          Источник: {sourceLabel}. Полный график используется только для расчёта на устройстве.
+        </p>
+        {fileError ? (
+          <p role="alert" className="loan-comparison-error">
+            {fileError}
+          </p>
+        ) : null}
+        <div className={'loan-comparison-status ' + statusClass} role="status" aria-live="polite">
+          {message}
+        </div>
+        {result?.plan ? (
+          <>
+            <div className="loan-comparison-metrics">
+              <div>
+                <span>Периодов рассчитано</span>
+                <strong>{result.plan.rows.length}</strong>
+              </div>
+              <div>
+                <span>Строк с расхождением</span>
+                <strong>{comparison ? comparison.mismatchedRows : 'Нет CSV'}</strong>
+              </div>
+              <div>
+                <span>Полнота банковских данных</span>
+                <strong>{comparison?.comparisonComplete ? 'Полная' : 'Не подтверждена'}</strong>
+              </div>
+            </div>
+            {comparison ? (
+              <>
+                <div
+                  className="loan-comparison-table-scroll"
+                  role="region"
+                  aria-label="Разницы рассчитанного и банковского графиков"
+                  tabIndex={0}
+                >
+                  <table className="compact-table">
+                    <caption>
+                      Δ = расчёт минус банковский график, суммы в копейках через формат рублей
+                    </caption>
+                    <thead>
+                      <tr>
+                        <th>Взнос</th>
+                        <th>Дата банка</th>
+                        <th>Δ дней</th>
+                        <th>Δ платёж</th>
+                        <th>Δ проценты</th>
+                        <th>Δ тело</th>
+                        <th>Δ остаток</th>
+                        <th>Прочее банка</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {comparison.rows.slice(0, rowsVisible).map((row) => (
+                        <DifferenceRow
+                          key={row.period}
+                          row={row}
+                          rubles={rubles}
+                          formatDate={formatDate}
+                        />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {comparison.rows.length > rowsVisible ? (
+                  <button
+                    type="button"
+                    className="button-secondary"
+                    onClick={() => setRowsVisible((count) => count + 25)}
+                  >
+                    Показать ещё строки
+                  </button>
+                ) : null}
+                <p className="small-hint">
+                  Сравнено {comparison.rows.length} строк, отображено{' '}
+                  {Math.min(rowsVisible, comparison.rows.length)}. Нет данных - не ноль; комиссии не
+                  списываются повторно.
+                </p>
+              </>
+            ) : null}
+            <p className="small-hint">
+              Фактические платежи не переносились в новый расчёт. Банковская идентичность не
+              подтверждена.
+            </p>
+          </>
+        ) : null}
+      </section>
 
-    <dialog ref={dialogRef} className="loan-comparison-dialog" aria-labelledby="loan-comparison-dialog-title" onCancel={() => setDialogOpen(false)}>
-      <div className="loan-comparison-dialog-head">
-        <div><span className="eyebrow">Только предварительный расчёт</span><h2 id="loan-comparison-dialog-title">Условия банка</h2></div>
-        <button className="button-secondary" type="button" aria-label="Закрыть условия банка" onClick={close}>Закрыть</button>
-      </div>
-      <form onSubmit={onSubmit}>
-        <div className="loan-comparison-dialog-body">
-          <p className="small-hint">Укажите только подтверждённые договором значения. Сохранённая дата и сумма долга не изменяются; при неверной дате сперва исправьте исходный кредит отдельно.</p>
-          <div className="loan-comparison-fields">
-            <label>Дата чистого основного долга<input type="date" value={snapshot.asOfDate} readOnly aria-readonly="true" /></label>
-            <label>Дата первого платежа<input type="date" name="firstDueDate" required /></label>
-            <label>День платежа по договору<input type="number" name="dueDayAnchor" min="1" max="31" step="1" required placeholder="1-31" /></label>
-            <label>Номинальная ставка, %<input type="text" name="annualRate" inputMode="decimal" required placeholder="Например, 9,5" /></label>
-            <label>Начисление дней<select name="dayCount" defaultValue="" required><option value="" disabled>Выберите правило</option>{DAY_COUNTS.map(x => <option key={x} value={x}>{x}</option>)}</select></label>
-            <label>Округление<select name="rounding" defaultValue="" required><option value="" disabled>Выберите правило</option><option value="HALF_UP">Половина вверх</option><option value="HALF_EVEN">Банковское округление</option></select></label>
-            <label>Тип графика<select name="scheduleType" defaultValue="" required><option value="" disabled>Выберите тип</option><option value="annuity">Аннуитетный</option><option value="differentiated">Дифференцированный</option></select></label>
-            <label>Основа платежа<select name="installmentBasis" defaultValue="" required><option value="" disabled>Выберите вариант</option><option value="fixed-contractual">Договорный фиксированный</option><option value="recalculate">Пересчитать платёж</option></select></label>
+      <dialog
+        ref={dialogRef}
+        className="loan-comparison-dialog"
+        aria-labelledby="loan-comparison-dialog-title"
+        onCancel={() => setDialogOpen(false)}
+      >
+        <div className="loan-comparison-dialog-head">
+          <div>
+            <span className="eyebrow">Только предварительный расчёт</span>
+            <h2 id="loan-comparison-dialog-title">Условия банка</h2>
           </div>
-          <label className="loan-comparison-confirm"><input type="checkbox" name="agreementConfirmed" required />Я проверил эти правила по договору.</label>
-          <label className="loan-comparison-confirm"><input type="checkbox" name="openingBalanceDateConfirmed" required />Сохранённый исходный остаток - чистый основной долг на указанную дату, без комиссий и просроченных процентов.</label>
-          {error ? <p className="loan-comparison-error" role="alert">{error}</p> : null}
-          <p className="small-hint">Проверка работает только в памяти браузера: без запросов в банк, записи в IndexedDB и изменения истории платежей.</p>
+          <button
+            className="button-secondary"
+            type="button"
+            aria-label="Закрыть условия банка"
+            onClick={close}
+          >
+            Закрыть
+          </button>
         </div>
-        <div className="loan-comparison-dialog-actions">
-          <button className="button-secondary" type="button" onClick={close}>Отмена</button>
-          <button className="button-primary" type="submit">Рассчитать и сравнить</button>
-        </div>
-      </form>
-    </dialog>
-  </>;
+        <form onSubmit={onSubmit}>
+          <div className="loan-comparison-dialog-body">
+            <p className="small-hint">
+              Укажите только подтверждённые договором значения. Сохранённая дата и сумма долга не
+              изменяются; при неверной дате сперва исправьте исходный кредит отдельно.
+            </p>
+            <div className="loan-comparison-fields">
+              <label>
+                Дата чистого основного долга
+                <input type="date" value={snapshot.asOfDate} readOnly aria-readonly="true" />
+              </label>
+              <label>
+                Дата первого платежа
+                <input type="date" name="firstDueDate" required />
+              </label>
+              <label>
+                День платежа по договору
+                <input
+                  type="number"
+                  name="dueDayAnchor"
+                  min="1"
+                  max="31"
+                  step="1"
+                  required
+                  placeholder="1-31"
+                />
+              </label>
+              <label>
+                Номинальная ставка, %
+                <input
+                  type="text"
+                  name="annualRate"
+                  inputMode="decimal"
+                  required
+                  placeholder="Например, 9,5"
+                />
+              </label>
+              <label>
+                Начисление дней
+                <select name="dayCount" defaultValue="" required>
+                  <option value="" disabled>
+                    Выберите правило
+                  </option>
+                  {DAY_COUNTS.map((x) => (
+                    <option key={x} value={x}>
+                      {x}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Округление
+                <select name="rounding" defaultValue="" required>
+                  <option value="" disabled>
+                    Выберите правило
+                  </option>
+                  <option value="HALF_UP">Половина вверх</option>
+                  <option value="HALF_EVEN">Банковское округление</option>
+                </select>
+              </label>
+              <label>
+                Тип графика
+                <select name="scheduleType" defaultValue="" required>
+                  <option value="" disabled>
+                    Выберите тип
+                  </option>
+                  <option value="annuity">Аннуитетный</option>
+                  <option value="differentiated">Дифференцированный</option>
+                </select>
+              </label>
+              <label>
+                Основа платежа
+                <select name="installmentBasis" defaultValue="" required>
+                  <option value="" disabled>
+                    Выберите вариант
+                  </option>
+                  <option value="fixed-contractual">Договорный фиксированный</option>
+                  <option value="recalculate">Пересчитать платёж</option>
+                </select>
+              </label>
+            </div>
+            <label className="loan-comparison-confirm">
+              <input type="checkbox" name="agreementConfirmed" required />Я проверил эти правила по
+              договору.
+            </label>
+            <label className="loan-comparison-confirm">
+              <input type="checkbox" name="openingBalanceDateConfirmed" required />
+              Сохранённый исходный остаток - чистый основной долг на указанную дату, без комиссий и
+              просроченных процентов.
+            </label>
+            {error ? (
+              <p className="loan-comparison-error" role="alert">
+                {error}
+              </p>
+            ) : null}
+            <p className="small-hint">
+              Проверка работает только в памяти браузера: без запросов в банк, записи в IndexedDB и
+              изменения истории платежей.
+            </p>
+          </div>
+          <div className="loan-comparison-dialog-actions">
+            <button className="button-secondary" type="button" onClick={close}>
+              Отмена
+            </button>
+            <button className="button-primary" type="submit">
+              Рассчитать и сравнить
+            </button>
+          </div>
+        </form>
+      </dialog>
+    </>
+  );
 }
