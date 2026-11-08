@@ -236,3 +236,25 @@ test('review P2: rejecting async financial mutation leaves no orphaned rejection
     assert.deepEqual(stored.outbox,[{id:'pending-1',amountCents:123}]);
   }finally{process.off('unhandledRejection',observe)}
 });
+
+test('encrypted v2 bundle rejects a v1 payload instead of silently migrating it on read',async()=>{
+  fakeNativeIdb();
+  const legacy=createSampleState();
+  legacy.version=1;
+  delete legacy.revision;
+  await createAtomicEncryptedCandidate(A,PASS,{
+    snapshot:legacy,outbox:[{id:'must-survive-mismatch'}],conflicts:[],
+  },2);
+  const session=new LocalBudgetSession();
+  session.selectScope(A);
+  await session.unlock(await getAtomicEncryptedKeyset(A),{passphrase:PASS});
+  try{
+    await assert.rejects(()=>readProtectedFinance(A,session),/Версия финансового снимка/);
+    await assert.rejects(()=>updateProtectedFinance(A,session,()=>{}),/Версия финансового снимка/);
+    // An invalid read must not rewrite the ciphertext or consume the queued item.
+    const raw=await readAtomicEncryptedCandidate(A,session);
+    assert.equal(raw.epoch,0);
+    assert.equal(raw.snapshot.version,1);
+    assert.deepEqual(raw.outbox,[{id:'must-survive-mismatch'}]);
+  }finally{session.logout()}
+});
