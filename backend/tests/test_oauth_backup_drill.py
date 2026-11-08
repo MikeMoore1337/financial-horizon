@@ -116,6 +116,7 @@ class SnapshotTests(unittest.TestCase):
                     mock.patch.object(drill, "EMAIL_CONFIG", folder / "email.env"), \
                     mock.patch.object(drill, "OAUTH_CONFIG", folder / "oauth.env"), \
                     mock.patch.object(drill, "BACKUPS", folder), \
+                    mock.patch.object(drill, "check_backup_directory"), \
                     mock.patch.object(drill, "root_private_text",
                                       side_effect=lambda p: (
                                           "FH_AUTH_DATABASE_PATH=" + str(db) + "\n"
