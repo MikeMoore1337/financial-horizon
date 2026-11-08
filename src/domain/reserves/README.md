@@ -52,7 +52,9 @@ of the existing XLSX importer. It recognizes Russian annotations such as
 `раз в 3 мес`, `ежегодно`, `каждые 2 года`, and validates 1..60 months.
 It returns a `suggestion` with `confirmationRequired: true` or an
 `invalid` status for conflicting, out-of-range, or explicitly unsupported
-periodicities (such as weeks, negative or fractional month counts); unrelated
+periodicities (such as weeks, negative or fractional month counts), and
+composite or alternative expressions like `1 год 6 месяцев` and
+`3 месяца или 6 месяцев`; unrelated
 descriptions without recurrence intent return `null`.
 
 **It does not create a reserve, alter an existing imported expense, infer
