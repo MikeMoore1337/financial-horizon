@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { LedgerState } from '../../src/domain/accounts/ledger.ts';
 import { Accounts, type AccountsProps } from '../../src/react/Accounts';
 import { deriveAccountsView, formatRubMinor, parseRubMinor } from '../../src/react/accounts-view-model';
@@ -124,7 +124,7 @@ describe('approved accounts interface (feature not exposed)', () => {
   it('previews transfer from an authoritative snapshot and passes expected revisions', async () => {
     const data = props();
     render(<Accounts {...data} />);
-    fireEvent.click(screen.getAllByRole('button', { name: 'Перевести' })[0]!);
+    fireEvent.click(within(screen.getByText('Основной').closest('article')!).getByRole('button', { name: 'Перевести' }));
     fireEvent.change(screen.getByLabelText('Сумма в рублях'), { target: { value: '1 000,00' } });
     fireEvent.change(screen.getByLabelText('Дата перевода'), { target: { value: '2026-11-08' } });
     expect(screen.getByText(/Без изменений/)).toBeTruthy();
@@ -139,7 +139,7 @@ describe('approved accounts interface (feature not exposed)', () => {
   it('cannot consume explicitly reserved funds via a transfer preview', () => {
     const data = props({ reservedMinorByAccount: { [A]: 13_400_000, [B]: 0 } });
     render(<Accounts {...data} />);
-    fireEvent.click(screen.getAllByRole('button', { name: 'Перевести' })[0]!);
+    fireEvent.click(within(screen.getByText('Основной').closest('article')!).getByRole('button', { name: 'Перевести' }));
     fireEvent.change(screen.getByLabelText('Сумма в рублях'), { target: { value: '2 000,00' } });
     fireEvent.change(screen.getByLabelText('Дата перевода'), { target: { value: '2026-11-08' } });
     fireEvent.click(screen.getByRole('button', { name: 'Подтвердить перевод' }));
@@ -159,7 +159,7 @@ describe('approved accounts interface (feature not exposed)', () => {
     const send = vi.fn().mockRejectedValue(new Error('timeout after possible commit'));
     const data = props({ onTransfer: send });
     render(<Accounts {...data} />);
-    fireEvent.click(screen.getAllByRole('button', { name: 'Перевести' })[0]!);
+    fireEvent.click(within(screen.getByText('Основной').closest('article')!).getByRole('button', { name: 'Перевести' }));
     fireEvent.change(screen.getByLabelText('Сумма в рублях'), { target: { value: '1 000,00' } });
     fireEvent.change(screen.getByLabelText('Дата перевода'), { target: { value: '2026-11-08' } });
     fireEvent.click(screen.getByRole('button', { name: 'Подтвердить перевод' }));
@@ -172,7 +172,7 @@ describe('approved accounts interface (feature not exposed)', () => {
     const onTransfer = vi.fn().mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
     const data = props({ onTransfer });
     render(<Accounts {...data} />);
-    fireEvent.click(screen.getAllByRole('button', { name: 'Перевести' })[0]!);
+    fireEvent.click(within(screen.getByText('Основной').closest('article')!).getByRole('button', { name: 'Перевести' }));
     fireEvent.change(screen.getByLabelText('Сумма в рублях'), { target: { value: '1 000,00' } });
     fireEvent.change(screen.getByLabelText('Дата перевода'), { target: { value: '2026-11-08' } });
     const confirm = screen.getByRole('button', { name: 'Подтвердить перевод' });
