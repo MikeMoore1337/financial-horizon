@@ -133,6 +133,9 @@ test('payment link must carry exactly one valid fact key, even with malformed se
     { transactionId: 'pay', settlementId: '' },
     { transactionId: 'pay', settlementId: null },
     { transactionId: 'pay', loanPaymentId: 5 },
+    { transactionId: 'pay', settlementId: ' ' },
+    { transactionId: 'pay', settlementId: ' fact-a' },
+    { transactionId: 'pay', loanPaymentId: 'fact-a ' },
   ]) {
     assert.throws(() => toBudgetOperations({ ...base,
       paymentLinks: [{ profileId, ...link }] }), /ambiguous payment link|invalid payment fact ID/);

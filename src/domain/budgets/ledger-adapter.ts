@@ -96,10 +96,12 @@ export function toBudgetOperations(
     if (hasSettlementKey === hasLoanKey || links.has(link.transactionId)) {
       fail('ambiguous payment link');
     }
+    // #33 uses canonical UUIDs. Reject whitespace instead of deriving a
+    // different fact key from an invalid restored or remote record.
     const hasSettlement = hasSettlementKey && typeof link.settlementId === 'string'
-      && link.settlementId.length > 0;
+      && link.settlementId.length > 0 && link.settlementId.trim() === link.settlementId;
     const hasLoan = hasLoanKey && typeof link.loanPaymentId === 'string'
-      && link.loanPaymentId.length > 0;
+      && link.loanPaymentId.length > 0 && link.loanPaymentId.trim() === link.loanPaymentId;
     if (!hasSettlement && !hasLoan) fail('invalid payment fact ID');
     const factId = hasSettlement ? `settlement:${link.settlementId}` : `loanPayment:${link.loanPaymentId}`;
     if (factIds.has(factId)) fail('duplicate settled payment fact');
