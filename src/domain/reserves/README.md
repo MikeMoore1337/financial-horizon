@@ -51,8 +51,9 @@ kopecks, nonnegative and bounded; never convert to floating-point rubles for mat
 of the existing XLSX importer. It recognizes Russian annotations such as
 `раз в 3 мес`, `ежегодно`, `каждые 2 года`, and validates 1..60 months.
 It returns a `suggestion` with `confirmationRequired: true` or an
-`invalid` status for conflicting/out-of-range notes; unrelated descriptions
-return `null`.
+`invalid` status for conflicting, out-of-range, or explicitly unsupported
+periodicities (such as weeks, negative or fractional month counts); unrelated
+descriptions without recurrence intent return `null`.
 
 **It does not create a reserve, alter an existing imported expense, infer
 a payment date, move money, or write any finance state.** The eventual
