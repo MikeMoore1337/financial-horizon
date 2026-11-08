@@ -16,7 +16,7 @@ deny() { echo "FINANCE_GUARDED_START_NO_GO: $*" >&2; exit 1; }
   deny "Unexpected finance data path"
 [[ "$FH_FINANCE_MAPPER_NAME" = fh-finance-pg ]] ||
   deny "Unexpected LUKS2 mapper"
-[[ "@{FH_FINANCE_SECRETS_DIR:-/etc/financial-horizon/finance/secrets}" = /etc/financial-horizon/finance/secrets ]] ||
+[[ "${FH_FINANCE_SECRETS_DIR:-/etc/financial-horizon/finance/secrets}" = /etc/financial-horizon/finance/secrets ]] ||
   deny "Unexpected finance PostgreSQL secret directory"
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
