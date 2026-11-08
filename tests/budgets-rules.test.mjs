@@ -101,7 +101,11 @@ test('invalid numbers, boundaries and calendar syntax fail closed',()=>{
 test('tampered snapshots reject duplicate rules, receipts, orphan receipt, overlap and unsupported fields',()=>{
   const state=apply(total(),create(1,0,rule()));
   assert.throws(()=>assertBudgetRuleState({...state,rules:[...state.rules,state.rules[0]]}),/Duplicate/);
-  assert.throws(()=>assertBudgetRuleState({...state,receipts:[...state.receipts,state.receipts[0]]}),/Duplicate budget receipt/);
+  assert.throws(()=>assertBudgetRuleState({...state,receipts:[...state.receipts,state.receipts[0]]}),/receipt sequence/);
+  assert.throws(()=>assertBudgetRuleState({...state,receipts:[]}),/receipt sequence/);
+  assert.throws(()=>assertBudgetRuleState({...state,revision:3}),/receipt sequence/);
+  assert.throws(()=>assertBudgetRuleState({...state,receipts:[{...state.receipts[0],revision:2}]}),/receipt sequence/);
+
   assert.throws(()=>assertBudgetRuleState({...state,receipts:[{...state.receipts[0],affectedRuleId:'missing'}]}),/Orphan/);
   assert.throws(()=>assertBudgetRuleState({...state,rules:[...state.rules,rule('bad',400,{fromMonth:'2026-06'})]}),/Overlapping/);
   assert.throws(()=>assertBudgetRuleState({...state,rules:[rule('bad',100,{scope:{kind:'total',categoryId:'sneaky'}})]}),/Invalid budget scope/);

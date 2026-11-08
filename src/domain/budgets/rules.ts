@@ -131,8 +131,11 @@ export function assertBudgetRuleState(state: BudgetRuleState): void {
       if (periods[i]![0] < periods[i - 1]![1]) throw new Error('Overlapping budget rule intervals');
     }
   }
+  // A pure state transition appends exactly one receipt per revision. Never
+  // accept a snapshot with silently discarded receipts or forged revision gaps.
+  if (state.revision !== state.receipts.length) throw new Error('Budget receipt sequence mismatch');
   const mutations = new Set<string>();
-  for (const receipt of state.receipts) {
+  for (const [position, receipt] of state.receipts.entries()) {
     exactKeys(receipt, ['clientMutationId', 'requestFingerprint', 'revision',
       'affectedRuleId'], 'budget receipt');
     if (typeof receipt.clientMutationId !== 'string' || !UUID.test(receipt.clientMutationId)) {
@@ -141,7 +144,7 @@ export function assertBudgetRuleState(state: BudgetRuleState): void {
     if (typeof receipt.requestFingerprint !== 'string' || !receipt.requestFingerprint
       || receipt.requestFingerprint.length > 32_768) throw new TypeError('Invalid receipt fingerprint');
     revision(receipt.revision);
-    if (receipt.revision === 0 || receipt.revision > state.revision) throw new RangeError('Invalid receipt revision');
+    if (receipt.revision !== position + 1) throw new Error('Budget receipt sequence mismatch');
     if (mutations.has(receipt.clientMutationId)) throw new Error('Duplicate budget receipt');
     mutations.add(receipt.clientMutationId);
     if (!ids.has(receipt.affectedRuleId)) throw new Error('Orphan budget receipt');
