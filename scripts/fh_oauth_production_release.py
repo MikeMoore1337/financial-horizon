@@ -745,23 +745,31 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
         if (backend_candidate.exists() or backend_candidate.is_symlink() or
                 static_candidate.exists() or static_candidate.is_symlink()):
             raise Gate("RELEASE_ALREADY_STAGED")
+        stage_step = "COPY_BACKEND"
         try:
             new_backend = stage_backend(source, sha, old_backend)
+            stage_step = "BUILD_STATIC"
             new_static = stage_static(source, sha)
+            stage_step = "CREATE_ISOLATED_PYTHON"
             isolated_site = stage_isolated_python(auth_py, new_backend, source)
+            stage_step = "READ_SERVICE_PROCESS"
             _, _, stage_process_env = running_process()
+            stage_step = "LOCATE_STAGED_MODULES"
             modules_root = staged_modules_root(new_backend)
+            stage_step = "RESOLVE_MODULE_PATH"
             prepared_path = service_python_path(
                 isolated_site, stage_process_env, str(modules_root)
             )
             check_env = os.environ.copy()
             check_env["PYTHONPATH"] = prepared_path
+            stage_step = "CHECK_LEGACY_INTERPRETER"
             command([str(auth_py), "-c",
                      "import fastapi, uvicorn, httpx, pwdlib, joserfc, cryptography"],
                     timeout=30, env=check_env,
                     failure_code="LIVE_PYTHON_WITH_STAGED_DEPS_FAILED")
             # Find specs without running app-level startup or touching SQLite.
             expected = "fh_email_auth,fh_auth"
+            stage_step = "CHECK_NEW_MODULE_IMPORT"
             command([str(auth_py), "-c",
                      "import importlib.util,pathlib,sys; root=pathlib.Path(sys.argv[1]); "
                      "assert all(pathlib.Path(importlib.util.find_spec(p).origin).parent == "
@@ -769,12 +777,14 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
                      str(modules_root), expected],
                     timeout=30, env=check_env,
                     failure_code="NEW_AUTH_SOURCE_IMPORT_MISMATCH")
+            stage_step = "CHECK_SERVICE_USER_ACCESS"
             verify_service_user_module_access(auth_py, modules_root, check_env,
                                               new_backend)
             # Validate the exact runtime used by the new systemd ExecStart.
             # The original interpreter can disappear when the current symlink
             # changes; do not depend on its executable or shebang at runtime.
             runtime_python = new_backend / ".oauth-venv" / "bin" / "python"
+            stage_step = "READ_SERVICE_USER"
             user = command(
                 ["systemctl", "show", "--value", "-p", "User", SERVICE],
                 timeout=12, failure_code="SERVICE_USER_UNAVAILABLE",
@@ -786,18 +796,22 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
                 "PYTHONPATH": prepared_path,
                 "PYTHONNOUSERSITE": "1",
             }
+            stage_step = "CHECK_PRIVATE_RUNTIME"
             command(
                 ["runuser", "-u", user, "--", str(runtime_python), "-c",
                  "import uvicorn,fastapi,fh_email_auth,fh_auth"],
                 cwd=modules_root, env=service_env, timeout=30,
                 failure_code="NEW_AUTH_RUNTIME_UNREADABLE_BY_SERVICE_USER",
             )
+            stage_step = "BUILD_SYSTEMD_DROPIN"
             dropin_content = systemd_oauth_dropin(
                 modules_root, prepared_path, runtime_python, approved_args,
             )
+            stage_step = "COMPILE_BACKEND"
             command([sys.executable, "-m", "compileall", "-q", str(new_backend)],
                     timeout=45, failure_code="BACKEND_COMPILE_FAILED")
         except Exception:
+            print("FAILED_STAGING_STEP=" + stage_step, flush=True)
             # Only delete this run's unactivated candidates, never the
             # symlinked live release or data; make failed staging retry-safe.
             try:
@@ -936,7 +950,7 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
             raise
 
 
-def safe_runtime_diagnostics(exc: Exception) -> tuple[str, str]:
+def safe_runtime_diagnostics(exc: Exception) -> tuple[str, str, int, int, str]:
     """Report only fixed category and source-function name, never exception text."""
     if isinstance(exc, FileNotFoundError):
         category = "OS_FILE_NOT_FOUND"
@@ -967,17 +981,40 @@ def safe_runtime_diagnostics(exc: Exception) -> tuple[str, str]:
         "safe_uvicorn_argv", "systemd_oauth_dropin", "preflight",
         "rollout", "save_private_release_receipt", "atomic_file",
         "migrate_live_database", "validate_running_oauth",
-        "current_release", "switch_release",
+        "current_release", "switch_release", "command",
+        "running_process", "find_auth_python", "ensure_supported_systemd_launch",
+        "safe_runtime_diagnostics",
     }
     found = "UNKNOWN"
+    inner_line = 0
+    rollout_line = 0
     trace = exc.__traceback__
     while trace is not None:
         frame = trace.tb_frame
-        if (frame.f_code.co_filename == __file__ and
-                frame.f_code.co_name in stages):
-            found = frame.f_code.co_name.upper()
+        if frame.f_code.co_filename == __file__:
+            if frame.f_code.co_name == "rollout":
+                rollout_line = trace.tb_lineno
+            if frame.f_code.co_name in stages:
+                # Traceback walks from outermost to innermost: keep the last
+                # allowlisted local frame, never the original path/message.
+                found = frame.f_code.co_name.upper()
+                inner_line = trace.tb_lineno
         trace = trace.tb_next
-    return category, found
+    target = "NOT_APPLICABLE"
+    if isinstance(exc, FileNotFoundError):
+        target = "OTHER"
+        filename = exc.filename
+        if isinstance(filename, str):
+            base = Path(filename).name
+            if base in {"runuser", "systemctl", "npm", "node", "uv", "test"}:
+                target = "COMMAND_" + base.upper()
+            elif base in {"python", "python3", "python3.12", "uvicorn"}:
+                target = "PYTHON_EXECUTABLE"
+            elif filename.startswith(str(BACKEND_ROOT / "releases") + "/"):
+                target = "STAGED_BACKEND_RESOURCE"
+            elif filename.startswith(str(STATIC_ROOT / "releases") + "/"):
+                target = "STAGED_STATIC_RESOURCE"
+    return category, found, inner_line, rollout_line, target
 
 
 def main() -> int:
@@ -1002,9 +1039,12 @@ def main() -> int:
         print("FAILURE_CODE=" + exc.code)
         return 1
     except Exception as exc:
-        category, stage = safe_runtime_diagnostics(exc)
+        category, stage, inner_line, rollout_line, target = safe_runtime_diagnostics(exc)
         print("SAFE_EXCEPTION_CATEGORY=" + category)
         print("SAFE_EXCEPTION_STAGE=" + stage)
+        print("SAFE_EXCEPTION_LINE=" + str(inner_line))
+        print("SAFE_ROLLOUT_LINE=" + str(rollout_line))
+        print("SAFE_MISSING_RESOURCE=" + target)
         print("RAW_EXCEPTION_PRINTED=NO")
         print("RELEASE_STATUS=FAILED")
         print("FAILURE_CODE=UNEXPECTED_RUNTIME")
