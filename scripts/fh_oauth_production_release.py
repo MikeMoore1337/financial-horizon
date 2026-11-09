@@ -195,9 +195,16 @@ def safe_uvicorn_argv(process_args: list[str], expected_port: int) -> list[str]:
     executable = Path(process_args[0]).name
     if executable in {"python", "python3", "python3.11", "python3.12",
                       "python3.13", "python3.14"}:
-        if process_args[1:3] != ["-m", "uvicorn"]:
+        if process_args[1:3] == ["-m", "uvicorn"]:
+            rest = process_args[3:]
+        elif (len(process_args) >= 3 and
+              Path(process_args[1]).name in {"uvicorn", "uvicorn3"} and
+              Path(process_args[1]).is_absolute()):
+            # Shebang-launched console scripts appear under /proc/PID/cmdline
+            # as Python followed by the absolute uvicorn entrypoint path.
+            rest = process_args[2:]
+        else:
             raise Gate("AUTH_EXEC_LAYOUT_UNSUPPORTED")
-        rest = process_args[3:]
     elif executable in {"uvicorn", "uvicorn3"}:
         rest = process_args[1:]
     else:
