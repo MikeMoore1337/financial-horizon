@@ -177,7 +177,7 @@ class ReleaseTests(unittest.TestCase):
                     }).encode()
                 else:
                     payload = b'nonempty static asset'
-                return subprocess.CompletedProcess(args, 0, payload, b'')
+                return subprocess.CompletedProcess(args, 0, payload + b'\n200', b'')
             return subprocess.CompletedProcess(args, 0, b'', b'')
 
         with (
@@ -206,6 +206,18 @@ class ReleaseTests(unittest.TestCase):
             )),
         ):
             with self.assertRaisesRegex(cd.DeployFailure, 'HTTPS_SMOKE_FAILED'):
+                cd.probe_release(SHA)
+
+    def test_origin_redirect_does_not_pass_smoke(self):
+        with (
+            mock.patch.object(cd, 'verify_origin_ca'),
+            mock.patch.object(cd.subprocess, 'run', return_value=(
+                subprocess.CompletedProcess(
+                    ['/usr/bin/curl'], 0, b'<html>redirect</html>\\n302', b''
+                )
+            )),
+        ):
+            with self.assertRaisesRegex(cd.DeployFailure, 'HTTPS_SMOKE_STATUS'):
                 cd.probe_release(SHA)
 
     def test_denies_nonstandard_ssh_commands(self):
