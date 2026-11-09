@@ -40,8 +40,12 @@ function validEvent(event) {
 // The comparison deliberately returns no "applied" proof. Only #67 authenticated
 // session/receipt + trusted complete finance-state verification followed by #68
 // atomic IDB persistence may create a durable applied proof.
-export function checkV1AckDeltaShape({ startCursor, pages, ack, mutationId } = {}) {
-  if (!integer(startCursor) || !uuid.test(mutationId) ||
+export function checkV1AckDeltaShape(input = {}) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    return 'RECOVERY_HOLD';
+  }
+  const { startCursor, pages, ack, mutationId } = input;
+  if (!integer(startCursor) || typeof mutationId !== 'string' || !uuid.test(mutationId) ||
       !Array.isArray(pages) || pages.length < 1 || pages.length > 32 ||
       !keys(ack, ['schema_version', 'client_mutation_id', 'revision', 'replayed', 'changes']) ||
       ack.schema_version !== 1 || ack.client_mutation_id !== mutationId ||
