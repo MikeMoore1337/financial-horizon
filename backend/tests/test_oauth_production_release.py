@@ -339,6 +339,17 @@ class ReleaseContracts(unittest.TestCase):
             )
             self.assertEqual(result, f"{module_root}:{site}:{previous}")
 
+    def test_systemd_dropin_resolves_new_release_source_first(self):
+        modules = Path("/opt/financial-horizon-auth/releases/" + SHA + "/backend")
+        pythonpath = str(modules) + ":/tmp/new-venv/lib/python3.12/site-packages"
+        rendered = release.systemd_oauth_dropin(modules, pythonpath).decode()
+        self.assertIn("WorkingDirectory=" + str(modules) + "\n", rendered)
+        self.assertIn('Environment="PYTHONPATH=' + pythonpath + '"\n', rendered)
+        self.assertIn("EnvironmentFile=/etc/financial-horizon/oauth.env\n", rendered)
+        self.assertNotIn("telegram", rendered.lower())
+        with self.assertRaises(release.Gate):
+            release.systemd_oauth_dropin(modules, "unsafe path with whitespace")
+
     def test_missing_staged_module_blocks_deployment(self):
         with tempfile.TemporaryDirectory() as root:
             stage = Path(root)
