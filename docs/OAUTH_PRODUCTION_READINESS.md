@@ -1,5 +1,56 @@
 # Financial Horizon #9 - production readiness and independent acceptance
 
+## Public API shows only Google after static-CD - 2026-11-09
+
+The owner checked the actual PUBLIC /api/auth/providers response:
+{"enabled":true,"providers":["google"]}. The UI correctly shows only Google.
+Yandex ID, VK ID and Telegram do not yet have verified production entrypoints
+or successful browser login/logout; Issue #9 remains OPEN.
+
+The static-only CD run #42662169596 deployed four-provider frontend source
+84bff626d1b6c413043a91895dd0b58cd0a4a84d, but it does not deploy
+OAuth FastAPI, migrate the auth SQLite or modify Caddy/provider flags.
+The owner-only canary deliberately permits one provider at a time.
+Never bypass server capability advertisement to reveal dead buttons.
+
+Fix of a confirmed deployment blocker: the previous OAuth release helper
+probed 127.0.0.1:443, occupied by Xray, NOT Caddy on this host. The live
+Caddy HTTPS origin is :8444 using Cloudflare Origin RSA CA. The corrected
+OAuth release preflight verifies a root-owned pinned CA file and its SHA-256,
+the final smoke checks TLS hostname and HTTP 200 via --cacert,
+--resolve fin-horizon.mikemoore.top:8444:127.0.0.1, and fails closed.
+Never use --insecure, globally trust the private origin CA or modify Xray.
+
+Backend-only rollout: since the four-provider static PWA already exists on
+production, operator may use --backend-only to keep static current unchanged.
+It verifies deployed static CD __release.json and byte identity of
+auth-ui.js, account-oauth.js and four provider SVGs against the pinned
+source SHA. A mismatch blocks activation rather than overwriting PWA.
+With --stage-only --backend-only, only an inactive backend is prepared and
+removed, and the live site, SQLite, Caddy and service remain unchanged.
+
+After the change is merged into main and exact SHA checks are green:
+
+1. Independently verify the pinned script SHA-256, then run ONLY
+   python3 <pinned-script> --sha <exact-main-SHA> --stage-only --backend-only.
+   Expect RELEASE_PREFLIGHT=PASS, RELEASE_STAGED=PASS, STAGE_ONLY=PASS,
+   LIVE_SERVICE_STOPPED=NO, DATABASE_MIGRATED=NO and CADDY_CHANGED=NO.
+   If failed, do NOT retry --apply, report only fixed-safe diagnostic codes.
+2. Stage-only is not production authorization. Confirm protected current
+   SQLite backup and restore, all four actual client applications and real
+   Telegram OIDC exchange, independent AppSec review, compatibility and
+   controlled backend/Caddy rollback.
+3. Only then run --apply --backend-only for the identical approved source
+   SHA in a dedicated rollout window. Expected receipts include
+   STATIC_FRONTEND_REUSED=YES,
+   PUBLIC_PROVIDERS=google,yandex,vk,telegram and PRODUCTION_OAUTH=DEPLOYED.
+   Then verify actual login and logout through all four services, two
+   accounts, cookie revocation, guest and installed PWA. Provider listing
+   alone is not proof of live sign-in.
+
+Do not enable financial cloud sync, delete IndexedDB data, weaken the
+owner canary or open email registration Issue #51 as part of Issue #9.
+
 ## Recovery from post-migration AUTH_READY_TIMEOUT - 2026-11-09
 
 Operator's second release attempt on VPS returned:
