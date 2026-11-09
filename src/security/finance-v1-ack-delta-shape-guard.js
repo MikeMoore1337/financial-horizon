@@ -80,7 +80,8 @@ export function checkV1AckDeltaShape({ startCursor, pages, ack, mutationId } = {
     let ordinal = 0;
     let group = [];
     for (const event of page.changes) {
-      if (!validEvent(event) || event.revision < currentRevision ||
+      if (!validEvent(event) || event.revision <= expected ||
+          event.revision < currentRevision ||
           event.revision > currentRevision + 1) return 'RECOVERY_HOLD';
       if (event.revision === currentRevision + 1) {
         // A page must start each committed revision at ordinal 0. Revisions
