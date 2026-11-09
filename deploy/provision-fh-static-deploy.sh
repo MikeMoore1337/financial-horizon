@@ -13,6 +13,29 @@ source_file="$source_dir/fh_static_deploy.py"
 [[ "$(sha256sum "$source_file" | cut -d' ' -f1)" == "$2" ]] || fail HANDLER_HASH_MISMATCH
 [[ "$(sha256sum "$0" | cut -d' ' -f1)" == "$3" ]] || fail INSTALLER_HASH_MISMATCH
 /usr/bin/python3 -m py_compile "$source_file" || fail HANDLER_SYNTAX
+# Cloudflare Origin CA root (public certificate, pinned; never added to global trust).
+origin_ca_source="$source_dir/certs/cloudflare-origin-rsa-root.pem"
+origin_ca_dir=/usr/local/lib/financial-horizon/certs
+origin_ca_target="$origin_ca_dir/cloudflare-origin-rsa-root.pem"
+origin_ca_sha=91a8a5567efa6bf941162aa806b3ba476aaddf7867640e53053b35fb225a5dae
+[[ -f "$origin_ca_source" && ! -L "$origin_ca_source" ]] || fail ORIGIN_CA_SOURCE_MISSING
+[[ "$(sha256sum "$origin_ca_source" | cut -d' ' -f1)" == "$origin_ca_sha" ]] || fail ORIGIN_CA_SOURCE_HASH
+[[ ! -e "$origin_ca_target" && ! -L "$origin_ca_target" ]] || fail ORIGIN_CA_ALREADY_INSTALLED
+for ca_directory in /usr/local/lib/financial-horizon "$origin_ca_dir"; do
+  [[ ! -L "$ca_directory" ]] || fail ORIGIN_CA_DIR_SYMLINK
+  if [[ -e "$ca_directory" ]]; then
+    [[ -d "$ca_directory" && "$(stat -c %u "$ca_directory")" == 0 ]] || fail ORIGIN_CA_DIR_UNSAFE
+    (( (8#$(stat -c %a "$ca_directory") & 8#22) == 0 )) || fail ORIGIN_CA_DIR_UNSAFE
+  fi
+done
+/usr/bin/openssl x509 -in "$origin_ca_source" -noout >/dev/null || fail ORIGIN_CA_PEM_INVALID
+origin_status="$(/usr/bin/curl --noproxy '*' --silent --show-error --fail \
+    --connect-timeout 5 --max-time 15 --max-redirs 0 \
+    --cacert "$origin_ca_source" \
+    --resolve fin-horizon.mikemoore.top:8444:127.0.0.1 \
+    --output /dev/null --write-out '%{http_code}' \
+    https://fin-horizon.mikemoore.top:8444/index.html)" || fail ORIGIN_TLS_NOT_TRUSTED
+[[ "$origin_status" == 200 ]] || fail ORIGIN_HTTP_NOT_200
 root=/srv/www/fin-horizon
 releases="$root/releases"
 [[ -d "$root" && ! -L "$root" && -d "$releases" && ! -L "$releases" ]] || fail STATIC_ROOT_UNKNOWN
@@ -42,6 +65,10 @@ ssh_home=/var/lib/fh-deploy-ssh
 [[ ! -e "$ssh_home" && ! -L "$ssh_home" ]] || fail SSH_HOME_ALREADY_EXISTS
 useradd --system --home-dir "$ssh_home" --create-home --shell /bin/sh "$user"
 install -d -m 0700 -o root -g root "$home"
+install -d -m 0755 -o root -g root "$origin_ca_dir"
+[[ "$(stat -c %u "$origin_ca_dir")" == 0 ]] || fail ORIGIN_CA_DIR_OWNER
+install -m 0644 -o root -g root "$origin_ca_source" "$origin_ca_target"
+[[ "$(sha256sum "$origin_ca_target" | cut -d' ' -f1)" == "$origin_ca_sha" ]] || fail ORIGIN_CA_INSTALL_HASH
 install -m 0750 -o root -g root "$source_file" "$handler"
 [[ "$(sha256sum "$handler" | cut -d' ' -f1)" == "$2" ]] || fail INSTALLED_HASH_MISMATCH
 install -d -m 0700 -o "$user" -g "$user" "$ssh_home/.ssh"
@@ -58,4 +85,4 @@ if runuser -u "$user" -- env SSH_ORIGINAL_COMMAND='not-an-approved-command' sudo
   fail RESTRICTION_BYPASS
 fi
 [[ "$(stat -c %a "$home")" == 700 && "$(stat -c %u "$home")" == 0 ]] || fail STATE_PERMISSIONS
-printf 'FH_PROVISION_STATUS=PASS\nHANDLER_SHA256=%s\nDEPLOY_USER=%s\nLIVE_DATA_UNCHANGED=YES\n' "$2" "$user"
+printf 'FH_PROVISION_STATUS=PASS\nHANDLER_SHA256=%s\nDEPLOY_USER=%s\nORIGIN_CA_SHA256=%s\nORIGIN_TLS_PREFLIGHT=PASS\nLIVE_DATA_UNCHANGED=YES\n' "$2" "$user" "$origin_ca_sha"
