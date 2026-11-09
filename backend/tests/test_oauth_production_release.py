@@ -7,6 +7,7 @@ from __future__ import annotations
 from contextlib import redirect_stdout
 import importlib.util
 import io
+import sqlite3
 from pathlib import Path
 import tarfile
 import tempfile
@@ -275,6 +276,129 @@ class ReleaseContracts(unittest.TestCase):
                 release.command(["/fake/venv/bin/python", "-m", "pip", "install"],
                                 failure_code="ISOLATED_DEPS_INSTALL_FAILED")
             self.assertEqual(error.exception.code, "ISOLATED_DEPS_INSTALL_FAILED")
+
+    def test_nullable_auth_db_is_accepted_without_repeating_live_migration(self):
+        with tempfile.TemporaryDirectory() as root:
+            db = Path(root) / "auth.sqlite3"
+            with sqlite3.connect(db) as conn:
+                conn.execute("""
+                    CREATE TABLE users (
+                        id TEXT PRIMARY KEY,
+                        email TEXT UNIQUE,
+                        password_hash TEXT NOT NULL DEFAULT '',
+                        verified_at INTEGER,
+                        password_changed_at INTEGER,
+                        disabled INTEGER NOT NULL DEFAULT 0,
+                        created_at INTEGER NOT NULL
+                    )
+                """)
+            self.assertTrue(release.schema_is_nullable(db))
+            with mock.patch.object(release, "command", side_effect=AssertionError(
+                "No migration of an already nullable production database"
+            )), redirect_stdout(io.StringIO()) as printed:
+                self.assertFalse(release.migrate_live_database(Path("/no-source"), db))
+            self.assertIn("DB_SCHEMA_MIGRATION=ALREADY_READY", printed.getvalue())
+            self.assertTrue(release.schema_is_nullable(db))
+
+    def test_legacy_auth_schema_still_requires_migration(self):
+        with tempfile.TemporaryDirectory() as root:
+            db = Path(root) / "legacy.sqlite3"
+            with sqlite3.connect(db) as conn:
+                conn.execute("""
+                    CREATE TABLE users (
+                        id TEXT PRIMARY KEY,
+                        email TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL DEFAULT '',
+                        verified_at INTEGER,
+                        password_changed_at INTEGER,
+                        disabled INTEGER NOT NULL DEFAULT 0,
+                        created_at INTEGER NOT NULL
+                    )
+                """)
+            self.assertFalse(release.schema_is_nullable(db))
+            with sqlite3.connect(db) as conn:
+                conn.execute("CREATE TRIGGER user_write_event AFTER INSERT ON users "
+                             "BEGIN SELECT 1; END")
+            with self.assertRaises(release.Gate) as error:
+                release.schema_is_nullable(db)
+            self.assertEqual(error.exception.code, "USERS_SCHEMA_CUSTOMIZATION_UNEXPECTED")
+
+    def test_staged_source_root_shadows_old_auth_modules(self):
+        with tempfile.TemporaryDirectory() as root:
+            stage = Path(root) / "releases" / SHA
+            for package in ("fh_auth", "fh_email_auth"):
+                folder = stage / "backend" / package
+                folder.mkdir(parents=True)
+                (folder / "app.py").write_text("# synthetic\n")
+            module_root = release.staged_modules_root(stage)
+            self.assertEqual(module_root, stage / "backend")
+            site = "/tmp/synthetic/lib/site-packages"
+            previous = "/opt/financial-horizon-auth/current/backend"
+            result = release.service_python_path(
+                site, {"PYTHONPATH": previous}, str(module_root)
+            )
+            self.assertEqual(result, f"{module_root}:{site}:{previous}")
+
+    def test_systemd_dropin_resolves_new_release_source_first(self):
+        modules = Path("/opt/financial-horizon-auth/releases/" + SHA + "/backend")
+        pythonpath = str(modules) + ":/tmp/new-venv/lib/python3.12/site-packages"
+        rendered = release.systemd_oauth_dropin(modules, pythonpath).decode()
+        self.assertIn("WorkingDirectory=" + str(modules) + "\n", rendered)
+        self.assertIn('Environment="PYTHONPATH=' + pythonpath + '"\n', rendered)
+        self.assertIn("EnvironmentFile=/etc/financial-horizon/oauth.env\n", rendered)
+        self.assertNotIn("telegram", rendered.lower())
+        with self.assertRaises(release.Gate):
+            release.systemd_oauth_dropin(modules, "unsafe path with whitespace")
+
+    def test_service_user_source_access_preflight_never_starts_backend(self):
+        source = Path("/opt/financial-horizon-auth/releases/" + SHA + "/backend")
+        python = Path("/opt/financial-horizon-auth/venv/bin/python")
+        env = {"PYTHONPATH": str(source) + ":/tmp/site"}
+        calls = []
+
+        def fake_command(args, **kwargs):
+            calls.append((args, kwargs))
+            if args[:4] == ["systemctl", "show", "--value", "-p"]:
+                return b"fh-email-auth\n"
+            return b""
+
+        with mock.patch.object(release, "command", side_effect=fake_command):
+            release.verify_service_user_module_access(python, source, env)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            calls[1][0][:5],
+            ["runuser", "-u", "fh-email-auth", "--", str(python)]
+        )
+        self.assertIs(calls[1][1]["env"], env)
+        self.assertEqual(calls[1][1]["failure_code"],
+                         "STAGED_AUTH_UNREADABLE_BY_SERVICE_USER")
+
+    def test_service_user_source_access_rejects_unconfigured_user(self):
+        with mock.patch.object(release, "command", return_value=b""):
+            with self.assertRaises(release.Gate) as error:
+                release.verify_service_user_module_access(
+                    Path("/usr/bin/python"), Path("/tmp/source"), {}
+                )
+        self.assertEqual(error.exception.code, "SERVICE_USER_INVALID")
+
+    def test_missing_staged_module_blocks_deployment(self):
+        with tempfile.TemporaryDirectory() as root:
+            stage = Path(root)
+            folder = stage / "backend" / "fh_email_auth"
+            folder.mkdir(parents=True)
+            (folder / "app.py").write_text("# synthetic\n")
+            with self.assertRaises(release.Gate) as error:
+                release.staged_modules_root(stage)
+            self.assertEqual(error.exception.code, "STAGED_AUTH_PACKAGES_NOT_FOUND")
+
+    def test_recent_logs_return_only_allowlisted_error_category(self):
+        data = "PII-NOT-FOR-OUTPUT\nModuleNotFoundError: No module named 'fh_auth'\n"
+        with mock.patch.object(release.subprocess, "run", return_value=mock.Mock(
+            returncode=0, stdout=data,
+        )):
+            result = release.safe_recent_service_error()
+        self.assertEqual(result, "MODULE_NOT_FOUND")
+        self.assertNotIn("PII", result)
 
     def test_one_command_without_apply_only_checks_preflight(self):
         with mock.patch.object(release, "preflight", return_value=None) as check, \
