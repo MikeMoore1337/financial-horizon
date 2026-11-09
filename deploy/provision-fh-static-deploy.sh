@@ -21,14 +21,21 @@ origin_ca_sha=91a8a5567efa6bf941162aa806b3ba476aaddf7867640e53053b35fb225a5dae
 [[ -f "$origin_ca_source" && ! -L "$origin_ca_source" ]] || fail ORIGIN_CA_SOURCE_MISSING
 [[ "$(sha256sum "$origin_ca_source" | cut -d' ' -f1)" == "$origin_ca_sha" ]] || fail ORIGIN_CA_SOURCE_HASH
 [[ ! -e "$origin_ca_target" && ! -L "$origin_ca_target" ]] || fail ORIGIN_CA_ALREADY_INSTALLED
+for ca_directory in /usr/local/lib/financial-horizon "$origin_ca_dir"; do
+  [[ ! -L "$ca_directory" ]] || fail ORIGIN_CA_DIR_SYMLINK
+  if [[ -e "$ca_directory" ]]; then
+    [[ -d "$ca_directory" && "$(stat -c %u "$ca_directory")" == 0 ]] || fail ORIGIN_CA_DIR_UNSAFE
+    (( (8#$(stat -c %a "$ca_directory") & 8#22) == 0 )) || fail ORIGIN_CA_DIR_UNSAFE
+  fi
+done
 /usr/bin/openssl x509 -in "$origin_ca_source" -noout >/dev/null || fail ORIGIN_CA_PEM_INVALID
-if ! /usr/bin/curl --noproxy '*' --silent --show-error --fail \
+origin_status="$(/usr/bin/curl --noproxy '*' --silent --show-error --fail \
     --connect-timeout 5 --max-time 15 --max-redirs 0 \
     --cacert "$origin_ca_source" \
     --resolve fin-horizon.mikemoore.top:8444:127.0.0.1 \
-    -o /dev/null https://fin-horizon.mikemoore.top:8444/index.html; then
-  fail ORIGIN_TLS_NOT_TRUSTED
-fi
+    --output /dev/null --write-out '%{http_code}' \
+    https://fin-horizon.mikemoore.top:8444/index.html)" || fail ORIGIN_TLS_NOT_TRUSTED
+[[ "$origin_status" == 200 ]] || fail ORIGIN_HTTP_NOT_200
 root=/srv/www/fin-horizon
 releases="$root/releases"
 [[ -d "$root" && ! -L "$root" && -d "$releases" && ! -L "$releases" ]] || fail STATIC_ROOT_UNKNOWN
