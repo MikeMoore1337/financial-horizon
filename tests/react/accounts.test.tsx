@@ -259,7 +259,9 @@ describe('approved accounts interface (feature not exposed)', () => {
     ).toBe(true);
 
     // Caller verifies receipt / outcome and provides a new proof with the complete snapshot.
-    view.rerender(<Accounts {...data} snapshot={snapshot()} reconciliationToken="verified-after" />);
+    view.rerender(
+      <Accounts {...data} snapshot={snapshot()} reconciliationToken="verified-after" />,
+    );
     await waitFor(() =>
       expect(
         screen.getByRole('button', { name: 'Подтвердить перевод' }).hasAttribute('disabled'),
