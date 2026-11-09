@@ -763,6 +763,7 @@ def preflight(sha: str):
     caddy = CADDY_SITE.read_text(encoding="utf-8")
     port = proxy_port(args, caddy)
     new_caddy = public_caddy_config(caddy, port)
+    verified_origin_ca()  # Fail before service downtime if CA is absent or unsafe.
     version = command(["node", "--version"]).decode().strip()
     if not re.fullmatch(r"v24\.\d+\.\d+", version):
         raise Gate("NODE_24_REQUIRED")
@@ -976,12 +977,9 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
             command(["systemctl", "reload", "caddy.service"], timeout=30)
             switch_release(STATIC_ROOT, new_static)
             validate_running_oauth(port, PROVIDERS)
-            # HTTPS origin HTTP response must actually reach production auth.
-            data = command([
-                "curl", "--fail", "--silent", "--show-error",
-                "--max-time", "12", "--resolve", HOST + ":443:127.0.0.1",
-                "https://" + HOST + "/api/auth/providers",
-            ], timeout=16)
+            # Caddy is on :8444; :443 is Xray on this VPS. Verify both
+            # hostname and trust chain with the pinned Cloudflare Origin RSA CA.
+            data = public_oauth_providers_over_verified_origin()
             try:
                 exposed = json.loads(data)
             except ValueError as exc:
