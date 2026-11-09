@@ -155,10 +155,16 @@ test('contiguous state+cursor+proof commit is atomic, scoped and preserves outbo
     // A stale tab, unexpected cursor, or changed queued fingerprint must
     // never persist *any* of the new finance state, cursor or proof.
     expect(await withDatabase(staleTab, name, 'delta', {
-      batch: { ...batch, epoch: epochB },
+      batch: { ...batch, epoch: epochB,
+        financeState: { ...batch.financeState, epoch: epochB } },
     })).toBe('RECOVERY_HOLD');
     expect(await withDatabase(page, name, 'delta', {
-      batch: { ...batch, expectedCursor: 4 },
+      batch: { ...batch, expectedCursor: 4,
+        revisions: [
+          { revision: 5, commands: [{ mutationId: idA, fingerprint: fpA }] },
+          { revision: 6, commands: [] },
+        ],
+        financeState: { ...batch.financeState, revision: 6 } },
     })).toBe('RECOVERY_HOLD');
     await withDatabase(page, name, 'patch', { fingerprint: fpB });
     expect(await withDatabase(page, name, 'delta', { batch })).toBe('RECOVERY_HOLD');
