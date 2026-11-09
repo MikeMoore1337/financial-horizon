@@ -38,9 +38,9 @@ CADDY_MAIN = Path("/etc/caddy/Caddyfile")
 BACKUPS = Path("/var/backups/financial-horizon")
 DROPIN = Path("/etc/systemd/system/fh-email-auth.service.d/70-oauth.conf")
 CANARY_DB = Path("/var/lib/financial-horizon/oauth-canary/auth.sqlite3")
-ALLOWED = {"FH_GOOGLE_OAUTH_ENABLED", "FH_YANDEX_OAUTH_ENABLED", "FH_VK_OAUTH_ENABLED"}
-FLAGS = {"FH_ENABLE_CLOUD_AUTH", "FH_TELEGRAM_OAUTH_ENABLED", *ALLOWED}
-PROVIDERS = ["google", "yandex", "vk"]
+ALLOWED = {"FH_GOOGLE_OAUTH_ENABLED", "FH_YANDEX_OAUTH_ENABLED", "FH_VK_OAUTH_ENABLED", "FH_TELEGRAM_OAUTH_ENABLED"}
+FLAGS = {"FH_ENABLE_CLOUD_AUTH", *ALLOWED}
+PROVIDERS = ["google", "yandex", "vk", "telegram"]
 USER_COLUMNS = ("id", "email", "password_hash", "verified_at",
                 "password_changed_at", "disabled", "created_at")
 
@@ -86,7 +86,7 @@ def assignment(raw: bytes, name: str) -> list[str]:
 def replace_flags(raw: bytes) -> bytes:
     data = raw
     for name in sorted(FLAGS):
-        wanted = b"false" if name == "FH_TELEGRAM_OAUTH_ENABLED" else b"true"
+        wanted = b"true"
         old = (name + "=false").encode()
         if data.count(old) != 1 or assignment(data, name) != ["false"]:
             raise Gate("OAUTH_FLAGS_NOT_DISABLED")
@@ -325,11 +325,17 @@ def validate_running_oauth(port: int, expected: list[str]) -> None:
         data = json.loads(body)
     except ValueError as exc:
         raise Gate("OAUTH_PROVIDERS_BAD_JSON") from exc
-    if data != {"enabled": True, "providers": expected}:
+    providers = data.get("providers") if isinstance(data, dict) else None
+    if (not isinstance(data, dict) or data.get("enabled") is not True or
+            not isinstance(providers, list) or
+            len(providers) != len(expected) or
+            any(not isinstance(p, str) for p in providers) or
+            set(providers) != set(expected)):
         raise Gate("OAUTH_PROVIDERS_UNEXPECTED")
+    # Telegram must work as an auth initiation endpoint, not just be listed.
     status, _ = http_probe(port, "/api/auth/oauth/telegram/start")
-    if status != 404:
-        raise Gate("TELEGRAM_NOT_DISABLED")
+    if status != 303:
+        raise Gate("TELEGRAM_START_UNAVAILABLE")
     status, body = http_probe(port, "/api/auth/email/me")
     if status != 200 or b'"authenticated":false' not in body.replace(b" ", b"").lower():
         raise Gate("SESSION_ENDPOINT_UNAVAILABLE")
@@ -915,13 +921,18 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
                 exposed = json.loads(data)
             except ValueError as exc:
                 raise Gate("PUBLIC_CADDY_BAD_JSON") from exc
-            if exposed != {"enabled": True, "providers": PROVIDERS}:
+            exposed_providers = exposed.get("providers") if isinstance(exposed, dict) else None
+            if (not isinstance(exposed, dict) or exposed.get("enabled") is not True or
+                    not isinstance(exposed_providers, list) or
+                    len(exposed_providers) != len(PROVIDERS) or
+                    any(not isinstance(p, str) for p in exposed_providers) or
+                    set(exposed_providers) != set(PROVIDERS)):
                 raise Gate("PUBLIC_CADDY_PROVIDER_MISMATCH")
             print("PUBLIC_CADDY_PROVIDERS=PASS", flush=True)
             print("PRODUCTION_OAUTH=DEPLOYED", flush=True)
             print("DEPLOYED_COMMIT=" + sha, flush=True)
-            print("PUBLIC_PROVIDERS=google,yandex,vk", flush=True)
-            print("TELEGRAM=DISABLED", flush=True)
+            print("PUBLIC_PROVIDERS=google,yandex,vk,telegram", flush=True)
+            print("TELEGRAM=ENABLED", flush=True)
             print("EMAIL_REGISTRATION_GATE=UNCHANGED", flush=True)
             print("DATABASE_MIGRATED=" +
                   ("YES" if schema_changed_now else "ALREADY_READY"), flush=True)
