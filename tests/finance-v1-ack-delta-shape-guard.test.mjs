@@ -24,7 +24,34 @@ const base = () => ({
     revision: 6, replayed: true, changes: [structuredClone(e60), structuredClone(e61)] },
 });
 const clone = value => structuredClone(value);
-const check = value => checkV1AckDeltaShape(value);
+// Fixtures are authored as ordinary JS objects. The production guard takes
+// ONLY raw JSON text: the fixture encoder refuses unsupported JS types before
+// JSON.stringify would silently turn Infinity into null or Date into a string.
+const check = value => {
+  if (value === null || typeof value !== 'object') return checkV1AckDeltaShape(value);
+  const seen = new WeakSet();
+  function isOrdinaryJson(v, depth = 0) {
+    if (depth > 24) return false;
+    if (v === null || typeof v === 'string' || typeof v === 'boolean') return true;
+    if (typeof v === 'number') return Number.isFinite(v);
+    if (typeof v !== 'object' || seen.has(v)) return false;
+    seen.add(v);
+    const array = Array.isArray(v);
+    if (Object.getPrototypeOf(v) !== (array ? Array.prototype : Object.prototype)) return false;
+    const names = Reflect.ownKeys(v);
+    if (names.some(n => typeof n !== 'string')) return false;
+    if (array && names.length !== v.length + 1) return false;
+    for (const n of names) {
+      const desc = Object.getOwnPropertyDescriptor(v, n);
+      if (!desc || !Object.hasOwn(desc, 'value')) return false;
+      if (n !== 'length' && !isOrdinaryJson(desc.value, depth + 1)) return false;
+    }
+    return true;
+  }
+  return isOrdinaryJson(value)
+    ? checkV1AckDeltaShape(JSON.stringify(value))
+    : 'RECOVERY_HOLD';
+};
 
 test('lost HTTP reply: exact replay ACK matches complete paged revision including two ordinals', () => {
   assert.equal(check(base()), 'MATCHED_STRUCTURALLY');
@@ -114,4 +141,12 @@ test('a structural match never creates an applied proof or modifies an outbox', 
   const original = clone(b);
   assert.equal(check(b), 'MATCHED_STRUCTURALLY');
   assert.deepEqual(b, original);
+});
+
+test('raw JSON boundary rejects malformed, huge and arbitrary object inputs', () => {
+  assert.equal(checkV1AckDeltaShape(base()), 'RECOVERY_HOLD');
+  assert.equal(checkV1AckDeltaShape('{"startCursor":Infinity}'), 'RECOVERY_HOLD');
+  assert.equal(checkV1AckDeltaShape('{"__proto__": 2}'), 'RECOVERY_HOLD');
+  assert.equal(checkV1AckDeltaShape(' '.repeat(2_000_001)), 'RECOVERY_HOLD');
+  assert.equal(checkV1AckDeltaShape(JSON.stringify(base())), 'MATCHED_STRUCTURALLY');
 });
