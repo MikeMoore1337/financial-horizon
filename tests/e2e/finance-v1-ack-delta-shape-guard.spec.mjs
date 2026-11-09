@@ -58,3 +58,68 @@ test('v1 partial-page trap and replay ACK mismatch hold in Chromium and WebKit',
   expect(await check('truncated')).toBe('RECOVERY_HOLD');
   expect(await check('complete')).toBe('MATCHED_STRUCTURALLY');
 });
+
+test('inactive shape guard rejects forged ACK, iterator and exponential alias graph in Chromium/WebKit', async ({ page, context }) => {
+  await context.route('**/__e2e_fh_v1_guard__.js', route => route.fulfill({
+    status: 200, contentType: 'text/javascript', body: source,
+    headers: { 'Cache-Control': 'no-store' },
+  }));
+  await page.goto('/__e2e__/ready');
+  const decisions = await page.evaluate(async () => {
+    const { checkV1AckDeltaShape: guard } = await import('/__e2e_fh_v1_guard__.js');
+    const mutationId = '00000000-0000-4000-8000-0000000000a1';
+    const entity_id = '00000000-0000-4000-8000-0000000000b1';
+    const e = (revision, amount) => ({ revision, ordinal: 0, kind: 'upsert',
+      entity_id, entity_revision: 1, payload: { values: [amount] } });
+    const fixture = () => ({
+      startCursor: 3, mutationId,
+      pages: [
+        { schema_version: 1, from_revision: 3, to_revision: 5,
+          next_since_revision: 4, has_more: true, changes: [e(4, 1)] },
+        { schema_version: 1, from_revision: 4, to_revision: 5,
+          next_since_revision: 5, has_more: false, changes: [e(5, 2)] },
+      ],
+      ack: { schema_version: 1, client_mutation_id: mutationId, revision: 4,
+        replayed: true, changes: [e(4, 1)] },
+    });
+    const good = guard(fixture());
+    const forged = fixture();
+    const forgedValues = forged.ack.changes[0].payload.values;
+    forgedValues[0] = 999;
+    Object.setPrototypeOf(forgedValues, { every: () => true });
+    const forgedDecision = guard(forged);
+    const accessor = fixture();
+    Object.defineProperty(accessor.ack, 'revision', {
+      enumerable: true, get() { throw new Error('untrusted accessor'); },
+    });
+    const accessorDecision = guard(accessor);
+    const iterator = fixture();
+    Object.defineProperty(iterator.pages[0].changes, Symbol.iterator, {
+      value: function* () { yield e(4, 1); },
+    });
+    const iteratorDecision = guard(iterator);
+    const sparse = fixture();
+    sparse.ack.changes = new Array(1);
+    const sparseDecision = guard(sparse);
+    const graph = fixture();
+    let child = { amount_minor: 1 };
+    for (let depth = 0; depth < 12; depth++) {
+      const parent = {};
+      for (let k = 0; k < 8; k++) parent['ref' + k] = child;
+      child = parent;
+    }
+    graph.pages[1].changes[0].payload = child;
+    const graphDecision = guard(graph);
+    return [good, forgedDecision, accessorDecision, iteratorDecision,
+      sparseDecision, graphDecision];
+  });
+  expect(decisions).toEqual([
+    'MATCHED_STRUCTURALLY', 'RECOVERY_HOLD', 'RECOVERY_HOLD',
+    'RECOVERY_HOLD', 'RECOVERY_HOLD', 'RECOVERY_HOLD',
+  ]);
+  await page.reload();
+  expect(await page.evaluate(async () => {
+    const { checkV1AckDeltaShape } = await import('/__e2e_fh_v1_guard__.js');
+    return checkV1AckDeltaShape(null);
+  })).toBe('RECOVERY_HOLD');
+});
