@@ -9,6 +9,7 @@ restores an old SQLite snapshot (which could lose new sessions/accounts).
 from __future__ import annotations
 
 import argparse
+import hashlib
 from contextlib import closing
 import http.client
 import io
@@ -28,6 +29,9 @@ from urllib.request import urlopen
 from urllib.parse import quote
 
 HOST = "fin-horizon.mikemoore.top"
+ORIGIN_PORT = 8444  # Verified Caddy; :443 is Xray on the live host
+ORIGIN_CA = Path("/usr/local/lib/financial-horizon/certs/cloudflare-origin-rsa-root.pem")
+ORIGIN_CA_SHA256 = "91a8a5567efa6bf941162aa806b3ba476aaddf7867640e53053b35fb225a5dae"
 SERVICE = "fh-email-auth.service"
 BACKEND_ROOT = Path("/opt/financial-horizon-auth")
 STATIC_ROOT = Path("/srv/www/fin-horizon")
@@ -378,6 +382,39 @@ def source_archive(sha: str, target: Path) -> Path:
     return content
 
 
+def verify_predeployed_four_provider_ui(source: Path, active: Path) -> None:
+    """Re-use the already deployed static CD UI; do not overwrite its PWA."""
+    manifest_file = active / "__release.json"
+    if manifest_file.is_symlink() or not manifest_file.is_file():
+        raise Gate("ACTIVE_STATIC_MANIFEST_MISSING")
+    try:
+        manifest = json.loads(manifest_file.read_bytes()[:8193])
+    except (ValueError, UnicodeError, OSError) as exc:
+        raise Gate("ACTIVE_STATIC_MANIFEST_INVALID") from exc
+    if (not isinstance(manifest, dict) or
+            manifest.get("repository") != "MikeMoore1337/financial-horizon" or
+            manifest.get("source_sha") != active.name or
+            type(manifest.get("run_id")) is not int or manifest["run_id"] <= 0):
+        raise Gate("ACTIVE_STATIC_MANIFEST_MISMATCH")
+    for name in (
+        "account-oauth.js", "auth-ui.js",
+        "assets/providers/google.svg", "assets/providers/yandex.svg",
+        "assets/providers/vk.svg", "assets/providers/telegram.svg",
+    ):
+        deployed = active / name
+        upstream = source / name
+        if (deployed.is_symlink() or not deployed.is_file() or
+                upstream.is_symlink() or not upstream.is_file()):
+            raise Gate("ACTIVE_OAUTH_UI_FILES_MISSING")
+        if hashlib.sha256(deployed.read_bytes()).digest() != hashlib.sha256(
+                upstream.read_bytes()).digest():
+            raise Gate("ACTIVE_OAUTH_UI_SOURCE_MISMATCH")
+    for name in ("index.html", "account.html", "sw.js", "manifest.webmanifest"):
+        path = active / name
+        if path.is_symlink() or not path.is_file():
+            raise Gate("ACTIVE_PWA_INCOMPLETE")
+
+
 def stage_backend(source: Path, sha: str, existing: Path) -> Path:
     destination = BACKEND_ROOT / "releases" / sha
     if destination.exists() or destination.is_symlink():
@@ -676,6 +713,46 @@ def safe_recent_service_error() -> str:
     return "NO_MATCHING_ERROR"
 
 
+def verified_origin_ca() -> Path:
+    """Root-owned pinned Cloudflare Origin RSA trust anchor, never -k."""
+    try:
+        for directory in (ORIGIN_CA.parent.parent, ORIGIN_CA.parent):
+            info = directory.lstat()
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or
+                    info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
+                raise Gate("ORIGIN_CA_DIR_UNSAFE")
+        info = ORIGIN_CA.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or
+                info.st_mode & (stat.S_IWGRP | stat.S_IWOTH) or
+                info.st_size > 8192):
+            raise Gate("ORIGIN_CA_FILE_UNSAFE")
+        content = ORIGIN_CA.read_bytes()
+    except OSError as exc:
+        raise Gate("ORIGIN_CA_UNAVAILABLE") from exc
+    if hashlib.sha256(content).hexdigest() != ORIGIN_CA_SHA256:
+        raise Gate("ORIGIN_CA_HASH_MISMATCH")
+    return ORIGIN_CA
+
+
+def public_oauth_providers_over_verified_origin() -> bytes:
+    """Confirm Caddy really serves the OAuth endpoint with trusted HTTPS."""
+    ca = verified_origin_ca()
+    result = command([
+        "/usr/bin/curl", "--noproxy", "*", "--silent", "--show-error",
+        "--fail", "--connect-timeout", "5", "--max-time", "12",
+        "--max-redirs", "0",
+        "--cacert", str(ca),
+        "--resolve", f"{HOST}:{ORIGIN_PORT}:127.0.0.1",
+        "--header", "Cache-Control: no-store",
+        "--write-out", "\n%{http_code}",
+        f"https://{HOST}:{ORIGIN_PORT}/api/auth/providers",
+    ], timeout=16, failure_code="PUBLIC_CADDY_HTTPS_FAILED")
+    body, marker, status = result.rpartition(b"\n")
+    if not marker or status != b"200" or not 0 < len(body) < 8192:
+        raise Gate("PUBLIC_CADDY_HTTPS_STATUS")
+    return body
+
+
 def preflight(sha: str):
     if os.geteuid() != 0 or not re.fullmatch("[a-f0-9]{40}", sha):
         raise Gate("ROOT_OR_SHA_INVALID")
@@ -719,6 +796,7 @@ def preflight(sha: str):
     caddy = CADDY_SITE.read_text(encoding="utf-8")
     port = proxy_port(args, caddy)
     new_caddy = public_caddy_config(caddy, port)
+    verified_origin_ca()  # Fail before service downtime if CA is absent or unsafe.
     version = command(["node", "--version"]).decode().strip()
     if not re.fullmatch(r"v24\.\d+\.\d+", version):
         raise Gate("NODE_24_REQUIRED")
@@ -754,7 +832,7 @@ def migrate_live_database(source: Path, db: Path) -> bool:
     return True
 
 
-def rollout(sha: str, *, stage_only: bool = False) -> None:
+def rollout(sha: str, *, stage_only: bool = False, backend_only: bool = False) -> None:
     (old_backend, old_static, db, old_env, old_caddy,
      new_caddy, port, auth_py, approved_args) = preflight(sha)
     print("RELEASE_PREFLIGHT=PASS", flush=True)
@@ -762,14 +840,17 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
         source = source_archive(sha, Path(workdir))
         backend_candidate = BACKEND_ROOT / "releases" / sha
         static_candidate = STATIC_ROOT / "releases" / sha
+        if backend_only:
+            verify_predeployed_four_provider_ui(source, old_static)
         if (backend_candidate.exists() or backend_candidate.is_symlink() or
-                static_candidate.exists() or static_candidate.is_symlink()):
+                (not backend_only and
+                 (static_candidate.exists() or static_candidate.is_symlink()))):
             raise Gate("RELEASE_ALREADY_STAGED")
         stage_step = "COPY_BACKEND"
         try:
             new_backend = stage_backend(source, sha, old_backend)
             stage_step = "BUILD_STATIC"
-            new_static = stage_static(source, sha)
+            new_static = old_static if backend_only else stage_static(source, sha)
             stage_step = "CREATE_ISOLATED_PYTHON"
             isolated_site = stage_isolated_python(auth_py, new_backend, source)
             stage_step = "READ_SERVICE_PROCESS"
@@ -844,7 +925,9 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
             try:
                 if (current_release(BACKEND_ROOT) == old_backend and
                         current_release(STATIC_ROOT) == old_static):
-                    for candidate in (backend_candidate, static_candidate):
+                    candidates = ((backend_candidate,) if backend_only else
+                                  (backend_candidate, static_candidate))
+                    for candidate in candidates:
                         if candidate.is_dir() and not candidate.is_symlink():
                             shutil.rmtree(candidate)
                     print("FAILED_STAGING_CLEANED=YES", flush=True)
@@ -871,10 +954,13 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
             if (current_release(BACKEND_ROOT) != old_backend or
                     current_release(STATIC_ROOT) != old_static):
                 raise Gate("STAGE_ONLY_RELEASE_CHANGED")
-            for candidate, parent in (
-                (backend_candidate, BACKEND_ROOT / "releases"),
-                (static_candidate, STATIC_ROOT / "releases"),
-            ):
+            candidates = (
+                ((backend_candidate, BACKEND_ROOT / "releases"),)
+                if backend_only else
+                ((backend_candidate, BACKEND_ROOT / "releases"),
+                 (static_candidate, STATIC_ROOT / "releases"))
+            )
+            for candidate, parent in candidates:
                 if (candidate.is_symlink() or
                         candidate.parent.resolve(strict=True) != parent.resolve(strict=True) or
                         not candidate.is_dir()):
@@ -930,14 +1016,12 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
             atomic_file(CADDY_SITE, new_caddy.encode("utf-8"), None)
             command(["caddy", "validate", "--config", str(CADDY_MAIN)], timeout=30)
             command(["systemctl", "reload", "caddy.service"], timeout=30)
-            switch_release(STATIC_ROOT, new_static)
+            if not backend_only:
+                switch_release(STATIC_ROOT, new_static)
             validate_running_oauth(port, PROVIDERS)
-            # HTTPS origin HTTP response must actually reach production auth.
-            data = command([
-                "curl", "--fail", "--silent", "--show-error",
-                "--max-time", "12", "--resolve", HOST + ":443:127.0.0.1",
-                "https://" + HOST + "/api/auth/providers",
-            ], timeout=16)
+            # Caddy is on :8444; :443 is Xray on this VPS. Verify both
+            # hostname and trust chain with the pinned Cloudflare Origin RSA CA.
+            data = public_oauth_providers_over_verified_origin()
             try:
                 exposed = json.loads(data)
             except ValueError as exc:
@@ -953,6 +1037,8 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
             print("PRODUCTION_OAUTH=DEPLOYED", flush=True)
             print("DEPLOYED_COMMIT=" + sha, flush=True)
             print("PUBLIC_PROVIDERS=google,yandex,vk,telegram", flush=True)
+            print("STATIC_FRONTEND_REUSED=" + ("YES" if backend_only else "NO"),
+                  flush=True)
             print("TELEGRAM=ENABLED", flush=True)
             print("EMAIL_REGISTRATION_GATE=UNCHANGED", flush=True)
             print("DATABASE_MIGRATED=" +
@@ -969,7 +1055,8 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
                     if DROPIN.exists():
                         DROPIN.unlink()
                     switch_release(BACKEND_ROOT, old_backend)
-                    switch_release(STATIC_ROOT, old_static)
+                    if not backend_only:
+                        switch_release(STATIC_ROOT, old_static)
                     command(["systemctl", "daemon-reload"], timeout=25)
                     command(["systemctl", "restart", SERVICE], timeout=40)
                     command(["caddy", "validate", "--config", str(CADDY_MAIN)], timeout=30)
@@ -1055,13 +1142,17 @@ def main() -> int:
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--apply", action="store_true")
     action.add_argument("--stage-only", action="store_true")
+    parser.add_argument("--backend-only", action="store_true",
+                        help="Re-use vetted live static UI without changing PWA")
     args = parser.parse_args()
     try:
         if args.apply:
-            rollout(args.sha)
+            rollout(args.sha, backend_only=args.backend_only)
         elif args.stage_only:
-            rollout(args.sha, stage_only=True)
+            rollout(args.sha, stage_only=True, backend_only=args.backend_only)
         else:
+            if args.backend_only:
+                raise Gate("BACKEND_ONLY_ACTION_REQUIRED")
             preflight(args.sha)
             print("RELEASE_PREFLIGHT=PASS")
             print("DEPLOYMENT_NOT_STARTED=YES")

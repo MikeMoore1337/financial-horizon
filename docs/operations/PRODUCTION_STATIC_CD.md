@@ -117,6 +117,33 @@ sudo bash deploy/provision-fh-static-deploy.sh \
 `/var/lib/fh-deploy-ssh`, `/var/lib/fh-static-deploy`, обработчик
 `/usr/local/sbin/fh-main-deploy` и sudoers.
 
+## Предварительная проверка SSH из GitHub Actions (без деплоя)
+
+После создания GitHub Environment `production-static` и четырёх
+Environment Secrets выполните **сначала** отдельный
+[Financial Horizon restricted SSH preflight](https://github.com/MikeMoore1337/financial-horizon/actions/workflows/fh-static-ssh-preflight.yml):
+`Run workflow` в ветке `main`. Workflow ничего не загружает, не выполняет
+`git checkout` и не переключает `current`; он выполняет только
+намеренно запрещённую команду `whoami` через restricted SSH.
+Точный ED25519 host fingerprint и `known_hosts` проверяются до подключения.
+Только ответ `FH_DEPLOY_FAILED=COMMAND_REJECTED` с SSH exit 1 считается PASS.
+
+Ожидаются: `SSH_HOST_IDENTITY=PASS`, `SSH_AUTHENTICATION=PASS`,
+`SSH_FORCED_COMMAND_DENIAL=PASS`, `SSH_PREFLIGHT=PASS`,
+`PRODUCTION_DEPLOY_PERFORMED=NO`.
+Если результат иной, **не** запускайте production-deploy workflow:
+проверяйте SSH connectivity, ключи и firewall, не ослабляя защиту.
+
+**Перед первым настоящим релизом** сравните текущую установленную на
+VPS версию с `main`. На 09.11.2026 последний operator-preflight указывал
+`1e536fff97cfde9698924d01cf3bd6a666afeb7a`, а GitHub `main` =
+`a9fa2e85aeda92b26da4d88cdc4f429fda914dd5`, то есть разница
+**220 коммитов**. Первый ручной деплой является **кумулятивным релизом**,
+а не проверкой одной строки. Требуется независимая приёмка именно
+этого набора изменений, возможность восстановления предыдущей PWA/IndexedDB
+и управляемое окно выпуска. Нельзя использовать первый real deploy
+вместо безвредного SSH-пробника.
+
 ## Environment и Secrets
 
 Создать в GitHub `Settings → Environments → production-static`,
