@@ -57,14 +57,14 @@ export function parseReservePeriodHint(note: unknown): ReservePeriodHint | null 
   // Explanatory payment-year/month metadata may precede an actual competing
   // interval. Strip only one bounded, well-formed annotation for the immediate
   // check; separately look for explicit alternatives anywhere in the suffix.
-  const explanatoryPrefix = /^\s*\(\s*(?:год|месяц)\s+оплаты(?!\p{L})[^()]{0,80}\)\s*/u;
+  const explanatoryPrefix = /^\s*\(\s*(?:год|месяц)\s+оплаты\s*(?:[-—]\s*)?(?:\d{4}|[а-яё]+)(?:\s+и\s+(?:год|месяц)\s+оплаты\s*(?:[-—]\s*)?(?:\d{4}|[а-яё]+))?\s*\)\s*/u;
   const laterConnector = /(?<![\p{L}\p{N}])(?:или|либо|и|\/|\+)(?!\p{L})/gu;
   const invalidContinuation = (rest: string): ReservePeriodHint | null => {
     const immediate = rest.replace(explanatoryPrefix, '');
     let tail = trailingCountedPeriod.exec(immediate) ?? trailingNamedAlternative.exec(immediate);
     if (!tail) {
-      for (const connector of rest.matchAll(laterConnector)) {
-        const afterConnector = rest.slice(connector.index ?? 0);
+      for (const connector of immediate.matchAll(laterConnector)) {
+        const afterConnector = immediate.slice(connector.index ?? 0);
         tail = trailingCountedPeriod.exec(afterConnector) ?? trailingNamedAlternative.exec(afterConnector);
         if (tail) break;
       }
