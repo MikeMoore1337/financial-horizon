@@ -1,4 +1,5 @@
 import type { GoalsScreenModel } from '../../domain/goals/presentation.ts';
+import type { GoalEvent, GoalInstallment } from '../../domain/goals/types.ts';
 import './goals-preview.css';
 
 const categoryLabel: Record<string, string> = {
@@ -13,6 +14,28 @@ const statusLabel: Record<string, string> = {
   active: 'В процессе',
   completed: 'Завершена',
   archived: 'В архиве',
+};
+
+const installmentStatusLabel: Record<GoalInstallment['status'], string> = {
+  upcoming: 'Ожидается',
+  paid: 'Оплачено',
+  partial: 'Частично внесено',
+  missed: 'Пропущено',
+  skipped: 'Пропущено по плану',
+  unnecessary: 'Не требуется',
+};
+
+const historyEventLabel: Record<GoalEvent['type'], string> = {
+  create: 'Создание цели',
+  update: 'Изменение цели',
+  contribution: 'Пополнение',
+  use: 'Использование средств',
+  skip: 'Пропуск взноса',
+  void: 'Отмена операции',
+  complete: 'Завершение цели',
+  reopen: 'Возобновление цели',
+  archive: 'Архивация',
+  restore: 'Восстановление',
 };
 
 export interface GoalsPreviewProps {
@@ -31,6 +54,11 @@ export interface GoalsPreviewProps {
  */
 export function GoalsPreview({ model, rubles, formatDate, onSelect }: GoalsPreviewProps) {
   const chosen = model.selected;
+  // Installments are returned from the goal's creation date. Show the next
+  // twelve due dates from the model's date, not the oldest historical rows.
+  const nextInstallments = chosen?.installments
+    .filter((row) => row.dueOn > model.asOf)
+    .slice(0, 12) ?? [];
   return (
     <section className="goals-preview" aria-labelledby="goals-preview-heading">
       <header className="page-header">
@@ -102,22 +130,28 @@ export function GoalsPreview({ model, rubles, formatDate, onSelect }: GoalsPrevi
             <div><small>Прогноз</small>
               <strong>{chosen.card.projectedCompletionDate ? formatDate(chosen.card.projectedCompletionDate) : 'Не рассчитан'}</strong>
             </div>
-            <div><small>Дефицит взноса</small><strong>{rubles(chosen.snapshot.monthlyDeficitCents ?? 0)}</strong></div>
+            <div><small>Дефицит взноса</small><strong>{
+              chosen.snapshot.monthlyDeficitCents === null
+                ? 'Невозможно рассчитать'
+                : rubles(chosen.snapshot.monthlyDeficitCents)
+            }</strong></div>
           </div>
           <h3>Ближайшие взносы</h3>
           <ul className="goals-preview-rows">
-            {chosen.installments.slice(0, 12).map(row => (
-              <li key={row.dueOn}>
-                <span>{formatDate(row.dueOn)} <small>{row.status}</small></span>
-                <strong>{rubles(row.actualCents)} / {rubles(row.plannedCents)}</strong>
-              </li>
-            ))}
+            {nextInstallments.length === 0
+              ? <li>Предстоящих взносов нет.</li>
+              : nextInstallments.map(row => (
+                <li key={row.dueOn}>
+                  <span>{formatDate(row.dueOn)} <small>{installmentStatusLabel[row.status]}</small></span>
+                  <strong>{rubles(row.actualCents)} / {rubles(row.plannedCents)}</strong>
+                </li>
+              ))}
           </ul>
           <h3>История</h3>
           <ul className="goals-preview-rows">
             {chosen.history.slice(0, 20).map(item => (
               <li key={item.eventId}>
-                <span>{formatDate(item.on)} <small>{item.type}{item.reversed ? ' · Отменено' : ''}</small></span>
+                <span>{formatDate(item.on)} <small>{historyEventLabel[item.type]}{item.reversed ? ' · Отменено' : ''}</small></span>
                 <strong>{item.amountCents === null ? '' : rubles(item.amountCents)}</strong>
               </li>
             ))}
