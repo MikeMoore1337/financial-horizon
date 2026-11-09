@@ -221,6 +221,45 @@ function canonicalNumberTokens(text) {
   return !quoted;
 }
 
+// JSON.parse silently keeps only the final value for duplicate object keys.
+// A forged wire ACK could then appear equal to a different delta. Scan raw JSON
+// (including Unicode-escaped names) before parsing, and fail closed on aliases.
+function uniqueJsonObjectKeys(text) {
+  const frames = [];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '"') {
+      const start = i;
+      i++;
+      for (; i < text.length; i++) {
+        if (text[i] === '\\') { i++; continue; }
+        if (text[i] === '"') break;
+      }
+      if (i >= text.length) return false;
+      let next = i + 1;
+      while (next < text.length &&
+             (text[next] === ' ' || text[next] === '\t' ||
+              text[next] === '\r' || text[next] === '\n')) next++;
+      if (text[next] === ':' && frames.length &&
+          frames[frames.length - 1].kind === '{') {
+        const frame = frames[frames.length - 1];
+        const key = inertJsonParse(text.slice(start, i + 1));
+        if (frame.keys.has(key) || frame.keys.size >= 128) return false;
+        frame.keys.add(key);
+      }
+      continue;
+    }
+    if (c === '{' || c === '[') {
+      frames.push({ kind: c, keys: c === '{' ? new Set() : null });
+      if (frames.length > 32) return false;
+    } else if (c === '}' || c === ']') {
+      const frame = frames.pop();
+      if (!frame || frame.kind !== (c === '}' ? '{' : '[')) return false;
+    }
+  }
+  return frames.length === 0;
+}
+
 const inertJsonParse = JSON.parse;
 const MAX_INPUT_CODE_UNITS = 2_000_000;
 
@@ -230,7 +269,7 @@ export function checkV1AckDeltaShape(rawJson) {
   try {
     // JSON.parse returns fresh, ordinary data without Proxy, accessors,
     // aliases or arbitrary prototypes; no input object is read twice.
-    if (!canonicalNumberTokens(rawJson)) return 'RECOVERY_HOLD';
+    if (!canonicalNumberTokens(rawJson) || !uniqueJsonObjectKeys(rawJson)) return 'RECOVERY_HOLD';
     return checkV1AckDeltaShapeInner(inertJsonParse(rawJson));
   } catch {
     return 'RECOVERY_HOLD';

@@ -155,3 +155,35 @@ test('inactive shape guard rejects forged ACK, iterator and exponential alias gr
     return checkV1AckDeltaShape(null);
   })).toBe('RECOVERY_HOLD');
 });
+
+test('wire duplicate keys and escaped duplicate names HOLD in Chromium/WebKit', async ({ page, context }) => {
+  await context.route('**/__e2e_fh_v1_guard__.js', route => route.fulfill({
+    status: 200, contentType: 'text/javascript', body: source,
+    headers: { 'Cache-Control': 'no-store' },
+  }));
+  await page.goto('/__e2e__/ready');
+  const decisions = await page.evaluate(async () => {
+    const { checkV1AckDeltaShape: check } = await import('/__e2e_fh_v1_guard__.js');
+    const id = '00000000-0000-4000-8000-0000000000a1';
+    const event = { revision: 4, ordinal: 0, kind: 'upsert',
+      entity_id: '00000000-0000-4000-8000-0000000000b1',
+      entity_revision: 1, payload: { amount_minor: 100 } };
+    const fixture = {
+      startCursor: 3, mutationId: id,
+      pages: [{ schema_version: 1, from_revision: 3, to_revision: 4,
+        next_since_revision: 4, has_more: false, changes: [event] }],
+      ack: { schema_version: 1, client_mutation_id: id,
+        revision: 4, replayed: true, changes: [event] },
+    };
+    const raw = JSON.stringify(fixture);
+    return [
+      check(raw),
+      check(raw.replace('"amount_minor":100', '"amount_minor":999,"amount_minor":100')),
+      check(raw.replace('"amount_minor":100', '"amount_minor":999,"\\u0061mount_minor":100')),
+      check(raw.replace('"amount_minor":100', '"amount_minor":100,"note":"quoted \\"key\\":{}"')),
+    ];
+  });
+  expect(decisions).toEqual([
+    'MATCHED_STRUCTURALLY', 'RECOVERY_HOLD', 'RECOVERY_HOLD', 'RECOVERY_HOLD',
+  ]);
+});

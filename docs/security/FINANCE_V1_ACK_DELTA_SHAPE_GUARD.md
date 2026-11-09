@@ -19,6 +19,7 @@ At #67 PR #100 HEAD `de4da1d75e93649e9cfdada06f10273ee8cccd4e`, v1 `Delta.change
 
 `checkV1AckDeltaShape(rawJson)` accepts **only a string** containing complete
 wire JSON (max 2,000,000 UTF-16 code units), not an arbitrary object graph.
+A second bounded preflight rejects duplicate decoded JSON object keys, including Unicode-escaped aliases, before JSON.parse can silently discard earlier conflicting financial values. The rejection applies to all pages, not only the acknowledged revision.
 This deliberately breaks the draft object-input signature: browsers cannot
 reliably identify a Proxy without invoking its traps, while descriptor checks
 can be bypassed by mutable proxy reads. Every numeric payload value that parses as an integer must be a JavaScript safe integer. In addition, a bounded lexical preflight requires **all JSON number tokens** to equal their JavaScript canonical numeric serialization *before* JSON.parse; it rejects fractional/underflow/unsafe-precision collisions such as `100` vs `100.000000000000001` or `0` vs `1e-400`. This intentionally rejects some valid but non-canonical wire-number spellings and must be reconciled with the versioned #67 finance DTO before any runtime use. The fresh native `JSON.parse` result

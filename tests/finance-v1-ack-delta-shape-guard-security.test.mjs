@@ -153,3 +153,23 @@ test('rejects rounded fractional and underflow ACK/delta numeric collisions', ()
   quoted.ack.changes[0].payload.details.values[0] = '1e-400';
   assert.equal(guard(JSON.stringify(quoted)), 'MATCHED_STRUCTURALLY');
 });
+
+test('P2: duplicate JSON object keys are rejected before JSON.parse discards first value', () => {
+  const raw = JSON.stringify(fixture());
+  const marker = '"values":[1]';
+  assert.equal(guard(raw), 'MATCHED_STRUCTURALLY');
+  const ordinaryDuplicate = raw.replace(marker, '"values":[999],"values":[1]');
+  assert.equal(JSON.parse(ordinaryDuplicate).pages[0].changes[0].payload.details.values[0], 1);
+  assert.equal(guard(ordinaryDuplicate), 'RECOVERY_HOLD');
+  const escapedDuplicate = raw.replace(marker, '"values":[999],"\\u0076alues":[1]');
+  assert.equal(JSON.parse(escapedDuplicate).pages[0].changes[0].payload.details.values[0], 1);
+  assert.equal(guard(escapedDuplicate), 'RECOVERY_HOLD');
+  // Duplicates in unrelated pages should also fail closed, not be ignored.
+  const anotherPage = raw.replace('"values":[2]', '"values":[999],"values":[2]');
+  assert.equal(guard(anotherPage), 'RECOVERY_HOLD');
+  // Names repeated in different objects are legal and ordinary text is inert.
+  const valid = fixture();
+  valid.pages[0].changes[0].payload.details.values[0] = 'quoted "values":{}';
+  valid.ack.changes[0].payload.details.values[0] = 'quoted "values":{}';
+  assert.equal(guard(JSON.stringify(valid)), 'MATCHED_STRUCTURALLY');
+});
