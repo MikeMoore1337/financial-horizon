@@ -673,10 +673,82 @@ class ReleaseContracts(unittest.TestCase):
             printed = output.getvalue()
             self.assertIn("SAFE_EXCEPTION_CATEGORY=" + expected, printed)
             self.assertIn("SAFE_EXCEPTION_STAGE=UNKNOWN", printed)
+            self.assertIn("SAFE_EXCEPTION_LINE=0", printed)
+            self.assertIn("SAFE_ROLLOUT_LINE=0", printed)
             self.assertIn("RAW_EXCEPTION_PRINTED=NO", printed)
             self.assertIn("FAILURE_CODE=UNEXPECTED_RUNTIME", printed)
             self.assertNotIn("SECRET", printed)
             self.assertNotIn("/root", printed)
+
+    def test_missing_subprocess_command_has_redacted_specific_function_and_line(self):
+        missing = FileNotFoundError(
+            2, "SENSITIVE private failure",
+            "/hidden/secret/bin/runuser",
+        )
+        with mock.patch.object(release.subprocess, "run",
+                               side_effect=missing):
+            try:
+                release.command(["runuser", "-u", "fake", "--", "true"])
+            except FileNotFoundError as exc:
+                category, stage, line, caller, target = \
+                    release.safe_runtime_diagnostics(exc)
+            else:
+                self.fail("Missing command was not detected")
+        self.assertEqual(category, "OS_FILE_NOT_FOUND")
+        self.assertEqual(stage, "COMMAND")
+        self.assertGreater(line, 0)
+        self.assertEqual(caller, 0)
+        self.assertEqual(target, "COMMAND_RUNUSER")
+        self.assertNotIn("SENSITIVE", target)
+        self.assertNotIn("secret", target)
+
+    def test_staging_missing_resource_emits_exact_phase_without_downtime(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            backend, static = base / "auth", base / "static"
+            for folder in (backend, static):
+                previous = folder / "releases" / "previous"
+                previous.mkdir(parents=True)
+                (folder / "current").symlink_to(previous)
+            db = base / "sqlite.db"
+            original = [
+                "/usr/bin/python3", "-m", "uvicorn", "fh_email_auth.app:app",
+                "--host", "127.0.0.1", "--port", "9141",
+                "--no-access-log",
+            ]
+            safe_args = release.safe_uvicorn_argv(original, 9141)
+            state = (
+                backend / "releases" / "previous",
+                static / "releases" / "previous",
+                db, b"OFF=true", "old-caddy", "new-caddy", 9141,
+                Path("/usr/bin/python3"), safe_args,
+            )
+            with ExitStack() as stack:
+                def p(name, obj):
+                    stack.enter_context(mock.patch.object(release, name, obj))
+                p("BACKEND_ROOT", backend)
+                p("STATIC_ROOT", static)
+                p("preflight", mock.Mock(return_value=state))
+                p("source_archive", mock.Mock(return_value=base))
+                p("stage_backend", mock.Mock(side_effect=FileNotFoundError(
+                    2, "secret-error", "/hidden/secret/filename"
+                )))
+                stop = mock.Mock(side_effect=AssertionError("service must stay alive"))
+                p("command", stop)
+                with redirect_stdout(io.StringIO()) as output:
+                    with self.assertRaises(FileNotFoundError) as caught:
+                        release.rollout(SHA, stage_only=True)
+                diagnosis = release.safe_runtime_diagnostics(caught.exception)
+            self.assertIn("FAILED_STAGING_STEP=COPY_BACKEND", output.getvalue())
+            self.assertIn("FAILED_STAGING_CLEANED=YES", output.getvalue())
+            self.assertEqual(release.current_release(backend), state[0])
+            self.assertEqual(release.current_release(static), state[1])
+            stop.assert_not_called()
+            self.assertEqual(diagnosis[0], "OS_FILE_NOT_FOUND")
+            self.assertEqual(diagnosis[1], "STAGE_BACKEND")
+            self.assertGreater(diagnosis[2], 0)
+            self.assertGreater(diagnosis[3], 0)
+            self.assertEqual(diagnosis[4], "OTHER")
 
     def test_one_command_without_apply_only_checks_preflight(self):
         with mock.patch.object(release, "preflight", return_value=None) as check, \
