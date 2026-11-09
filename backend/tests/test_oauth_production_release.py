@@ -379,6 +379,22 @@ class ReleaseContracts(unittest.TestCase):
                     modules, pythonpath, modules / "python", args
                 )
 
+    def test_shebang_launcher_uses_new_private_runtime_not_old_script(self):
+        # Linux /proc/PID/cmdline for a console script may be:
+        # python /old/current/.venv/bin/uvicorn app:app --flags...
+        argv = [
+            "/opt/financial-horizon-auth/current/.venv/bin/python",
+            "/opt/financial-horizon-auth/current/.venv/bin/uvicorn",
+            "fh_email_auth.app:app", "--host", "127.0.0.1",
+            "--port", "9141", "--no-access-log",
+        ]
+        normalized = release.safe_uvicorn_argv(argv, 9141)
+        self.assertEqual(normalized, [
+            "fh_email_auth.app:app", "--host", "127.0.0.1",
+            "--port", "9141", "--no-access-log",
+        ])
+        self.assertNotIn("/current/", " ".join(normalized))
+
     def test_unknown_or_insecure_launchers_block_before_downtime(self):
         base = ["-m", "uvicorn", "fh_email_auth.app:app",
                 "--host", "127.0.0.1", "--port", "9141", "--no-access-log"]
