@@ -1,5 +1,8 @@
 import {cents,rubles,numberInput,monthKey,monthIndex,shiftMonth,monthLabel,dayInMonth,loanLedger,previewLoanPayment,getMonthEvents,monthTotals,createSampleState,isActive,emptyState,payoffMonths} from './finance.js';
-import {readState,updateState,replaceState,askPersistentStorage,storageStatus,selectStateScope} from './storage.js?rev=auth-scopes-v18';
+// Namespace import keeps mixed old-SW/new-shell compatibility even if an
+// earlier cached storage module does not export the new revocation hook.
+import * as legacyStorage from './storage.js?rev=auth-scopes-v18';
+const {readState,updateState,replaceState,askPersistentStorage,storageStatus,selectStateScope}=legacyStorage;
 import {encryptBackup,decryptBackup} from './backup.js';
 import {parseSchedule} from './schedule.js';
 import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.js';
@@ -17,6 +20,18 @@ let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),
 const emailSession=createEmailSession();
 let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
 const GUEST_MODE_KEY='fh-guest-session-v2';
+function revokeDisplayedLedger(){
+ // Always clear UI, including if an obsolete mixed-version cache lacks the
+ // synchronous revocation hook. Account mode is gated at startup below.
+ if(typeof legacyStorage.revokeStateScope==='function')legacyStorage.revokeStateScope();
+ state=null;restoreFile=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
+ $('#main').replaceChildren();
+ for(const dialog of document.querySelectorAll('dialog')){
+  if(dialog.open)dialog.close();
+  dialog.replaceChildren();
+ }
+}
+
 const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
 const monthEvents=()=>getMonthEvents(state,ui.month);
 function toast(message,kind='success'){$('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('visible'),3800);$('#save-indicator').textContent=kind==='error'?'Ошибка':'Сохранено на устройстве';}
@@ -46,7 +61,7 @@ async function refreshEmailSession(){
  const pending=(async()=>{
   const verified=await emailSession.refresh();
   if(!verified||emailSession.userId!==activeUserId||!emailSession.email){
-   state=null;
+   revokeDisplayedLedger();
    window.location.replace('./account.html');
    return false;
   }
@@ -64,7 +79,7 @@ async function logoutEmailAccount(){
  try{
   if(await pending){
    // Revoke access to the displayed account before leaving the page.
-   state=null;
+   revokeDisplayedLedger();
    try{sessionStorage.removeItem(GUEST_MODE_KEY);}catch{}
    try{authBroadcast?.postMessage({type:'logout',userId:activeUserId});}catch{}
    window.location.replace('./account.html');
@@ -486,17 +501,13 @@ function bindEvents(){
  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&!guestMode&&activeUserId)void refreshEmailSession();});
  window.addEventListener('pageshow',event=>{
   if(!event.persisted||guestMode||!activeUserId)return;
-  // A restored page from back/forward cache must re-validate authorization
-  // before it can show any finance records.
-  state=null;
-  $('#main').textContent='Проверяем доступ к бухгалтерии…';
-  void (async()=>{
-   if(!await refreshEmailSession())return;
-   state=await readState();
-   render();
-  })().catch(()=>window.location.replace('./account.html'));
+  // A BFCache restore can contain stale rendered finance and modal values.
+  // Revoke first; the full new navigation repeats authentication and rebuilds
+  // forms from a clean document. Failed navigation remains blank, not stale.
+  revokeDisplayedLedger();
+  window.location.replace('./');
  });
- try{channel=new BroadcastChannel('financial-horizon-updates');channel.onmessage=async()=>{try{state=await readState();render();}catch(e){fail(e);}};}catch{}
+ try{channel=new BroadcastChannel('financial-horizon-updates');channel.onmessage=async()=>{if(!state)return;try{state=await readState();render();}catch(e){fail(e);}};}catch{}
 }
 async function init(){
  try{themeSet(localStorage.getItem('fh-theme')||((window.matchMedia?.('(prefers-color-scheme: dark)').matches)?'dark':'light'));}catch{themeSet('light');}
@@ -515,6 +526,10 @@ async function init(){
   if(guestMode){
    await selectStateScope(null);
   }else{
+   // A mismatched old cached storage.js has no abort hook. Fail closed for
+   // authenticated records rather than enabling a mixed-version session.
+   if(typeof legacyStorage.revokeStateScope!=='function')
+    throw Error('Обновите приложение через интернет для безопасного входа в финансовый профиль');
    // Validate the server session BEFORE reading any account ledger.
    const verified=await emailSession.refresh();
    if(!verified||!emailSession.userId){
@@ -527,7 +542,7 @@ async function init(){
     authBroadcast=new BroadcastChannel('fh-auth-session-v2');
     authBroadcast.onmessage=event=>{
      if(event.data?.type==='logout'&&event.data.userId===activeUserId){
-      state=null;
+      revokeDisplayedLedger();
       window.location.replace('./account.html');
      }
     };
