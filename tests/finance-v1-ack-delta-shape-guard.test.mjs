@@ -82,6 +82,15 @@ test('rejects stale/rebound ACK, untrusted schema and non-JSON payload', () => {
     b => { b.ack.schema_version = 2; },
     b => { b.ack.extra = 1; },
     b => { b.pages[0].changes[0].payload.entity.data.amount_minor = Infinity; },
+    b => { b.pages[1].changes[1].payload = { invalid: Infinity }; }, // unmatched delta must still be JSON
+    b => { b.pages[1].changes[0].payload = { invalid: () => 1 }; },
+    b => { b.pages[0].changes[0].payload = { invalid: new Date(0) };
+           b.ack.changes[0].payload = { invalid: new Date(0) }; },
+    b => { b.pages[0].changes[0].payload = { invalid: new Map() };
+           b.ack.changes[0].payload = { invalid: new Map() }; },
+    b => { b.pages[0].changes[0].payload = { invalid: { get secret() { return 'x'; } } }; },
+    b => { b.pages[1].changes[0].payload = { invalid: Array(2) }; },
+
     b => { b.startCursor = Number.MAX_SAFE_INTEGER; },
   ];
   for (const mutate of alters) {

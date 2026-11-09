@@ -10,6 +10,39 @@ const keys = (value, expected) =>
   expected.every(key => Object.hasOwn(value, key));
 const eventKeys = ['revision', 'ordinal', 'kind', 'entity_id', 'entity_revision', 'payload'];
 
+function isJsonValue(value, depth = 0) {
+  if (depth > 16) return false;
+  if (value === null) return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value !== 'object') return false;
+  if (Array.isArray(value)) {
+    if (value.length > 2048 || Reflect.ownKeys(value).length !== value.length + 1) {
+      return false;
+    }
+    for (let i = 0; i < value.length; i++) {
+      const item = Object.getOwnPropertyDescriptor(value, String(i));
+      if (!item || !Object.hasOwn(item, 'value') ||
+          !isJsonValue(item.value, depth + 1)) return false;
+    }
+    return true;
+  }
+  // Object-shaped JS values may not be JSON: Date, Map, non-enumerable
+  // properties, symbols and accessor getters are never HTTP JSON payloads.
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return false;
+  const names = Object.keys(value);
+  if (names.length > 128 || names.length !== Reflect.ownKeys(value).length) {
+    return false;
+  }
+  for (const name of names) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, name);
+    if (!descriptor || !Object.hasOwn(descriptor, 'value') ||
+        !isJsonValue(descriptor.value, depth + 1)) return false;
+  }
+  return true;
+}
+
 // The API carries JSON objects. Comparison is independent of property ordering
 // and rejects unexpected nesting or non-JSON values rather than serializing
 // a client-side surrogate for the server's Python canonical request digest.
@@ -38,7 +71,7 @@ function validEvent(event) {
     typeof event.entity_id === 'string' && uuid.test(event.entity_id) &&
     integer(event.entity_revision) && event.entity_revision > 0 &&
     event.payload !== null && typeof event.payload === 'object' &&
-    !Array.isArray(event.payload);
+    !Array.isArray(event.payload) && isJsonValue(event.payload);
 }
 
 // The comparison deliberately returns no "applied" proof. Only #67 authenticated
