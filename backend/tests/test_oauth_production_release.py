@@ -4,7 +4,7 @@ No real service, network call, database or production filesystem is modified.
 """
 from __future__ import annotations
 
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, ExitStack
 import importlib.util
 import io
 import os
@@ -35,11 +35,11 @@ STAGED = "\n".join([
 
 
 class ReleaseContracts(unittest.TestCase):
-    def test_only_three_provider_flags_enabled_and_telegram_stays_off(self):
+    def test_all_four_provider_flags_enabled_in_production_release(self):
         changed = release.replace_flags(STAGED)
         self.assertEqual(release.assignment(changed, "FH_ENABLE_CLOUD_AUTH"), ["true"])
-        self.assertEqual(release.assignment(changed, "FH_TELEGRAM_OAUTH_ENABLED"), ["false"])
-        for name in ("GOOGLE", "YANDEX", "VK"):
+        self.assertEqual(release.assignment(changed, "FH_TELEGRAM_OAUTH_ENABLED"), ["true"])
+        for name in ("GOOGLE", "YANDEX", "VK", "TELEGRAM"):
             self.assertEqual(
                 release.assignment(changed, f"FH_{name}_OAUTH_ENABLED"), ["true"]
             )
@@ -84,7 +84,8 @@ class ReleaseContracts(unittest.TestCase):
         self.assertIn("respond \"Forbidden\" 403", updated)
         self.assertIn("/api/auth/email/logout-others", updated)
         self.assertNotIn("/api/auth/email/register", updated)
-        self.assertNotIn("/api/auth/oauth/telegram/start", updated)
+        self.assertIn("/api/auth/oauth/telegram/start", updated)
+        self.assertIn("/api/auth/oauth/telegram/callback", updated)
         self.assertLess(updated.index("handle @fh_oauth_live_get"),
                         updated.index("handle @owner_oauth_canary"))
         with self.assertRaises(release.Gate):
@@ -93,9 +94,9 @@ class ReleaseContracts(unittest.TestCase):
     def test_session_and_provider_readiness_have_explicit_negative_checks(self):
         def fake_http(_port, path):
             if path == "/api/auth/providers":
-                return 200, b'{"enabled":true,"providers":["google","yandex","vk"]}'
+                return 200, b'{"enabled":true,"providers":["telegram","google","yandex","vk"]}'
             if path == "/api/auth/oauth/telegram/start":
-                return 404, b'{"detail":"not available"}'
+                return 303, b""
             if path == "/api/auth/email/me":
                 return 200, b'{"authenticated":false,"user":null}'
             raise AssertionError(path)
@@ -104,12 +105,21 @@ class ReleaseContracts(unittest.TestCase):
             release.validate_running_oauth(9141, release.PROVIDERS)
         def bad_telegram(_port, path):
             if path == "/api/auth/oauth/telegram/start":
-                return 303, b""
+                return 404, b""
             return fake_http(_port, path)
         with mock.patch.object(release, "http_probe", side_effect=bad_telegram):
             with self.assertRaises(release.Gate) as result:
                 release.validate_running_oauth(9141, release.PROVIDERS)
-            self.assertEqual(result.exception.code, "TELEGRAM_NOT_DISABLED")
+            self.assertEqual(result.exception.code, "TELEGRAM_START_UNAVAILABLE")
+
+        def missing_telegram(_port, path):
+            if path == "/api/auth/providers":
+                return 200, b'{"enabled":true,"providers":["google","yandex","vk"]}'
+            return fake_http(_port, path)
+        with mock.patch.object(release, "http_probe", side_effect=missing_telegram):
+            with self.assertRaises(release.Gate) as result:
+                release.validate_running_oauth(9141, release.PROVIDERS)
+            self.assertEqual(result.exception.code, "OAUTH_PROVIDERS_UNEXPECTED")
 
     def test_release_switch_keeps_previous_tree_for_rollback(self):
         with tempfile.TemporaryDirectory() as root:
@@ -451,11 +461,13 @@ class ReleaseContracts(unittest.TestCase):
                 mock.patch.object(release.pwd, "getpwnam", return_value=account):
             release.verify_service_user_module_access(python, source, env)
         self.assertEqual(len(calls), 5)
-        self.assertEqual(
-            calls[-1][0][:5],
-            ["runuser", "-u", "fh-email-auth", "--", str(python)]
-        )
+        self.assertEqual(calls[-1][0][:2], [str(python), "-c"])
+        self.assertEqual(calls[1][0][:2], ["test", "-x"])
+        self.assertEqual(calls[2][0][:2], ["test", "-r"])
         self.assertTrue(all(call[1]["cwd"] == source for call in calls[1:]))
+        self.assertTrue(all(call[1]["run_as"] == (9001, 9002)
+                            for call in calls[1:]))
+        self.assertFalse(any(args[0] == "runuser" for args, _ in calls))
         self.assertEqual(calls[1][1]["failure_code"],
                          "STAGED_SOURCE_NOT_TRAVERSABLE")
         self.assertEqual(calls[2][1]["failure_code"],
@@ -467,6 +479,38 @@ class ReleaseContracts(unittest.TestCase):
         self.assertEqual(service_env["PYTHONNOUSERSITE"], "1")
         self.assertEqual(service_env["HOME"], "/nonexistent")
         self.assertNotIn("FH_SESSION_SECRET", service_env)
+
+    def test_service_user_checks_drop_privileges_without_external_runuser(self):
+        process = SimpleNamespace(returncode=0, stdout=b"ok")
+        with mock.patch.object(release.subprocess, "run", return_value=process) as invoke, \
+                mock.patch.object(release.os, "geteuid", return_value=0):
+            self.assertEqual(
+                release.command(["/usr/bin/python3", "-c", "pass"],
+                                run_as=(9001, 9002)), b"ok"
+            )
+        self.assertEqual(invoke.call_args.args[0],
+                         ["/usr/bin/python3", "-c", "pass"])
+        opts = invoke.call_args.kwargs
+        self.assertEqual(opts["user"], 9001)
+        self.assertEqual(opts["group"], 9002)
+        self.assertEqual(opts["extra_groups"], [])
+        self.assertFalse(opts["check"])
+
+    def test_service_user_checks_refuse_root_or_unsafe_identity(self):
+        with mock.patch.object(release.subprocess, "run") as invoke, \
+                mock.patch.object(release.os, "geteuid", return_value=0):
+            for identity in ((0, 9002), (9001, 0), (-1, 9002),
+                             ("9001", 9002), (True, 9002)):
+                with self.subTest(identity=identity), self.assertRaises(release.Gate) as result:
+                    release.command(["test", "-x", "/tmp"], run_as=identity)
+                self.assertEqual(result.exception.code, "SERVICE_IDENTITY_UNSAFE")
+        invoke.assert_not_called()
+        with mock.patch.object(release.subprocess, "run") as invoke, \
+                mock.patch.object(release.os, "geteuid", return_value=1000):
+            with self.assertRaises(release.Gate) as result:
+                release.command(["test", "-x", "/tmp"], run_as=(9001, 9002))
+            self.assertEqual(result.exception.code, "SERVICE_IDENTITY_UNSAFE")
+        invoke.assert_not_called()
 
     def test_only_new_backend_gets_group_read_without_service_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -558,6 +602,205 @@ class ReleaseContracts(unittest.TestCase):
             result = release.safe_recent_service_error()
         self.assertEqual(result, "MODULE_NOT_FOUND")
         self.assertNotIn("PII", result)
+
+    def test_stage_only_prepares_same_release_then_cleans_without_downtime(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            backend = base / "auth"
+            static = base / "static"
+            for folder in (backend, static):
+                (folder / "releases").mkdir(parents=True)
+            old_backend = backend / "releases" / "previous"
+            old_static = static / "releases" / "previous"
+            old_backend.mkdir()
+            old_static.mkdir()
+            (backend / "current").symlink_to(old_backend)
+            (static / "current").symlink_to(old_static)
+            site = base / "site.caddy"
+            site.write_text("original", encoding="utf-8")
+            source = base / "source"
+            source.mkdir()
+            db = base / "auth.sqlite3"
+            old_env = b"TEST_ENV_DISABLED=true\n"
+            old_args = [
+                "/usr/bin/python3", "-m", "uvicorn", "fh_email_auth.app:app",
+                "--host", "127.0.0.1", "--port", "9141", "--no-access-log",
+            ]
+            approved = release.safe_uvicorn_argv(old_args, 9141)
+            calls = []
+
+            def fake_backend(src, sha, existing):
+                candidate = backend / "releases" / sha
+                (candidate / ".oauth-venv" / "bin").mkdir(parents=True)
+                (candidate / ".oauth-venv" / "bin" / "python").write_text(
+                    "fake executable"
+                )
+                (candidate / "backend").mkdir()
+                return candidate
+
+            def fake_static(src, sha):
+                candidate = static / "releases" / sha
+                candidate.mkdir()
+                return candidate
+
+            def fake_command(args, **kwargs):
+                calls.append(args)
+                if args[:4] == ["systemctl", "show", "--value", "-p"]:
+                    return b"fh-email-auth\n"
+                if args[:2] == ["systemctl", "stop"]:
+                    raise AssertionError("stage-only must not stop production")
+                return b""
+
+            preflight = (
+                old_backend, old_static, db, old_env, "original", "new",
+                9141, Path("/usr/bin/python3"), approved,
+            )
+            with ExitStack() as stack:
+                def patch(name, value):
+                    return stack.enter_context(mock.patch.object(release, name, value))
+
+                patch("BACKEND_ROOT", backend)
+                patch("STATIC_ROOT", static)
+                patch("CADDY_SITE", site)
+                patch("OAUTH_ENV", base / "oauth.env")
+                patch("preflight", mock.Mock(return_value=preflight))
+                patch("source_archive", mock.Mock(return_value=source))
+                patch("stage_backend", fake_backend)
+                patch("stage_static", fake_static)
+                patch("stage_isolated_python",
+                      mock.Mock(return_value=str(base / "synthetic-site")))
+                patch("running_process", mock.Mock(return_value=(
+                    123, old_args, {"FH_AUTH_DATABASE_PATH": str(db)}
+                )))
+                patch("staged_modules_root", lambda candidate: candidate / "backend")
+                patch("private_file", lambda path: old_env)
+                patch("verify_service_user_module_access", mock.Mock())
+                patch("systemd_oauth_dropin", mock.Mock(return_value=b"TEST_ONLY\n"))
+                patch("command", fake_command)
+                stack.enter_context(mock.patch.object(
+                    release.pwd, "getpwnam",
+                    return_value=SimpleNamespace(pw_uid=9001, pw_gid=9002,
+                                                 pw_dir="/nonexistent"),
+                ))
+                patch("save_private_release_receipt",
+                      mock.Mock(side_effect=AssertionError(
+                          "stage-only may not save production config"
+                      )))
+                with redirect_stdout(io.StringIO()) as output:
+                    release.rollout(SHA, stage_only=True)
+            self.assertIn("STAGE_ONLY=PASS", output.getvalue())
+            self.assertIn("LIVE_SERVICE_STOPPED=NO", output.getvalue())
+            self.assertEqual(release.current_release(backend), old_backend)
+            self.assertEqual(release.current_release(static), old_static)
+            self.assertFalse((backend / "releases" / SHA).exists())
+            self.assertFalse((static / "releases" / SHA).exists())
+            self.assertEqual(site.read_text(), "original")
+            self.assertFalse(any(args[:2] == ["systemctl", "stop"]
+                                 for args in calls))
+
+    def test_stage_only_cli_never_calls_apply_branch(self):
+        with mock.patch.object(release, "rollout") as rollout, \
+             mock.patch.object(release, "preflight") as preflight, \
+             mock.patch("sys.argv", [
+                 "release", "--sha", SHA, "--stage-only",
+             ]):
+            self.assertEqual(release.main(), 0)
+        rollout.assert_called_once_with(SHA, stage_only=True)
+        preflight.assert_not_called()
+
+    def test_unexpected_runtime_prints_only_safe_category(self):
+        for exc, expected in (
+            (PermissionError("SECRET PII /root/private"), "OS_PERMISSION_DENIED"),
+            (FileNotFoundError("SECRET PII"), "OS_FILE_NOT_FOUND"),
+            (NotImplementedError("SECRET PII"), "UNSUPPORTED_OS_OPERATION"),
+        ):
+            with self.subTest(category=expected), \
+                 mock.patch.object(release, "rollout", side_effect=exc), \
+                 mock.patch("sys.argv", ["release", "--sha", SHA, "--apply"]), \
+                 redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(release.main(), 1)
+            printed = output.getvalue()
+            self.assertIn("SAFE_EXCEPTION_CATEGORY=" + expected, printed)
+            self.assertIn("SAFE_EXCEPTION_STAGE=UNKNOWN", printed)
+            self.assertIn("SAFE_EXCEPTION_LINE=0", printed)
+            self.assertIn("SAFE_ROLLOUT_LINE=0", printed)
+            self.assertIn("RAW_EXCEPTION_PRINTED=NO", printed)
+            self.assertIn("FAILURE_CODE=UNEXPECTED_RUNTIME", printed)
+            self.assertNotIn("SECRET", printed)
+            self.assertNotIn("/root", printed)
+
+    def test_missing_subprocess_command_has_redacted_specific_function_and_line(self):
+        missing = FileNotFoundError(
+            2, "SENSITIVE private failure",
+            "/hidden/secret/bin/test",
+        )
+        with mock.patch.object(release.subprocess, "run",
+                               side_effect=missing):
+            try:
+                release.command(["test", "-x", "/staged/module"])
+            except FileNotFoundError as exc:
+                category, stage, line, caller, target = \
+                    release.safe_runtime_diagnostics(exc)
+            else:
+                self.fail("Missing command was not detected")
+        self.assertEqual(category, "OS_FILE_NOT_FOUND")
+        self.assertEqual(stage, "COMMAND")
+        self.assertGreater(line, 0)
+        self.assertEqual(caller, 0)
+        self.assertEqual(target, "COMMAND_TEST")
+        self.assertNotIn("SENSITIVE", target)
+        self.assertNotIn("secret", target)
+
+    def test_staging_missing_resource_emits_exact_phase_without_downtime(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            backend, static = base / "auth", base / "static"
+            for folder in (backend, static):
+                previous = folder / "releases" / "previous"
+                previous.mkdir(parents=True)
+                (folder / "current").symlink_to(previous)
+            db = base / "sqlite.db"
+            original = [
+                "/usr/bin/python3", "-m", "uvicorn", "fh_email_auth.app:app",
+                "--host", "127.0.0.1", "--port", "9141",
+                "--no-access-log",
+            ]
+            safe_args = release.safe_uvicorn_argv(original, 9141)
+            state = (
+                backend / "releases" / "previous",
+                static / "releases" / "previous",
+                db, b"OFF=true", "old-caddy", "new-caddy", 9141,
+                Path("/usr/bin/python3"), safe_args,
+            )
+            with ExitStack() as stack:
+                def p(name, obj):
+                    stack.enter_context(mock.patch.object(release, name, obj))
+                p("BACKEND_ROOT", backend)
+                p("STATIC_ROOT", static)
+                p("preflight", mock.Mock(return_value=state))
+                p("source_archive", mock.Mock(return_value=base))
+                p("stage_backend", mock.Mock(side_effect=FileNotFoundError(
+                    2, "secret-error", "/hidden/secret/filename"
+                )))
+                stop = mock.Mock(side_effect=AssertionError("service must stay alive"))
+                p("command", stop)
+                with redirect_stdout(io.StringIO()) as output:
+                    try:
+                        release.rollout(SHA, stage_only=True)
+                    except FileNotFoundError as exc:
+                        diagnosis = release.safe_runtime_diagnostics(exc)
+                    else:
+                        self.fail("Expected the missing staged backend to fail")
+            self.assertIn("FAILED_STAGING_STEP=COPY_BACKEND", output.getvalue())
+            self.assertIn("FAILED_STAGING_CLEANED=YES", output.getvalue())
+            self.assertEqual(release.current_release(backend), state[0])
+            self.assertEqual(release.current_release(static), state[1])
+            stop.assert_not_called()
+            self.assertEqual(diagnosis[0], "OS_FILE_NOT_FOUND")
+            self.assertEqual(diagnosis[1], "ROLLOUT")
+            self.assertGreater(diagnosis[2], 0)
+            self.assertGreater(diagnosis[3], 0)
+            self.assertEqual(diagnosis[4], "OTHER")
 
     def test_one_command_without_apply_only_checks_preflight(self):
         with mock.patch.object(release, "preflight", return_value=None) as check, \
