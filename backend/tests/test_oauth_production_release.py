@@ -705,7 +705,7 @@ class ReleaseContracts(unittest.TestCase):
                  "release", "--sha", SHA, "--stage-only",
              ]):
             self.assertEqual(release.main(), 0)
-        rollout.assert_called_once_with(SHA, stage_only=True)
+        rollout.assert_called_once_with(SHA, stage_only=True, backend_only=False)
         preflight.assert_not_called()
 
     def test_unexpected_runtime_prints_only_safe_category(self):
@@ -874,6 +874,135 @@ class ReleaseContracts(unittest.TestCase):
                                        side_effect=unsafe_metadata), \
                      self.assertRaisesRegex(release.Gate, "ORIGIN_CA_FILE_UNSAFE"):
                     release.verified_origin_ca()
+
+    def test_backend_only_static_must_match_verified_published_ui(self):
+        import json
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            source = base / "source"
+            active = base / "releases" / SHA
+            for path in (source, active):
+                path.mkdir(parents=True)
+                (path / "assets/providers").mkdir(parents=True)
+                for name in (
+                    "account-oauth.js", "auth-ui.js",
+                    "assets/providers/google.svg", "assets/providers/yandex.svg",
+                    "assets/providers/vk.svg", "assets/providers/telegram.svg",
+                    "index.html", "account.html", "sw.js", "manifest.webmanifest",
+                ):
+                    file = path / name
+                    file.write_text("synthetic " + name, encoding="utf-8")
+            (active / "__release.json").write_text(json.dumps({
+                "repository": "MikeMoore1337/financial-horizon",
+                "source_sha": SHA, "run_id": 12345,
+            }))
+            release.verify_predeployed_four_provider_ui(source, active)
+            (active / "assets/providers/telegram.svg").write_text("tampered")
+            with self.assertRaisesRegex(
+                release.Gate, "ACTIVE_OAUTH_UI_SOURCE_MISMATCH"
+            ):
+                release.verify_predeployed_four_provider_ui(source, active)
+            (active / "assets/providers/telegram.svg").write_text(
+                "synthetic assets/providers/telegram.svg"
+            )
+            (active / "__release.json").write_text(json.dumps({
+                "repository": "MikeMoore1337/financial-horizon",
+                "source_sha": "f" * 40, "run_id": 12345,
+            }))
+            with self.assertRaisesRegex(
+                release.Gate, "ACTIVE_STATIC_MANIFEST_MISMATCH"
+            ):
+                release.verify_predeployed_four_provider_ui(source, active)
+
+    def test_backend_only_stage_only_cannot_replace_live_static_pwa(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            backend, static = base / "auth", base / "static"
+            for folder in (backend, static):
+                (folder / "releases").mkdir(parents=True)
+            old_backend = backend / "releases" / "previous"
+            old_static = static / "releases" / "previous"
+            old_backend.mkdir()
+            old_static.mkdir()
+            (backend / "current").symlink_to(old_backend)
+            (static / "current").symlink_to(old_static)
+            site = base / "site.caddy"
+            site.write_text("unchanged")
+            db = base / "auth.sqlite3"
+            source = base / "source"
+            source.mkdir()
+            old_env = b"TEST_ENV_DISABLED=true\n"
+            args = [
+                "/usr/bin/python3", "-m", "uvicorn", "fh_email_auth.app:app",
+                "--host", "127.0.0.1", "--port", "9141", "--no-access-log",
+            ]
+            approved = release.safe_uvicorn_argv(args, 9141)
+            preflight = (old_backend, old_static, db, old_env, "unchanged",
+                         "new", 9141, Path("/usr/bin/python3"), approved)
+            verify = mock.Mock()
+            def fake_backend(src, sha, existing):
+                candidate = backend / "releases" / sha
+                (candidate / ".oauth-venv/bin").mkdir(parents=True)
+                (candidate / ".oauth-venv/bin/python").write_text("synthetic")
+                (candidate / "backend").mkdir()
+                return candidate
+            def fake_command(command, **kwargs):
+                if command[:4] == ["systemctl", "show", "--value", "-p"]:
+                    return b"fh-email-auth\n"
+                if command[:2] == ["systemctl", "stop"]:
+                    raise AssertionError("No downtime in stage-only")
+                return b""
+            with ExitStack() as stack:
+                def patch(name, value):
+                    return stack.enter_context(mock.patch.object(release, name, value))
+                patch("BACKEND_ROOT", backend)
+                patch("STATIC_ROOT", static)
+                patch("CADDY_SITE", site)
+                patch("OAUTH_ENV", base / "oauth.env")
+                patch("preflight", mock.Mock(return_value=preflight))
+                patch("source_archive", mock.Mock(return_value=source))
+                patch("verify_predeployed_four_provider_ui", verify)
+                patch("stage_backend", fake_backend)
+                patch("stage_static", mock.Mock(
+                    side_effect=AssertionError("Do not build/redeploy static")))
+                patch("stage_isolated_python",
+                      mock.Mock(return_value=str(base / "synthetic-site")))
+                patch("running_process", mock.Mock(return_value=(
+                    123, args, {"FH_AUTH_DATABASE_PATH": str(db)}
+                )))
+                patch("staged_modules_root", lambda value: value / "backend")
+                patch("private_file", lambda value: old_env)
+                patch("verify_service_user_module_access", mock.Mock())
+                patch("systemd_oauth_dropin", mock.Mock(return_value=b"TEST_ONLY"))
+                patch("command", fake_command)
+                patch("switch_release", mock.Mock(
+                    side_effect=AssertionError("No live release switch")))
+                stack.enter_context(mock.patch.object(
+                    release.pwd, "getpwnam",
+                    return_value=SimpleNamespace(pw_uid=9001, pw_gid=9002)
+                ))
+                with redirect_stdout(io.StringIO()) as output:
+                    release.rollout(SHA, stage_only=True, backend_only=True)
+            verify.assert_called_once_with(source, old_static)
+            self.assertIn("STAGE_ONLY=PASS", output.getvalue())
+            self.assertEqual(release.current_release(backend), old_backend)
+            self.assertEqual(release.current_release(static), old_static)
+            self.assertFalse((backend / "releases" / SHA).exists())
+            self.assertFalse((static / "releases" / SHA).exists())
+            self.assertEqual(site.read_text(), "unchanged")
+
+    def test_backend_only_cli_is_explicit_and_cannot_be_standalone(self):
+        with mock.patch.object(release, "rollout") as run, \
+             mock.patch("sys.argv", [
+                 "release", "--sha", SHA, "--backend-only", "--stage-only",
+             ]):
+            self.assertEqual(release.main(), 0)
+        run.assert_called_once_with(SHA, stage_only=True, backend_only=True)
+        with mock.patch("sys.argv", ["release", "--sha", SHA,
+                                     "--backend-only"]), \
+             redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(release.main(), 1)
+        self.assertIn("BACKEND_ONLY_ACTION_REQUIRED", output.getvalue())
 
     def test_one_command_without_apply_only_checks_preflight(self):
         with mock.patch.object(release, "preflight", return_value=None) as check, \
