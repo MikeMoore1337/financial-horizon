@@ -832,7 +832,7 @@ def migrate_live_database(source: Path, db: Path) -> bool:
     return True
 
 
-def rollout(sha: str, *, stage_only: bool = False) -> None:
+def rollout(sha: str, *, stage_only: bool = False, backend_only: bool = False) -> None:
     (old_backend, old_static, db, old_env, old_caddy,
      new_caddy, port, auth_py, approved_args) = preflight(sha)
     print("RELEASE_PREFLIGHT=PASS", flush=True)
@@ -840,14 +840,17 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
         source = source_archive(sha, Path(workdir))
         backend_candidate = BACKEND_ROOT / "releases" / sha
         static_candidate = STATIC_ROOT / "releases" / sha
+        if backend_only:
+            verify_predeployed_four_provider_ui(source, old_static)
         if (backend_candidate.exists() or backend_candidate.is_symlink() or
-                static_candidate.exists() or static_candidate.is_symlink()):
+                (not backend_only and
+                 (static_candidate.exists() or static_candidate.is_symlink()))):
             raise Gate("RELEASE_ALREADY_STAGED")
         stage_step = "COPY_BACKEND"
         try:
             new_backend = stage_backend(source, sha, old_backend)
             stage_step = "BUILD_STATIC"
-            new_static = stage_static(source, sha)
+            new_static = old_static if backend_only else stage_static(source, sha)
             stage_step = "CREATE_ISOLATED_PYTHON"
             isolated_site = stage_isolated_python(auth_py, new_backend, source)
             stage_step = "READ_SERVICE_PROCESS"
@@ -922,7 +925,9 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
             try:
                 if (current_release(BACKEND_ROOT) == old_backend and
                         current_release(STATIC_ROOT) == old_static):
-                    for candidate in (backend_candidate, static_candidate):
+                    candidates = ((backend_candidate,) if backend_only else
+                                  (backend_candidate, static_candidate))
+                    for candidate in candidates:
                         if candidate.is_dir() and not candidate.is_symlink():
                             shutil.rmtree(candidate)
                     print("FAILED_STAGING_CLEANED=YES", flush=True)
@@ -949,10 +954,13 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
             if (current_release(BACKEND_ROOT) != old_backend or
                     current_release(STATIC_ROOT) != old_static):
                 raise Gate("STAGE_ONLY_RELEASE_CHANGED")
-            for candidate, parent in (
-                (backend_candidate, BACKEND_ROOT / "releases"),
-                (static_candidate, STATIC_ROOT / "releases"),
-            ):
+            candidates = (
+                ((backend_candidate, BACKEND_ROOT / "releases"),)
+                if backend_only else
+                ((backend_candidate, BACKEND_ROOT / "releases"),
+                 (static_candidate, STATIC_ROOT / "releases"))
+            )
+            for candidate, parent in candidates:
                 if (candidate.is_symlink() or
                         candidate.parent.resolve(strict=True) != parent.resolve(strict=True) or
                         not candidate.is_dir()):
@@ -1008,7 +1016,8 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
             atomic_file(CADDY_SITE, new_caddy.encode("utf-8"), None)
             command(["caddy", "validate", "--config", str(CADDY_MAIN)], timeout=30)
             command(["systemctl", "reload", "caddy.service"], timeout=30)
-            switch_release(STATIC_ROOT, new_static)
+            if not backend_only:
+                switch_release(STATIC_ROOT, new_static)
             validate_running_oauth(port, PROVIDERS)
             # Caddy is on :8444; :443 is Xray on this VPS. Verify both
             # hostname and trust chain with the pinned Cloudflare Origin RSA CA.
@@ -1028,6 +1037,8 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
             print("PRODUCTION_OAUTH=DEPLOYED", flush=True)
             print("DEPLOYED_COMMIT=" + sha, flush=True)
             print("PUBLIC_PROVIDERS=google,yandex,vk,telegram", flush=True)
+            print("STATIC_FRONTEND_REUSED=" + ("YES" if backend_only else "NO"),
+                  flush=True)
             print("TELEGRAM=ENABLED", flush=True)
             print("EMAIL_REGISTRATION_GATE=UNCHANGED", flush=True)
             print("DATABASE_MIGRATED=" +
@@ -1044,7 +1055,8 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
                     if DROPIN.exists():
                         DROPIN.unlink()
                     switch_release(BACKEND_ROOT, old_backend)
-                    switch_release(STATIC_ROOT, old_static)
+                    if not backend_only:
+                        switch_release(STATIC_ROOT, old_static)
                     command(["systemctl", "daemon-reload"], timeout=25)
                     command(["systemctl", "restart", SERVICE], timeout=40)
                     command(["caddy", "validate", "--config", str(CADDY_MAIN)], timeout=30)
@@ -1130,13 +1142,17 @@ def main() -> int:
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--apply", action="store_true")
     action.add_argument("--stage-only", action="store_true")
+    parser.add_argument("--backend-only", action="store_true",
+                        help="Re-use vetted live static UI without changing PWA")
     args = parser.parse_args()
     try:
         if args.apply:
-            rollout(args.sha)
+            rollout(args.sha, backend_only=args.backend_only)
         elif args.stage_only:
-            rollout(args.sha, stage_only=True)
+            rollout(args.sha, stage_only=True, backend_only=args.backend_only)
         else:
+            if args.backend_only:
+                raise Gate("BACKEND_ONLY_ACTION_REQUIRED")
             preflight(args.sha)
             print("RELEASE_PREFLIGHT=PASS")
             print("DEPLOYMENT_NOT_STARTED=YES")
