@@ -51,7 +51,7 @@ test('approved design C renders email before the initially hidden OAuth section'
  const section=html.indexOf('<section id="oauth-login"');
  assert.ok(form>=0 && section>form);
  assert.match(html,/<section id="oauth-login"[^>]*hidden>/);
- assert.match(html,/<script type="module" src="\.\/account-oauth\.js\?rev=oauth-auth-v1"><\/script>/);
+ assert.match(html,/<script type="module" src="\.\/account-oauth\.js\?rev=oauth-four-v2"><\/script>/);
  const css=readFileSync(new URL('../account.css',import.meta.url),'utf8');
  assert.match(css,/#oauth-login\[hidden\]\{display:none\}/);
  assert.match(css,/\.oauth-provider-grid\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
