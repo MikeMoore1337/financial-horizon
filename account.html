@@ -9,21 +9,22 @@
 <link rel="icon" type="image/svg+xml" href="./assets/brand/favicon.svg">
 <script src="./theme-bootstrap.js?rev=ios27-chrome-v17"></script>
 <link rel="stylesheet" href="./styles.css?rev=auth-theme-v28">
-<link rel="stylesheet" href="./account.css?rev=auth-theme-v25">
+<link rel="stylesheet" href="./account.css?rev=auth-theme-v26">
 <script type="module" src="./account.js?rev=auth-theme-v25"></script>
+<script type="module" src="./account-oauth.js?rev=oauth-auth-v1"></script>
 </head>
 <body data-theme="light">
 <main class="auth-layout">
   <section class="auth-intro" aria-labelledby="app-heading">
     <div class="auth-lockup"><img src="./assets/brand/symbol.svg" alt="" width="56" height="56"><div><strong>Финансовый горизонт</strong><small>Личная бухгалтерия</small></div></div>
     <h1 id="app-heading">Личные финансы под контролем</h1>
-    <p>Работайте без регистрации. Подключение аккаунта предназначено для будущей синхронизации устройств.</p>
+    <p>Выберите удобный способ входа. Учётные записи и финансовые данные остаются в Финансовом горизонте.</p>
     <a class="button-secondary" href="./?guest=1">Продолжить без регистрации</a>
   </section>
   <section class="auth-card surface" aria-labelledby="form-heading">
     <span class="eyebrow">Защищённый доступ</span>
     <h2 id="form-heading">Войти по email</h2>
-    <p id="form-description" class="small-hint">Для доступа к аккаунту нужен подтверждённый email.</p>
+    <p id="form-description" class="small-hint">Сохраните привычный способ входа или воспользуйтесь другим сервисом.</p>
     <nav class="auth-modes" aria-label="Действия с аккаунтом">
       <button type="button" data-mode="login" aria-current="page">Войти</button>
       <button type="button" data-mode="register">Регистрация</button>
@@ -37,9 +38,19 @@
         <input type="password" id="password" name="password" minlength="12" maxlength="128" autocomplete="current-password">
       </label>
       <div id="turnstile-container" role="group" aria-label="Защитная проверка" hidden></div>
-      <button type="submit" id="auth-submit" class="button-primary" disabled>Войти</button>
+      <button type="submit" id="auth-submit" class="button-primary" disabled>Войти по email</button>
     </form>
     <div class="auth-feedback" id="auth-feedback" role="status" aria-live="polite"></div>
+    <div class="auth-actions">
+      <button type="button" data-mode="reset">Восстановить доступ</button>
+      <button type="button" data-mode="resend" hidden>Не пришло письмо? Отправить повторно</button>
+      <a href="./?guest=1">Без регистрации</a>
+    </div>
+    <section id="oauth-login" aria-label="Другие способы входа" hidden>
+      <p class="oauth-divider"><span>или через сервис</span></p>
+      <div id="oauth-options" class="oauth-provider-grid" aria-label="Внешние способы входа"></div>
+      <p class="small-hint oauth-note">Внешний сервис подтверждает личность. Синхронизация финансовых данных подключается отдельно.</p>
+    </section>
     <section id="session-panel" hidden aria-label="Аккаунт">
       <p id="session-email"></p>
       <div class="session-actions">
@@ -62,10 +73,6 @@
         <button type="submit" id="change-email-submit" class="button-primary" disabled>Отправить подтверждение</button>
       </form>
     </section>
-    <div class="auth-actions">
-      <button type="button" data-mode="resend">Не пришло письмо? Отправить повторно</button>
-      <a href="./?guest=1">Продолжить без регистрации</a>
-    </div>
     <p class="small-hint">Без аккаунта все записи сохраняются локально. До включения синхронизации вход не переносит бюджет между устройствами.</p>
   </section>
 </main>
