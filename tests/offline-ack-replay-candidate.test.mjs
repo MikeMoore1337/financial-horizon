@@ -5,6 +5,7 @@ import { reconcileVerifiedReplay } from '../src/security/offline-ack-replay-cand
 const valid = {
   scope: 'account:' + 'a'.repeat(32),
   generation: 4,
+  epoch: 'c'.repeat(32),
   mutationId: '00000000-0000-4000-8000-0000000000a1',
   fingerprint: 'a'.repeat(64),
   revision: 6,
@@ -16,7 +17,8 @@ test('offline replay rejects invalid account, command, revision and fingerprint 
   const controller = new AbortController();
   for (const patch of [
     { scope: 'guest' }, { scope: 'account:' + 'b'.repeat(31) },
-    { generation: -1 }, { generation: 1.1 }, { revision: -1 },
+    { generation: -1 }, { generation: 1.1 }, { epoch: 'bad' },
+    { epoch: undefined }, { revision: -1 },
     { revision: Number.MAX_SAFE_INTEGER + 1 }, { mutationId: 'bad' },
     { fingerprint: 'not-a-digest' },
   ]) {
