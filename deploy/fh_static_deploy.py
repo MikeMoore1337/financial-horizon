@@ -196,12 +196,16 @@ def probe_release(sha: str) -> None:
             '--max-time', '8', '--max-redirs', '0',
             '--cacert', str(ORIGIN_CA),
             '--resolve', f'{HOST}:{ORIGIN_PORT}:127.0.0.1',
+            '--write-out', '\\n%{http_code}',
             '-H', 'Cache-Control: no-store', f'https://{HOST}:{ORIGIN_PORT}/{path}',
         ]
         result = subprocess.run(args, capture_output=True, timeout=12, check=False)
         if result.returncode != 0 or not result.stdout or len(result.stdout) > 2_000_000:
             raise DeployFailure('HTTPS_SMOKE_FAILED')
-        return result.stdout
+        body, separator, status = result.stdout.rpartition(b'\\n')
+        if not separator or status != b'200' or not body:
+            raise DeployFailure('HTTPS_SMOKE_STATUS')
+        return body
 
     try:
         manifest = json.loads(fetch(f'__release.json?sha={sha}'))
