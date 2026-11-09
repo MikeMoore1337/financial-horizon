@@ -177,8 +177,23 @@ function checkV1AckDeltaShapeInner(input = {}) {
   return 'MATCHED_STRUCTURALLY';
 }
 
-// Exotic proxies or descriptors may throw: fail closed, never crash UI.
-export function checkV1AckDeltaShape(input = {}) {
-  try { return checkV1AckDeltaShapeInner(input); }
-  catch { return 'RECOVERY_HOLD'; }
+// Security boundary: accept only raw JSON text from a transport or another
+// trusted serialization boundary. An arbitrary JS object can contain Proxy
+// traps that lie about validated fields or mutate between two reads. There is
+// no cross-browser, side-effect-free Proxy detection for arbitrary objects.
+// Never JSON.stringify an untrusted object and pass that text here: the
+// conversion itself could execute getters. The contract accepts wire JSON.
+const inertJsonParse = JSON.parse;
+const MAX_INPUT_CODE_UNITS = 2_000_000;
+
+export function checkV1AckDeltaShape(rawJson) {
+  if (typeof rawJson !== 'string' || rawJson.length === 0 ||
+      rawJson.length > MAX_INPUT_CODE_UNITS) return 'RECOVERY_HOLD';
+  try {
+    // JSON.parse returns fresh, ordinary data without Proxy, accessors,
+    // aliases or arbitrary prototypes; no input object is read twice.
+    return checkV1AckDeltaShapeInner(inertJsonParse(rawJson));
+  } catch {
+    return 'RECOVERY_HOLD';
+  }
 }
