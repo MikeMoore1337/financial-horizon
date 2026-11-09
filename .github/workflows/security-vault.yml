@@ -2,28 +2,6 @@ name: security-vault
 on:
   push:
     branches: [main]
-    paths:
-      - 'src/security/**'
-      - 'tests/local-vault*.test.mjs'
-      - 'tests/local-budget-session.test.mjs'
-      - 'tests/protected-*.test.mjs'
-      - 'tests/e2e/protected-staging.spec.mjs'
-      - 'tests/e2e/local-budget-session.spec.mjs'
-      - 'tests/e2e/protected-atomic-candidate.spec.mjs'
-      - 'tests/e2e/live-legacy-preflight.spec.mjs'
-      - 'tests/e2e/verified-atomic-staging.spec.mjs'
-      - 'tests/e2e/protected-finance-adapter.spec.mjs'
-      - 'tests/protected-finance-adapter.test.mjs'
-      - 'tests/verified-atomic-staging.test.mjs'
-      - 'tests/live-legacy-preflight.test.mjs'
-      - 'docs/security/LOCAL_STORAGE_ENCRYPTION.md'
-      - 'docs/security/PROTECTED_STAGING.md'
-      - 'docs/security/APPROVED_LOCAL_UNLOCK_FLOW.md'
-      - 'docs/security/ATOMIC_ENCRYPTED_CANDIDATE.md'
-      - 'docs/security/LIVE_LEGACY_PREFLIGHT.md'
-      - 'docs/security/VERIFIED_ATOMIC_STAGING.md'
-      - 'docs/security/PROTECTED_FINANCE_ADAPTER.md'
-      - '.github/workflows/security-vault.yml'
   pull_request:
     branches: [main]
     paths:

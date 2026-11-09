@@ -1,0 +1,166 @@
+name: Financial Horizon production static deploy
+
+on:
+  workflow_run:
+    workflows: [tests]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release_sha:
+        description: 'Exact SHA of current main (static assets only)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: fh-production-static
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       vars.FH_STATIC_AUTO_DEPLOY_ENABLED == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      source_sha: ${{ steps.gate.outputs.sha }}
+      archive_sha256: ${{ steps.package.outputs.sha256 }}
+    steps:
+      - name: Verify SHA and exact-SHA tests/security-vault workflows
+        id: gate
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
+          MANUAL_SHA: ${{ inputs.release_sha }}
+          SELECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]] || { echo 'main-only deploy' >&2; exit 1; }
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            TARGET_SHA="$MANUAL_SHA"
+            [[ "$TARGET_SHA" == "$SELECTED_SHA" ]] || { echo 'Manual SHA mismatch' >&2; exit 1; }
+          else
+            TARGET_SHA="$WORKFLOW_SHA"
+          fi
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid SHA' >&2; exit 1; }
+          latest="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          [[ "$latest" == "$TARGET_SHA" ]] || { echo 'Superseded main' >&2; exit 1; }
+          for workflow in tests.yml security-vault.yml; do
+            confirmed=false
+            for attempt in $(seq 1 40); do
+              status="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?head_sha=$TARGET_SHA&branch=main&event=push&per_page=10" --jq '.workflow_runs[0].conclusion // "pending"')"
+              if [[ "$status" == success ]]; then confirmed=true; break; fi
+              if [[ "$status" == failure || "$status" == cancelled || "$status" == timed_out || "$status" == action_required ]]; then
+                echo "$workflow blocked: $status" >&2; exit 1
+              fi
+              [[ "$attempt" == 40 ]] || sleep 8
+            done
+            [[ "$confirmed" == true ]] || { echo "$workflow not green for exact SHA" >&2; exit 1; }
+          done
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')" == "$TARGET_SHA" ]]
+          echo "sha=$TARGET_SHA" >> "$GITHUB_OUTPUT"
+      - name: Checkout verified main (without credentials)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.gate.outputs.sha }}
+          persist-credentials: false
+      - name: Build static assets without production secrets
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$SOURCE_SHA" ]]
+          npm ci
+          npm run build
+          npm run test:build
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          p = Path('dist/__release.json')
+          if p.exists():
+              raise SystemExit('Reserved manifest already present')
+          p.write_text(json.dumps({
+              'repository': os.environ['GITHUB_REPOSITORY'],
+              'source_sha': os.environ['SOURCE_SHA'],
+              'run_id': int(os.environ['GITHUB_RUN_ID']),
+          }, sort_keys=True) + '\n')
+          PY
+      - name: Package dist archive
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --sort=name --owner=0 --group=0 --numeric-owner -czf "$RUNNER_TEMP/fh-static.tar.gz" dist
+          echo "sha256=$(sha256sum "$RUNNER_TEMP/fh-static.tar.gz" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Upload only static archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: fh-static-release
+          path: ${{ runner.temp }}/fh-static.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
+  deploy:
+    needs: [build]
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: production-static
+      url: https://fin-horizon.mikemoore.top
+    steps:
+      - name: Download artifact from same workflow run
+        uses: actions/download-artifact@v4
+        with:
+          name: fh-static-release
+          path: ${{ runner.temp }}/release
+      - name: Verify archive, current SHA and restricted SSH deploy
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.build.outputs.source_sha }}
+          ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
+          FH_DEPLOY_KEY: ${{ secrets.FH_DEPLOY_KEY }}
+          FH_DEPLOY_TARGET: ${{ secrets.FH_DEPLOY_TARGET }}
+          FH_DEPLOY_PORT: ${{ secrets.FH_DEPLOY_PORT }}
+          FH_DEPLOY_KNOWN_HOSTS: ${{ secrets.FH_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/release/fh-static.tar.gz"
+          [[ -f "$archive" && "$TARGET_SHA" =~ ^[0-9a-f]{40}$ && "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          printf '%s  %s\n' "$ARCHIVE_SHA256" "$archive" | sha256sum -c -
+          latest="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
+          [[ "$latest" == "$TARGET_SHA" ]] || { echo 'Main superseded release' >&2; exit 1; }
+          [[ -n "$FH_DEPLOY_KEY" && -n "$FH_DEPLOY_KNOWN_HOSTS" &&
+             "$FH_DEPLOY_TARGET" =~ ^[a-z_][a-z0-9_-]*@[a-zA-Z0-9.-]+$ &&
+             "$FH_DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]] || { echo 'SSH secrets not provisioned' >&2; exit 1; }
+          umask 077
+          key="$RUNNER_TEMP/fh-deploy-key"
+          hosts="$RUNNER_TEMP/fh-deploy-hosts"
+          trap 'rm -f "$key" "$hosts"' EXIT
+          printf '%s\n' "$FH_DEPLOY_KEY" > "$key"
+          printf '%s\n' "$FH_DEPLOY_KNOWN_HOSTS" > "$hosts"
+          output="$RUNNER_TEMP/fh-deploy-result"
+          timeout 120 ssh -T -i "$key" -p "$FH_DEPLOY_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 -o ServerAliveInterval=10 \
+            -o ServerAliveCountMax=6 -o "UserKnownHostsFile=$hosts" \
+            "$FH_DEPLOY_TARGET" "deploy $TARGET_SHA $ARCHIVE_SHA256" \
+            < "$archive" | tee "$output"
+          grep -Fxq "PRODUCTION_DEPLOYED=$TARGET_SHA" "$output" ||
+            grep -Fxq "ALREADY_DEPLOYED=$TARGET_SHA" "$output" || {
+              echo 'Valid production receipt missing' >&2; exit 1;
+            }
