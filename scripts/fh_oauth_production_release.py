@@ -382,6 +382,39 @@ def source_archive(sha: str, target: Path) -> Path:
     return content
 
 
+def verify_predeployed_four_provider_ui(source: Path, active: Path) -> None:
+    """Re-use the already deployed static CD UI; do not overwrite its PWA."""
+    manifest_file = active / "__release.json"
+    if manifest_file.is_symlink() or not manifest_file.is_file():
+        raise Gate("ACTIVE_STATIC_MANIFEST_MISSING")
+    try:
+        manifest = json.loads(manifest_file.read_bytes()[:8193])
+    except (ValueError, UnicodeError, OSError) as exc:
+        raise Gate("ACTIVE_STATIC_MANIFEST_INVALID") from exc
+    if (not isinstance(manifest, dict) or
+            manifest.get("repository") != "MikeMoore1337/financial-horizon" or
+            manifest.get("source_sha") != active.name or
+            type(manifest.get("run_id")) is not int or manifest["run_id"] <= 0):
+        raise Gate("ACTIVE_STATIC_MANIFEST_MISMATCH")
+    for name in (
+        "account-oauth.js", "auth-ui.js",
+        "assets/providers/google.svg", "assets/providers/yandex.svg",
+        "assets/providers/vk.svg", "assets/providers/telegram.svg",
+    ):
+        deployed = active / name
+        upstream = source / name
+        if (deployed.is_symlink() or not deployed.is_file() or
+                upstream.is_symlink() or not upstream.is_file()):
+            raise Gate("ACTIVE_OAUTH_UI_FILES_MISSING")
+        if hashlib.sha256(deployed.read_bytes()).digest() != hashlib.sha256(
+                upstream.read_bytes()).digest():
+            raise Gate("ACTIVE_OAUTH_UI_SOURCE_MISMATCH")
+    for name in ("index.html", "account.html", "sw.js", "manifest.webmanifest"):
+        path = active / name
+        if path.is_symlink() or not path.is_file():
+            raise Gate("ACTIVE_PWA_INCOMPLETE")
+
+
 def stage_backend(source: Path, sha: str, existing: Path) -> Path:
     destination = BACKEND_ROOT / "releases" / sha
     if destination.exists() or destination.is_symlink():
