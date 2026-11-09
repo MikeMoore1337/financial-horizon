@@ -7,6 +7,9 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
+import subprocess
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'deploy'))
 import fh_static_deploy as cd  # noqa: E402
@@ -128,6 +131,82 @@ class ReleaseTests(unittest.TestCase):
         (self.root / 'current').symlink_to(self.root)
         with self.assertRaisesRegex(cd.DeployFailure, 'RELEASE_LINK_OUTSIDE_ROOT'):
             cd.current_release(self.root)
+
+    def test_origin_ca_trust_anchor_hash_and_symlink_guards(self):
+        # Synthetic trust data; CI runner need not run as root.
+        anchor = Path(self.tmp.name) / 'ca'
+        anchor.mkdir()
+        directory = anchor / 'certs'
+        directory.mkdir()
+        certificate = directory / 'cloudflare.pem'
+        certificate.write_bytes(b'synthetic ca fixture')
+        original_lstat = Path.lstat
+
+        def root_owned(path):
+            stat_result = original_lstat(path)
+            return SimpleNamespace(
+                st_mode=stat_result.st_mode,
+                st_uid=0,
+                st_size=stat_result.st_size,
+            )
+
+        with (
+            mock.patch.object(cd, 'ORIGIN_CA', certificate),
+            mock.patch.object(cd, 'ORIGIN_CA_SHA256',
+                              hashlib.sha256(certificate.read_bytes()).hexdigest()),
+            mock.patch.object(Path, 'lstat', root_owned),
+        ):
+            cd.verify_origin_ca()
+            certificate.write_bytes(b'modified trust anchor')
+            with self.assertRaisesRegex(cd.DeployFailure, 'ORIGIN_CA_HASH_MISMATCH'):
+                cd.verify_origin_ca()
+            certificate.unlink()
+            certificate.symlink_to(directory / 'missing.pem')
+            with self.assertRaisesRegex(cd.DeployFailure, 'ORIGIN_CA_FILE_UNSAFE'):
+                cd.verify_origin_ca()
+
+    def test_caddy_origin_https_has_ca_validation_and_correct_port(self):
+        calls = []
+
+        def run(args, **kwargs):
+            calls.append(args)
+            if args[0] == '/usr/bin/curl':
+                if '__release.json' in args[-1]:
+                    payload = json.dumps({
+                        'repository': cd.REPO, 'source_sha': SHA, 'run_id': 1,
+                    }).encode()
+                else:
+                    payload = b'nonempty static asset'
+                return subprocess.CompletedProcess(args, 0, payload, b'')
+            return subprocess.CompletedProcess(args, 0, b'', b'')
+
+        with (
+            mock.patch.object(cd, 'verify_origin_ca') as verified,
+            mock.patch.object(cd.subprocess, 'run', side_effect=run),
+        ):
+            cd.probe_release(SHA)
+        verified.assert_called_once_with()
+        curls = [args for args in calls if args[0] == '/usr/bin/curl']
+        self.assertEqual(len(curls), 5)
+        for args in curls:
+            self.assertIn('--cacert', args)
+            self.assertEqual(args[args.index('--cacert')+1], str(cd.ORIGIN_CA))
+            self.assertIn('--resolve', args)
+            self.assertEqual(args[args.index('--resolve')+1],
+                             f'{cd.HOST}:{cd.ORIGIN_PORT}:127.0.0.1')
+            self.assertTrue(args[-1].startswith(f'https://{cd.HOST}:8444/'))
+            self.assertNotIn('--insecure', args)
+            self.assertNotIn('-k', args)
+
+    def test_origin_tls_error_does_not_pass_smoke(self):
+        with (
+            mock.patch.object(cd, 'verify_origin_ca'),
+            mock.patch.object(cd.subprocess, 'run', return_value=(
+                subprocess.CompletedProcess(['/usr/bin/curl'], 60, b'', b'certificate error')
+            )),
+        ):
+            with self.assertRaisesRegex(cd.DeployFailure, 'HTTPS_SMOKE_FAILED'):
+                cd.probe_release(SHA)
 
     def test_denies_nonstandard_ssh_commands(self):
         valid = 'deploy ' + SHA + ' ' + ('f' * 64)
