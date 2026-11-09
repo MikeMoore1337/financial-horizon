@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Single guarded OAuth #9 production rollout. Run only on the real FH VPS.
 
-Requires a pinned, CI-passing main SHA. No Telegram or public registration.
+Requires a pinned, CI-passing main SHA. No public email registration.
 Makes NO changes unless every required production layout invariant holds.
 On failed rollout restores links, Caddy and OAuth configuration, never blindly
 restores an old SQLite snapshot (which could lose new sessions/accounts).
@@ -38,9 +38,9 @@ CADDY_MAIN = Path("/etc/caddy/Caddyfile")
 BACKUPS = Path("/var/backups/financial-horizon")
 DROPIN = Path("/etc/systemd/system/fh-email-auth.service.d/70-oauth.conf")
 CANARY_DB = Path("/var/lib/financial-horizon/oauth-canary/auth.sqlite3")
-ALLOWED = {"FH_GOOGLE_OAUTH_ENABLED", "FH_YANDEX_OAUTH_ENABLED", "FH_VK_OAUTH_ENABLED"}
-FLAGS = {"FH_ENABLE_CLOUD_AUTH", "FH_TELEGRAM_OAUTH_ENABLED", *ALLOWED}
-PROVIDERS = ["google", "yandex", "vk"]
+ALLOWED = {"FH_GOOGLE_OAUTH_ENABLED", "FH_YANDEX_OAUTH_ENABLED", "FH_VK_OAUTH_ENABLED", "FH_TELEGRAM_OAUTH_ENABLED"}
+FLAGS = {"FH_ENABLE_CLOUD_AUTH", *ALLOWED}
+PROVIDERS = ["google", "yandex", "vk", "telegram"]
 USER_COLUMNS = ("id", "email", "password_hash", "verified_at",
                 "password_changed_at", "disabled", "created_at")
 
@@ -53,9 +53,21 @@ class Gate(Exception):
 
 def command(args: list[str], *, timeout: int = 1200, cwd: Path | None = None,
             env: dict[str, str] | None = None,
-            failure_code: str | None = None) -> bytes:
+            failure_code: str | None = None,
+            run_as: tuple[int, int] | None = None) -> bytes:
+    # Native POSIX privilege drop avoids reliance on runuser, which is not
+    # installed on every production image. Never silently run service checks
+    # with root privileges when dropping to the systemd identity is required.
+    identity = {}
+    if run_as is not None:
+        uid, gid = run_as
+        if (os.geteuid() != 0 or type(uid) is not int or type(gid) is not int
+                or uid <= 0 or gid <= 0):
+            raise Gate("SERVICE_IDENTITY_UNSAFE")
+        identity = {"user": uid, "group": gid, "extra_groups": []}
     p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                       cwd=cwd, env=env, timeout=timeout, check=False)
+                       cwd=cwd, env=env, timeout=timeout, check=False,
+                       **identity)
     if p.returncode:
         # Never expose unfiltered pip, subprocess or OAuth output: it may hold
         # tokens, local paths or secrets. Stable operation codes identify the step.
@@ -86,7 +98,7 @@ def assignment(raw: bytes, name: str) -> list[str]:
 def replace_flags(raw: bytes) -> bytes:
     data = raw
     for name in sorted(FLAGS):
-        wanted = b"false" if name == "FH_TELEGRAM_OAUTH_ENABLED" else b"true"
+        wanted = b"true"
         old = (name + "=false").encode()
         if data.count(old) != 1 or assignment(data, name) != ["false"]:
             raise Gate("OAUTH_FLAGS_NOT_DISABLED")
@@ -325,11 +337,17 @@ def validate_running_oauth(port: int, expected: list[str]) -> None:
         data = json.loads(body)
     except ValueError as exc:
         raise Gate("OAUTH_PROVIDERS_BAD_JSON") from exc
-    if data != {"enabled": True, "providers": expected}:
+    providers = data.get("providers") if isinstance(data, dict) else None
+    if (not isinstance(data, dict) or data.get("enabled") is not True or
+            not isinstance(providers, list) or
+            len(providers) != len(expected) or
+            any(not isinstance(p, str) for p in providers) or
+            set(providers) != set(expected)):
         raise Gate("OAUTH_PROVIDERS_UNEXPECTED")
+    # Telegram must work as an auth initiation endpoint, not just be listed.
     status, _ = http_probe(port, "/api/auth/oauth/telegram/start")
-    if status != 404:
-        raise Gate("TELEGRAM_NOT_DISABLED")
+    if status != 303:
+        raise Gate("TELEGRAM_START_UNAVAILABLE")
     status, body = http_probe(port, "/api/auth/email/me")
     if status != 200 or b'"authenticated":false' not in body.replace(b" ", b"").lower():
         raise Gate("SESSION_ENDPOINT_UNAVAILABLE")
@@ -573,6 +591,8 @@ def verify_service_user_module_access(auth_py: Path, source_root: Path,
         account = pwd.getpwnam(user)
     except KeyError as exc:
         raise Gate("SERVICE_ACCOUNT_NOT_FOUND") from exc
+    if account.pw_uid <= 0 or account.pw_gid <= 0:
+        raise Gate("SERVICE_ACCOUNT_PRIVILEGED")
     if staged_release is not None:
         grant_staged_release_read_access(staged_release, user=user)
     if "PYTHONPATH" not in check_env:
@@ -585,22 +605,22 @@ def verify_service_user_module_access(auth_py: Path, source_root: Path,
     }
     # Inheriting /root or a private operator working directory would produce
     # a false negative even if systemd's configured WorkingDirectory is fine.
-    command(["runuser", "-u", user, "--", "test", "-x", str(source_root)],
-            timeout=15, cwd=source_root, env=service_env,
+    identity = (account.pw_uid, account.pw_gid)
+    command(["test", "-x", str(source_root)],
+            timeout=15, cwd=source_root, env=service_env, run_as=identity,
             failure_code="STAGED_SOURCE_NOT_TRAVERSABLE")
     for package in ("fh_email_auth", "fh_auth"):
-        command(["runuser", "-u", user, "--", "test", "-r",
-                 str(source_root / package / "__init__.py")],
-                timeout=15, cwd=source_root, env=service_env,
+        command(["test", "-r", str(source_root / package / "__init__.py")],
+                timeout=15, cwd=source_root, env=service_env, run_as=identity,
                 failure_code="STAGED_SOURCE_NOT_READABLE")
     check = (
         "import importlib.util,pathlib,sys; root=pathlib.Path(sys.argv[1]); "
         "assert all(pathlib.Path(importlib.util.find_spec(p).origin).parent == "
         "root / p for p in sys.argv[2].split(','))"
     )
-    command(["runuser", "-u", user, "--", str(auth_py), "-c", check,
+    command([str(auth_py), "-c", check,
              str(source_root), "fh_email_auth,fh_auth"],
-            timeout=30, cwd=source_root, env=service_env,
+            timeout=30, cwd=source_root, env=service_env, run_as=identity,
             failure_code="STAGED_AUTH_IMPORT_AS_SERVICE_USER_FAILED")
 
 
@@ -791,6 +811,12 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
             ).decode().strip()
             if not re.fullmatch(r"[a-z_][a-z0-9_-]*", user):
                 raise Gate("SERVICE_USER_INVALID")
+            try:
+                account = pwd.getpwnam(user)
+            except KeyError as exc:
+                raise Gate("SERVICE_ACCOUNT_NOT_FOUND") from exc
+            if account.pw_uid <= 0 or account.pw_gid <= 0:
+                raise Gate("SERVICE_ACCOUNT_PRIVILEGED")
             service_env = {
                 "PATH": "/usr/local/bin:/usr/bin:/bin",
                 "PYTHONPATH": prepared_path,
@@ -798,9 +824,10 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
             }
             stage_step = "CHECK_PRIVATE_RUNTIME"
             command(
-                ["runuser", "-u", user, "--", str(runtime_python), "-c",
+                [str(runtime_python), "-c",
                  "import uvicorn,fastapi,fh_email_auth,fh_auth"],
                 cwd=modules_root, env=service_env, timeout=30,
+                run_as=(account.pw_uid, account.pw_gid),
                 failure_code="NEW_AUTH_RUNTIME_UNREADABLE_BY_SERVICE_USER",
             )
             stage_step = "BUILD_SYSTEMD_DROPIN"
@@ -915,13 +942,18 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
                 exposed = json.loads(data)
             except ValueError as exc:
                 raise Gate("PUBLIC_CADDY_BAD_JSON") from exc
-            if exposed != {"enabled": True, "providers": PROVIDERS}:
+            exposed_providers = exposed.get("providers") if isinstance(exposed, dict) else None
+            if (not isinstance(exposed, dict) or exposed.get("enabled") is not True or
+                    not isinstance(exposed_providers, list) or
+                    len(exposed_providers) != len(PROVIDERS) or
+                    any(not isinstance(p, str) for p in exposed_providers) or
+                    set(exposed_providers) != set(PROVIDERS)):
                 raise Gate("PUBLIC_CADDY_PROVIDER_MISMATCH")
             print("PUBLIC_CADDY_PROVIDERS=PASS", flush=True)
             print("PRODUCTION_OAUTH=DEPLOYED", flush=True)
             print("DEPLOYED_COMMIT=" + sha, flush=True)
-            print("PUBLIC_PROVIDERS=google,yandex,vk", flush=True)
-            print("TELEGRAM=DISABLED", flush=True)
+            print("PUBLIC_PROVIDERS=google,yandex,vk,telegram", flush=True)
+            print("TELEGRAM=ENABLED", flush=True)
             print("EMAIL_REGISTRATION_GATE=UNCHANGED", flush=True)
             print("DATABASE_MIGRATED=" +
                   ("YES" if schema_changed_now else "ALREADY_READY"), flush=True)
