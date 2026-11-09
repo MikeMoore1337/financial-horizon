@@ -22,7 +22,7 @@ const fixture = () => ({
 });
 
 test('ordinary JSON ACK matches an intact two-page delta', () => {
-  assert.equal(guard(fixture()), 'MATCHED_STRUCTURALLY');
+  assert.equal(guard(JSON.stringify(fixture())), 'MATCHED_STRUCTURALLY');
 });
 
 test('P2: altered payload cannot override Array.every through a forged prototype', () => {
@@ -84,4 +84,27 @@ test('valid events in unacknowledged pages must still be ordinary JSON', () => {
   const input = fixture();
   input.pages[1].changes[0].payload = { attack: Number.POSITIVE_INFINITY };
   assert.equal(guard(input), 'RECOVERY_HOLD');
+});
+
+test('P2 Proxy: caller object, nested Proxy and mutation traps are never touched', () => {
+  let traps = 0;
+  const attack = new Proxy({ amount_minor: 999 }, {
+    get() { traps++; return 100; },
+    getPrototypeOf() { traps++; return Object.prototype; },
+    ownKeys() { traps++; return ['amount_minor']; },
+    getOwnPropertyDescriptor() { traps++; return { value: 100, enumerable: true, configurable: true }; },
+  });
+  const input = fixture();
+  input.ack.changes[0].payload = attack;
+  assert.equal(guard(input), 'RECOVERY_HOLD');
+  assert.equal(traps, 0);
+  const proxiedEnvelope = new Proxy(fixture(), {
+    get() { traps++; throw new Error('must not read input'); },
+    getPrototypeOf() { traps++; throw new Error('must not inspect input'); },
+  });
+  assert.equal(guard(proxiedEnvelope), 'RECOVERY_HOLD');
+  assert.equal(traps, 0);
+  const differing = fixture();
+  differing.ack.changes[0].payload.details.values[0] = 999;
+  assert.equal(guard(JSON.stringify(differing)), 'RECOVERY_HOLD');
 });
