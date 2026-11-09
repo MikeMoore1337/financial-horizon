@@ -13,14 +13,16 @@ const valid = {
 test('offline replay rejects invalid account, command, revision and fingerprint before opening IndexedDB', async () => {
   let touched = false;
   const db = { transaction() { touched = true; throw Error('must not open'); } };
+  const controller = new AbortController();
   for (const patch of [
     { scope: 'guest' }, { scope: 'account:' + 'b'.repeat(31) },
     { generation: -1 }, { generation: 1.1 }, { revision: -1 },
     { revision: Number.MAX_SAFE_INTEGER + 1 }, { mutationId: 'bad' },
     { fingerprint: 'not-a-digest' },
   ]) {
-    await assert.rejects(reconcileVerifiedReplay(db, { ...valid, ...patch }), TypeError);
+    await assert.rejects(reconcileVerifiedReplay(db, { ...valid, ...patch }, controller.signal), TypeError);
   }
+  await assert.rejects(reconcileVerifiedReplay(db, valid), TypeError);
   assert.equal(touched, false);
 });
 
