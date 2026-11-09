@@ -734,7 +734,7 @@ def migrate_live_database(source: Path, db: Path) -> bool:
     return True
 
 
-def rollout(sha: str) -> None:
+def rollout(sha: str, *, stage_only: bool = False) -> None:
     (old_backend, old_static, db, old_env, old_caddy,
      new_caddy, port, auth_py, approved_args) = preflight(sha)
     print("RELEASE_PREFLIGHT=PASS", flush=True)
@@ -823,6 +823,27 @@ def rollout(sha: str) -> None:
                 current_release(BACKEND_ROOT) != old_backend or
                 current_release(STATIC_ROOT) != old_static):
             raise Gate("LIVE_DEPLOYMENT_CHANGED_DURING_STAGING")
+        # Same staging and security checks as production, but never enter
+        # the service-stop, database-migration or Caddy activation section.
+        # Remove only freshly created, inactive candidate release directories.
+        if stage_only:
+            if (current_release(BACKEND_ROOT) != old_backend or
+                    current_release(STATIC_ROOT) != old_static):
+                raise Gate("STAGE_ONLY_RELEASE_CHANGED")
+            for candidate, parent in (
+                (backend_candidate, BACKEND_ROOT / "releases"),
+                (static_candidate, STATIC_ROOT / "releases"),
+            ):
+                if (candidate.is_symlink() or
+                        candidate.parent.resolve(strict=True) != parent.resolve(strict=True) or
+                        not candidate.is_dir()):
+                    raise Gate("STAGE_ONLY_CLEANUP_SCOPE_INVALID")
+                shutil.rmtree(candidate)
+            print("STAGE_ONLY=PASS", flush=True)
+            print("LIVE_SERVICE_STOPPED=NO", flush=True)
+            print("DATABASE_MIGRATED=NO", flush=True)
+            print("CADDY_CHANGED=NO", flush=True)
+            return
         changed = False
         db_migrated = False
         # Crash-resistant root-only copies before touching live configuration.
@@ -915,14 +936,62 @@ def rollout(sha: str) -> None:
             raise
 
 
+def safe_runtime_diagnostics(exc: Exception) -> tuple[str, str]:
+    """Report only fixed category and source-function name, never exception text."""
+    if isinstance(exc, FileNotFoundError):
+        category = "OS_FILE_NOT_FOUND"
+    elif isinstance(exc, PermissionError):
+        category = "OS_PERMISSION_DENIED"
+    elif isinstance(exc, NotImplementedError):
+        category = "UNSUPPORTED_OS_OPERATION"
+    elif isinstance(exc, subprocess.TimeoutExpired):
+        category = "SUBPROCESS_TIMEOUT"
+    elif isinstance(exc, OSError):
+        category = "OS_ERROR"
+    elif isinstance(exc, shutil.Error):
+        category = "COPY_ERROR"
+    elif isinstance(exc, ValueError):
+        category = "VALUE_ERROR"
+    elif isinstance(exc, TypeError):
+        category = "TYPE_ERROR"
+    elif isinstance(exc, AttributeError):
+        category = "ATTRIBUTE_ERROR"
+    elif isinstance(exc, AssertionError):
+        category = "ASSERTION_FAILED"
+    else:
+        category = "OTHER_ERROR"
+    stages = {
+        "source_archive", "stage_backend", "stage_static",
+        "stage_isolated_python", "staged_modules_root", "service_python_path",
+        "grant_staged_release_read_access", "verify_service_user_module_access",
+        "safe_uvicorn_argv", "systemd_oauth_dropin", "preflight",
+        "rollout", "save_private_release_receipt", "atomic_file",
+        "migrate_live_database", "validate_running_oauth",
+        "current_release", "switch_release",
+    }
+    found = "UNKNOWN"
+    trace = exc.__traceback__
+    while trace is not None:
+        frame = trace.tb_frame
+        if (frame.f_code.co_filename == __file__ and
+                frame.f_code.co_name in stages):
+            found = frame.f_code.co_name.upper()
+        trace = trace.tb_next
+    return category, found
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sha", required=True)
-    parser.add_argument("--apply", action="store_true")
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--apply", action="store_true")
+    action.add_argument("--stage-only", action="store_true")
     args = parser.parse_args()
     try:
         if args.apply:
             rollout(args.sha)
+        elif args.stage_only:
+            rollout(args.sha, stage_only=True)
         else:
             preflight(args.sha)
             print("RELEASE_PREFLIGHT=PASS")
@@ -932,7 +1001,11 @@ def main() -> int:
         print("RELEASE_STATUS=BLOCKED")
         print("FAILURE_CODE=" + exc.code)
         return 1
-    except Exception:
+    except Exception as exc:
+        category, stage = safe_runtime_diagnostics(exc)
+        print("SAFE_EXCEPTION_CATEGORY=" + category)
+        print("SAFE_EXCEPTION_STAGE=" + stage)
+        print("RAW_EXCEPTION_PRINTED=NO")
         print("RELEASE_STATUS=FAILED")
         print("FAILURE_CODE=UNEXPECTED_RUNTIME")
         return 1
