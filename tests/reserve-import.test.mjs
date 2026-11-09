@@ -112,6 +112,12 @@ for (const [text, reason] of [
   ['ежегодно (год оплаты 2026 или 1 квартал)', 'ambiguous'],
   ['раз в 3 месяца (год оплаты 2026 и 2 года)', 'unsupported'],
   ['ежегодно (год оплаты 2026 и месяц оплаты июнь) 6 месяцев', 'unsupported'],
+  ['ежегодно (год оплаты 2026) или 3–6 месяцев', 'ambiguous'],
+  ['ежегодно (год оплаты 2026) или 3-6 месяцев', 'ambiguous'],
+  ['ежегодно или от 3 до 6 месяцев', 'ambiguous'],
+  ['каждые 3 месяца либо 2—4 года', 'ambiguous'],
+  ['каждые 3 месяца 2–4 месяца', 'unsupported'],
+  ['ежегодно (год оплаты 2026 и месяц оплаты июнь) или 3-6 месяцев', 'ambiguous'],
 ]) {
   test('XLSX uncertain recurrence stays invalid, never auto-converted: ' + text.slice(0, 40), () => {
     assert.deepEqual(parseReservePeriodHint(text), invalid(reason));
