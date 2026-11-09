@@ -342,16 +342,96 @@ class ReleaseContracts(unittest.TestCase):
             )
             self.assertEqual(result, f"{module_root}:{site}:{previous}")
 
-    def test_systemd_dropin_resolves_new_release_source_first(self):
-        modules = Path("/opt/financial-horizon-auth/releases/" + SHA + "/backend")
-        pythonpath = str(modules) + ":/tmp/new-venv/lib/python3.12/site-packages"
-        rendered = release.systemd_oauth_dropin(modules, pythonpath).decode()
-        self.assertIn("WorkingDirectory=" + str(modules) + "\n", rendered)
-        self.assertIn('Environment="PYTHONPATH=' + pythonpath + '"\n', rendered)
-        self.assertIn("EnvironmentFile=/etc/financial-horizon/oauth.env\n", rendered)
-        self.assertNotIn("telegram", rendered.lower())
-        with self.assertRaises(release.Gate):
-            release.systemd_oauth_dropin(modules, "unsafe path with whitespace")
+    def test_systemd_dropin_uses_new_private_python_not_missing_old_venv(self):
+        with tempfile.TemporaryDirectory() as root:
+            stage = Path(root) / "releases" / SHA
+            modules = stage / "backend"
+            modules.mkdir(parents=True)
+            runtime = stage / ".oauth-venv" / "bin" / "python"
+            runtime.parent.mkdir(parents=True)
+            runtime.write_text("# synthetic interpreter")
+            runtime.chmod(0o755)
+            pythonpath = str(modules) + ":" + str(stage / ".oauth-venv" / "lib" / "site-packages")
+            args = release.safe_uvicorn_argv([
+                "/opt/financial-horizon-auth/current/.venv/bin/python",
+                "-m", "uvicorn", "fh_email_auth.app:app",
+                "--host", "127.0.0.1", "--port", "9141",
+                "--no-access-log", "--proxy-headers",
+            ], 9141)
+            rendered = release.systemd_oauth_dropin(
+                modules, pythonpath, runtime, args
+            ).decode()
+            self.assertIn("ExecStart=\nExecStart=" + str(runtime) +
+                          " -m uvicorn fh_email_auth.app:app", rendered)
+            self.assertNotIn("/current/.venv/", rendered)
+            self.assertIn("--host 127.0.0.1 --port 9141", rendered)
+            self.assertIn("--no-access-log", rendered)
+            self.assertIn("WorkingDirectory=" + str(modules) + "\n", rendered)
+            self.assertIn('Environment="PYTHONPATH=' + pythonpath + '"\n', rendered)
+            self.assertIn("EnvironmentFile=/etc/financial-horizon/oauth.env\n", rendered)
+            self.assertNotIn("telegram", rendered.lower())
+            with self.assertRaises(release.Gate):
+                release.systemd_oauth_dropin(
+                    modules, "unsafe path with whitespace", runtime, args
+                )
+            with self.assertRaises(release.Gate):
+                release.systemd_oauth_dropin(
+                    modules, pythonpath, modules / "python", args
+                )
+
+    def test_shebang_launcher_uses_new_private_runtime_not_old_script(self):
+        # Linux /proc/PID/cmdline for a console script may be:
+        # python /old/current/.venv/bin/uvicorn app:app --flags...
+        argv = [
+            "/opt/financial-horizon-auth/current/.venv/bin/python",
+            "/opt/financial-horizon-auth/current/.venv/bin/uvicorn",
+            "fh_email_auth.app:app", "--host", "127.0.0.1",
+            "--port", "9141", "--no-access-log",
+        ]
+        normalized = release.safe_uvicorn_argv(argv, 9141)
+        self.assertEqual(normalized, [
+            "fh_email_auth.app:app", "--host", "127.0.0.1",
+            "--port", "9141", "--no-access-log",
+        ])
+        self.assertNotIn("/current/", " ".join(normalized))
+
+    def test_unknown_or_insecure_launchers_block_before_downtime(self):
+        base = ["-m", "uvicorn", "fh_email_auth.app:app",
+                "--host", "127.0.0.1", "--port", "9141", "--no-access-log"]
+        examples = [
+            ["/bin/sh", "-c", "echo test"],
+            ["/usr/bin/python3", "-m", "gunicorn", "fh_email_auth.app:app",
+             "--host", "127.0.0.1", "--port", "9141", "--no-access-log"],
+            ["/usr/bin/python3", *base[:-1], "--reload"],
+            ["/usr/bin/python3", *base[:-1]],
+            ["/usr/bin/python3", *base, "--port", "9141"],
+            ["/usr/bin/python3", *base, "--host", "0.0.0.0"],
+            ["/usr/bin/python3", "-m", "uvicorn", "fh_auth.app:app",
+             "--host", "127.0.0.1", "--port", "9141", "--no-access-log"],
+        ]
+        for args in examples:
+            with self.subTest(args=args), self.assertRaises(release.Gate):
+                release.safe_uvicorn_argv(args, 9141)
+
+    def test_approved_existing_launch_flags_are_preserved(self):
+        start = [
+            "/opt/financial-horizon-auth/venv/bin/uvicorn",
+            "fh_email_auth.app:app", "--host=127.0.0.1",
+            "--port=9141", "--no-access-log", "--log-level", "warning",
+        ]
+        output = release.safe_uvicorn_argv(start, 9141)
+        self.assertEqual(output, [
+            "fh_email_auth.app:app", "--host", "127.0.0.1",
+            "--port", "9141", "--no-access-log", "--log-level", "warning",
+        ])
+
+    def test_service_launch_type_must_support_single_exec(self):
+        with mock.patch.object(release, "command", return_value=b"simple\n"):
+            release.ensure_supported_systemd_launch()
+        with mock.patch.object(release, "command", return_value=b"notify\n"):
+            with self.assertRaises(release.Gate):
+                release.ensure_supported_systemd_launch()
+
 
     def test_service_user_source_access_preflight_never_starts_backend(self):
         source = Path("/opt/financial-horizon-auth/releases/" + SHA + "/backend")

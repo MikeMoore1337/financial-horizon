@@ -183,6 +183,92 @@ def proxy_port(args: list[str], caddy: str) -> int:
     return port
 
 
+def safe_uvicorn_argv(process_args: list[str], expected_port: int) -> list[str]:
+    """Preserve known Uvicorn flags for a new release-private systemd ExecStart.
+
+    The old deployment copied backend/current without its .venv. Switching the
+    current link can therefore leave the previous ExecStart missing (203/EXEC).
+    Unsupported argv layouts fail closed, without changing listening policy.
+    """
+    if not process_args:
+        raise Gate("AUTH_EXEC_PROCESS_MISSING")
+    executable = Path(process_args[0]).name
+    if executable in {"python", "python3", "python3.11", "python3.12",
+                      "python3.13", "python3.14"}:
+        if process_args[1:3] == ["-m", "uvicorn"]:
+            rest = process_args[3:]
+        elif (len(process_args) >= 3 and
+              Path(process_args[1]).name in {"uvicorn", "uvicorn3"} and
+              Path(process_args[1]).is_absolute()):
+            # Shebang-launched console scripts appear under /proc/PID/cmdline
+            # as Python followed by the absolute uvicorn entrypoint path.
+            rest = process_args[2:]
+        else:
+            raise Gate("AUTH_EXEC_LAYOUT_UNSUPPORTED")
+    elif executable in {"uvicorn", "uvicorn3"}:
+        rest = process_args[1:]
+    else:
+        raise Gate("AUTH_EXEC_LAYOUT_UNSUPPORTED")
+    if not rest or rest[0] != "fh_email_auth.app:app":
+        raise Gate("AUTH_EXEC_APP_UNEXPECTED")
+    switches = {
+        "--no-access-log", "--proxy-headers", "--no-proxy-headers",
+        "--no-server-header", "--no-date-header",
+    }
+    values = {
+        "--host", "--port", "--workers", "--log-level", "--loop",
+        "--http", "--lifespan", "--timeout-keep-alive", "--backlog",
+        "--forwarded-allow-ips", "--interface",
+    }
+    seen: dict[str, str] = {}
+    flags: set[str] = set()
+    argv = [rest[0]]
+    index = 1
+    while index < len(rest):
+        item = rest[index]
+        if item in switches:
+            if item in flags:
+                raise Gate("AUTH_EXEC_DUPLICATE_SWITCH")
+            flags.add(item)
+            argv.append(item)
+            index += 1
+            continue
+        key, sep, inline_value = item.partition("=")
+        if key not in values or key in seen:
+            raise Gate("AUTH_EXEC_UNKNOWN_OR_DUPLICATE_OPTION")
+        if sep:
+            value = inline_value
+            index += 1
+        else:
+            if index + 1 >= len(rest):
+                raise Gate("AUTH_EXEC_OPTION_MISSING_VALUE")
+            value = rest[index + 1]
+            index += 2
+        if not re.fullmatch(r"[A-Za-z0-9_.,:/\*-]+", value):
+            raise Gate("AUTH_EXEC_UNSAFE_OPTION_VALUE")
+        seen[key] = value
+        argv.extend((key, value))
+    if seen.get("--host") != "127.0.0.1" or seen.get("--port") != str(expected_port):
+        raise Gate("AUTH_EXEC_BINDING_MISMATCH")
+    if "--no-access-log" not in flags:
+        raise Gate("AUTH_EXEC_ACCESS_LOG_NOT_DISABLED")
+    if "--proxy-headers" in flags and "--no-proxy-headers" in flags:
+        raise Gate("AUTH_EXEC_CONFLICTING_OPTIONS")
+    for key in ("--workers", "--backlog", "--timeout-keep-alive"):
+        if key in seen and not seen[key].isdigit():
+            raise Gate("AUTH_EXEC_NONNUMERIC_OPTION")
+    return argv
+
+
+def ensure_supported_systemd_launch() -> None:
+    unit_type = command(
+        ["systemctl", "show", "--value", "-p", "Type", SERVICE],
+        timeout=12, failure_code="AUTH_SYSTEMD_TYPE_UNKNOWN",
+    ).decode().strip()
+    if unit_type not in ("simple", "exec"):
+        raise Gate("AUTH_SYSTEMD_TYPE_UNSUPPORTED")
+
+
 def public_caddy_config(original: str, port: int) -> str:
     marker = "handle @owner_oauth_canary {"
     if original.count(marker) != 1 or original.count("handle @any_oauth_canary {") != 1:
@@ -518,12 +604,26 @@ def verify_service_user_module_access(auth_py: Path, source_root: Path,
             failure_code="STAGED_AUTH_IMPORT_AS_SERVICE_USER_FAILED")
 
 
-def systemd_oauth_dropin(modules_root: Path, python_path: str) -> bytes:
-    if not re.fullmatch(r"/[A-Za-z0-9_./-]+", str(modules_root)) or \
-            not re.fullmatch(r"[/A-Za-z0-9_.:-]+", python_path):
+def systemd_oauth_dropin(modules_root: Path, python_path: str,
+                         runtime_python: Path, uvicorn_args: list[str]) -> bytes:
+    """Override old ExecStart and use the verified release-private interpreter."""
+    if (not re.fullmatch(r"/[A-Za-z0-9_./-]+", str(modules_root)) or
+            not re.fullmatch(r"[/A-Za-z0-9_.:-]+", python_path)):
         raise Gate("SYSTEMD_RELEASE_PATH_INVALID")
+    release_root = modules_root.parent if modules_root.name == "backend" else modules_root
+    expected = release_root / ".oauth-venv" / "bin" / "python"
+    if runtime_python != expected or not runtime_python.is_file():
+        raise Gate("RELEASE_PRIVATE_PYTHON_INVALID")
+    if not uvicorn_args or uvicorn_args[0] != "fh_email_auth.app:app":
+        raise Gate("AUTH_EXEC_APP_UNEXPECTED")
+    tokens = [str(runtime_python), "-m", "uvicorn", *uvicorn_args]
+    if any(not re.fullmatch(r"[/A-Za-z0-9_.,:/*=-]+", token)
+           for token in tokens):
+        raise Gate("SYSTEMD_EXECSTART_UNSAFE")
     return (
         "[Service]\n"
+        "ExecStart=\n"
+        "ExecStart=" + " ".join(tokens) + "\n"
         "WorkingDirectory=" + str(modules_root) + "\n"
         "Environment=\"PYTHONPATH=" + python_path + "\"\n"
         "EnvironmentFile=/etc/financial-horizon/oauth.env\n"
@@ -605,7 +705,10 @@ def preflight(sha: str):
     auth_py = find_auth_python(args)
     for name in ("caddy.service", SERVICE):
         command(["systemctl", "is-active", "--quiet", name])
-    return back, static, path, staged, caddy, new_caddy, port, auth_py
+    ensure_supported_systemd_launch()
+    approved_args = safe_uvicorn_argv(args, port)
+    return (back, static, path, staged, caddy, new_caddy,
+            port, auth_py, approved_args)
 
 
 def migrate_live_database(source: Path, db: Path) -> bool:
@@ -632,7 +735,8 @@ def migrate_live_database(source: Path, db: Path) -> bool:
 
 
 def rollout(sha: str) -> None:
-    old_backend, old_static, db, old_env, old_caddy, new_caddy, port, auth_py = preflight(sha)
+    (old_backend, old_static, db, old_env, old_caddy,
+     new_caddy, port, auth_py, approved_args) = preflight(sha)
     print("RELEASE_PREFLIGHT=PASS", flush=True)
     with tempfile.TemporaryDirectory(prefix="fh-oauth-release-") as workdir:
         source = source_archive(sha, Path(workdir))
@@ -667,6 +771,30 @@ def rollout(sha: str) -> None:
                     failure_code="NEW_AUTH_SOURCE_IMPORT_MISMATCH")
             verify_service_user_module_access(auth_py, modules_root, check_env,
                                               new_backend)
+            # Validate the exact runtime used by the new systemd ExecStart.
+            # The original interpreter can disappear when the current symlink
+            # changes; do not depend on its executable or shebang at runtime.
+            runtime_python = new_backend / ".oauth-venv" / "bin" / "python"
+            user = command(
+                ["systemctl", "show", "--value", "-p", "User", SERVICE],
+                timeout=12, failure_code="SERVICE_USER_UNAVAILABLE",
+            ).decode().strip()
+            if not re.fullmatch(r"[a-z_][a-z0-9_-]*", user):
+                raise Gate("SERVICE_USER_INVALID")
+            service_env = {
+                "PATH": "/usr/local/bin:/usr/bin:/bin",
+                "PYTHONPATH": prepared_path,
+                "PYTHONNOUSERSITE": "1",
+            }
+            command(
+                ["runuser", "-u", user, "--", str(runtime_python), "-c",
+                 "import uvicorn,fastapi,fh_email_auth,fh_auth"],
+                cwd=modules_root, env=service_env, timeout=30,
+                failure_code="NEW_AUTH_RUNTIME_UNREADABLE_BY_SERVICE_USER",
+            )
+            dropin_content = systemd_oauth_dropin(
+                modules_root, prepared_path, runtime_python, approved_args,
+            )
             command([sys.executable, "-m", "compileall", "-q", str(new_backend)],
                     timeout=45, failure_code="BACKEND_COMPILE_FAILED")
         except Exception:
@@ -687,12 +815,13 @@ def rollout(sha: str) -> None:
         print("RELEASE_STAGED=PASS", flush=True)
         # Revalidate after network-dependent staging: other releases or
         # operators may have changed the live service while we built assets.
-        _, _, fresh_env = running_process()
-        if fresh_env.get("FH_AUTH_DATABASE_PATH") != str(db) or \
-                private_file(OAUTH_ENV) != old_env or \
-                CADDY_SITE.read_text(encoding="utf-8") != old_caddy or \
-                current_release(BACKEND_ROOT) != old_backend or \
-                current_release(STATIC_ROOT) != old_static:
+        _, fresh_args, fresh_env = running_process()
+        if (safe_uvicorn_argv(fresh_args, port) != approved_args or
+                fresh_env.get("FH_AUTH_DATABASE_PATH") != str(db) or
+                private_file(OAUTH_ENV) != old_env or
+                CADDY_SITE.read_text(encoding="utf-8") != old_caddy or
+                current_release(BACKEND_ROOT) != old_backend or
+                current_release(STATIC_ROOT) != old_static):
             raise Gate("LIVE_DEPLOYMENT_CHANGED_DURING_STAGING")
         changed = False
         db_migrated = False
@@ -707,7 +836,6 @@ def rollout(sha: str) -> None:
             db_migrated = True
             switch_release(BACKEND_ROOT, new_backend)
             DROPIN.parent.mkdir(parents=True, exist_ok=True)
-            dropin_content = systemd_oauth_dropin(modules_root, prepared_path)
             atomic_file(DROPIN, dropin_content, 0o644)
             atomic_file(OAUTH_ENV, replace_flags(old_env))
             command(["systemctl", "daemon-reload"], timeout=25)
