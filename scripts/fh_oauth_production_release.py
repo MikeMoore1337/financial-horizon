@@ -764,6 +764,30 @@ def rollout(sha: str) -> None:
                     failure_code="NEW_AUTH_SOURCE_IMPORT_MISMATCH")
             verify_service_user_module_access(auth_py, modules_root, check_env,
                                               new_backend)
+            # Validate the exact runtime used by the new systemd ExecStart.
+            # The original interpreter can disappear when the current symlink
+            # changes; do not depend on its executable or shebang at runtime.
+            runtime_python = new_backend / ".oauth-venv" / "bin" / "python"
+            user = command(
+                ["systemctl", "show", "--value", "-p", "User", SERVICE],
+                timeout=12, failure_code="SERVICE_USER_UNAVAILABLE",
+            ).decode().strip()
+            if not re.fullmatch(r"[a-z_][a-z0-9_-]*", user):
+                raise Gate("SERVICE_USER_INVALID")
+            service_env = {
+                "PATH": "/usr/local/bin:/usr/bin:/bin",
+                "PYTHONPATH": prepared_path,
+                "PYTHONNOUSERSITE": "1",
+            }
+            command(
+                ["runuser", "-u", user, "--", str(runtime_python), "-c",
+                 "import uvicorn,fastapi,fh_email_auth,fh_auth"],
+                cwd=modules_root, env=service_env, timeout=30,
+                failure_code="NEW_AUTH_RUNTIME_UNREADABLE_BY_SERVICE_USER",
+            )
+            dropin_content = systemd_oauth_dropin(
+                modules_root, prepared_path, runtime_python, approved_args,
+            )
             command([sys.executable, "-m", "compileall", "-q", str(new_backend)],
                     timeout=45, failure_code="BACKEND_COMPILE_FAILED")
         except Exception:
@@ -784,8 +808,9 @@ def rollout(sha: str) -> None:
         print("RELEASE_STAGED=PASS", flush=True)
         # Revalidate after network-dependent staging: other releases or
         # operators may have changed the live service while we built assets.
-        _, _, fresh_env = running_process()
-        if fresh_env.get("FH_AUTH_DATABASE_PATH") != str(db) or \
+        _, fresh_args, fresh_env = running_process()
+        if (safe_uvicorn_argv(fresh_args, port) != approved_args or
+                fresh_env.get("FH_AUTH_DATABASE_PATH") != str(db) or
                 private_file(OAUTH_ENV) != old_env or \
                 CADDY_SITE.read_text(encoding="utf-8") != old_caddy or \
                 current_release(BACKEND_ROOT) != old_backend or \
@@ -804,7 +829,6 @@ def rollout(sha: str) -> None:
             db_migrated = True
             switch_release(BACKEND_ROOT, new_backend)
             DROPIN.parent.mkdir(parents=True, exist_ok=True)
-            dropin_content = systemd_oauth_dropin(modules_root, prepared_path)
             atomic_file(DROPIN, dropin_content, 0o644)
             atomic_file(OAUTH_ENV, replace_flags(old_env))
             command(["systemctl", "daemon-reload"], timeout=25)
