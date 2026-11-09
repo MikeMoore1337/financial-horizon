@@ -37,6 +37,7 @@ test('v1 partial-page trap and replay ACK mismatch hold in Chromium and WebKit',
       b.pages[0].next_since_revision = b.pages[0].to_revision;
       b.pages.pop();
     }
+    if (mode === 'stale-cursor-event') b.pages[0].changes.unshift(e(3));
     if (mode === 'wrong-ack') b.ack.changes[0].payload.amount_minor = 101;
     if (mode === 'foreign-uuid') {
       b.ack.client_mutation_id = '00000000-0000-4000-8000-0000000000ff';
@@ -44,7 +45,7 @@ test('v1 partial-page trap and replay ACK mismatch hold in Chromium and WebKit',
     return checkV1AckDeltaShape(b);
   }, { mode });
   expect(await check('complete')).toBe('MATCHED_STRUCTURALLY');
-  for (const mode of ['truncated', 'high-watermark', 'wrong-ack', 'foreign-uuid']) {
+  for (const mode of ['truncated', 'high-watermark', 'stale-cursor-event', 'wrong-ack', 'foreign-uuid']) {
     expect(await check(mode)).toBe('RECOVERY_HOLD');
   }
   await page.reload();
