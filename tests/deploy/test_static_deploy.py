@@ -213,7 +213,7 @@ class ReleaseTests(unittest.TestCase):
             mock.patch.object(cd, 'verify_origin_ca'),
             mock.patch.object(cd.subprocess, 'run', return_value=(
                 subprocess.CompletedProcess(
-                    ['/usr/bin/curl'], 0, b'<html>redirect</html>\\n302', b''
+                    ['/usr/bin/curl'], 0, b'<html>redirect</html>\n302', b''
                 )
             )),
         ):
