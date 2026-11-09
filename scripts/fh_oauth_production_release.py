@@ -40,6 +40,8 @@ CANARY_DB = Path("/var/lib/financial-horizon/oauth-canary/auth.sqlite3")
 ALLOWED = {"FH_GOOGLE_OAUTH_ENABLED", "FH_YANDEX_OAUTH_ENABLED", "FH_VK_OAUTH_ENABLED"}
 FLAGS = {"FH_ENABLE_CLOUD_AUTH", "FH_TELEGRAM_OAUTH_ENABLED", *ALLOWED}
 PROVIDERS = ["google", "yandex", "vk"]
+USER_COLUMNS = ("id", "email", "password_hash", "verified_at",
+                "password_changed_at", "disabled", "created_at")
 
 
 class Gate(Exception):
@@ -379,14 +381,79 @@ def stage_isolated_python(auth_py: Path, new_backend: Path,
         raise
 
 
-def service_python_path(isolated_site: str, process_env: dict[str, str]) -> str:
+def service_python_path(isolated_site: str, process_env: dict[str, str],
+                        staged_modules: str | None = None) -> str:
     old_path = process_env.get("PYTHONPATH", "")
     if old_path and not re.fullmatch(r"[/A-Za-z0-9_.:-]+", old_path):
         raise Gate("EXISTING_PYTHONPATH_UNEXPECTED")
-    result = isolated_site + (os.pathsep + old_path if old_path else "")
+    # The prior release only prepended site-packages: uvicorn could import
+    # the old backend through its inherited PYTHONPATH or --app-dir instead.
+    parts = [staged_modules, isolated_site, old_path]
+    result = os.pathsep.join(p for p in parts if p)
     if not re.fullmatch(r"[/A-Za-z0-9_.:-]+", result):
         raise Gate("ISOLATED_PYTHONPATH_INVALID")
     return result
+
+
+def schema_is_nullable(path: Path) -> bool:
+    """Read the real SQLite schema without creating files or altering rows."""
+    if path == CANARY_DB or path.is_symlink() or not path.is_file():
+        raise Gate("AUTH_DB_NOT_ALLOWED")
+    with closing(sqlite3.connect(
+        "file:" + quote(str(path), safe="/") + "?mode=ro", uri=True,
+        timeout=12,
+    )) as conn:
+        if conn.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+            raise Gate("LIVE_DB_INTEGRITY")
+        if conn.execute("PRAGMA foreign_key_check").fetchall():
+            raise Gate("LIVE_DB_FOREIGN_KEYS")
+        columns = conn.execute("PRAGMA table_info(users)").fetchall()
+        if tuple(c[1] for c in columns) != USER_COLUMNS or columns[1][3] not in (0, 1):
+            raise Gate("MIGRATION_SCHEMA_UNEXPECTED")
+        if conn.execute(
+            "SELECT count(*) FROM sqlite_master WHERE tbl_name='users' "
+            "AND type IN ('index','trigger') AND sql IS NOT NULL"
+        ).fetchone()[0]:
+            raise Gate("USERS_SCHEMA_CUSTOMIZATION_UNEXPECTED")
+        return columns[1][3] == 0
+
+
+def staged_modules_root(new_backend: Path) -> Path:
+    """Locate source packages under the staged release, not the old live tree."""
+    roots = [entry.parent.parent for entry in
+             new_backend.rglob("fh_email_auth/app.py") if entry.is_file()]
+    if len(roots) != 1 or not (roots[0] / "fh_auth" / "app.py").is_file():
+        raise Gate("STAGED_AUTH_PACKAGES_NOT_FOUND")
+    parent = roots[0]
+    if parent.is_symlink() or not parent.resolve().is_relative_to(new_backend.resolve()):
+        raise Gate("STAGED_AUTH_PACKAGE_PATH_INVALID")
+    return parent
+
+
+def safe_recent_service_error() -> str:
+    """Only emit allowlisted error categories, never raw journal lines."""
+    result = subprocess.run(
+        ["journalctl", "-u", SERVICE, "--since", "-3 minutes",
+         "-n", "180", "-o", "cat", "--no-pager"],
+        capture_output=True, text=True, timeout=12, check=False,
+    )
+    if result.returncode != 0:
+        return "JOURNAL_UNAVAILABLE"
+    data = result.stdout[-24000:]
+    patterns = (
+        ("ModuleNotFoundError", "MODULE_NOT_FOUND"),
+        ("ImportError", "IMPORT_ERROR"),
+        ("PermissionError", "PERMISSION_ERROR"),
+        ("sqlite3.OperationalError", "SQLITE_ERROR"),
+        ("pydantic_core.ValidationError", "PYDANTIC_ERROR"),
+        ("ValueError", "VALIDATION_ERROR"),
+        ("Address already in use", "PORT_BIND_ERROR"),
+        ("Traceback (most recent call last)", "PYTHON_TRACEBACK_PRESENT"),
+    )
+    for needle, label in patterns:
+        if needle in data:
+            return label
+    return "NO_MATCHING_ERROR"
 
 
 def preflight(sha: str):
@@ -408,14 +475,9 @@ def preflight(sha: str):
             not path.is_file() or path.is_symlink() or \
             path.parent.stat().st_mode & 0o077:
         raise Gate("LIVE_AUTH_DB_INVALID")
-    with closing(sqlite3.connect("file:" + quote(str(path), safe="/") +
-                                "?mode=ro", uri=True)) as db:
-        if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok" or \
-                db.execute("PRAGMA foreign_key_check").fetchall():
-            raise Gate("LIVE_DB_INTEGRITY")
-        cols = db.execute("PRAGMA table_info(users)").fetchall()
-        if len(cols) != 7 or cols[1][1] != "email" or cols[1][3] != 1:
-            raise Gate("MIGRATION_SCHEMA_NOT_LEGACY")
+    # Previous attempts may have migrated users.email before rolling back
+    # backend/Caddy. Never force the old NOT NULL schema or restore stale DBs.
+    schema_is_nullable(path)
     email = private_file(EMAIL_ENV)
     staged = private_file(OAUTH_ENV)
     if assignment(email, "FH_AUTH_DATABASE_PATH") != [str(path)] or \
@@ -446,7 +508,11 @@ def preflight(sha: str):
     return back, static, path, staged, caddy, new_caddy, port, auth_py
 
 
-def migrate_live_database(source: Path, db: Path) -> None:
+def migrate_live_database(source: Path, db: Path) -> bool:
+    """Return True only if migration executed. Already-migrated DB is left as-is."""
+    if schema_is_nullable(db):
+        print("DB_SCHEMA_MIGRATION=ALREADY_READY", flush=True)
+        return False
     migration = source / "backend/fh_auth/migrate.py"
     if not migration.is_file():
         raise Gate("MIGRATION_SCRIPT_MISSING")
@@ -454,10 +520,15 @@ def migrate_live_database(source: Path, db: Path) -> None:
                                     suffix=".sqlite3", dir=db.parent)
     os.close(fd)
     Path(filename).unlink()
-    command([sys.executable, str(migration), str(db), filename], timeout=90)
+    command([sys.executable, str(migration), str(db), filename], timeout=90,
+            failure_code="AUTH_SCHEMA_MIGRATION_FAILED")
     backup = Path(filename)
     if not backup.is_file() or backup.stat().st_mode & 0o077:
         raise Gate("MIGRATION_BACKUP_INVALID")
+    if not schema_is_nullable(db):
+        raise Gate("MIGRATION_NOT_EFFECTIVE")
+    print("DB_SCHEMA_MIGRATION=APPLIED", flush=True)
+    return True
 
 
 def rollout(sha: str) -> None:
@@ -475,13 +546,25 @@ def rollout(sha: str) -> None:
             new_static = stage_static(source, sha)
             isolated_site = stage_isolated_python(auth_py, new_backend, source)
             _, _, stage_process_env = running_process()
-            prepared_path = service_python_path(isolated_site, stage_process_env)
+            modules_root = staged_modules_root(new_backend)
+            prepared_path = service_python_path(
+                isolated_site, stage_process_env, str(modules_root)
+            )
             check_env = os.environ.copy()
             check_env["PYTHONPATH"] = prepared_path
             command([str(auth_py), "-c",
                      "import fastapi, uvicorn, httpx, pwdlib, joserfc, cryptography"],
                     timeout=30, env=check_env,
                     failure_code="LIVE_PYTHON_WITH_STAGED_DEPS_FAILED")
+            # Find specs without running app-level startup or touching SQLite.
+            expected = "fh_email_auth,fh_auth"
+            command([str(auth_py), "-c",
+                     "import importlib.util,pathlib,sys; root=pathlib.Path(sys.argv[1]); "
+                     "assert all(pathlib.Path(importlib.util.find_spec(p).origin).parent == "
+                     "root / p for p in sys.argv[2].split(','))",
+                     str(modules_root), expected],
+                    timeout=30, env=check_env,
+                    failure_code="NEW_AUTH_SOURCE_IMPORT_MISMATCH")
             command([sys.executable, "-m", "compileall", "-q", str(new_backend)],
                     timeout=45, failure_code="BACKEND_COMPILE_FAILED")
         except Exception:
@@ -518,7 +601,7 @@ def rollout(sha: str) -> None:
         try:
             changed = True
             command(["systemctl", "stop", SERVICE], timeout=25)
-            migrate_live_database(source, db)
+            schema_changed_now = migrate_live_database(source, db)
             db_migrated = True
             switch_release(BACKEND_ROOT, new_backend)
             DROPIN.parent.mkdir(parents=True, exist_ok=True)
@@ -534,14 +617,28 @@ def rollout(sha: str) -> None:
             # A systemd active state does not prove Uvicorn is ready yet.
             import time
             deadline = time.monotonic() + 35
+            last_reason = "UNKNOWN"
             while True:
                 try:
                     validate_running_oauth(port, PROVIDERS)
                     break
-                except (OSError, Gate):
-                    if time.monotonic() >= deadline:
-                        raise Gate("AUTH_READY_TIMEOUT")
-                    time.sleep(0.5)
+                except Gate as exc:
+                    last_reason = exc.code
+                except (OSError, http.client.HTTPException):
+                    last_reason = "AUTH_HTTP_UNREACHABLE"
+                if time.monotonic() >= deadline:
+                    status = subprocess.run(
+                        ["systemctl", "is-active", "--quiet", SERVICE],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        check=False, timeout=12,
+                    )
+                    print("AUTH_READY_LAST_REASON=" + last_reason, flush=True)
+                    print("AUTH_SERVICE_STILL_ACTIVE=" +
+                          ("YES" if status.returncode == 0 else "NO"), flush=True)
+                    print("AUTH_RECENT_LOG_CATEGORY=" +
+                          safe_recent_service_error(), flush=True)
+                    raise Gate("AUTH_READY_TIMEOUT")
+                time.sleep(0.5)
             atomic_file(CADDY_SITE, new_caddy.encode("utf-8"), None)
             command(["caddy", "validate", "--config", str(CADDY_MAIN)], timeout=30)
             command(["systemctl", "reload", "caddy.service"], timeout=30)
@@ -565,7 +662,8 @@ def rollout(sha: str) -> None:
             print("PUBLIC_PROVIDERS=google,yandex,vk", flush=True)
             print("TELEGRAM=DISABLED", flush=True)
             print("EMAIL_REGISTRATION_GATE=UNCHANGED", flush=True)
-            print("DATABASE_MIGRATED=YES", flush=True)
+            print("DATABASE_MIGRATED=" +
+                  ("YES" if schema_changed_now else "ALREADY_READY"), flush=True)
             print("DB_RESTORE_NOT_PERFORMED=YES", flush=True)
         except Exception:
             if changed:
