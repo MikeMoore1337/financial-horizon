@@ -7,8 +7,9 @@ SQLite, PostgreSQL, OAuth, FastAPI, секреты и финансовые ми�
 ## Путь выпуска
 
 1. Push в `main` запускает `tests.yml` и `security-vault.yml`.
-   Оба должны быть SUCCESS для **одного exact SHA**. При событии
-   `workflow_run` используется `workflow_run.head_sha`, а не `github.sha`.
+   Оба должны быть SUCCESS для **одного exact SHA**. При событии `push` используется `github.sha` после проверки
+   актуального `main`; при ручном запуске SHA обязан совпасть с выбранным
+   коммитом `main`.
 2. `production-deploy.yml` сверяет текущий main, оба CI, собирает Vite
    из точного SHA в отдельном GitHub-hosted runner **без production secrets**.
    Артефакт - только `dist` с `__release.json` и SHA-256.
