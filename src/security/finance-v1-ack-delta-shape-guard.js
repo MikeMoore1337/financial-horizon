@@ -186,6 +186,41 @@ function checkV1AckDeltaShapeInner(input = {}) {
 // no cross-browser, side-effect-free Proxy detection for arbitrary objects.
 // Never JSON.stringify an untrusted object and pass that text here: the
 // conversion itself could execute getters. The contract accepts wire JSON.
+// JSON.parse rounds some distinct finite wire number tokens to the same
+// IEEE-754 value (100 vs 100.000000000000001, 0 vs 1e-400). Validate every
+// number token before parse. Non-canonical but valid JSON holds by design:
+// this isolated guard favors an explicit recovery over a false ACK match.
+function canonicalNumberTokens(text) {
+  let quoted = false, escaped = false;
+  for (let i = 0; i < text.length;) {
+    const ch = text[i];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') quoted = false;
+      i++;
+      continue;
+    }
+    if (ch === '"') { quoted = true; i++; continue; }
+    if (ch === '-' || (ch >= '0' && ch <= '9')) {
+      let end = i + 1;
+      while (end < text.length) {
+        const c = text[end];
+        if ((c >= '0' && c <= '9') || c === '.' || c === 'e' ||
+            c === 'E' || c === '+' || c === '-') end++;
+        else break;
+      }
+      const token = text.slice(i, end);
+      const num = Number(token);
+      if (!Number.isFinite(num) || JSON.stringify(num) !== token) return false;
+      i = end;
+      continue;
+    }
+    i++;
+  }
+  return !quoted;
+}
+
 const inertJsonParse = JSON.parse;
 const MAX_INPUT_CODE_UNITS = 2_000_000;
 
@@ -195,6 +230,7 @@ export function checkV1AckDeltaShape(rawJson) {
   try {
     // JSON.parse returns fresh, ordinary data without Proxy, accessors,
     // aliases or arbitrary prototypes; no input object is read twice.
+    if (!canonicalNumberTokens(rawJson)) return 'RECOVERY_HOLD';
     return checkV1AckDeltaShapeInner(inertJsonParse(rawJson));
   } catch {
     return 'RECOVERY_HOLD';

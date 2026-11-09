@@ -124,3 +124,32 @@ test('rejects unsafe integer precision collision in ACK versus delta wire JSON',
   const both = JSON.stringify(fixture()).replaceAll(token, '"values":[9007199254740992]');
   assert.equal(guard(both), 'RECOVERY_HOLD');
 });
+
+// Precision cannot be recovered after JSON.parse: require canonical numeric
+// tokens in the *original* wire text, not just safe integer parsed values.
+test('rejects rounded fractional and underflow ACK/delta numeric collisions', () => {
+  const token = '"values":[1]';
+  const inject = (delta, ack) => {
+    const first = JSON.stringify(fixture()).replace(token, '"values":[' + delta + ']');
+    const last = first.lastIndexOf(token);
+    assert.notEqual(last, -1);
+    return first.slice(0, last) + '"values":[' + ack + ']' +
+      first.slice(last + token.length);
+  };
+  for (const [delta, ack] of [
+    ['100', '100.000000000000001'],
+    ['9007199254740991', '9007199254740991.1'],
+    ['0', '1e-400'],
+  ]) {
+    assert.equal(Number(delta), Number(ack)); // proves parser precision collapse
+    assert.equal(guard(inject(delta, ack)), 'RECOVERY_HOLD');
+  }
+  const valid = fixture();
+  valid.pages[0].changes[0].payload.details.values[0] = 0.1;
+  valid.ack.changes[0].payload.details.values[0] = 0.1;
+  assert.equal(guard(JSON.stringify(valid)), 'MATCHED_STRUCTURALLY');
+  const quoted = fixture();
+  quoted.pages[0].changes[0].payload.details.values[0] = '1e-400';
+  quoted.ack.changes[0].payload.details.values[0] = '1e-400';
+  assert.equal(guard(JSON.stringify(quoted)), 'MATCHED_STRUCTURALLY');
+});

@@ -48,14 +48,22 @@ test('v1 partial-page trap and replay ACK mismatch hold in Chromium and WebKit',
     if (mode === 'foreign-uuid') {
       b.ack.client_mutation_id = '00000000-0000-4000-8000-0000000000ff';
     }
-    if (mode === 'unsafe-integer-precision') {
+    if (['unsafe-integer-precision', 'fractional-precision', 'underflow-precision',
+         'max-safe-fractional-precision'].includes(mode)) {
       const raw = JSON.stringify(b);
       const token = '"amount_minor":100';
-      const first = raw.replace(token, '"amount_minor":9007199254740992');
+      const variants = {
+        'unsafe-integer-precision': ['9007199254740992', '9007199254740993'],
+        'fractional-precision': ['100', '100.000000000000001'],
+        'underflow-precision': ['0', '1e-400'],
+        'max-safe-fractional-precision': ['9007199254740991', '9007199254740991.1'],
+      };
+      const [delta, ack] = variants[mode];
+      const first = raw.replace(token, '"amount_minor":' + delta);
       const last = first.lastIndexOf(token);
       if (last < 0) throw new Error('missing ACK amount fixture');
       return checkV1AckDeltaShape(first.slice(0, last) +
-        '"amount_minor":9007199254740993' + first.slice(last + token.length));
+        '"amount_minor":' + ack + first.slice(last + token.length));
     }
     // Only a raw JSON string can cross the verification boundary. Non-JSON
     // in-memory inputs must fail closed rather than be lossy-stringified.
@@ -63,7 +71,9 @@ test('v1 partial-page trap and replay ACK mismatch hold in Chromium and WebKit',
     return checkV1AckDeltaShape(JSON.stringify(b));
   }, { mode });
   expect(await check('complete')).toBe('MATCHED_STRUCTURALLY');
-  for (const mode of ['truncated', 'high-watermark', 'stale-cursor-event', 'wrong-ack', 'foreign-uuid', 'non-json-later', 'date-in-ack', 'unsafe-integer-precision']) {
+  for (const mode of ['truncated', 'high-watermark', 'stale-cursor-event', 'wrong-ack', 'foreign-uuid', 'non-json-later', 'date-in-ack', 'unsafe-integer-precision',
+                     'fractional-precision', 'underflow-precision',
+                     'max-safe-fractional-precision']) {
     expect(await check(mode)).toBe('RECOVERY_HOLD');
   }
   await page.reload();
