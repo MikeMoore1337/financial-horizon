@@ -4,7 +4,7 @@ No real service, network call, database or production filesystem is modified.
 """
 from __future__ import annotations
 
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, ExitStack
 import importlib.util
 import io
 import os
@@ -558,6 +558,125 @@ class ReleaseContracts(unittest.TestCase):
             result = release.safe_recent_service_error()
         self.assertEqual(result, "MODULE_NOT_FOUND")
         self.assertNotIn("PII", result)
+
+    def test_stage_only_prepares_same_release_then_cleans_without_downtime(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            backend = base / "auth"
+            static = base / "static"
+            for folder in (backend, static):
+                (folder / "releases").mkdir(parents=True)
+            old_backend = backend / "releases" / "previous"
+            old_static = static / "releases" / "previous"
+            old_backend.mkdir()
+            old_static.mkdir()
+            (backend / "current").symlink_to(old_backend)
+            (static / "current").symlink_to(old_static)
+            site = base / "site.caddy"
+            site.write_text("original", encoding="utf-8")
+            source = base / "source"
+            source.mkdir()
+            db = base / "auth.sqlite3"
+            old_env = b"TEST_ENV_DISABLED=true\n"
+            old_args = [
+                "/usr/bin/python3", "-m", "uvicorn", "fh_email_auth.app:app",
+                "--host", "127.0.0.1", "--port", "9141", "--no-access-log",
+            ]
+            approved = release.safe_uvicorn_argv(old_args, 9141)
+            calls = []
+
+            def fake_backend(src, sha, existing):
+                candidate = backend / "releases" / sha
+                (candidate / ".oauth-venv" / "bin").mkdir(parents=True)
+                (candidate / ".oauth-venv" / "bin" / "python").write_text(
+                    "fake executable"
+                )
+                (candidate / "backend").mkdir()
+                return candidate
+
+            def fake_static(src, sha):
+                candidate = static / "releases" / sha
+                candidate.mkdir()
+                return candidate
+
+            def fake_command(args, **kwargs):
+                calls.append(args)
+                if args[:4] == ["systemctl", "show", "--value", "-p"]:
+                    return b"fh-email-auth\n"
+                if args[:2] == ["systemctl", "stop"]:
+                    raise AssertionError("stage-only must not stop production")
+                return b""
+
+            preflight = (
+                old_backend, old_static, db, old_env, "original", "new",
+                9141, Path("/usr/bin/python3"), approved,
+            )
+            with ExitStack() as stack:
+                def patch(name, value):
+                    return stack.enter_context(mock.patch.object(release, name, value))
+
+                patch("BACKEND_ROOT", backend)
+                patch("STATIC_ROOT", static)
+                patch("CADDY_SITE", site)
+                patch("OAUTH_ENV", base / "oauth.env")
+                patch("preflight", mock.Mock(return_value=preflight))
+                patch("source_archive", mock.Mock(return_value=source))
+                patch("stage_backend", fake_backend)
+                patch("stage_static", fake_static)
+                patch("stage_isolated_python",
+                      mock.Mock(return_value=str(base / "synthetic-site")))
+                patch("running_process", mock.Mock(return_value=(
+                    123, old_args, {"FH_AUTH_DATABASE_PATH": str(db)}
+                )))
+                patch("staged_modules_root", lambda candidate: candidate / "backend")
+                patch("private_file", lambda path: old_env)
+                patch("verify_service_user_module_access", mock.Mock())
+                patch("systemd_oauth_dropin", mock.Mock(return_value=b"TEST_ONLY\n"))
+                patch("command", fake_command)
+                patch("save_private_release_receipt",
+                      mock.Mock(side_effect=AssertionError(
+                          "stage-only may not save production config"
+                      )))
+                with redirect_stdout(io.StringIO()) as output:
+                    release.rollout(SHA, stage_only=True)
+            self.assertIn("STAGE_ONLY=PASS", output.getvalue())
+            self.assertIn("LIVE_SERVICE_STOPPED=NO", output.getvalue())
+            self.assertEqual(release.current_release(backend), old_backend)
+            self.assertEqual(release.current_release(static), old_static)
+            self.assertFalse((backend / "releases" / SHA).exists())
+            self.assertFalse((static / "releases" / SHA).exists())
+            self.assertEqual(site.read_text(), "original")
+            self.assertFalse(any(args[:2] == ["systemctl", "stop"]
+                                 for args in calls))
+
+    def test_stage_only_cli_never_calls_apply_branch(self):
+        with mock.patch.object(release, "rollout") as rollout, \
+             mock.patch.object(release, "preflight") as preflight, \
+             mock.patch("sys.argv", [
+                 "release", "--sha", SHA, "--stage-only",
+             ]):
+            self.assertEqual(release.main(), 0)
+        rollout.assert_called_once_with(SHA, stage_only=True)
+        preflight.assert_not_called()
+
+    def test_unexpected_runtime_prints_only_safe_category(self):
+        for exc, expected in (
+            (PermissionError("SECRET PII /root/private"), "OS_PERMISSION_DENIED"),
+            (FileNotFoundError("SECRET PII"), "OS_FILE_NOT_FOUND"),
+            (NotImplementedError("SECRET PII"), "UNSUPPORTED_OS_OPERATION"),
+        ):
+            with self.subTest(category=expected), \
+                 mock.patch.object(release, "rollout", side_effect=exc), \
+                 mock.patch("sys.argv", ["release", "--sha", SHA, "--apply"]), \
+                 redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(release.main(), 1)
+            printed = output.getvalue()
+            self.assertIn("SAFE_EXCEPTION_CATEGORY=" + expected, printed)
+            self.assertIn("SAFE_EXCEPTION_STAGE=UNKNOWN", printed)
+            self.assertIn("RAW_EXCEPTION_PRINTED=NO", printed)
+            self.assertIn("FAILURE_CODE=UNEXPECTED_RUNTIME", printed)
+            self.assertNotIn("SECRET", printed)
+            self.assertNotIn("/root", printed)
 
     def test_one_command_without_apply_only_checks_preflight(self):
         with mock.patch.object(release, "preflight", return_value=None) as check, \
