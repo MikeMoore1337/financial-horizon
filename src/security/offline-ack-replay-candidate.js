@@ -7,13 +7,19 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const digest = /^[0-9a-f]{64}$/;
 
 export function reconcileVerifiedReplay(db, ack, signal) {
-  if (!db || !ack || !accountScope.test(ack.scope) ||
-      !uuid.test(ack.mutationId) || !digest.test(ack.fingerprint) ||
-      !Number.isSafeInteger(ack.generation) || ack.generation < 1 ||
-      !Number.isSafeInteger(ack.revision) || ack.revision < 0) {
+  // Capture all fields once. Network ACK objects must not mutate their scope
+  // or command identity between an IndexedDB request and its onsuccess event.
+  const { scope, mutationId, fingerprint, generation, revision } = ack || {};
+  if (!db || !accountScope.test(scope) ||
+      !uuid.test(mutationId) || !digest.test(fingerprint) ||
+      !Number.isSafeInteger(generation) || generation < 1 ||
+      !Number.isSafeInteger(revision) || revision < 0 ||
+      !signal || typeof signal.aborted !== 'boolean' ||
+      typeof signal.addEventListener !== 'function' ||
+      typeof signal.removeEventListener !== 'function') {
     return Promise.reject(new TypeError('Invalid replay reconciliation inputs'));
   }
-  if (signal?.aborted) return Promise.resolve('RECOVERY_HOLD');
+  if (signal.aborted) return Promise.resolve('RECOVERY_HOLD');
   return new Promise((resolve, reject) => {
     let tx;
     try { tx = db.transaction(['meta', 'outbox', 'applied'], 'readwrite'); }
@@ -22,33 +28,33 @@ export function reconcileVerifiedReplay(db, ack, signal) {
     let outcome = 'RECOVERY_HOLD';
     const abort = () => { try { tx.abort(); } catch { /* transaction already finished */ } };
     const hold = () => { outcome = 'RECOVERY_HOLD'; abort(); };
-    const cleanup = () => signal?.removeEventListener('abort', abort);
+    const cleanup = () => signal.removeEventListener('abort', abort);
     tx.oncomplete = () => { cleanup(); resolve(outcome); };
     tx.onabort = () => {
       cleanup();
       if (tx.error) reject(tx.error);
       else resolve('RECOVERY_HOLD');
     };
-    signal?.addEventListener('abort', abort, { once: true });
-    if (signal?.aborted) { hold(); return; }
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) { hold(); return; }
 
-    const meta = tx.objectStore('meta').get(ack.scope);
+    const meta = tx.objectStore('meta').get(scope);
     meta.onsuccess = () => {
       const current = meta.result;
-      if (!current || current.scope !== ack.scope ||
-          current.generation !== ack.generation ||
+      if (!current || current.scope !== scope ||
+          current.generation !== generation ||
           !Number.isSafeInteger(current.cursor) ||
-          current.cursor < 0 || ack.revision > current.cursor) {
+          current.cursor < 0 || revision > current.cursor) {
         hold(); return;
       }
-      const key = [ack.scope, ack.mutationId];
+      const key = [scope, mutationId];
       const proof = tx.objectStore('applied').get(key);
       proof.onsuccess = () => {
         const record = proof.result;
-        if (!record || record.scope !== ack.scope ||
-            record.mutationId !== ack.mutationId ||
-            record.fingerprint !== ack.fingerprint ||
-            record.revision !== ack.revision ||
+        if (!record || record.scope !== scope ||
+            record.mutationId !== mutationId ||
+            record.fingerprint !== fingerprint ||
+            record.revision !== revision ||
             record.applied !== true) {
           hold(); return;
         }
@@ -56,8 +62,8 @@ export function reconcileVerifiedReplay(db, ack, signal) {
         queued.onsuccess = () => {
           const entry = queued.result;
           if (!entry) { outcome = 'ALREADY_SETTLED'; return; }
-          if (entry.scope !== ack.scope || entry.mutationId !== ack.mutationId ||
-              entry.fingerprint !== ack.fingerprint ||
+          if (entry.scope !== scope || entry.mutationId !== mutationId ||
+              entry.fingerprint !== fingerprint ||
               !['pending', 'sending'].includes(entry.status)) {
             hold(); return;
           }
