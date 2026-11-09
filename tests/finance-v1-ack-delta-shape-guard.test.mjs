@@ -93,6 +93,11 @@ test('rejects stale/rebound ACK, untrusted schema and non-JSON payload', () => {
   assert.equal(check(null), 'RECOVERY_HOLD');
   assert.equal(check({ ...base(), mutationId: { toString: () => mutationId } }),
     'RECOVERY_HOLD');
+  const malformed = clone(base());
+  const nonJson = () => 'not-json';
+  malformed.pages[0].changes[0].payload = { injected: nonJson };
+  malformed.ack.changes[0].payload = { injected: nonJson };
+  assert.equal(check(malformed), 'RECOVERY_HOLD');
 });
 
 test('a structural match never creates an applied proof or modifies an outbox', () => {
