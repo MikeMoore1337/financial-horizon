@@ -38,7 +38,10 @@ const eventKeys = ['revision', 'ordinal', 'kind', 'entity_id', 'entity_revision'
 function isJsonValue(v, budget, depth = 0) {
   if (depth > 16 || --budget.remaining < 0) return false;
   if (v === null) return true;
-  if (typeof v === 'number') return Number.isFinite(v);
+  // Fail closed on large wire integers: distinct JSON literals can round to
+  // the same IEEE-754 Number and falsely satisfy ACK/delta equality.
+  if (typeof v === 'number') return Number.isFinite(v) &&
+    (!Number.isInteger(v) || Number.isSafeInteger(v));
   if (typeof v === 'string' || typeof v === 'boolean') return true;
   if (typeof v !== 'object' || budget.seen.has(v)) return false;
   budget.seen.add(v);

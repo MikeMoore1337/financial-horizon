@@ -108,3 +108,19 @@ test('P2 Proxy: caller object, nested Proxy and mutation traps are never touched
   differing.ack.changes[0].payload.details.values[0] = 999;
   assert.equal(guard(JSON.stringify(differing)), 'RECOVERY_HOLD');
 });
+
+// Before this guard, different wire integers above 2^53 collapsed to the
+// same JS Number, incorrectly producing MATCHED_STRUCTURALLY.
+test('rejects unsafe integer precision collision in ACK versus delta wire JSON', () => {
+  const raw = JSON.stringify(fixture());
+  const token = '"values":[1]';
+  const first = raw.replace(token, '"values":[9007199254740992]');
+  const last = first.lastIndexOf(token);
+  assert.notEqual(last, -1);
+  const ambiguous = first.slice(0, last) + '"values":[9007199254740993]' +
+    first.slice(last + token.length);
+  assert.equal(JSON.parse('9007199254740992'), JSON.parse('9007199254740993'));
+  assert.equal(guard(ambiguous), 'RECOVERY_HOLD');
+  const both = JSON.stringify(fixture()).replaceAll(token, '"values":[9007199254740992]');
+  assert.equal(guard(both), 'RECOVERY_HOLD');
+});

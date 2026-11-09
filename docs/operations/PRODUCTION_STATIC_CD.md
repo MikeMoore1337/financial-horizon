@@ -24,7 +24,8 @@ SQLite, PostgreSQL, OAuth, FastAPI, секреты и финансовые ми�
    запрет symlink/path traversal, ограничение размеров, проверка
    manifest и SHA), распаковывается в `releases/<sha>`, затем
    атомарно переключается `current`.
-6. Локальный HTTPS smoke через Caddy проверяет exact SHA, HTML,
+6. Локальный HTTPS smoke через Caddy на порту `8444` с доверенным
+   Cloudflare Origin CA (не через Xray на `:443`) проверяет exact SHA, HTML,
    Service Worker, manifest, активность Caddy и auth-сервиса.
    При ошибке автоматически восстанавливается старый `current`.
    После PASS создаётся root-only квитанция в
@@ -33,6 +34,56 @@ SQLite, PostgreSQL, OAuth, FastAPI, секреты и финансовые ми�
 Автоматический запуск **по умолчанию выключен**. Он разрешён только
 если repository variable `FH_STATIC_AUTO_DEPLOY_ENABLED=true` и оба
 CI успешны. До этого доступен ручной `workflow_dispatch` с точным SHA.
+
+## Реальная origin TLS-топология (проверена владельцем 09.11.2026)
+
+- Публичный `https://fin-horizon.mikemoore.top/` через Cloudflare: HTTP 200.
+- `127.0.0.1:443` принадлежит **Xray**, возвращает HTTP 403.
+  Его нельзя использовать для проверки приложения, менять Xray не нужно.
+- Caddy слушает `:8444` (HTTPS), `:80` (редирект HTTP 308)
+  и локальный `:2019` (административный интерфейс).
+- `curl --resolve fin-horizon.mikemoore.top:8444:127.0.0.1` без
+  `--cacert` завершается `EXIT=60 TLS=20`, поскольку Caddy выдаёт
+  **Cloudflare Origin CA**, не входящий в обычные доверенные CA клиента.
+  Диагностический `--insecure` подтвердил HTTP 200, но **запрещён**
+  в рабочем release smoke.
+
+Исправленный обработчик подключается только к локальному Caddy `:8444`,
+проверяет TLS **с SAN имени хоста и сроком действия** через `--cacert`
+и отдельный root-owned Cloudflare Origin RSA trust anchor. Публичный
+сертификат взят из официального репозитория
+[Cloudflare Docs](https://github.com/cloudflare/cloudflare-docs/blob/production/public/ssl/static/origin_ca_rsa_root.pem)
+и сохранён в `deploy/certs/cloudflare-origin-rsa-root.pem`.
+SHA-256 файла:
+
+```text
+91a8a5567efa6bf941162aa806b3ba476aaddf7867640e53053b35fb225a5dae
+```
+
+Установщик проверяет digest до изменения сервера, проверяет origin
+HTTPS настоящим `curl --cacert` и копирует только этот публичный
+сертификат в `/usr/local/lib/financial-horizon/certs/cloudflare-origin-rsa-root.pem`.
+Системное хранилище CA не меняется. Обработчик до релиза проверяет права
+root, запрет symlink и SHA-256. Ошибки сертификата блокируют релиз и откат
+не отключает проверки TLS.
+
+**Проверка без установки** из checkout актуального одобренного commit:
+
+```bash
+curl --noproxy '*' --silent --show-error --fail \
+  --cacert deploy/certs/cloudflare-origin-rsa-root.pem \
+  --resolve fin-horizon.mikemoore.top:8444:127.0.0.1 \
+  --output /dev/null --write-out 'HTTPS_ORIGIN=%{http_code} TLS=%{ssl_verify_result}\n' \
+  https://fin-horizon.mikemoore.top:8444/index.html
+```
+
+Ожидается `HTTPS_ORIGIN=200 TLS=0`. Ни пароль, ни сертификат с приватным
+ключом для проверки не нужны.
+
+Публичный Cloudflare Origin RSA root имеет срок действия до **15.08.2029**,
+хотя текущий leaf сертификат выдан до 2041 года. Заблаговременно
+заменить trust root / origin certificate по отдельной процедуре ротации,
+иначе после истечения CA проверка перестанет проходить.
 
 ## Однократная установка на VPS
 
@@ -44,8 +95,9 @@ GitHub Actions не может сам создать первоначальны�
   без прав записи для группы/остальных;
 - `current` - symlink на непосредственный каталог `releases/<sha>`,
   файлы `index.html` и `sw.js` существуют;
-- `caddy.service` и `fh-email-auth.service` активны, HTTPS через
-  `127.0.0.1:443` и SNI `fin-horizon.mikemoore.top` доступен.
+- `caddy.service` и `fh-email-auth.service` активны, HTTPS Caddy через
+  `127.0.0.1:8444` с SNI `fin-horizon.mikemoore.top` и pinned
+  Cloudflare Origin CA даёт 200 без `--insecure`.
   Если layout отличается, **остановиться**, не менять права вслепую.
 
 Сгенерировать **отдельный FH ED25519 ключ** и независимо сверить SHA-256

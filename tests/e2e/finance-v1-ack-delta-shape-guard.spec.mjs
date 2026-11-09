@@ -48,13 +48,22 @@ test('v1 partial-page trap and replay ACK mismatch hold in Chromium and WebKit',
     if (mode === 'foreign-uuid') {
       b.ack.client_mutation_id = '00000000-0000-4000-8000-0000000000ff';
     }
+    if (mode === 'unsafe-integer-precision') {
+      const raw = JSON.stringify(b);
+      const token = '"amount_minor":100';
+      const first = raw.replace(token, '"amount_minor":9007199254740992');
+      const last = first.lastIndexOf(token);
+      if (last < 0) throw new Error('missing ACK amount fixture');
+      return checkV1AckDeltaShape(first.slice(0, last) +
+        '"amount_minor":9007199254740993' + first.slice(last + token.length));
+    }
     // Only a raw JSON string can cross the verification boundary. Non-JSON
     // in-memory inputs must fail closed rather than be lossy-stringified.
     if (mode === 'non-json-later' || mode === 'date-in-ack') return checkV1AckDeltaShape(b);
     return checkV1AckDeltaShape(JSON.stringify(b));
   }, { mode });
   expect(await check('complete')).toBe('MATCHED_STRUCTURALLY');
-  for (const mode of ['truncated', 'high-watermark', 'stale-cursor-event', 'wrong-ack', 'foreign-uuid', 'non-json-later', 'date-in-ack']) {
+  for (const mode of ['truncated', 'high-watermark', 'stale-cursor-event', 'wrong-ack', 'foreign-uuid', 'non-json-later', 'date-in-ack', 'unsafe-integer-precision']) {
     expect(await check(mode)).toBe('RECOVERY_HOLD');
   }
   await page.reload();

@@ -21,7 +21,7 @@ At #67 PR #100 HEAD `de4da1d75e93649e9cfdada06f10273ee8cccd4e`, v1 `Delta.change
 wire JSON (max 2,000,000 UTF-16 code units), not an arbitrary object graph.
 This deliberately breaks the draft object-input signature: browsers cannot
 reliably identify a Proxy without invoking its traps, while descriptor checks
-can be bypassed by mutable proxy reads. The fresh native `JSON.parse` result
+can be bypassed by mutable proxy reads. Every numeric payload value that parses as an integer must be a JavaScript safe integer, preventing distinct >2^53 wire literals from comparing equal after IEEE-754 rounding. The fresh native `JSON.parse` result
 is checked without referencing caller objects. Any object (including one
 with a nested Proxy), invalid JSON or oversized text returns `RECOVERY_HOLD`.
 Integration MUST pass raw response text from an authenticated source, never
