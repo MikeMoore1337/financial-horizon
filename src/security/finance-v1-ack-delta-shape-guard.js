@@ -4,92 +4,108 @@
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const kinds = new Set(['upsert', 'tombstone', 'ledger_posted']);
 const integer = n => Number.isSafeInteger(n) && n >= 0;
-const keys = (value, expected) =>
-  value !== null && typeof value === 'object' && !Array.isArray(value) &&
-  Object.keys(value).length === expected.length &&
-  expected.every(key => Object.hasOwn(value, key));
+// Reject getters, symbols and inherited fields before accessing untrusted envelopes.
+const ownNames = v => {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const proto = Object.getPrototypeOf(v);
+  if (proto !== Object.prototype && proto !== null) return null;
+  const names = Reflect.ownKeys(v);
+  if (names.length > 128 || names.some(n => typeof n !== 'string')) return null;
+  for (const n of names) {
+    const d = Object.getOwnPropertyDescriptor(v, n);
+    if (!d || !Object.hasOwn(d, 'value') || !d.enumerable) return null;
+  }
+  return names;
+};
+const keys = (v, expected) => {
+  const names = ownNames(v);
+  return names !== null && names.length === expected.length &&
+    expected.every(n => Object.hasOwn(v, n));
+};
+const denseArray = (a, max) => {
+  if (!Array.isArray(a) || Object.getPrototypeOf(a) !== Array.prototype ||
+      a.length > max || Reflect.ownKeys(a).length !== a.length + 1) return false;
+  for (let i = 0; i < a.length; i++) {
+    const d = Object.getOwnPropertyDescriptor(a, String(i));
+    if (!d || !Object.hasOwn(d, 'value') || !d.enumerable) return false;
+  }
+  return true;
+};
 const eventKeys = ['revision', 'ordinal', 'kind', 'entity_id', 'entity_revision', 'payload'];
 
-function isJsonValue(value, depth = 0) {
-  if (depth > 16) return false;
-  if (value === null) return true;
-  if (typeof value === 'number') return Number.isFinite(value);
-  if (typeof value === 'string' || typeof value === 'boolean') return true;
-  if (typeof value !== 'object') return false;
-  if (Array.isArray(value)) {
-    if (value.length > 2048 || Reflect.ownKeys(value).length !== value.length + 1) {
-      return false;
-    }
-    for (let i = 0; i < value.length; i++) {
-      const item = Object.getOwnPropertyDescriptor(value, String(i));
-      if (!item || !Object.hasOwn(item, 'value') ||
-          !isJsonValue(item.value, depth + 1)) return false;
+// Parsed JSON cannot contain cycles or aliases. Reject both, sharing a work
+// budget across every event and comparison to avoid exponential DAG expansion.
+function isJsonValue(v, budget, depth = 0) {
+  if (depth > 16 || --budget.remaining < 0) return false;
+  if (v === null) return true;
+  if (typeof v === 'number') return Number.isFinite(v);
+  if (typeof v === 'string' || typeof v === 'boolean') return true;
+  if (typeof v !== 'object' || budget.seen.has(v)) return false;
+  budget.seen.add(v);
+  if (Array.isArray(v)) {
+    if (!denseArray(v, 2048)) return false;
+    for (let i = 0; i < v.length; i++) {
+      if (!isJsonValue(v[i], budget, depth + 1)) return false;
     }
     return true;
   }
-  // Object-shaped JS values may not be JSON: Date, Map, non-enumerable
-  // properties, symbols and accessor getters are never HTTP JSON payloads.
-  const proto = Object.getPrototypeOf(value);
-  if (proto !== Object.prototype && proto !== null) return false;
-  const names = Object.keys(value);
-  if (names.length > 128 || names.length !== Reflect.ownKeys(value).length) {
-    return false;
-  }
-  for (const name of names) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, name);
-    if (!descriptor || !Object.hasOwn(descriptor, 'value') ||
-        !isJsonValue(descriptor.value, depth + 1)) return false;
-  }
+  const names = ownNames(v);
+  if (names === null) return false;
+  for (const n of names) if (!isJsonValue(v[n], budget, depth + 1)) return false;
   return true;
 }
 
-// The API carries JSON objects. Comparison is independent of property ordering
-// and rejects unexpected nesting or non-JSON values rather than serializing
-// a client-side surrogate for the server's Python canonical request digest.
-function jsonEqual(a, b, depth = 0) {
-  if (depth > 16 || a === undefined || b === undefined) return false;
+// Never dispatch .every() or an iterator supplied by an untrusted object.
+function jsonEqual(a, b, budget, depth = 0) {
+  if (depth > 16 || --budget.remaining < 0 || a === undefined || b === undefined) return false;
   if (a === null || b === null) return a === null && b === null;
   if (typeof a !== 'object' || typeof b !== 'object') {
     if (typeof a !== typeof b) return false;
     if (typeof a === 'number') return Number.isFinite(a) && a === b;
     if (typeof a === 'string' || typeof a === 'boolean') return a === b;
-    return false; // functions, BigInt and symbols are never JSON values
+    return false;
   }
   if (Array.isArray(a) !== Array.isArray(b)) return false;
   if (Array.isArray(a)) {
-    return a.length <= 2048 && a.length === b.length &&
-      a.every((value, index) => jsonEqual(value, b[index], depth + 1));
+    if (!denseArray(a, 2048) || !denseArray(b, 2048) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!jsonEqual(a[i], b[i], budget, depth + 1)) return false;
+    }
+    return true;
   }
-  const ak = Object.keys(a);
-  return ak.length <= 128 && ak.length === Object.keys(b).length &&
-    ak.every(key => Object.hasOwn(b, key) && jsonEqual(a[key], b[key], depth + 1));
+  const an = ownNames(a), bn = ownNames(b);
+  if (an === null || bn === null || an.length !== bn.length) return false;
+  for (const n of an) {
+    if (!Object.hasOwn(b, n) || !jsonEqual(a[n], b[n], budget, depth + 1)) return false;
+  }
+  return true;
 }
 
-function validEvent(event) {
+function validEvent(event, budget) {
   return keys(event, eventKeys) && integer(event.revision) && event.revision > 0 &&
     integer(event.ordinal) && kinds.has(event.kind) &&
     typeof event.entity_id === 'string' && uuid.test(event.entity_id) &&
     integer(event.entity_revision) && event.entity_revision > 0 &&
     event.payload !== null && typeof event.payload === 'object' &&
-    !Array.isArray(event.payload) && isJsonValue(event.payload);
+    !Array.isArray(event.payload) && isJsonValue(event.payload, budget);
 }
 
 // The comparison deliberately returns no "applied" proof. Only #67 authenticated
 // session/receipt + trusted complete finance-state verification followed by #68
 // atomic IDB persistence may create a durable applied proof.
-export function checkV1AckDeltaShape(input = {}) {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+function checkV1AckDeltaShapeInner(input = {}) {
+  const budget = { remaining: 30000, seen: new WeakSet() };
+  if (!keys(input, ['startCursor', 'pages', 'ack', 'mutationId'])) {
     return 'RECOVERY_HOLD';
   }
   const { startCursor, pages, ack, mutationId } = input;
   if (!integer(startCursor) || typeof mutationId !== 'string' || !uuid.test(mutationId) ||
-      !Array.isArray(pages) || pages.length < 1 || pages.length > 32 ||
+      !denseArray(pages, 32) || pages.length < 1 ||
       !keys(ack, ['schema_version', 'client_mutation_id', 'revision', 'replayed', 'changes']) ||
       ack.schema_version !== 1 || ack.client_mutation_id !== mutationId ||
       !integer(ack.revision) || ack.revision <= startCursor ||
       typeof ack.replayed !== 'boolean' ||
-      !Array.isArray(ack.changes) || ack.changes.length < 1 ||
-      ack.changes.length > 2000) return 'RECOVERY_HOLD';
+      !denseArray(ack.changes, 2000) || ack.changes.length < 1) return 'RECOVERY_HOLD';
 
   let expected = startCursor;
   let pinnedHead;
@@ -104,7 +120,7 @@ export function checkV1AckDeltaShape(input = {}) {
         page.to_revision < page.next_since_revision ||
         typeof page.has_more !== 'boolean' ||
         page.has_more !== (page.next_since_revision < page.to_revision) ||
-        !Array.isArray(page.changes) || page.changes.length > 2000 ||
+        !denseArray(page.changes, 2000) ||
         (pinnedHead !== undefined && page.to_revision !== pinnedHead)) {
       return 'RECOVERY_HOLD';
     }
@@ -120,8 +136,9 @@ export function checkV1AckDeltaShape(input = {}) {
     let currentRevision = expected;
     let ordinal = 0;
     let group = [];
-    for (const event of page.changes) {
-      if (!validEvent(event) || event.revision <= expected ||
+    for (let j = 0; j < page.changes.length; j++) {
+      const event = page.changes[j];
+      if (!validEvent(event, budget) || event.revision <= expected ||
           event.revision < currentRevision ||
           event.revision > currentRevision + 1) return 'RECOVERY_HOLD';
       if (event.revision === currentRevision + 1) {
@@ -152,10 +169,16 @@ export function checkV1AckDeltaShape(input = {}) {
       matchedEvents.length !== ack.changes.length) return 'RECOVERY_HOLD';
   for (let i = 0; i < matchedEvents.length; i++) {
     const change = ack.changes[i];
-    if (!validEvent(change) || change.revision !== ack.revision ||
-        change.ordinal !== i || !jsonEqual(change, matchedEvents[i])) {
+    if (!validEvent(change, budget) || change.revision !== ack.revision ||
+        change.ordinal !== i || !jsonEqual(change, matchedEvents[i], budget)) {
       return 'RECOVERY_HOLD';
     }
   }
   return 'MATCHED_STRUCTURALLY';
+}
+
+// Exotic proxies or descriptors may throw: fail closed, never crash UI.
+export function checkV1AckDeltaShape(input = {}) {
+  try { return checkV1AckDeltaShapeInner(input); }
+  catch { return 'RECOVERY_HOLD'; }
 }
