@@ -9,6 +9,7 @@ restores an old SQLite snapshot (which could lose new sessions/accounts).
 from __future__ import annotations
 
 import argparse
+import hashlib
 from contextlib import closing
 import http.client
 import io
@@ -28,6 +29,9 @@ from urllib.request import urlopen
 from urllib.parse import quote
 
 HOST = "fin-horizon.mikemoore.top"
+ORIGIN_PORT = 8444  # Verified Caddy; :443 is Xray on the live host
+ORIGIN_CA = Path("/usr/local/lib/financial-horizon/certs/cloudflare-origin-rsa-root.pem")
+ORIGIN_CA_SHA256 = "91a8a5567efa6bf941162aa806b3ba476aaddf7867640e53053b35fb225a5dae"
 SERVICE = "fh-email-auth.service"
 BACKEND_ROOT = Path("/opt/financial-horizon-auth")
 STATIC_ROOT = Path("/srv/www/fin-horizon")
