@@ -237,6 +237,58 @@ describe('approved accounts interface (feature not exposed)', () => {
       screen.getByRole('button', { name: 'Подтвердить перевод' }).hasAttribute('disabled'),
     ).toBe(true);
   });
+  it('unlocks ambiguous transfer only after explicit receipt reconciliation', async () => {
+    const send = vi.fn().mockRejectedValue(new Error('timeout after possible commit'));
+    const data = props({ onTransfer: send, reconciliationToken: 'before' });
+    const view = render(<Accounts {...data} />);
+    fireEvent.click(
+      within(screen.getByText('Основной').closest('article')!).getByRole('button', {
+        name: 'Перевести',
+      }),
+    );
+    fireEvent.change(screen.getByLabelText('Сумма в рублях'), { target: { value: '1 000,00' } });
+    fireEvent.change(screen.getByLabelText('Дата перевода'), { target: { value: '2026-11-08' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Подтвердить перевод' }));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/не подтверждён/));
+
+    // A new ready snapshot without a corresponding receipt must not unlock a retry.
+    view.rerender(<Accounts {...data} status="loading" />);
+    view.rerender(<Accounts {...data} snapshot={snapshot()} reconciliationToken="before" />);
+    expect(
+      screen.getByRole('button', { name: 'Подтвердить перевод' }).hasAttribute('disabled'),
+    ).toBe(true);
+
+    // Caller verifies receipt / outcome and provides a new proof with the complete snapshot.
+    view.rerender(<Accounts {...data} snapshot={snapshot()} reconciliationToken="verified-after" />);
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'Подтвердить перевод' }).hasAttribute('disabled'),
+      ).toBe(false),
+    );
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+  it('rebinds dialog focus and Tab trapping after loading removes its DOM', () => {
+    const data = props();
+    const view = render(<Accounts {...data} />);
+    fireEvent.click(
+      within(screen.getByText('Основной').closest('article')!).getByRole('button', {
+        name: 'Перевести',
+      }),
+    );
+    const oldDialog = screen.getByRole('dialog');
+    expect(oldDialog.contains(document.activeElement)).toBe(true);
+
+    view.rerender(<Accounts {...data} status="loading" />);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    view.rerender(<Accounts {...data} status="ready" />);
+    const newDialog = screen.getByRole('dialog');
+    expect(newDialog).not.toBe(oldDialog);
+    expect(newDialog.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+    expect(newDialog.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
   it('keeps focus within the transfer dialog and supports Escape', () => {
     render(<Accounts {...props()} />);
     fireEvent.click(
