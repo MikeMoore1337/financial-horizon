@@ -48,7 +48,10 @@ test('v1 partial-page trap and replay ACK mismatch hold in Chromium and WebKit',
     if (mode === 'foreign-uuid') {
       b.ack.client_mutation_id = '00000000-0000-4000-8000-0000000000ff';
     }
-    return checkV1AckDeltaShape(b);
+    // Only a raw JSON string can cross the verification boundary. Non-JSON
+    // in-memory inputs must fail closed rather than be lossy-stringified.
+    if (mode === 'non-json-later' || mode === 'date-in-ack') return checkV1AckDeltaShape(b);
+    return checkV1AckDeltaShape(JSON.stringify(b));
   }, { mode });
   expect(await check('complete')).toBe('MATCHED_STRUCTURALLY');
   for (const mode of ['truncated', 'high-watermark', 'stale-cursor-event', 'wrong-ack', 'foreign-uuid', 'non-json-later', 'date-in-ack']) {
@@ -82,7 +85,10 @@ test('inactive shape guard rejects forged ACK, iterator and exponential alias gr
       ack: { schema_version: 1, client_mutation_id: mutationId, revision: 4,
         replayed: true, changes: [e(4, 1)] },
     });
-    const good = guard(fixture());
+    const good = guard(JSON.stringify(fixture()));
+    const altered = fixture();
+    altered.ack.changes[0].payload.values[0] = 999;
+    const alteredWireDecision = guard(JSON.stringify(altered));
     const forged = fixture();
     const forgedValues = forged.ack.changes[0].payload.values;
     forgedValues[0] = 999;
@@ -110,12 +116,19 @@ test('inactive shape guard rejects forged ACK, iterator and exponential alias gr
     }
     graph.pages[1].changes[0].payload = child;
     const graphDecision = guard(graph);
-    return [good, forgedDecision, accessorDecision, iteratorDecision,
-      sparseDecision, graphDecision];
+    let traps = 0;
+    const proxy = new Proxy(fixture(), {
+      get() { traps++; throw new Error('untrusted proxy get'); },
+      getPrototypeOf() { traps++; throw new Error('untrusted proxy prototype'); },
+    });
+    const proxyDecision = guard(proxy);
+    return [good, alteredWireDecision, forgedDecision, accessorDecision, iteratorDecision,
+      sparseDecision, graphDecision, proxyDecision, traps];
   });
   expect(decisions).toEqual([
     'MATCHED_STRUCTURALLY', 'RECOVERY_HOLD', 'RECOVERY_HOLD',
     'RECOVERY_HOLD', 'RECOVERY_HOLD', 'RECOVERY_HOLD',
+    'RECOVERY_HOLD', 'RECOVERY_HOLD', 0,
   ]);
   await page.reload();
   expect(await page.evaluate(async () => {
