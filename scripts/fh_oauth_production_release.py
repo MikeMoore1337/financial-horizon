@@ -430,6 +430,18 @@ def staged_modules_root(new_backend: Path) -> Path:
     return parent
 
 
+def systemd_oauth_dropin(modules_root: Path, python_path: str) -> bytes:
+    if not re.fullmatch(r"/[A-Za-z0-9_./-]+", str(modules_root)) or \
+            not re.fullmatch(r"[/A-Za-z0-9_.:-]+", python_path):
+        raise Gate("SYSTEMD_RELEASE_PATH_INVALID")
+    return (
+        "[Service]\n"
+        "WorkingDirectory=" + str(modules_root) + "\n"
+        "Environment=\"PYTHONPATH=" + python_path + "\"\n"
+        "EnvironmentFile=/etc/financial-horizon/oauth.env\n"
+    ).encode("utf-8")
+
+
 def safe_recent_service_error() -> str:
     """Only emit allowlisted error categories, never raw journal lines."""
     result = subprocess.run(
@@ -605,15 +617,8 @@ def rollout(sha: str) -> None:
             db_migrated = True
             switch_release(BACKEND_ROOT, new_backend)
             DROPIN.parent.mkdir(parents=True, exist_ok=True)
-            dropin_content = (
-                "[Service]\n"
-                # Python package imports must not fall back to the previous
-                # release via the inherited systemd working directory.
-                "WorkingDirectory=" + str(modules_root) + "\n"
-                "Environment=\"PYTHONPATH=" + prepared_path + "\"\n"
-                "EnvironmentFile=/etc/financial-horizon/oauth.env\n"
-            )
-            atomic_file(DROPIN, dropin_content.encode("utf-8"), 0o644)
+            dropin_content = systemd_oauth_dropin(modules_root, prepared_path)
+            atomic_file(DROPIN, dropin_content, 0o644)
             atomic_file(OAUTH_ENV, replace_flags(old_env))
             command(["systemctl", "daemon-reload"], timeout=25)
             command(["systemctl", "start", SERVICE], timeout=30)
