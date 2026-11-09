@@ -55,6 +55,8 @@ export interface AccountsProps {
   reservedMinorByAccount: Readonly<Record<string, number>> | null;
   status: 'loading' | 'ready' | 'offline' | 'conflict' | 'error' | 'locked';
   writable: boolean;
+  /** Changes only after the caller confirms the ambiguous command's receipt and reloads a verified snapshot. */
+  reconciliationToken?: string | null;
   onBack: () => void;
   onRefresh: () => void;
   onCreate?: (input: AccountCreation) => Promise<void>;
@@ -88,6 +90,7 @@ export function Accounts({
   reservedMinorByAccount,
   status,
   writable,
+  reconciliationToken,
   onBack,
   onRefresh,
   onCreate,
@@ -109,6 +112,7 @@ export function Accounts({
   const inFlight = useRef(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const [uncertain, setUncertain] = useState(false);
+  const uncertainAtFailure = useRef<{ token: string | null; profileId: string | null } | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const derived = useMemo(() => {
@@ -133,6 +137,26 @@ export function Accounts({
   }, [snapshot, activeProfileId, reservedMinorByAccount, status]);
 
   const model = derived.model;
+  // A generic refresh or status='ready' does NOT prove a timed-out debit failed.
+  // Only a new caller-supplied reconciliation receipt for this profile can unlock writes.
+  useEffect(() => {
+    const pending = uncertainAtFailure.current;
+    if (
+      !uncertain ||
+      status !== 'ready' ||
+      !model ||
+      !pending ||
+      !reconciliationToken ||
+      reconciliationToken === pending.token ||
+      activeProfileId !== pending.profileId
+    ) {
+      return;
+    }
+    uncertainAtFailure.current = null;
+    setUncertain(false);
+    setFeedback(null);
+  }, [uncertain, status, model, reconciliationToken, activeProfileId]);
+
   const active = model?.rows.filter((row) => !row.archived) || [];
   const archived = model?.rows.filter((row) => row.archived) || [];
   const selected =
@@ -185,6 +209,7 @@ export function Accounts({
       onRefresh();
     } catch {
       // A timeout can occur after commit. Do not retry with another mutation key.
+      uncertainAtFailure.current = { token: reconciliationToken ?? null, profileId: activeProfileId };
       setUncertain(true);
       setFeedback('Статус операции не подтверждён. Проверьте состояние на сервере перед повтором.');
     } finally {
@@ -279,9 +304,11 @@ export function Accounts({
     );
   }
 
+  // Track actual dialog visibility: loading can unmount its DOM while panel stays open.
+  const dialogVisible = Boolean(panel && model);
   // The modal owns focus while visible; Escape never interrupts a pending write.
   useEffect(() => {
-    if (!panel) return;
+    if (!dialogVisible) return;
     const previouslyFocused =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const dialog = dialogRef.current;
@@ -322,7 +349,7 @@ export function Accounts({
       document.removeEventListener('keydown', handleKey);
       previouslyFocused?.focus();
     };
-  }, [panel, busy]);
+  }, [dialogVisible, panel, busy]);
 
   const transferFrom = active.find((row) => row.id === fromId);
   const transferTo = active.find((row) => row.id === toId);
