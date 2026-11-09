@@ -14,6 +14,7 @@ import http.client
 import io
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import shutil
@@ -354,7 +355,7 @@ def stage_isolated_python(auth_py: Path, new_backend: Path,
             raise Gate("ISOLATED_VENV_PYTHON_MISSING")
         if uv:
             command([uv, "pip", "install", "--python", str(isolated_py),
-                     "--no-progress", "-r", str(requirements)],
+                     "--link-mode", "copy", "--no-progress", "-r", str(requirements)],
                     timeout=360, failure_code="ISOLATED_DEPS_INSTALL_FAILED")
         else:
             command([str(isolated_py), "-m", "pip", "install", "--no-input",
@@ -430,13 +431,82 @@ def staged_modules_root(new_backend: Path) -> Path:
     return parent
 
 
+def grant_staged_release_read_access(stage: Path, *, user: str) -> None:
+    """Keep staged files root-owned and writable only by root.
+
+    Group-read/traverse is granted strictly within the newly created backend
+    release to the service account's primary group. No active release, system
+    packages, symlink target or shared hardlinked inode may be changed.
+    """
+    if (stage.is_symlink() or not stage.is_dir() or
+            stage.parent.resolve() != (BACKEND_ROOT / "releases").resolve()):
+        raise Gate("STAGED_RELEASE_OWNERSHIP_SCOPE_INVALID")
+    stage_owner = stage.lstat().st_uid
+    if stage_owner != os.geteuid():
+        raise Gate("STAGED_RELEASE_NOT_OWNED_BY_OPERATOR")
+    try:
+        account = pwd.getpwnam(user)
+    except KeyError as exc:
+        raise Gate("SERVICE_ACCOUNT_NOT_FOUND") from exc
+    if account.pw_uid == 0 or account.pw_gid == 0:
+        raise Gate("SERVICE_ACCOUNT_PRIVILEGED")
+    candidates: list[tuple[Path, os.stat_result]] = []
+    for current, directories, files in os.walk(stage, followlinks=False):
+        for name in [".", *directories, *files]:
+            candidate = Path(current) if name == "." else Path(current) / name
+            info = candidate.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                continue
+            if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
+                raise Gate("STAGED_RELEASE_SPECIAL_FILE")
+            if info.st_uid != stage_owner:
+                raise Gate("STAGED_RELEASE_NOT_OPERATOR_OWNED")
+            if stat.S_ISREG(info.st_mode) and info.st_nlink != 1:
+                raise Gate("STAGED_RELEASE_SHARED_HARDLINK")
+            candidates.append((candidate, info))
+    for candidate, info in candidates:
+        mode = stat.S_IMODE(info.st_mode)
+        # Root remains the only writer. The service user can traverse
+        # directories, read code and dependencies, and execute binaries.
+        group_bits = (0o50 if stat.S_ISDIR(info.st_mode) else
+                      0o40 | (0o10 if mode & 0o100 else 0))
+        safe_mode = (mode | group_bits) & ~0o020
+        os.chown(candidate, -1, account.pw_gid, follow_symlinks=False)
+        os.chmod(candidate, safe_mode, follow_symlinks=False)
+
+
 def verify_service_user_module_access(auth_py: Path, source_root: Path,
-                                      check_env: dict[str, str]) -> None:
-    """Test staged import paths as the actual systemd user before downtime."""
+                                      check_env: dict[str, str],
+                                      staged_release: Path | None = None) -> None:
+    """Check staging under the same user and working directory as systemd."""
     user = command(["systemctl", "show", "--value", "-p", "User", SERVICE],
                    timeout=15, failure_code="SERVICE_USER_UNAVAILABLE").decode().strip()
     if not re.fullmatch(r"[a-z_][a-z0-9_-]*", user):
         raise Gate("SERVICE_USER_INVALID")
+    try:
+        account = pwd.getpwnam(user)
+    except KeyError as exc:
+        raise Gate("SERVICE_ACCOUNT_NOT_FOUND") from exc
+    if staged_release is not None:
+        grant_staged_release_read_access(staged_release, user=user)
+    if "PYTHONPATH" not in check_env:
+        raise Gate("STAGED_PYTHONPATH_MISSING")
+    service_env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": account.pw_dir,
+        "PYTHONPATH": check_env["PYTHONPATH"],
+        "PYTHONNOUSERSITE": "1",
+    }
+    # Inheriting /root or a private operator working directory would produce
+    # a false negative even if systemd's configured WorkingDirectory is fine.
+    command(["runuser", "-u", user, "--", "test", "-x", str(source_root)],
+            timeout=15, cwd=source_root, env=service_env,
+            failure_code="STAGED_SOURCE_NOT_TRAVERSABLE")
+    for package in ("fh_email_auth", "fh_auth"):
+        command(["runuser", "-u", user, "--", "test", "-r",
+                 str(source_root / package / "__init__.py")],
+                timeout=15, cwd=source_root, env=service_env,
+                failure_code="STAGED_SOURCE_NOT_READABLE")
     check = (
         "import importlib.util,pathlib,sys; root=pathlib.Path(sys.argv[1]); "
         "assert all(pathlib.Path(importlib.util.find_spec(p).origin).parent == "
@@ -444,8 +514,8 @@ def verify_service_user_module_access(auth_py: Path, source_root: Path,
     )
     command(["runuser", "-u", user, "--", str(auth_py), "-c", check,
              str(source_root), "fh_email_auth,fh_auth"],
-            timeout=30, env=check_env,
-            failure_code="STAGED_AUTH_UNREADABLE_BY_SERVICE_USER")
+            timeout=30, cwd=source_root, env=service_env,
+            failure_code="STAGED_AUTH_IMPORT_AS_SERVICE_USER_FAILED")
 
 
 def systemd_oauth_dropin(modules_root: Path, python_path: str) -> bytes:
@@ -595,7 +665,8 @@ def rollout(sha: str) -> None:
                      str(modules_root), expected],
                     timeout=30, env=check_env,
                     failure_code="NEW_AUTH_SOURCE_IMPORT_MISMATCH")
-            verify_service_user_module_access(auth_py, modules_root, check_env)
+            verify_service_user_module_access(auth_py, modules_root, check_env,
+                                              new_backend)
             command([sys.executable, "-m", "compileall", "-q", str(new_backend)],
                     timeout=45, failure_code="BACKEND_COMPILE_FAILED")
         except Exception:

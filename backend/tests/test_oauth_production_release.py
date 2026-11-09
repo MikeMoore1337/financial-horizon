@@ -7,7 +7,9 @@ from __future__ import annotations
 from contextlib import redirect_stdout
 import importlib.util
 import io
+import os
 import sqlite3
+from types import SimpleNamespace
 from pathlib import Path
 import tarfile
 import tempfile
@@ -253,7 +255,8 @@ class ReleaseContracts(unittest.TestCase):
             )
             self.assertIn(
                 ["/usr/local/bin/uv", "pip", "install", "--python",
-                 str(staged_py), "--no-progress", "-r", str(requirements)],
+                 str(staged_py), "--link-mode", "copy",
+                 "--no-progress", "-r", str(requirements)],
                 calls,
             )
             self.assertFalse(any(args[0] == str(active) and "pip" in args
@@ -362,16 +365,92 @@ class ReleaseContracts(unittest.TestCase):
                 return b"fh-email-auth\n"
             return b""
 
-        with mock.patch.object(release, "command", side_effect=fake_command):
+        account = SimpleNamespace(pw_uid=9001, pw_gid=9002,
+                                  pw_dir="/nonexistent")
+        with mock.patch.object(release, "command", side_effect=fake_command), \
+                mock.patch.object(release.pwd, "getpwnam", return_value=account):
             release.verify_service_user_module_access(python, source, env)
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 5)
         self.assertEqual(
-            calls[1][0][:5],
+            calls[-1][0][:5],
             ["runuser", "-u", "fh-email-auth", "--", str(python)]
         )
-        self.assertIs(calls[1][1]["env"], env)
+        self.assertTrue(all(call[1]["cwd"] == source for call in calls[1:]))
         self.assertEqual(calls[1][1]["failure_code"],
-                         "STAGED_AUTH_UNREADABLE_BY_SERVICE_USER")
+                         "STAGED_SOURCE_NOT_TRAVERSABLE")
+        self.assertEqual(calls[2][1]["failure_code"],
+                         "STAGED_SOURCE_NOT_READABLE")
+        self.assertEqual(calls[-1][1]["failure_code"],
+                         "STAGED_AUTH_IMPORT_AS_SERVICE_USER_FAILED")
+        service_env = calls[-1][1]["env"]
+        self.assertEqual(service_env["PYTHONPATH"], env["PYTHONPATH"])
+        self.assertEqual(service_env["PYTHONNOUSERSITE"], "1")
+        self.assertEqual(service_env["HOME"], "/nonexistent")
+        self.assertNotIn("FH_SESSION_SECRET", service_env)
+
+    def test_only_new_backend_gets_group_read_without_service_writes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            releases = base / "releases"
+            releases.mkdir()
+            stage = releases / SHA
+            stage.mkdir(mode=0o700)
+            module = stage / "fh_auth"
+            module.mkdir(mode=0o700)
+            code = module / "__init__.py"
+            code.write_text("synthetic = True")
+            code.chmod(0o600)
+            external = base / "external-private"
+            external.write_text("keep this private")
+            external.chmod(0o600)
+            (stage / "external-link").symlink_to(external)
+            account = SimpleNamespace(pw_uid=9001, pw_gid=9002,
+                                      pw_dir="/nonexistent")
+            with mock.patch.object(release, "BACKEND_ROOT", base), \
+                    mock.patch.object(release.pwd, "getpwnam",
+                                      return_value=account), \
+                    mock.patch.object(release.os, "chown") as chown, \
+                    mock.patch.object(release.os, "chmod") as chmod:
+                release.grant_staged_release_read_access(
+                    stage, user="fh-email-auth"
+                )
+            owner_targets = [x.args[0] for x in chown.call_args_list]
+            self.assertIn(stage, owner_targets)
+            self.assertIn(module, owner_targets)
+            self.assertIn(code, owner_targets)
+            self.assertNotIn(external, owner_targets)
+            self.assertNotIn(stage / "external-link", owner_targets)
+            self.assertTrue(all(x.args[1] == -1 and x.args[2] == 9002
+                                for x in chown.call_args_list))
+            modes = {call.args[0]:call.args[1] for call in chmod.call_args_list}
+            self.assertEqual(modes[stage], 0o750)
+            self.assertEqual(modes[module], 0o750)
+            self.assertEqual(modes[code], 0o640)
+            self.assertEqual(external.stat().st_mode & 0o777, 0o600)
+
+    def test_shared_hardlinks_block_permission_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            releases = base / "releases"
+            releases.mkdir()
+            stage = releases / SHA
+            stage.mkdir()
+            code = stage / "shared.py"
+            code.write_text("synthetic")
+            os.link(code, base / "other-shared.py")
+            with mock.patch.object(release, "BACKEND_ROOT", base), \
+                    mock.patch.object(release.pwd, "getpwnam",
+                                      return_value=SimpleNamespace(
+                                          pw_uid=9001, pw_gid=9002,
+                                          pw_dir="/nonexistent")), \
+                    mock.patch.object(release.os, "chown") as chown:
+                with self.assertRaises(release.Gate) as error:
+                    release.grant_staged_release_read_access(
+                        stage, user="fh-email-auth"
+                    )
+            self.assertEqual(error.exception.code,
+                             "STAGED_RELEASE_SHARED_HARDLINK")
+            chown.assert_not_called()
 
     def test_service_user_source_access_rejects_unconfigured_user(self):
         with mock.patch.object(release, "command", return_value=b""):
