@@ -430,6 +430,24 @@ def staged_modules_root(new_backend: Path) -> Path:
     return parent
 
 
+def verify_service_user_module_access(auth_py: Path, source_root: Path,
+                                      check_env: dict[str, str]) -> None:
+    """Test staged import paths as the actual systemd user before downtime."""
+    user = command(["systemctl", "show", "--value", "-p", "User", SERVICE],
+                   timeout=15, failure_code="SERVICE_USER_UNAVAILABLE").decode().strip()
+    if not re.fullmatch(r"[a-z_][a-z0-9_-]*", user):
+        raise Gate("SERVICE_USER_INVALID")
+    check = (
+        "import importlib.util,pathlib,sys; root=pathlib.Path(sys.argv[1]); "
+        "assert all(pathlib.Path(importlib.util.find_spec(p).origin).parent == "
+        "root / p for p in sys.argv[2].split(','))"
+    )
+    command(["runuser", "-u", user, "--", str(auth_py), "-c", check,
+             str(source_root), "fh_email_auth,fh_auth"],
+            timeout=30, env=check_env,
+            failure_code="STAGED_AUTH_UNREADABLE_BY_SERVICE_USER")
+
+
 def systemd_oauth_dropin(modules_root: Path, python_path: str) -> bytes:
     if not re.fullmatch(r"/[A-Za-z0-9_./-]+", str(modules_root)) or \
             not re.fullmatch(r"[/A-Za-z0-9_.:-]+", python_path):
@@ -577,6 +595,7 @@ def rollout(sha: str) -> None:
                      str(modules_root), expected],
                     timeout=30, env=check_env,
                     failure_code="NEW_AUTH_SOURCE_IMPORT_MISMATCH")
+            verify_service_user_module_access(auth_py, modules_root, check_env)
             command([sys.executable, "-m", "compileall", "-q", str(new_backend)],
                     timeout=45, failure_code="BACKEND_COMPILE_FAILED")
         except Exception:
