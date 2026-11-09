@@ -35,11 +35,11 @@ STAGED = "\n".join([
 
 
 class ReleaseContracts(unittest.TestCase):
-    def test_only_three_provider_flags_enabled_and_telegram_stays_off(self):
+    def test_all_four_provider_flags_enabled_in_production_release(self):
         changed = release.replace_flags(STAGED)
         self.assertEqual(release.assignment(changed, "FH_ENABLE_CLOUD_AUTH"), ["true"])
-        self.assertEqual(release.assignment(changed, "FH_TELEGRAM_OAUTH_ENABLED"), ["false"])
-        for name in ("GOOGLE", "YANDEX", "VK"):
+        self.assertEqual(release.assignment(changed, "FH_TELEGRAM_OAUTH_ENABLED"), ["true"])
+        for name in ("GOOGLE", "YANDEX", "VK", "TELEGRAM"):
             self.assertEqual(
                 release.assignment(changed, f"FH_{name}_OAUTH_ENABLED"), ["true"]
             )
@@ -84,7 +84,8 @@ class ReleaseContracts(unittest.TestCase):
         self.assertIn("respond \"Forbidden\" 403", updated)
         self.assertIn("/api/auth/email/logout-others", updated)
         self.assertNotIn("/api/auth/email/register", updated)
-        self.assertNotIn("/api/auth/oauth/telegram/start", updated)
+        self.assertIn("/api/auth/oauth/telegram/start", updated)
+        self.assertIn("/api/auth/oauth/telegram/callback", updated)
         self.assertLess(updated.index("handle @fh_oauth_live_get"),
                         updated.index("handle @owner_oauth_canary"))
         with self.assertRaises(release.Gate):
@@ -93,9 +94,9 @@ class ReleaseContracts(unittest.TestCase):
     def test_session_and_provider_readiness_have_explicit_negative_checks(self):
         def fake_http(_port, path):
             if path == "/api/auth/providers":
-                return 200, b'{"enabled":true,"providers":["google","yandex","vk"]}'
+                return 200, b'{"enabled":true,"providers":["telegram","google","yandex","vk"]}'
             if path == "/api/auth/oauth/telegram/start":
-                return 404, b'{"detail":"not available"}'
+                return 303, b""
             if path == "/api/auth/email/me":
                 return 200, b'{"authenticated":false,"user":null}'
             raise AssertionError(path)
@@ -104,12 +105,21 @@ class ReleaseContracts(unittest.TestCase):
             release.validate_running_oauth(9141, release.PROVIDERS)
         def bad_telegram(_port, path):
             if path == "/api/auth/oauth/telegram/start":
-                return 303, b""
+                return 404, b""
             return fake_http(_port, path)
         with mock.patch.object(release, "http_probe", side_effect=bad_telegram):
             with self.assertRaises(release.Gate) as result:
                 release.validate_running_oauth(9141, release.PROVIDERS)
-            self.assertEqual(result.exception.code, "TELEGRAM_NOT_DISABLED")
+            self.assertEqual(result.exception.code, "TELEGRAM_START_UNAVAILABLE")
+
+        def missing_telegram(_port, path):
+            if path == "/api/auth/providers":
+                return 200, b'{"enabled":true,"providers":["google","yandex","vk"]}'
+            return fake_http(_port, path)
+        with mock.patch.object(release, "http_probe", side_effect=missing_telegram):
+            with self.assertRaises(release.Gate) as result:
+                release.validate_running_oauth(9141, release.PROVIDERS)
+            self.assertEqual(result.exception.code, "OAUTH_PROVIDERS_UNEXPECTED")
 
     def test_release_switch_keeps_previous_tree_for_rollback(self):
         with tempfile.TemporaryDirectory() as root:
