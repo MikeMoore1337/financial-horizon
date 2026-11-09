@@ -90,6 +90,9 @@ test('rejects stale/rebound ACK, untrusted schema and non-JSON payload', () => {
   }
   assert.equal(check({ ...base(), mutationId: 'guest' }), 'RECOVERY_HOLD');
   assert.equal(check(), 'RECOVERY_HOLD');
+  assert.equal(check(null), 'RECOVERY_HOLD');
+  assert.equal(check({ ...base(), mutationId: { toString: () => mutationId } }),
+    'RECOVERY_HOLD');
 });
 
 test('a structural match never creates an applied proof or modifies an outbox', () => {
