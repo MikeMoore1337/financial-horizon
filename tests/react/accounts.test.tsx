@@ -303,6 +303,36 @@ describe('approved accounts interface (feature not exposed)', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();
   });
+  it('returns focus to the original transfer opener after a successful async write', async () => {
+    const data = props();
+    render(<Accounts {...data} />);
+    const opener = within(screen.getByText('Основной').closest('article')!).getByRole('button', {
+      name: 'Перевести',
+    });
+    opener.focus();
+    fireEvent.click(opener);
+    fireEvent.change(screen.getByLabelText('Сумма в рублях'), { target: { value: '1 000,00' } });
+    fireEvent.change(screen.getByLabelText('Дата перевода'), { target: { value: '2026-11-08' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Подтвердить перевод' }));
+    await waitFor(() => {
+      expect(data.onRefresh).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(document.activeElement).toBe(opener);
+    });
+  });
+  it('preserves the history opener through an internal archive confirmation panel', () => {
+    render(<Accounts {...props()} />);
+    const opener = within(screen.getByText('Основной').closest('article')!).getByRole('button', {
+      name: 'История',
+    });
+    opener.focus();
+    fireEvent.click(opener);
+    fireEvent.click(screen.getByRole('button', { name: 'В архив' }));
+    expect(screen.getByRole('dialog').textContent).toMatch(/Архивировать счёт/);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(opener);
+  });
   it('never emits two mutations on rapid repeated confirmation', async () => {
     let finish: (() => void) | undefined;
     const onTransfer = vi.fn().mockImplementation(
