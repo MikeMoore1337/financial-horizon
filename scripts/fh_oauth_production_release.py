@@ -811,10 +811,10 @@ def rollout(sha: str) -> None:
         _, fresh_args, fresh_env = running_process()
         if (safe_uvicorn_argv(fresh_args, port) != approved_args or
                 fresh_env.get("FH_AUTH_DATABASE_PATH") != str(db) or
-                private_file(OAUTH_ENV) != old_env or \
-                CADDY_SITE.read_text(encoding="utf-8") != old_caddy or \
-                current_release(BACKEND_ROOT) != old_backend or \
-                current_release(STATIC_ROOT) != old_static:
+                private_file(OAUTH_ENV) != old_env or
+                CADDY_SITE.read_text(encoding="utf-8") != old_caddy or
+                current_release(BACKEND_ROOT) != old_backend or
+                current_release(STATIC_ROOT) != old_static):
             raise Gate("LIVE_DEPLOYMENT_CHANGED_DURING_STAGING")
         changed = False
         db_migrated = False
