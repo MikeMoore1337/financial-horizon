@@ -21,7 +21,7 @@ const base = () => ({
       next_since_revision: 8, has_more: false, changes: [e70, e80] },
   ],
   ack: { schema_version: 1, client_mutation_id: mutationId,
-    revision: 6, replayed: true, changes: [e60, e61] },
+    revision: 6, replayed: true, changes: [structuredClone(e60), structuredClone(e61)] },
 });
 const clone = value => structuredClone(value);
 const check = value => checkV1AckDeltaShape(value);
