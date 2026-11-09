@@ -1,6 +1,6 @@
 # Financial Horizon - production static CD
 
-Статус: **не активировано на VPS** до первичной операторской установки.
+Статус (09.11.2026): **ручной static-only деплой активирован и принят на production**. Автоматическая доставка по push в `main` остаётся выключена до выполнения заключительных ворот Issue #141.
 Механизм публикует только собранный каталог `dist/`, не меняет Caddy,
 SQLite, PostgreSQL, OAuth, FastAPI, секреты и финансовые миграции.
 
@@ -134,15 +134,15 @@ Environment Secrets выполните **сначала** отдельный
 Если результат иной, **не** запускайте production-deploy workflow:
 проверяйте SSH connectivity, ключи и firewall, не ослабляя защиту.
 
-**Перед первым настоящим релизом** сравните текущую установленную на
-VPS версию с `main`. На 09.11.2026 последний operator-preflight указывал
-`1e536fff97cfde9698924d01cf3bd6a666afeb7a`, а GitHub `main` =
-`a9fa2e85aeda92b26da4d88cdc4f429fda914dd5`, то есть разница
-**220 коммитов**. Первый ручной деплой является **кумулятивным релизом**,
-а не проверкой одной строки. Требуется независимая приёмка именно
-этого набора изменений, возможность восстановления предыдущей PWA/IndexedDB
-и управляемое окно выпуска. Нельзя использовать первый real deploy
-вместо безвредного SSH-пробника.
+**Перед каждым релизом** сравните текущую установленную на VPS
+версию с `main`. Первый контролируемый релиз 09.11.2026 был
+**кумулятивным**: предыдущий `1e536fff97cfde9698924d01cf3bd6a666afeb7a`,
+выпущенный `84bff626d1b6c413043a91895dd0b58cd0a4a84d`,
+224 коммита в исходном сравнении. Его выполнили только после проверки
+соответствия IndexedDB, сохранения старого release, успешных CI и
+ручной приёмки. Для будущих крупных обновлений обязательны отдельные
+проверки обратной совместимости PWA/IndexedDB и возможность отката.
+Первый real deploy **не заменяет** безвредный SSH-пробник.
 
 ## Environment и Secrets
 
@@ -169,6 +169,64 @@ Service Worker и возможность восстановить предыду
 **Только после полноценной приёмки** включить repository variable
 `FH_STATIC_AUTO_DEPLOY_ENABLED=true` в Settings → Secrets and variables
 → Actions → Variables.
+
+## Квитанция первого production CD (09.11.2026)
+
+- Bootstrap: установлен root-owned `/usr/local/sbin/fh-main-deploy`, отдельный
+  `fh-deploy` с заблокированным паролем, принудительной SSH-командой
+  и root-only сертификатом Cloudflare Origin RSA; глобальный SSH, Caddy,
+  Xray и финансовые хранилища не перенастраивались.
+- GitHub Environment `production-static`: ограничение по ветке `main`,
+  четыре отдельные environment secrets. Секреты не копируются в документацию.
+- Проверка SSH из GitHub-hosted runner:
+  [run #42654794561](https://github.com/MikeMoore1337/financial-horizon/actions/runs/42654794561).
+  `SSH_HOST_IDENTITY=PASS`, `SSH_AUTHENTICATION=PASS`,
+  `SSH_FORCED_COMMAND_DENIAL=PASS`; `PRODUCTION_DEPLOY_PERFORMED=NO`.
+- Первый ручной static-only CD:
+  [run #42662169596](https://github.com/MikeMoore1337/financial-horizon/actions/runs/42662169596),
+  release SHA `84bff626d1b6c413043a91895dd0b58cd0a4a84d`.
+  Точный push SHA прошёл `tests` и `security-vault`; `build=SUCCESS`,
+  `deploy=SUCCESS` и `PRODUCTION_DEPLOYED=84bff626d1b6c413043a91895dd0b58cd0a4a84d`.
+- Operator postdeploy check: `CURRENT_RELEASE=PASS`, `PREVIOUS_RELEASE=PASS`
+  (включая `1e536fff97cfde9698924d01cf3bd6a666afeb7a`),
+  `LOCAL_MANIFEST=PASS`, `DEPLOY_RECEIPT=PASS`, `PUBLIC_MANIFEST=PASS`.
+- Owner desktop/PWA smoke: UI, две темы, создание и сохранение записи,
+  вход/выход и PWA - **PASS**. Реальных финансовых записей перед обновлением
+  не было; резервную копию пустого профиля не требовали.
+- Локальный origin curl без owner-only заголовков получил HTTP 403 для
+  /api/auth/email/config, /api/auth/email/me и /api/auth/providers.
+  Прямой email-auth backend с правильным Host ответил 200, 200, 404;
+  существующие ограничения Caddy не ослаблялись. Независимый OAuth release
+  остаётся вне scope статического CD.
+- Осталось закрыть в Issue #141: изолированная проверка кода отката на VPS,
+  явное включение repository variable `FH_STATIC_AUTO_DEPLOY_ENABLED=true`,
+  один docs-only контрольный merge в `main`, проверка вызванного им
+  automatic CD и публичного exact-SHA манифеста. До их подтверждения
+  автодоставка выключена.
+
+### Изолированная проверка rollback без переключения живого `current`
+
+Контролируемая проверка автоматического отката выполняется в **отдельном
+временном каталоге вне `/srv/www/fin-horizon`** с установленным root-owned
+обработчиком. Создаётся синтетический `dist` архив, вызывается
+`deploy(..., health=forced_failure)`, ожидается исключение и подтверждаются
+старый symlink, отсутствие нового release и отсутствие квитанции успеха.
+Это доказывает алгоритм rollback без риска публикации старой Service Worker
+на действующий сайт. Проверка **не равнозначна live-drill на production
+Caddy**; последний возможен только в отдельном согласованном окне.
+Синтетические тесты также исполняются в `tests/deploy/test_static_deploy.py`.
+
+### Контрольное включение автодоставки
+
+Переменная `FH_STATIC_AUTO_DEPLOY_ENABLED=true` должна быть **repository
+variable**, не environment secret и не переменная только в `production-static`.
+После включения слейте **только документационный** проверенный PR в `main`;
+`push` запускает production-deploy, который ожидает успешные `tests.yml`
+и `security-vault.yml` для того же SHA. Затем проверьте
+`PRODUCTION_DEPLOYED=<точный merge SHA>`, публичный `__release.json`,
+активный симлинк, сохранность предыдущей версии и smoke в браузере.
+При любом FAIL выключите переменную в GitHub и проводите rollback по
+зафиксированной квитанции, а не восстанавливайте базы из старых копий.
 
 ## Пределы
 
