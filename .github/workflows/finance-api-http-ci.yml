@@ -28,6 +28,8 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
+      # Resolve existing top-level fh_auth and fh_email_auth under backend/.
+      PYTHONPATH: ${{ github.workspace }}/backend:${{ github.workspace }}
       FH_FINANCE_CI_ALLOW_BOOTSTRAP: "yes"
       FH_FINANCE_MIGRATION_URL: postgresql+psycopg://fh_finance_migrator:ci_migration_password_only@127.0.0.1:5432/fh_finance_ci
       FH_FINANCE_DATABASE_URL: postgresql+psycopg://fh_finance_runtime:ci_runtime_password_only@127.0.0.1:5432/fh_finance_ci
