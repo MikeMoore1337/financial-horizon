@@ -1,5 +1,35 @@
 # Financial Horizon #9 - production readiness and independent acceptance
 
+## Recovery from post-migration AUTH_READY_TIMEOUT - 2026-11-09
+
+Operator's second release attempt on VPS returned:
+`ISOLATED_PYTHON_DEPS=PASS`, `RELEASE_STAGED=PASS`,
+`PROTECTED_CONFIG_BACKUPS=CREATED`, `ROLLBACK=PASS`,
+`LIVE_DB_SCHEMA_MAY_BE_NULLABLE=YES`, `AUTH_READY_TIMEOUT`.
+Therefore the *service/Caddy/static* rollback is confirmed by the operator
+receipt, but the independent auth SQLite migration could have persisted.
+
+**Never rerun old release scripts**. Never overwrite the active SQLite with
+the previous snapshot: later sessions/accounts may be lost. Before the next
+release, require read-only schema, FK and integrity checks. The new guarded
+release script accepts the exact expected seven-column `users` schema with
+`email NOT NULL` or `email NULLABLE`; when already nullable it outputs
+`DB_SCHEMA_MIGRATION=ALREADY_READY` and never repeats the offline migration.
+The backend source root is prepended to PYTHONPATH so uvicorn resolves
+the new source packages rather than inheriting an older auth package.
+
+Readiness checks still require exact Google/Yandex/VK provider JSON,
+Telegram start HTTP 404 and anonymous `/api/auth/email/me`.
+On a timeout the operator receives *only fixed categories*:
+`AUTH_READY_LAST_REASON`, `AUTH_SERVICE_STILL_ACTIVE`,
+`AUTH_RECENT_LOG_CATEGORY`, followed by rollback. This does not reveal
+OAuth codes/state, cookies, user IDs, environment secrets or unfiltered logs.
+
+Status: code and operator plan only. No successful production OAuth receipt;
+issue #9 OPEN. Public email registration #51 and financial IndexedDB remain
+unaffected. The independent security review and real production logout still
+need to be verified before closing.
+
 ## Live SQLite and staged OAuth environment alignment - 2026-11-08
 
 Operator read-only evidence confirms:

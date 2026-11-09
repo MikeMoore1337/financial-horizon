@@ -4,9 +4,12 @@ No real service, network call, database or production filesystem is modified.
 """
 from __future__ import annotations
 
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, ExitStack
 import importlib.util
 import io
+import os
+import sqlite3
+from types import SimpleNamespace
 from pathlib import Path
 import tarfile
 import tempfile
@@ -158,6 +161,522 @@ class ReleaseContracts(unittest.TestCase):
                              {b"BEFORE\n", b"AGAIN\n"})
             self.assertTrue(all(p.stat().st_mode & 0o777 == 0o600
                                 for p in files))
+
+    def test_dependencies_are_installed_only_in_new_release_venv(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            release_dir = base / "releases" / SHA
+            release_dir.mkdir(parents=True)
+            source = base / "src"
+            requirements = source / "backend" / "requirements.txt"
+            requirements.parent.mkdir(parents=True)
+            requirements.write_text("fastapi>=0.115,<1\njoserfc>=1.8,<2\n")
+            active = base / "running-venv" / "bin" / "python"
+            isolated = release_dir / ".oauth-venv"
+            staged_py = isolated / "bin" / "python"
+            site = isolated / "lib" / "python3.12" / "site-packages"
+            calls = []
+
+            def fake_command(args, **kwargs):
+                calls.append((args, kwargs))
+                if args[1:3] == ["-m", "venv"]:
+                    staged_py.parent.mkdir(parents=True)
+                    staged_py.touch()
+                    site.mkdir(parents=True)
+                if len(args) > 2 and args[1] == "-c" and "sysconfig.get_path" in args[2]:
+                    return str(site).encode("utf-8") + b"\n"
+                return b""
+
+            with mock.patch.object(release, "command", side_effect=fake_command), \
+                    mock.patch.object(release.shutil, "which", return_value=None):
+                result = release.stage_isolated_python(active, release_dir, source)
+            self.assertEqual(result, str(site))
+            installs = [args for args, _ in calls if "-m" in args and "pip" in args]
+            self.assertEqual(len(installs), 1)
+            self.assertEqual(installs[0][0], str(staged_py))
+            self.assertIn("--require-virtualenv", installs[0])
+            self.assertFalse(any(args[0] == str(active) and "pip" in args
+                                 for args, _ in calls))
+
+    def test_failed_staging_removes_private_venv(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            source = base / "src"
+            path = source / "backend" / "requirements.txt"
+            path.parent.mkdir(parents=True)
+            path.write_text("fastapi>=0.115,<1\n")
+            dest = base / "releases" / SHA
+            dest.mkdir(parents=True)
+            venv = dest / ".oauth-venv"
+
+            def fail(args, **kwargs):
+                venv.mkdir()
+                raise release.Gate("ISOLATED_VENV_CREATION_FAILED")
+
+            with mock.patch.object(release, "command", side_effect=fail), \
+                    mock.patch.object(release.shutil, "which", return_value=None):
+                with self.assertRaises(release.Gate) as raised:
+                    release.stage_isolated_python(Path("/tmp/old/python"), dest, source)
+            self.assertEqual(raised.exception.code, "ISOLATED_VENV_CREATION_FAILED")
+            self.assertFalse(venv.exists())
+
+    def test_uv_install_works_without_pip_on_active_python(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            release_dir = base / "releases" / SHA
+            release_dir.mkdir(parents=True)
+            source = base / "src"
+            requirements = source / "backend" / "requirements.txt"
+            requirements.parent.mkdir(parents=True)
+            requirements.write_text("fastapi>=0.115,<1\n")
+            active = base / "running-venv" / "bin" / "python"
+            target = release_dir / ".oauth-venv"
+            staged_py = target / "bin" / "python"
+            site = target / "lib" / "python3.12" / "site-packages"
+            calls = []
+
+            def fake(args, **kwargs):
+                calls.append(args)
+                if len(args) > 1 and args[1] == "venv":
+                    staged_py.parent.mkdir(parents=True)
+                    staged_py.touch()
+                    site.mkdir(parents=True)
+                if len(args) > 2 and args[1] == "-c" and "sysconfig.get_path" in args[2]:
+                    return (str(site) + "\n").encode("utf-8")
+                return b""
+
+            with mock.patch.object(release, "command", side_effect=fake), \
+                    mock.patch.object(release.shutil, "which", return_value="/usr/local/bin/uv"):
+                resolved = release.stage_isolated_python(active, release_dir, source)
+            self.assertEqual(resolved, str(site))
+            self.assertIn(
+                ["/usr/local/bin/uv", "venv", "--python", str(active), str(target)],
+                calls,
+            )
+            self.assertIn(
+                ["/usr/local/bin/uv", "pip", "install", "--python",
+                 str(staged_py), "--link-mode", "copy",
+                 "--no-progress", "-r", str(requirements)],
+                calls,
+            )
+            self.assertFalse(any(args[0] == str(active) and "pip" in args
+                                 for args in calls))
+
+    def test_staged_pythonpath_keeps_original_import_path(self):
+        site = "/opt/financial-horizon-auth/releases/" + SHA + "/.oauth-venv/lib/python3.12/site-packages"
+        self.assertEqual(
+            release.service_python_path(site, {"PYTHONPATH": "/opt/financial-horizon-auth/current/backend"}),
+            site + ":/opt/financial-horizon-auth/current/backend",
+        )
+        self.assertEqual(release.service_python_path(site, {}), site)
+        with self.assertRaises(release.Gate):
+            release.service_python_path(site, {"PYTHONPATH": "unexpected path with spaces"})
+
+    def test_python_failures_receive_stable_diagnostic_code(self):
+        result = mock.Mock(returncode=1, stdout=b"private data, never display")
+        with mock.patch.object(release.subprocess, "run", return_value=result):
+            with self.assertRaises(release.Gate) as error:
+                release.command(["/fake/venv/bin/python", "-m", "pip", "install"],
+                                failure_code="ISOLATED_DEPS_INSTALL_FAILED")
+            self.assertEqual(error.exception.code, "ISOLATED_DEPS_INSTALL_FAILED")
+
+    def test_nullable_auth_db_is_accepted_without_repeating_live_migration(self):
+        with tempfile.TemporaryDirectory() as root:
+            db = Path(root) / "auth.sqlite3"
+            with sqlite3.connect(db) as conn:
+                conn.execute("""
+                    CREATE TABLE users (
+                        id TEXT PRIMARY KEY,
+                        email TEXT UNIQUE,
+                        password_hash TEXT NOT NULL DEFAULT '',
+                        verified_at INTEGER,
+                        password_changed_at INTEGER,
+                        disabled INTEGER NOT NULL DEFAULT 0,
+                        created_at INTEGER NOT NULL
+                    )
+                """)
+            self.assertTrue(release.schema_is_nullable(db))
+            with mock.patch.object(release, "command", side_effect=AssertionError(
+                "No migration of an already nullable production database"
+            )), redirect_stdout(io.StringIO()) as printed:
+                self.assertFalse(release.migrate_live_database(Path("/no-source"), db))
+            self.assertIn("DB_SCHEMA_MIGRATION=ALREADY_READY", printed.getvalue())
+            self.assertTrue(release.schema_is_nullable(db))
+
+    def test_legacy_auth_schema_still_requires_migration(self):
+        with tempfile.TemporaryDirectory() as root:
+            db = Path(root) / "legacy.sqlite3"
+            with sqlite3.connect(db) as conn:
+                conn.execute("""
+                    CREATE TABLE users (
+                        id TEXT PRIMARY KEY,
+                        email TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL DEFAULT '',
+                        verified_at INTEGER,
+                        password_changed_at INTEGER,
+                        disabled INTEGER NOT NULL DEFAULT 0,
+                        created_at INTEGER NOT NULL
+                    )
+                """)
+            self.assertFalse(release.schema_is_nullable(db))
+            with sqlite3.connect(db) as conn:
+                conn.execute("CREATE TRIGGER user_write_event AFTER INSERT ON users "
+                             "BEGIN SELECT 1; END")
+            with self.assertRaises(release.Gate) as error:
+                release.schema_is_nullable(db)
+            self.assertEqual(error.exception.code, "USERS_SCHEMA_CUSTOMIZATION_UNEXPECTED")
+
+    def test_staged_source_root_shadows_old_auth_modules(self):
+        with tempfile.TemporaryDirectory() as root:
+            stage = Path(root) / "releases" / SHA
+            for package in ("fh_auth", "fh_email_auth"):
+                folder = stage / "backend" / package
+                folder.mkdir(parents=True)
+                (folder / "app.py").write_text("# synthetic\n")
+            module_root = release.staged_modules_root(stage)
+            self.assertEqual(module_root, stage / "backend")
+            site = "/tmp/synthetic/lib/site-packages"
+            previous = "/opt/financial-horizon-auth/current/backend"
+            result = release.service_python_path(
+                site, {"PYTHONPATH": previous}, str(module_root)
+            )
+            self.assertEqual(result, f"{module_root}:{site}:{previous}")
+
+    def test_systemd_dropin_uses_new_private_python_not_missing_old_venv(self):
+        with tempfile.TemporaryDirectory() as root:
+            stage = Path(root) / "releases" / SHA
+            modules = stage / "backend"
+            modules.mkdir(parents=True)
+            runtime = stage / ".oauth-venv" / "bin" / "python"
+            runtime.parent.mkdir(parents=True)
+            runtime.write_text("# synthetic interpreter")
+            runtime.chmod(0o755)
+            pythonpath = str(modules) + ":" + str(stage / ".oauth-venv" / "lib" / "site-packages")
+            args = release.safe_uvicorn_argv([
+                "/opt/financial-horizon-auth/current/.venv/bin/python",
+                "-m", "uvicorn", "fh_email_auth.app:app",
+                "--host", "127.0.0.1", "--port", "9141",
+                "--no-access-log", "--proxy-headers",
+            ], 9141)
+            rendered = release.systemd_oauth_dropin(
+                modules, pythonpath, runtime, args
+            ).decode()
+            self.assertIn("ExecStart=\nExecStart=" + str(runtime) +
+                          " -m uvicorn fh_email_auth.app:app", rendered)
+            self.assertNotIn("/current/.venv/", rendered)
+            self.assertIn("--host 127.0.0.1 --port 9141", rendered)
+            self.assertIn("--no-access-log", rendered)
+            self.assertIn("WorkingDirectory=" + str(modules) + "\n", rendered)
+            self.assertIn('Environment="PYTHONPATH=' + pythonpath + '"\n', rendered)
+            self.assertIn("EnvironmentFile=/etc/financial-horizon/oauth.env\n", rendered)
+            self.assertNotIn("telegram", rendered.lower())
+            with self.assertRaises(release.Gate):
+                release.systemd_oauth_dropin(
+                    modules, "unsafe path with whitespace", runtime, args
+                )
+            with self.assertRaises(release.Gate):
+                release.systemd_oauth_dropin(
+                    modules, pythonpath, modules / "python", args
+                )
+
+    def test_shebang_launcher_uses_new_private_runtime_not_old_script(self):
+        # Linux /proc/PID/cmdline for a console script may be:
+        # python /old/current/.venv/bin/uvicorn app:app --flags...
+        argv = [
+            "/opt/financial-horizon-auth/current/.venv/bin/python",
+            "/opt/financial-horizon-auth/current/.venv/bin/uvicorn",
+            "fh_email_auth.app:app", "--host", "127.0.0.1",
+            "--port", "9141", "--no-access-log",
+        ]
+        normalized = release.safe_uvicorn_argv(argv, 9141)
+        self.assertEqual(normalized, [
+            "fh_email_auth.app:app", "--host", "127.0.0.1",
+            "--port", "9141", "--no-access-log",
+        ])
+        self.assertNotIn("/current/", " ".join(normalized))
+
+    def test_unknown_or_insecure_launchers_block_before_downtime(self):
+        base = ["-m", "uvicorn", "fh_email_auth.app:app",
+                "--host", "127.0.0.1", "--port", "9141", "--no-access-log"]
+        examples = [
+            ["/bin/sh", "-c", "echo test"],
+            ["/usr/bin/python3", "-m", "gunicorn", "fh_email_auth.app:app",
+             "--host", "127.0.0.1", "--port", "9141", "--no-access-log"],
+            ["/usr/bin/python3", *base[:-1], "--reload"],
+            ["/usr/bin/python3", *base[:-1]],
+            ["/usr/bin/python3", *base, "--port", "9141"],
+            ["/usr/bin/python3", *base, "--host", "0.0.0.0"],
+            ["/usr/bin/python3", "-m", "uvicorn", "fh_auth.app:app",
+             "--host", "127.0.0.1", "--port", "9141", "--no-access-log"],
+        ]
+        for args in examples:
+            with self.subTest(args=args), self.assertRaises(release.Gate):
+                release.safe_uvicorn_argv(args, 9141)
+
+    def test_approved_existing_launch_flags_are_preserved(self):
+        start = [
+            "/opt/financial-horizon-auth/venv/bin/uvicorn",
+            "fh_email_auth.app:app", "--host=127.0.0.1",
+            "--port=9141", "--no-access-log", "--log-level", "warning",
+        ]
+        output = release.safe_uvicorn_argv(start, 9141)
+        self.assertEqual(output, [
+            "fh_email_auth.app:app", "--host", "127.0.0.1",
+            "--port", "9141", "--no-access-log", "--log-level", "warning",
+        ])
+
+    def test_service_launch_type_must_support_single_exec(self):
+        with mock.patch.object(release, "command", return_value=b"simple\n"):
+            release.ensure_supported_systemd_launch()
+        with mock.patch.object(release, "command", return_value=b"notify\n"):
+            with self.assertRaises(release.Gate):
+                release.ensure_supported_systemd_launch()
+
+
+    def test_service_user_source_access_preflight_never_starts_backend(self):
+        source = Path("/opt/financial-horizon-auth/releases/" + SHA + "/backend")
+        python = Path("/opt/financial-horizon-auth/venv/bin/python")
+        env = {"PYTHONPATH": str(source) + ":/tmp/site"}
+        calls = []
+
+        def fake_command(args, **kwargs):
+            calls.append((args, kwargs))
+            if args[:4] == ["systemctl", "show", "--value", "-p"]:
+                return b"fh-email-auth\n"
+            return b""
+
+        account = SimpleNamespace(pw_uid=9001, pw_gid=9002,
+                                  pw_dir="/nonexistent")
+        with mock.patch.object(release, "command", side_effect=fake_command), \
+                mock.patch.object(release.pwd, "getpwnam", return_value=account):
+            release.verify_service_user_module_access(python, source, env)
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(
+            calls[-1][0][:5],
+            ["runuser", "-u", "fh-email-auth", "--", str(python)]
+        )
+        self.assertTrue(all(call[1]["cwd"] == source for call in calls[1:]))
+        self.assertEqual(calls[1][1]["failure_code"],
+                         "STAGED_SOURCE_NOT_TRAVERSABLE")
+        self.assertEqual(calls[2][1]["failure_code"],
+                         "STAGED_SOURCE_NOT_READABLE")
+        self.assertEqual(calls[-1][1]["failure_code"],
+                         "STAGED_AUTH_IMPORT_AS_SERVICE_USER_FAILED")
+        service_env = calls[-1][1]["env"]
+        self.assertEqual(service_env["PYTHONPATH"], env["PYTHONPATH"])
+        self.assertEqual(service_env["PYTHONNOUSERSITE"], "1")
+        self.assertEqual(service_env["HOME"], "/nonexistent")
+        self.assertNotIn("FH_SESSION_SECRET", service_env)
+
+    def test_only_new_backend_gets_group_read_without_service_writes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            releases = base / "releases"
+            releases.mkdir()
+            stage = releases / SHA
+            stage.mkdir(mode=0o700)
+            module = stage / "fh_auth"
+            module.mkdir(mode=0o700)
+            code = module / "__init__.py"
+            code.write_text("synthetic = True")
+            code.chmod(0o600)
+            external = base / "external-private"
+            external.write_text("keep this private")
+            external.chmod(0o600)
+            (stage / "external-link").symlink_to(external)
+            account = SimpleNamespace(pw_uid=9001, pw_gid=9002,
+                                      pw_dir="/nonexistent")
+            with mock.patch.object(release, "BACKEND_ROOT", base), \
+                    mock.patch.object(release.pwd, "getpwnam",
+                                      return_value=account), \
+                    mock.patch.object(release.os, "chown") as chown, \
+                    mock.patch.object(release.os, "chmod") as chmod:
+                release.grant_staged_release_read_access(
+                    stage, user="fh-email-auth"
+                )
+            owner_targets = [x.args[0] for x in chown.call_args_list]
+            self.assertIn(stage, owner_targets)
+            self.assertIn(module, owner_targets)
+            self.assertIn(code, owner_targets)
+            self.assertNotIn(external, owner_targets)
+            self.assertNotIn(stage / "external-link", owner_targets)
+            self.assertTrue(all(x.args[1] == -1 and x.args[2] == 9002
+                                for x in chown.call_args_list))
+            modes = {call.args[0]:call.args[1] for call in chmod.call_args_list}
+            self.assertEqual(modes[stage], 0o750)
+            self.assertEqual(modes[module], 0o750)
+            self.assertEqual(modes[code], 0o640)
+            self.assertEqual(external.stat().st_mode & 0o777, 0o600)
+
+    def test_shared_hardlinks_block_permission_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            releases = base / "releases"
+            releases.mkdir()
+            stage = releases / SHA
+            stage.mkdir()
+            code = stage / "shared.py"
+            code.write_text("synthetic")
+            os.link(code, base / "other-shared.py")
+            with mock.patch.object(release, "BACKEND_ROOT", base), \
+                    mock.patch.object(release.pwd, "getpwnam",
+                                      return_value=SimpleNamespace(
+                                          pw_uid=9001, pw_gid=9002,
+                                          pw_dir="/nonexistent")), \
+                    mock.patch.object(release.os, "chown") as chown:
+                with self.assertRaises(release.Gate) as error:
+                    release.grant_staged_release_read_access(
+                        stage, user="fh-email-auth"
+                    )
+            self.assertEqual(error.exception.code,
+                             "STAGED_RELEASE_SHARED_HARDLINK")
+            chown.assert_not_called()
+
+    def test_service_user_source_access_rejects_unconfigured_user(self):
+        with mock.patch.object(release, "command", return_value=b""):
+            with self.assertRaises(release.Gate) as error:
+                release.verify_service_user_module_access(
+                    Path("/usr/bin/python"), Path("/tmp/source"), {}
+                )
+        self.assertEqual(error.exception.code, "SERVICE_USER_INVALID")
+
+    def test_missing_staged_module_blocks_deployment(self):
+        with tempfile.TemporaryDirectory() as root:
+            stage = Path(root)
+            folder = stage / "backend" / "fh_email_auth"
+            folder.mkdir(parents=True)
+            (folder / "app.py").write_text("# synthetic\n")
+            with self.assertRaises(release.Gate) as error:
+                release.staged_modules_root(stage)
+            self.assertEqual(error.exception.code, "STAGED_AUTH_PACKAGES_NOT_FOUND")
+
+    def test_recent_logs_return_only_allowlisted_error_category(self):
+        data = "PII-NOT-FOR-OUTPUT\nModuleNotFoundError: No module named 'fh_auth'\n"
+        with mock.patch.object(release.subprocess, "run", return_value=mock.Mock(
+            returncode=0, stdout=data,
+        )):
+            result = release.safe_recent_service_error()
+        self.assertEqual(result, "MODULE_NOT_FOUND")
+        self.assertNotIn("PII", result)
+
+    def test_stage_only_prepares_same_release_then_cleans_without_downtime(self):
+        with tempfile.TemporaryDirectory() as root:
+            base = Path(root)
+            backend = base / "auth"
+            static = base / "static"
+            for folder in (backend, static):
+                (folder / "releases").mkdir(parents=True)
+            old_backend = backend / "releases" / "previous"
+            old_static = static / "releases" / "previous"
+            old_backend.mkdir()
+            old_static.mkdir()
+            (backend / "current").symlink_to(old_backend)
+            (static / "current").symlink_to(old_static)
+            site = base / "site.caddy"
+            site.write_text("original", encoding="utf-8")
+            source = base / "source"
+            source.mkdir()
+            db = base / "auth.sqlite3"
+            old_env = b"TEST_ENV_DISABLED=true\n"
+            old_args = [
+                "/usr/bin/python3", "-m", "uvicorn", "fh_email_auth.app:app",
+                "--host", "127.0.0.1", "--port", "9141", "--no-access-log",
+            ]
+            approved = release.safe_uvicorn_argv(old_args, 9141)
+            calls = []
+
+            def fake_backend(src, sha, existing):
+                candidate = backend / "releases" / sha
+                (candidate / ".oauth-venv" / "bin").mkdir(parents=True)
+                (candidate / ".oauth-venv" / "bin" / "python").write_text(
+                    "fake executable"
+                )
+                (candidate / "backend").mkdir()
+                return candidate
+
+            def fake_static(src, sha):
+                candidate = static / "releases" / sha
+                candidate.mkdir()
+                return candidate
+
+            def fake_command(args, **kwargs):
+                calls.append(args)
+                if args[:4] == ["systemctl", "show", "--value", "-p"]:
+                    return b"fh-email-auth\n"
+                if args[:2] == ["systemctl", "stop"]:
+                    raise AssertionError("stage-only must not stop production")
+                return b""
+
+            preflight = (
+                old_backend, old_static, db, old_env, "original", "new",
+                9141, Path("/usr/bin/python3"), approved,
+            )
+            with ExitStack() as stack:
+                def patch(name, value):
+                    return stack.enter_context(mock.patch.object(release, name, value))
+
+                patch("BACKEND_ROOT", backend)
+                patch("STATIC_ROOT", static)
+                patch("CADDY_SITE", site)
+                patch("OAUTH_ENV", base / "oauth.env")
+                patch("preflight", mock.Mock(return_value=preflight))
+                patch("source_archive", mock.Mock(return_value=source))
+                patch("stage_backend", fake_backend)
+                patch("stage_static", fake_static)
+                patch("stage_isolated_python",
+                      mock.Mock(return_value=str(base / "synthetic-site")))
+                patch("running_process", mock.Mock(return_value=(
+                    123, old_args, {"FH_AUTH_DATABASE_PATH": str(db)}
+                )))
+                patch("staged_modules_root", lambda candidate: candidate / "backend")
+                patch("private_file", lambda path: old_env)
+                patch("verify_service_user_module_access", mock.Mock())
+                patch("systemd_oauth_dropin", mock.Mock(return_value=b"TEST_ONLY\n"))
+                patch("command", fake_command)
+                patch("save_private_release_receipt",
+                      mock.Mock(side_effect=AssertionError(
+                          "stage-only may not save production config"
+                      )))
+                with redirect_stdout(io.StringIO()) as output:
+                    release.rollout(SHA, stage_only=True)
+            self.assertIn("STAGE_ONLY=PASS", output.getvalue())
+            self.assertIn("LIVE_SERVICE_STOPPED=NO", output.getvalue())
+            self.assertEqual(release.current_release(backend), old_backend)
+            self.assertEqual(release.current_release(static), old_static)
+            self.assertFalse((backend / "releases" / SHA).exists())
+            self.assertFalse((static / "releases" / SHA).exists())
+            self.assertEqual(site.read_text(), "original")
+            self.assertFalse(any(args[:2] == ["systemctl", "stop"]
+                                 for args in calls))
+
+    def test_stage_only_cli_never_calls_apply_branch(self):
+        with mock.patch.object(release, "rollout") as rollout, \
+             mock.patch.object(release, "preflight") as preflight, \
+             mock.patch("sys.argv", [
+                 "release", "--sha", SHA, "--stage-only",
+             ]):
+            self.assertEqual(release.main(), 0)
+        rollout.assert_called_once_with(SHA, stage_only=True)
+        preflight.assert_not_called()
+
+    def test_unexpected_runtime_prints_only_safe_category(self):
+        for exc, expected in (
+            (PermissionError("SECRET PII /root/private"), "OS_PERMISSION_DENIED"),
+            (FileNotFoundError("SECRET PII"), "OS_FILE_NOT_FOUND"),
+            (NotImplementedError("SECRET PII"), "UNSUPPORTED_OS_OPERATION"),
+        ):
+            with self.subTest(category=expected), \
+                 mock.patch.object(release, "rollout", side_effect=exc), \
+                 mock.patch("sys.argv", ["release", "--sha", SHA, "--apply"]), \
+                 redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(release.main(), 1)
+            printed = output.getvalue()
+            self.assertIn("SAFE_EXCEPTION_CATEGORY=" + expected, printed)
+            self.assertIn("SAFE_EXCEPTION_STAGE=UNKNOWN", printed)
+            self.assertIn("RAW_EXCEPTION_PRINTED=NO", printed)
+            self.assertIn("FAILURE_CODE=UNEXPECTED_RUNTIME", printed)
+            self.assertNotIn("SECRET", printed)
+            self.assertNotIn("/root", printed)
 
     def test_one_command_without_apply_only_checks_preflight(self):
         with mock.patch.object(release, "preflight", return_value=None) as check, \
