@@ -461,11 +461,13 @@ class ReleaseContracts(unittest.TestCase):
                 mock.patch.object(release.pwd, "getpwnam", return_value=account):
             release.verify_service_user_module_access(python, source, env)
         self.assertEqual(len(calls), 5)
-        self.assertEqual(
-            calls[-1][0][:5],
-            ["runuser", "-u", "fh-email-auth", "--", str(python)]
-        )
+        self.assertEqual(calls[-1][0][:2], [str(python), "-c"])
+        self.assertEqual(calls[1][0][:2], ["test", "-x"])
+        self.assertEqual(calls[2][0][:2], ["test", "-r"])
         self.assertTrue(all(call[1]["cwd"] == source for call in calls[1:]))
+        self.assertTrue(all(call[1]["run_as"] == (9001, 9002)
+                            for call in calls[1:]))
+        self.assertFalse(any(args[0] == "runuser" for args, _ in calls))
         self.assertEqual(calls[1][1]["failure_code"],
                          "STAGED_SOURCE_NOT_TRAVERSABLE")
         self.assertEqual(calls[2][1]["failure_code"],
@@ -477,6 +479,38 @@ class ReleaseContracts(unittest.TestCase):
         self.assertEqual(service_env["PYTHONNOUSERSITE"], "1")
         self.assertEqual(service_env["HOME"], "/nonexistent")
         self.assertNotIn("FH_SESSION_SECRET", service_env)
+
+    def test_service_user_checks_drop_privileges_without_external_runuser(self):
+        process = SimpleNamespace(returncode=0, stdout=b"ok")
+        with mock.patch.object(release.subprocess, "run", return_value=process) as invoke, \
+                mock.patch.object(release.os, "geteuid", return_value=0):
+            self.assertEqual(
+                release.command(["/usr/bin/python3", "-c", "pass"],
+                                run_as=(9001, 9002)), b"ok"
+            )
+        self.assertEqual(invoke.call_args.args[0],
+                         ["/usr/bin/python3", "-c", "pass"])
+        opts = invoke.call_args.kwargs
+        self.assertEqual(opts["user"], 9001)
+        self.assertEqual(opts["group"], 9002)
+        self.assertEqual(opts["extra_groups"], [])
+        self.assertFalse(opts["check"])
+
+    def test_service_user_checks_refuse_root_or_unsafe_identity(self):
+        with mock.patch.object(release.subprocess, "run") as invoke, \
+                mock.patch.object(release.os, "geteuid", return_value=0):
+            for identity in ((0, 9002), (9001, 0), (-1, 9002),
+                             ("9001", 9002), (True, 9002)):
+                with self.subTest(identity=identity), self.assertRaises(release.Gate) as result:
+                    release.command(["test", "-x", "/tmp"], run_as=identity)
+                self.assertEqual(result.exception.code, "SERVICE_IDENTITY_UNSAFE")
+        invoke.assert_not_called()
+        with mock.patch.object(release.subprocess, "run") as invoke, \
+                mock.patch.object(release.os, "geteuid", return_value=1000):
+            with self.assertRaises(release.Gate) as result:
+                release.command(["test", "-x", "/tmp"], run_as=(9001, 9002))
+            self.assertEqual(result.exception.code, "SERVICE_IDENTITY_UNSAFE")
+        invoke.assert_not_called()
 
     def test_only_new_backend_gets_group_read_without_service_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -643,6 +677,11 @@ class ReleaseContracts(unittest.TestCase):
                 patch("verify_service_user_module_access", mock.Mock())
                 patch("systemd_oauth_dropin", mock.Mock(return_value=b"TEST_ONLY\n"))
                 patch("command", fake_command)
+                stack.enter_context(mock.patch.object(
+                    release.pwd, "getpwnam",
+                    return_value=SimpleNamespace(pw_uid=9001, pw_gid=9002,
+                                                 pw_dir="/nonexistent"),
+                ))
                 patch("save_private_release_receipt",
                       mock.Mock(side_effect=AssertionError(
                           "stage-only may not save production config"
@@ -693,12 +732,12 @@ class ReleaseContracts(unittest.TestCase):
     def test_missing_subprocess_command_has_redacted_specific_function_and_line(self):
         missing = FileNotFoundError(
             2, "SENSITIVE private failure",
-            "/hidden/secret/bin/runuser",
+            "/hidden/secret/bin/test",
         )
         with mock.patch.object(release.subprocess, "run",
                                side_effect=missing):
             try:
-                release.command(["runuser", "-u", "fake", "--", "true"])
+                release.command(["test", "-x", "/staged/module"])
             except FileNotFoundError as exc:
                 category, stage, line, caller, target = \
                     release.safe_runtime_diagnostics(exc)
@@ -708,7 +747,7 @@ class ReleaseContracts(unittest.TestCase):
         self.assertEqual(stage, "COMMAND")
         self.assertGreater(line, 0)
         self.assertEqual(caller, 0)
-        self.assertEqual(target, "COMMAND_RUNUSER")
+        self.assertEqual(target, "COMMAND_TEST")
         self.assertNotIn("SENSITIVE", target)
         self.assertNotIn("secret", target)
 
