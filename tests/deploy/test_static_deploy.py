@@ -132,6 +132,17 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(cd.DeployFailure, 'RELEASE_LINK_OUTSIDE_ROOT'):
             cd.current_release(self.root)
 
+    def test_official_origin_ca_pem_is_parseable_and_pinned(self):
+        pem = Path(__file__).resolve().parents[2] / 'deploy' / 'certs' / 'cloudflare-origin-rsa-root.pem'
+        content = pem.read_bytes()
+        self.assertEqual(hashlib.sha256(content).hexdigest(), cd.ORIGIN_CA_SHA256)
+        result = subprocess.run(
+            ['/usr/bin/openssl', 'x509', '-in', str(pem), '-noout', '-subject', '-issuer'],
+            capture_output=True, check=False, text=True,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn('CloudFlare Origin SSL Certificate Authority', result.stdout)
+
     def test_origin_ca_trust_anchor_hash_and_symlink_guards(self):
         # Synthetic trust data; CI runner need not run as root.
         anchor = Path(self.tmp.name) / 'ca'
