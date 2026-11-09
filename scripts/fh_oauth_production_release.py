@@ -607,6 +607,9 @@ def rollout(sha: str) -> None:
             DROPIN.parent.mkdir(parents=True, exist_ok=True)
             dropin_content = (
                 "[Service]\n"
+                # Python package imports must not fall back to the previous
+                # release via the inherited systemd working directory.
+                "WorkingDirectory=" + str(modules_root) + "\n"
                 "Environment=\"PYTHONPATH=" + prepared_path + "\"\n"
                 "EnvironmentFile=/etc/financial-horizon/oauth.env\n"
             )
