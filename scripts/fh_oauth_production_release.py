@@ -680,6 +680,46 @@ def safe_recent_service_error() -> str:
     return "NO_MATCHING_ERROR"
 
 
+def verified_origin_ca() -> Path:
+    """Root-owned pinned Cloudflare Origin RSA trust anchor, never -k."""
+    try:
+        for directory in (ORIGIN_CA.parent.parent, ORIGIN_CA.parent):
+            info = directory.lstat()
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or
+                    info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
+                raise Gate("ORIGIN_CA_DIR_UNSAFE")
+        info = ORIGIN_CA.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or
+                info.st_mode & (stat.S_IWGRP | stat.S_IWOTH) or
+                info.st_size > 8192):
+            raise Gate("ORIGIN_CA_FILE_UNSAFE")
+        content = ORIGIN_CA.read_bytes()
+    except OSError as exc:
+        raise Gate("ORIGIN_CA_UNAVAILABLE") from exc
+    if hashlib.sha256(content).hexdigest() != ORIGIN_CA_SHA256:
+        raise Gate("ORIGIN_CA_HASH_MISMATCH")
+    return ORIGIN_CA
+
+
+def public_oauth_providers_over_verified_origin() -> bytes:
+    """Confirm Caddy really serves the OAuth endpoint with trusted HTTPS."""
+    ca = verified_origin_ca()
+    result = command([
+        "/usr/bin/curl", "--noproxy", "*", "--silent", "--show-error",
+        "--fail", "--connect-timeout", "5", "--max-time", "12",
+        "--max-redirs", "0",
+        "--cacert", str(ca),
+        "--resolve", f"{HOST}:{ORIGIN_PORT}:127.0.0.1",
+        "--header", "Cache-Control: no-store",
+        "--write-out", "\n%{http_code}",
+        f"https://{HOST}:{ORIGIN_PORT}/api/auth/providers",
+    ], timeout=16, failure_code="PUBLIC_CADDY_HTTPS_FAILED")
+    body, marker, status = result.rpartition(b"\n")
+    if not marker or status != b"200" or not 0 < len(body) < 8192:
+        raise Gate("PUBLIC_CADDY_HTTPS_STATUS")
+    return body
+
+
 def preflight(sha: str):
     if os.geteuid() != 0 or not re.fullmatch("[a-f0-9]{40}", sha):
         raise Gate("ROOT_OR_SHA_INVALID")
