@@ -25,7 +25,8 @@ PUBLIC_FILES = {
     "account.css",
 }
 LEGACY_FILES = {
-    "app.js", "account.js", "auth-session.js", "backup.js", "excel-import.js",
+    "app.js", "account.js", "account-oauth.js", "auth-ui.js",
+    "auth-session.js", "backup.js", "excel-import.js",
     "finance.js", "ledger-operations.js", "schedule.js", "state-migrations.js",
     "storage.js",
 }
