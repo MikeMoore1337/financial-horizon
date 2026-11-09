@@ -5,13 +5,13 @@ import {allowedProviderIds, providerHref, providerLabel} from '../auth-ui.js';
 
 const read=name=>readFileSync(new URL('../'+name,import.meta.url),'utf8');
 
-test('only the three production-approved OAuth providers have fixed start URLs',()=>{
+test('all four approved OAuth providers have fixed start URLs',()=>{
  const ids=allowedProviderIds({enabled:true,providers:['vk','telegram','fake','google','yandex']});
- assert.deepEqual(ids,['google','yandex','vk']);
- assert.throws(()=>providerHref('telegram'));
- assert.equal(providerLabel('telegram'),null);
+ assert.deepEqual(ids,['google','yandex','vk','telegram']);
+ assert.equal(providerHref('telegram'),'./api/auth/oauth/telegram/start');
+ assert.equal(providerLabel('telegram'),'Войти через Telegram');
  assert.deepEqual(allowedProviderIds({enabled:false,providers:['google']}),[]);
- assert.deepEqual(allowedProviderIds({enabled:true,providers:['telegram']}),[]);
+ assert.deepEqual(allowedProviderIds({enabled:true,providers:['telegram']}),['telegram']);
  assert.deepEqual(allowedProviderIds(null),[]);
  for(const provider of ids){
   assert.ok(providerLabel(provider));
@@ -27,11 +27,11 @@ test('current email account and protected ledger do not activate the staged OAut
  assert.match(html,/<meta name="fh-email-auth" content="disabled">/);
  assert.doesNotMatch(html,/fh-cloud-auth" content="enabled"/);
  assert.match(account,/<section id="oauth-login"[^>]*hidden>/);
- assert.match(account,/account-oauth\.js\?rev=oauth-auth-v1/);
+ assert.match(account,/account-oauth\.js\?rev=oauth-four-v2/);
  assert.match(account,/id="auth-form"[\s\S]*id="oauth-login"/);
  assert.doesNotMatch(app,/from ['"]\.\/auth-ui\.js['"]/);
- assert.match(sw,/'\.\/auth-ui\.js\?rev=oauth-auth-v1'/);
- assert.match(sw,/'\.\/account-oauth\.js\?rev=oauth-auth-v1'/);
+ assert.match(sw,/'\.\/auth-ui\.js\?rev=oauth-four-v2'/);
+ assert.match(sw,/'\.\/account-oauth\.js\?rev=oauth-four-v2'/);
  assert.match(app,/await emailSession\.refresh\(\)/);
  assert.match(sw,/financial-horizon-shell-/);
 });
