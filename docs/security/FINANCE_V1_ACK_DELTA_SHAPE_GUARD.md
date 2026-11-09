@@ -15,6 +15,24 @@ At #67 PR #100 HEAD `de4da1d75e93649e9cfdada06f10273ee8cccd4e`, v1 `Delta.change
 3. #68/#69 provide a functioning historical explicit-v1 **and versionless** cached writer fence before final re-read of legacy state and every `pending/sending/conflict` outbox row, cross-tab scope/generation/epoch isolation, durable single commit marker and migration journal; abort/rollback without losing the original UUID/fingerprint or offline operations. ADR-0065's separate new database alone does not stop writers in legacy `financial-horizon-browser-v1`.
 4. #69 independent external encrypted backup **physically restored**, explicit user consent and approved unlock visuals; #70 full real-db/crash/browser-restart/physical iPhone Safari acceptance, human AppSec sign-off, and exact prod SHA + rollback evidence. No consent to delete legacy plaintext exists.
 
+## Inert JSON-only boundary (P2 Proxy remediation)
+
+`checkV1AckDeltaShape(rawJson)` accepts **only a string** containing complete
+wire JSON (max 2,000,000 UTF-16 code units), not an arbitrary object graph.
+This deliberately breaks the draft object-input signature: browsers cannot
+reliably identify a Proxy without invoking its traps, while descriptor checks
+can be bypassed by mutable proxy reads. The fresh native `JSON.parse` result
+is checked without referencing caller objects. Any object (including one
+with a nested Proxy), invalid JSON or oversized text returns `RECOVERY_HOLD`.
+Integration MUST pass raw response text from an authenticated source, never
+`JSON.stringify(untrustedObject)` and never string-coerce an input object.
+
+This only makes the isolated *structural* guard deterministic over ordinary
+JSON data. It is NOT transport authenticity, server command provenance,
+trusted idempotency, writer fencing, encryption, an applied proof or permission
+to acknowledge/delete the offline outbox. Integration must separately enforce
+response identity/profile/session and the #67/#68/#69 recovery contracts.
+
 ## Coverage / limits
 
 Node tests check high-watermark, missing pages, revision/ordinal integrity and mismatched ACK/payload. Native Chromium and WebKit E2E only import the isolated checker, simulate lost-response replay and browser reload; they do **not** connect to finance API, perform a process crash or assert real on-device encryption. There is no code path to the active Service Worker, IndexedDB, accounts, PostgreSQL, auth or deployment.
