@@ -21,7 +21,8 @@ const fpA = 'a'.repeat(64);
 const fpB = 'b'.repeat(64);
 
 async function withDatabase(page, name, operation, payload) {
-  return page.evaluate(async ({ name, operation, payload }) => {
+  return page.evaluate(async ({ name, operation, payload, scopeA, scopeB,
+    idA, idPending, idConflict, idForeign }) => {
     const req = indexedDB.open(name, 1);
     const db = await new Promise((resolve, reject) => {
       req.onsuccess = () => resolve(req.result);
@@ -78,7 +79,8 @@ async function withDatabase(page, name, operation, payload) {
       }
       throw Error('unknown synthetic operation');
     } finally { db.close(); }
-  }, { name, operation, payload });
+  }, { name, operation, payload, scopeA, scopeB,
+    idA, idPending, idConflict, idForeign });
 }
 
 test('contiguous state+cursor+proof commit is atomic, scoped and preserves outbox across reload', async ({ page, context }) => {
