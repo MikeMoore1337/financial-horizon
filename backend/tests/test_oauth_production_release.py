@@ -866,14 +866,17 @@ class ReleaseContracts(unittest.TestCase):
                 with mock.patch.object(release, "ORIGIN_CA_SHA256", "0" * 64), \
                      self.assertRaisesRegex(release.Gate, "ORIGIN_CA_HASH_MISMATCH"):
                     release.verified_origin_ca()
-                unsafe = SimpleNamespace(st_mode=stat.S_IFREG | 0o666,
-                                         st_uid=0, st_size=file.stat().st_size)
-                def unsafe_metadata(path):
-                    return unsafe if path == file else directory
-                with mock.patch.object(Path, "lstat", autospec=True,
-                                       side_effect=unsafe_metadata), \
-                     self.assertRaisesRegex(release.Gate, "ORIGIN_CA_FILE_UNSAFE"):
-                    release.verified_origin_ca()
+            unsafe = SimpleNamespace(st_mode=stat.S_IFREG | 0o666,
+                                     st_uid=0, st_size=file.stat().st_size)
+            def unsafe_metadata(path):
+                return unsafe if path == file else directory
+            # Do not apply autospec over an already-patched Path.lstat Mock.
+            with mock.patch.object(release, "ORIGIN_CA", file), \
+                 mock.patch.object(release, "ORIGIN_CA_SHA256", digest), \
+                 mock.patch.object(Path, "lstat", autospec=True,
+                                   side_effect=unsafe_metadata), \
+                 self.assertRaisesRegex(release.Gate, "ORIGIN_CA_FILE_UNSAFE"):
+                release.verified_origin_ca()
 
     def test_backend_only_static_must_match_verified_published_ui(self):
         import json
