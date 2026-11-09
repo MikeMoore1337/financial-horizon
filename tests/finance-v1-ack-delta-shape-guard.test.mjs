@@ -54,6 +54,7 @@ test('fail closed on partial pages, false terminal cursor and pinned-head drift'
 
 test('fail closed on missing, duplicate, reordered or altered ordinal events', () => {
   const alters = [
+    b => { b.pages[0].changes.unshift(event(5, 0)); }, // stale since_revision event
     b => { b.pages[0].changes[1].ordinal = 2; },
     b => { b.pages[0].changes[1].revision = 7; },
     b => { b.pages[0].changes[0].entity_revision = 0; },
