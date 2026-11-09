@@ -64,7 +64,7 @@ jobs:
       - name: Checkout verified main (without credentials)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ steps.gate.outputs.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Build static assets without production secrets
         shell: bash
