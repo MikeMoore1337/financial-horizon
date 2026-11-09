@@ -438,10 +438,12 @@ def grant_staged_release_read_access(stage: Path, *, user: str) -> None:
     release to the service account's primary group. No active release, system
     packages, symlink target or shared hardlinked inode may be changed.
     """
-    if (os.geteuid() != 0 or stage.is_symlink() or
-            not stage.is_dir() or
+    if (stage.is_symlink() or not stage.is_dir() or
             stage.parent.resolve() != (BACKEND_ROOT / "releases").resolve()):
         raise Gate("STAGED_RELEASE_OWNERSHIP_SCOPE_INVALID")
+    stage_owner = stage.lstat().st_uid
+    if stage_owner != os.geteuid():
+        raise Gate("STAGED_RELEASE_NOT_OWNED_BY_OPERATOR")
     try:
         account = pwd.getpwnam(user)
     except KeyError as exc:
@@ -457,8 +459,8 @@ def grant_staged_release_read_access(stage: Path, *, user: str) -> None:
                 continue
             if not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)):
                 raise Gate("STAGED_RELEASE_SPECIAL_FILE")
-            if info.st_uid != 0:
-                raise Gate("STAGED_RELEASE_NOT_ROOT_OWNED")
+            if info.st_uid != stage_owner:
+                raise Gate("STAGED_RELEASE_NOT_OPERATOR_OWNED")
             if stat.S_ISREG(info.st_mode) and info.st_nlink != 1:
                 raise Gate("STAGED_RELEASE_SHARED_HARDLINK")
             candidates.append((candidate, info))
