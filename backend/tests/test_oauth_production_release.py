@@ -736,16 +736,19 @@ class ReleaseContracts(unittest.TestCase):
                 stop = mock.Mock(side_effect=AssertionError("service must stay alive"))
                 p("command", stop)
                 with redirect_stdout(io.StringIO()) as output:
-                    with self.assertRaises(FileNotFoundError) as caught:
+                    try:
                         release.rollout(SHA, stage_only=True)
-                diagnosis = release.safe_runtime_diagnostics(caught.exception)
+                    except FileNotFoundError as exc:
+                        diagnosis = release.safe_runtime_diagnostics(exc)
+                    else:
+                        self.fail("Expected the missing staged backend to fail")
             self.assertIn("FAILED_STAGING_STEP=COPY_BACKEND", output.getvalue())
             self.assertIn("FAILED_STAGING_CLEANED=YES", output.getvalue())
             self.assertEqual(release.current_release(backend), state[0])
             self.assertEqual(release.current_release(static), state[1])
             stop.assert_not_called()
             self.assertEqual(diagnosis[0], "OS_FILE_NOT_FOUND")
-            self.assertEqual(diagnosis[1], "STAGE_BACKEND")
+            self.assertEqual(diagnosis[1], "ROLLOUT")
             self.assertGreater(diagnosis[2], 0)
             self.assertGreater(diagnosis[3], 0)
             self.assertEqual(diagnosis[4], "OTHER")
