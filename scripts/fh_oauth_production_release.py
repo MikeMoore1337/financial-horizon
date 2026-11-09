@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Single guarded OAuth #9 production rollout. Run only on the real FH VPS.
 
-Requires a pinned, CI-passing main SHA. No Telegram or public registration.
+Requires a pinned, CI-passing main SHA. No public email registration.
 Makes NO changes unless every required production layout invariant holds.
 On failed rollout restores links, Caddy and OAuth configuration, never blindly
 restores an old SQLite snapshot (which could lose new sessions/accounts).
@@ -53,9 +53,21 @@ class Gate(Exception):
 
 def command(args: list[str], *, timeout: int = 1200, cwd: Path | None = None,
             env: dict[str, str] | None = None,
-            failure_code: str | None = None) -> bytes:
+            failure_code: str | None = None,
+            run_as: tuple[int, int] | None = None) -> bytes:
+    # Native POSIX privilege drop avoids reliance on runuser, which is not
+    # installed on every production image. Never silently run service checks
+    # with root privileges when dropping to the systemd identity is required.
+    identity = {}
+    if run_as is not None:
+        uid, gid = run_as
+        if (os.geteuid() != 0 or type(uid) is not int or type(gid) is not int
+                or uid <= 0 or gid <= 0):
+            raise Gate("SERVICE_IDENTITY_UNSAFE")
+        identity = {"user": uid, "group": gid, "extra_groups": []}
     p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                       cwd=cwd, env=env, timeout=timeout, check=False)
+                       cwd=cwd, env=env, timeout=timeout, check=False,
+                       **identity)
     if p.returncode:
         # Never expose unfiltered pip, subprocess or OAuth output: it may hold
         # tokens, local paths or secrets. Stable operation codes identify the step.
@@ -579,6 +591,8 @@ def verify_service_user_module_access(auth_py: Path, source_root: Path,
         account = pwd.getpwnam(user)
     except KeyError as exc:
         raise Gate("SERVICE_ACCOUNT_NOT_FOUND") from exc
+    if account.pw_uid <= 0 or account.pw_gid <= 0:
+        raise Gate("SERVICE_ACCOUNT_PRIVILEGED")
     if staged_release is not None:
         grant_staged_release_read_access(staged_release, user=user)
     if "PYTHONPATH" not in check_env:
@@ -591,22 +605,22 @@ def verify_service_user_module_access(auth_py: Path, source_root: Path,
     }
     # Inheriting /root or a private operator working directory would produce
     # a false negative even if systemd's configured WorkingDirectory is fine.
-    command(["runuser", "-u", user, "--", "test", "-x", str(source_root)],
-            timeout=15, cwd=source_root, env=service_env,
+    identity = (account.pw_uid, account.pw_gid)
+    command(["test", "-x", str(source_root)],
+            timeout=15, cwd=source_root, env=service_env, run_as=identity,
             failure_code="STAGED_SOURCE_NOT_TRAVERSABLE")
     for package in ("fh_email_auth", "fh_auth"):
-        command(["runuser", "-u", user, "--", "test", "-r",
-                 str(source_root / package / "__init__.py")],
-                timeout=15, cwd=source_root, env=service_env,
+        command(["test", "-r", str(source_root / package / "__init__.py")],
+                timeout=15, cwd=source_root, env=service_env, run_as=identity,
                 failure_code="STAGED_SOURCE_NOT_READABLE")
     check = (
         "import importlib.util,pathlib,sys; root=pathlib.Path(sys.argv[1]); "
         "assert all(pathlib.Path(importlib.util.find_spec(p).origin).parent == "
         "root / p for p in sys.argv[2].split(','))"
     )
-    command(["runuser", "-u", user, "--", str(auth_py), "-c", check,
+    command([str(auth_py), "-c", check,
              str(source_root), "fh_email_auth,fh_auth"],
-            timeout=30, cwd=source_root, env=service_env,
+            timeout=30, cwd=source_root, env=service_env, run_as=identity,
             failure_code="STAGED_AUTH_IMPORT_AS_SERVICE_USER_FAILED")
 
 
@@ -797,6 +811,12 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
             ).decode().strip()
             if not re.fullmatch(r"[a-z_][a-z0-9_-]*", user):
                 raise Gate("SERVICE_USER_INVALID")
+            try:
+                account = pwd.getpwnam(user)
+            except KeyError as exc:
+                raise Gate("SERVICE_ACCOUNT_NOT_FOUND") from exc
+            if account.pw_uid <= 0 or account.pw_gid <= 0:
+                raise Gate("SERVICE_ACCOUNT_PRIVILEGED")
             service_env = {
                 "PATH": "/usr/local/bin:/usr/bin:/bin",
                 "PYTHONPATH": prepared_path,
@@ -804,9 +824,10 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
             }
             stage_step = "CHECK_PRIVATE_RUNTIME"
             command(
-                ["runuser", "-u", user, "--", str(runtime_python), "-c",
+                [str(runtime_python), "-c",
                  "import uvicorn,fastapi,fh_email_auth,fh_auth"],
                 cwd=modules_root, env=service_env, timeout=30,
+                run_as=(account.pw_uid, account.pw_gid),
                 failure_code="NEW_AUTH_RUNTIME_UNREADABLE_BY_SERVICE_USER",
             )
             stage_step = "BUILD_SYSTEMD_DROPIN"
