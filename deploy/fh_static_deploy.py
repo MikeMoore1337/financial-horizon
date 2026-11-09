@@ -22,6 +22,9 @@ import tempfile
 ROOT = Path('/srv/www/fin-horizon')
 STATE = Path('/var/lib/fh-static-deploy')
 HOST = 'fin-horizon.mikemoore.top'
+ORIGIN_PORT = 8444  # Caddy origin; public :443 is owned by Xray on this VPS
+ORIGIN_CA = Path('/usr/local/lib/financial-horizon/certs/cloudflare-origin-rsa-root.pem')
+ORIGIN_CA_SHA256 = '91a8a5567efa6bf941162aa806b3ba476aaddf7867640e53053b35fb225a5dae'
 REPO = 'MikeMoore1337/financial-horizon'
 MAX_ARCHIVE = 30_000_000
 MAX_UNPACKED = 90_000_000
@@ -164,12 +167,36 @@ def write_atomic(path: Path, content: bytes) -> None:
         Path(tmp).unlink(missing_ok=True)
 
 
+def verify_origin_ca() -> None:
+    """Fail closed unless the pinned Cloudflare RSA trust anchor is root-controlled."""
+    try:
+        for directory in (ORIGIN_CA.parent.parent, ORIGIN_CA.parent):
+            info = directory.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or (
+                    info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
+                raise DeployFailure('ORIGIN_CA_DIR_UNSAFE')
+        info = ORIGIN_CA.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or
+                info.st_mode & (stat.S_IWGRP | stat.S_IWOTH) or info.st_size > 8192):
+            raise DeployFailure('ORIGIN_CA_FILE_UNSAFE')
+        with ORIGIN_CA.open('rb') as handle:
+            content = handle.read(8193)
+    except OSError as exc:
+        raise DeployFailure('ORIGIN_CA_MISSING') from exc
+    if hashlib.sha256(content).hexdigest() != ORIGIN_CA_SHA256:
+        raise DeployFailure('ORIGIN_CA_HASH_MISMATCH')
+
+
 def probe_release(sha: str) -> None:
+    verify_origin_ca()
+
     def fetch(path: str) -> bytes:
         args = [
             '/usr/bin/curl', '--silent', '--show-error', '--fail', '--noproxy', '*',
-            '--max-time', '8', '--max-redirs', '0', '--resolve', f'{HOST}:443:127.0.0.1',
-            '-H', 'Cache-Control: no-store', f'https://{HOST}/{path}',
+            '--max-time', '8', '--max-redirs', '0',
+            '--cacert', str(ORIGIN_CA),
+            '--resolve', f'{HOST}:{ORIGIN_PORT}:127.0.0.1',
+            '-H', 'Cache-Control: no-store', f'https://{HOST}:{ORIGIN_PORT}/{path}',
         ]
         result = subprocess.run(args, capture_output=True, timeout=12, check=False)
         if result.returncode != 0 or not result.stdout or len(result.stdout) > 2_000_000:
