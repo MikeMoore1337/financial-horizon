@@ -111,6 +111,7 @@ export function Accounts({
   // Synchronous guard against double-clicks before React commits the busy state.
   const inFlight = useRef(false);
   const dialogRef = useRef<HTMLDivElement>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
   const [uncertain, setUncertain] = useState(false);
   const uncertainAtFailure = useRef<{ token: string | null; profileId: string | null } | null>(
     null,
@@ -311,12 +312,22 @@ export function Accounts({
 
   // Track actual dialog visibility: loading can unmount its DOM while panel stays open.
   const dialogVisible = Boolean(panel && model);
+  // Preserve the opener across busy/panel changes and temporary loading unmounts.
+  useEffect(() => {
+    if (panel !== null) return;
+    const opener = openerRef.current;
+    openerRef.current = null;
+    if (opener?.isConnected) opener.focus();
+  }, [panel]);
+
   // The modal owns focus while visible; Escape never interrupts a pending write.
   useEffect(() => {
     if (!dialogVisible) return;
-    const previouslyFocused =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const dialog = dialogRef.current;
+    const focused = document.activeElement;
+    if (!openerRef.current && focused instanceof HTMLElement && !dialog?.contains(focused)) {
+      openerRef.current = focused;
+    }
     const focusable = () =>
       Array.from(
         dialog?.querySelectorAll<HTMLElement>(
@@ -352,7 +363,6 @@ export function Accounts({
     document.addEventListener('keydown', handleKey);
     return () => {
       document.removeEventListener('keydown', handleKey);
-      previouslyFocused?.focus();
     };
   }, [dialogVisible, panel, busy]);
 
