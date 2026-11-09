@@ -5,13 +5,15 @@
 const accountScope = /^account:[a-f0-9]{32}$/;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const digest = /^[0-9a-f]{64}$/;
+const epochToken = /^[0-9a-f]{32}$/;
 
 export function reconcileVerifiedReplay(db, ack, signal) {
   // Capture all fields once. Network ACK objects must not mutate their scope
   // or command identity between an IndexedDB request and its onsuccess event.
-  const { scope, mutationId, fingerprint, generation, revision } = ack || {};
+  const { scope, mutationId, fingerprint, generation, epoch, revision } = ack || {};
   if (!db || !accountScope.test(scope) ||
       !uuid.test(mutationId) || !digest.test(fingerprint) ||
+      !epochToken.test(epoch) ||
       !Number.isSafeInteger(generation) || generation < 1 ||
       !Number.isSafeInteger(revision) || revision < 0 ||
       !signal || typeof signal.aborted !== 'boolean' ||
@@ -42,7 +44,7 @@ export function reconcileVerifiedReplay(db, ack, signal) {
     meta.onsuccess = () => {
       const current = meta.result;
       if (!current || current.scope !== scope ||
-          current.generation !== generation ||
+          current.generation !== generation || current.epoch !== epoch ||
           !Number.isSafeInteger(current.cursor) ||
           current.cursor < 0 || revision > current.cursor) {
         hold(); return;
@@ -53,6 +55,7 @@ export function reconcileVerifiedReplay(db, ack, signal) {
         const record = proof.result;
         if (!record || record.scope !== scope ||
             record.mutationId !== mutationId ||
+            record.generation !== generation || record.epoch !== epoch ||
             record.fingerprint !== fingerprint ||
             record.revision !== revision ||
             record.applied !== true) {
@@ -63,11 +66,12 @@ export function reconcileVerifiedReplay(db, ack, signal) {
           const entry = queued.result;
           if (!entry) { outcome = 'ALREADY_SETTLED'; return; }
           if (entry.scope !== scope || entry.mutationId !== mutationId ||
+              entry.generation !== generation || entry.epoch !== epoch ||
               entry.fingerprint !== fingerprint ||
               !['pending', 'sending'].includes(entry.status)) {
             hold(); return;
           }
-          // Cursor, epoch, other pending/sending/conflict entries and other
+          // Cursor, other pending/sending/conflict entries and other
           // account scopes are never overwritten by an old replay receipt.
           tx.objectStore('outbox').delete(key);
           outcome = 'ACKED';
