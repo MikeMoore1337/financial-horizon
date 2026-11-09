@@ -202,7 +202,7 @@ def probe_release(sha: str) -> None:
         result = subprocess.run(args, capture_output=True, timeout=12, check=False)
         if result.returncode != 0 or not result.stdout or len(result.stdout) > 2_000_000:
             raise DeployFailure('HTTPS_SMOKE_FAILED')
-        body, separator, status = result.stdout.rpartition(b'\\n')
+        body, separator, status = result.stdout.rpartition(b'\n')
         if not separator or status != b'200' or not body:
             raise DeployFailure('HTTPS_SMOKE_STATUS')
         return body
