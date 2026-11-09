@@ -55,7 +55,7 @@ export interface AccountsProps {
   reservedMinorByAccount: Readonly<Record<string, number>> | null;
   status: 'loading' | 'ready' | 'offline' | 'conflict' | 'error' | 'locked';
   writable: boolean;
-  /** Changes only after the caller confirms the ambiguous command's receipt and reloads a verified snapshot. */
+  /** Supplied only after the caller verifies the ambiguous mutation's receipt and snapshot. */
   reconciliationToken?: string | null;
   onBack: () => void;
   onRefresh: () => void;
@@ -112,7 +112,9 @@ export function Accounts({
   const inFlight = useRef(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const [uncertain, setUncertain] = useState(false);
-  const uncertainAtFailure = useRef<{ token: string | null; profileId: string | null } | null>(null);
+  const uncertainAtFailure = useRef<{ token: string | null; profileId: string | null } | null>(
+    null,
+  );
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const derived = useMemo(() => {
@@ -209,7 +211,10 @@ export function Accounts({
       onRefresh();
     } catch {
       // A timeout can occur after commit. Do not retry with another mutation key.
-      uncertainAtFailure.current = { token: reconciliationToken ?? null, profileId: activeProfileId };
+      uncertainAtFailure.current = {
+        token: reconciliationToken ?? null,
+        profileId: activeProfileId,
+      };
       setUncertain(true);
       setFeedback('Статус операции не подтверждён. Проверьте состояние на сервере перед повтором.');
     } finally {
