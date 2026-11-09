@@ -802,6 +802,79 @@ class ReleaseContracts(unittest.TestCase):
             self.assertGreater(diagnosis[3], 0)
             self.assertEqual(diagnosis[4], "OTHER")
 
+    def test_public_oauth_smoke_uses_verified_caddy_8444_and_pinned_ca(self):
+        answer = b'{"enabled":true,"providers":["google","yandex","vk","telegram"]}\n200'
+        with mock.patch.object(
+            release, "verified_origin_ca", return_value=release.ORIGIN_CA
+        ) as ca, mock.patch.object(
+            release, "command", return_value=answer
+        ) as transport:
+            self.assertEqual(release.public_oauth_providers_over_verified_origin(),
+                             answer.partition(b"\n")[0])
+        ca.assert_called_once()
+        args = transport.call_args.args[0]
+        self.assertEqual(args[0], "/usr/bin/curl")
+        self.assertEqual(args[args.index("--resolve") + 1],
+                         "fin-horizon.mikemoore.top:8444:127.0.0.1")
+        self.assertEqual(args[args.index("--cacert") + 1], str(release.ORIGIN_CA))
+        self.assertEqual(args[-1],
+                         "https://fin-horizon.mikemoore.top:8444/api/auth/providers")
+        self.assertNotIn("--insecure", args)
+        self.assertNotIn("-k", args)
+        self.assertIn("--noproxy", args)
+        self.assertEqual(transport.call_args.kwargs["failure_code"],
+                         "PUBLIC_CADDY_HTTPS_FAILED")
+
+    def test_public_oauth_rejects_http_error_and_tls_failure(self):
+        with mock.patch.object(release, "verified_origin_ca",
+                               return_value=release.ORIGIN_CA):
+            for result in (
+                b'{"enabled":true}\n403',
+                b'{"enabled":true}\n302',
+                b'{"enabled":true}',
+                b'\n200',
+            ):
+                with self.subTest(result=result), mock.patch.object(
+                    release, "command", return_value=result
+                ), self.assertRaisesRegex(release.Gate,
+                                          "PUBLIC_CADDY_HTTPS_STATUS"):
+                    release.public_oauth_providers_over_verified_origin()
+            with mock.patch.object(
+                release, "command",
+                side_effect=release.Gate("PUBLIC_CADDY_HTTPS_FAILED"),
+            ), self.assertRaisesRegex(release.Gate, "PUBLIC_CADDY_HTTPS_FAILED"):
+                release.public_oauth_providers_over_verified_origin()
+
+    def test_cloudflare_origin_ca_untrusted_file_fails_closed(self):
+        import hashlib
+        import stat
+        with tempfile.TemporaryDirectory() as temp:
+            file = Path(temp) / "financial-horizon" / "certs" / "root.pem"
+            file.parent.mkdir(parents=True)
+            file.write_bytes(b"test-pinned-origin-ca")
+            digest = hashlib.sha256(file.read_bytes()).hexdigest()
+            directory = SimpleNamespace(st_mode=stat.S_IFDIR | 0o755, st_uid=0)
+            regular = SimpleNamespace(st_mode=stat.S_IFREG | 0o644, st_uid=0,
+                                      st_size=file.stat().st_size)
+            def safe_metadata(path):
+                return regular if path == file else directory
+            with mock.patch.object(release, "ORIGIN_CA", file), \
+                 mock.patch.object(release, "ORIGIN_CA_SHA256", digest), \
+                 mock.patch.object(Path, "lstat", autospec=True,
+                                   side_effect=safe_metadata):
+                self.assertEqual(release.verified_origin_ca(), file)
+                with mock.patch.object(release, "ORIGIN_CA_SHA256", "0" * 64), \
+                     self.assertRaisesRegex(release.Gate, "ORIGIN_CA_HASH_MISMATCH"):
+                    release.verified_origin_ca()
+                unsafe = SimpleNamespace(st_mode=stat.S_IFREG | 0o666,
+                                         st_uid=0, st_size=file.stat().st_size)
+                def unsafe_metadata(path):
+                    return unsafe if path == file else directory
+                with mock.patch.object(Path, "lstat", autospec=True,
+                                       side_effect=unsafe_metadata), \
+                     self.assertRaisesRegex(release.Gate, "ORIGIN_CA_FILE_UNSAFE"):
+                    release.verified_origin_ca()
+
     def test_one_command_without_apply_only_checks_preflight(self):
         with mock.patch.object(release, "preflight", return_value=None) as check, \
              mock.patch.object(release, "rollout") as deployed, \
