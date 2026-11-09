@@ -350,6 +350,37 @@ class ReleaseContracts(unittest.TestCase):
         with self.assertRaises(release.Gate):
             release.systemd_oauth_dropin(modules, "unsafe path with whitespace")
 
+    def test_service_user_source_access_preflight_never_starts_backend(self):
+        source = Path("/opt/financial-horizon-auth/releases/" + SHA + "/backend")
+        python = Path("/opt/financial-horizon-auth/venv/bin/python")
+        env = {"PYTHONPATH": str(source) + ":/tmp/site"}
+        calls = []
+
+        def fake_command(args, **kwargs):
+            calls.append((args, kwargs))
+            if args[:4] == ["systemctl", "show", "--value", "-p"]:
+                return b"fh-email-auth\n"
+            return b""
+
+        with mock.patch.object(release, "command", side_effect=fake_command):
+            release.verify_service_user_module_access(python, source, env)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            calls[1][0][:5],
+            ["runuser", "-u", "fh-email-auth", "--", str(python)]
+        )
+        self.assertIs(calls[1][1]["env"], env)
+        self.assertEqual(calls[1][1]["failure_code"],
+                         "STAGED_AUTH_UNREADABLE_BY_SERVICE_USER")
+
+    def test_service_user_source_access_rejects_unconfigured_user(self):
+        with mock.patch.object(release, "command", return_value=b""):
+            with self.assertRaises(release.Gate) as error:
+                release.verify_service_user_module_access(
+                    Path("/usr/bin/python"), Path("/tmp/source"), {}
+                )
+        self.assertEqual(error.exception.code, "SERVICE_USER_INVALID")
+
     def test_missing_staged_module_blocks_deployment(self):
         with tempfile.TemporaryDirectory() as root:
             stage = Path(root)
