@@ -15,8 +15,12 @@ const eventKeys = ['revision', 'ordinal', 'kind', 'entity_id', 'entity_revision'
 // a client-side surrogate for the server's Python canonical request digest.
 function jsonEqual(a, b, depth = 0) {
   if (depth > 16 || a === undefined || b === undefined) return false;
-  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') {
-    return a === b && (typeof a !== 'number' || Number.isFinite(a));
+  if (a === null || b === null) return a === null && b === null;
+  if (typeof a !== 'object' || typeof b !== 'object') {
+    if (typeof a !== typeof b) return false;
+    if (typeof a === 'number') return Number.isFinite(a) && a === b;
+    if (typeof a === 'string' || typeof a === 'boolean') return a === b;
+    return false; // functions, BigInt and symbols are never JSON values
   }
   if (Array.isArray(a) !== Array.isArray(b)) return false;
   if (Array.isArray(a)) {
