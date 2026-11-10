@@ -842,3 +842,40 @@ test('indexed reconciliation detects both directions of transfers across bank st
   }, []);
   assert.deepEqual(sameFile.rows.map(x => x.status), ['ready', 'possible-duplicate']);
 });
+
+test('legacy movements lacking fingerprints are flagged for explicit review, not silently imported', async () => {
+  const { preview } = await previewOf(base +
+    '07.11.2026;-100,00;Кофе;Основной;;расход;Питание;\\n'.replace('\\n', '\n'));
+  const operation = operationAt(preview, 0);
+  assert.ok(operation);
+  const saved = {
+    id: 'older-manual-movement',
+    accountId: operation.accountId,
+    date: operation.date,
+    amountCents: operation.amountCents,
+    kind: operation.kind,
+    description: '  кОфЕ  ',
+  };
+  const matched = reconcileBankStatement(preview, [saved]);
+  assert.equal(matched.ready, 0);
+  assert.equal(matched.possibleDuplicates, 1);
+  assert.deepEqual(matched.rows[0].existingIds, ['older-manual-movement']);
+  await assert.rejects(
+    draftBankImportBatch(matched, [operation.sourceKey]),
+    /подтверждения/,
+  );
+  const confirmed = await draftBankImportBatch(
+    matched, [operation.sourceKey], [operation.sourceKey],
+  );
+  assert.equal(confirmed.expectedOperationCount, 1);
+  // Similar-looking entries with different financial values are not matches.
+  const differentAmount = reconcileBankStatement(preview, [
+    { ...saved, amountCents: saved.amountCents + 100 },
+  ]);
+  assert.equal(differentAmount.ready, 1);
+  // A stored unrelated fingerprint must not be interpreted as a legacy match.
+  const differentFingerprint = reconcileBankStatement(preview, [
+    { ...saved, fingerprint: 'unrelated-fingerprint' },
+  ]);
+  assert.equal(differentFingerprint.ready, 1);
+});
