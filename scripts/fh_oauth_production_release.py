@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Single guarded OAuth #9 production rollout. Run only on the real FH VPS.
 
-Requires a pinned, CI-passing main SHA. No Telegram or public registration.
+Requires a pinned, CI-passing main SHA. No public email registration.
 Makes NO changes unless every required production layout invariant holds.
 On failed rollout restores links, Caddy and OAuth configuration, never blindly
 restores an old SQLite snapshot (which could lose new sessions/accounts).
@@ -9,6 +9,7 @@ restores an old SQLite snapshot (which could lose new sessions/accounts).
 from __future__ import annotations
 
 import argparse
+import hashlib
 from contextlib import closing
 import http.client
 import io
@@ -28,6 +29,9 @@ from urllib.request import urlopen
 from urllib.parse import quote
 
 HOST = "fin-horizon.mikemoore.top"
+ORIGIN_PORT = 8444  # Verified Caddy; :443 is Xray on the live host
+ORIGIN_CA = Path("/usr/local/lib/financial-horizon/certs/cloudflare-origin-rsa-root.pem")
+ORIGIN_CA_SHA256 = "91a8a5567efa6bf941162aa806b3ba476aaddf7867640e53053b35fb225a5dae"
 SERVICE = "fh-email-auth.service"
 BACKEND_ROOT = Path("/opt/financial-horizon-auth")
 STATIC_ROOT = Path("/srv/www/fin-horizon")
@@ -38,9 +42,9 @@ CADDY_MAIN = Path("/etc/caddy/Caddyfile")
 BACKUPS = Path("/var/backups/financial-horizon")
 DROPIN = Path("/etc/systemd/system/fh-email-auth.service.d/70-oauth.conf")
 CANARY_DB = Path("/var/lib/financial-horizon/oauth-canary/auth.sqlite3")
-ALLOWED = {"FH_GOOGLE_OAUTH_ENABLED", "FH_YANDEX_OAUTH_ENABLED", "FH_VK_OAUTH_ENABLED"}
-FLAGS = {"FH_ENABLE_CLOUD_AUTH", "FH_TELEGRAM_OAUTH_ENABLED", *ALLOWED}
-PROVIDERS = ["google", "yandex", "vk"]
+ALLOWED = {"FH_GOOGLE_OAUTH_ENABLED", "FH_YANDEX_OAUTH_ENABLED", "FH_VK_OAUTH_ENABLED", "FH_TELEGRAM_OAUTH_ENABLED"}
+FLAGS = {"FH_ENABLE_CLOUD_AUTH", *ALLOWED}
+PROVIDERS = ["google", "yandex", "vk", "telegram"]
 USER_COLUMNS = ("id", "email", "password_hash", "verified_at",
                 "password_changed_at", "disabled", "created_at")
 
@@ -53,9 +57,21 @@ class Gate(Exception):
 
 def command(args: list[str], *, timeout: int = 1200, cwd: Path | None = None,
             env: dict[str, str] | None = None,
-            failure_code: str | None = None) -> bytes:
+            failure_code: str | None = None,
+            run_as: tuple[int, int] | None = None) -> bytes:
+    # Native POSIX privilege drop avoids reliance on runuser, which is not
+    # installed on every production image. Never silently run service checks
+    # with root privileges when dropping to the systemd identity is required.
+    identity = {}
+    if run_as is not None:
+        uid, gid = run_as
+        if (os.geteuid() != 0 or type(uid) is not int or type(gid) is not int
+                or uid <= 0 or gid <= 0):
+            raise Gate("SERVICE_IDENTITY_UNSAFE")
+        identity = {"user": uid, "group": gid, "extra_groups": []}
     p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                       cwd=cwd, env=env, timeout=timeout, check=False)
+                       cwd=cwd, env=env, timeout=timeout, check=False,
+                       **identity)
     if p.returncode:
         # Never expose unfiltered pip, subprocess or OAuth output: it may hold
         # tokens, local paths or secrets. Stable operation codes identify the step.
@@ -86,7 +102,7 @@ def assignment(raw: bytes, name: str) -> list[str]:
 def replace_flags(raw: bytes) -> bytes:
     data = raw
     for name in sorted(FLAGS):
-        wanted = b"false" if name == "FH_TELEGRAM_OAUTH_ENABLED" else b"true"
+        wanted = b"true"
         old = (name + "=false").encode()
         if data.count(old) != 1 or assignment(data, name) != ["false"]:
             raise Gate("OAUTH_FLAGS_NOT_DISABLED")
@@ -325,11 +341,17 @@ def validate_running_oauth(port: int, expected: list[str]) -> None:
         data = json.loads(body)
     except ValueError as exc:
         raise Gate("OAUTH_PROVIDERS_BAD_JSON") from exc
-    if data != {"enabled": True, "providers": expected}:
+    providers = data.get("providers") if isinstance(data, dict) else None
+    if (not isinstance(data, dict) or data.get("enabled") is not True or
+            not isinstance(providers, list) or
+            len(providers) != len(expected) or
+            any(not isinstance(p, str) for p in providers) or
+            set(providers) != set(expected)):
         raise Gate("OAUTH_PROVIDERS_UNEXPECTED")
+    # Telegram must work as an auth initiation endpoint, not just be listed.
     status, _ = http_probe(port, "/api/auth/oauth/telegram/start")
-    if status != 404:
-        raise Gate("TELEGRAM_NOT_DISABLED")
+    if status != 303:
+        raise Gate("TELEGRAM_START_UNAVAILABLE")
     status, body = http_probe(port, "/api/auth/email/me")
     if status != 200 or b'"authenticated":false' not in body.replace(b" ", b"").lower():
         raise Gate("SESSION_ENDPOINT_UNAVAILABLE")
@@ -358,6 +380,39 @@ def source_archive(sha: str, target: Path) -> Path:
             not (content / "account-oauth.js").is_file():
         raise Gate("SOURCE_CONTENT_MISSING")
     return content
+
+
+def verify_predeployed_four_provider_ui(source: Path, active: Path) -> None:
+    """Re-use the already deployed static CD UI; do not overwrite its PWA."""
+    manifest_file = active / "__release.json"
+    if manifest_file.is_symlink() or not manifest_file.is_file():
+        raise Gate("ACTIVE_STATIC_MANIFEST_MISSING")
+    try:
+        manifest = json.loads(manifest_file.read_bytes()[:8193])
+    except (ValueError, UnicodeError, OSError) as exc:
+        raise Gate("ACTIVE_STATIC_MANIFEST_INVALID") from exc
+    if (not isinstance(manifest, dict) or
+            manifest.get("repository") != "MikeMoore1337/financial-horizon" or
+            manifest.get("source_sha") != active.name or
+            type(manifest.get("run_id")) is not int or manifest["run_id"] <= 0):
+        raise Gate("ACTIVE_STATIC_MANIFEST_MISMATCH")
+    for name in (
+        "account-oauth.js", "auth-ui.js",
+        "assets/providers/google.svg", "assets/providers/yandex.svg", "assets/providers/yandex.webp",
+        "assets/providers/vk.svg", "assets/providers/telegram.svg",
+    ):
+        deployed = active / name
+        upstream = source / name
+        if (deployed.is_symlink() or not deployed.is_file() or
+                upstream.is_symlink() or not upstream.is_file()):
+            raise Gate("ACTIVE_OAUTH_UI_FILES_MISSING")
+        if hashlib.sha256(deployed.read_bytes()).digest() != hashlib.sha256(
+                upstream.read_bytes()).digest():
+            raise Gate("ACTIVE_OAUTH_UI_SOURCE_MISMATCH")
+    for name in ("index.html", "account.html", "sw.js", "manifest.webmanifest"):
+        path = active / name
+        if path.is_symlink() or not path.is_file():
+            raise Gate("ACTIVE_PWA_INCOMPLETE")
 
 
 def stage_backend(source: Path, sha: str, existing: Path) -> Path:
@@ -573,6 +628,8 @@ def verify_service_user_module_access(auth_py: Path, source_root: Path,
         account = pwd.getpwnam(user)
     except KeyError as exc:
         raise Gate("SERVICE_ACCOUNT_NOT_FOUND") from exc
+    if account.pw_uid <= 0 or account.pw_gid <= 0:
+        raise Gate("SERVICE_ACCOUNT_PRIVILEGED")
     if staged_release is not None:
         grant_staged_release_read_access(staged_release, user=user)
     if "PYTHONPATH" not in check_env:
@@ -585,22 +642,22 @@ def verify_service_user_module_access(auth_py: Path, source_root: Path,
     }
     # Inheriting /root or a private operator working directory would produce
     # a false negative even if systemd's configured WorkingDirectory is fine.
-    command(["runuser", "-u", user, "--", "test", "-x", str(source_root)],
-            timeout=15, cwd=source_root, env=service_env,
+    identity = (account.pw_uid, account.pw_gid)
+    command(["test", "-x", str(source_root)],
+            timeout=15, cwd=source_root, env=service_env, run_as=identity,
             failure_code="STAGED_SOURCE_NOT_TRAVERSABLE")
     for package in ("fh_email_auth", "fh_auth"):
-        command(["runuser", "-u", user, "--", "test", "-r",
-                 str(source_root / package / "__init__.py")],
-                timeout=15, cwd=source_root, env=service_env,
+        command(["test", "-r", str(source_root / package / "__init__.py")],
+                timeout=15, cwd=source_root, env=service_env, run_as=identity,
                 failure_code="STAGED_SOURCE_NOT_READABLE")
     check = (
         "import importlib.util,pathlib,sys; root=pathlib.Path(sys.argv[1]); "
         "assert all(pathlib.Path(importlib.util.find_spec(p).origin).parent == "
         "root / p for p in sys.argv[2].split(','))"
     )
-    command(["runuser", "-u", user, "--", str(auth_py), "-c", check,
+    command([str(auth_py), "-c", check,
              str(source_root), "fh_email_auth,fh_auth"],
-            timeout=30, cwd=source_root, env=service_env,
+            timeout=30, cwd=source_root, env=service_env, run_as=identity,
             failure_code="STAGED_AUTH_IMPORT_AS_SERVICE_USER_FAILED")
 
 
@@ -656,6 +713,46 @@ def safe_recent_service_error() -> str:
     return "NO_MATCHING_ERROR"
 
 
+def verified_origin_ca() -> Path:
+    """Root-owned pinned Cloudflare Origin RSA trust anchor, never -k."""
+    try:
+        for directory in (ORIGIN_CA.parent.parent, ORIGIN_CA.parent):
+            info = directory.lstat()
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or
+                    info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)):
+                raise Gate("ORIGIN_CA_DIR_UNSAFE")
+        info = ORIGIN_CA.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or
+                info.st_mode & (stat.S_IWGRP | stat.S_IWOTH) or
+                info.st_size > 8192):
+            raise Gate("ORIGIN_CA_FILE_UNSAFE")
+        content = ORIGIN_CA.read_bytes()
+    except OSError as exc:
+        raise Gate("ORIGIN_CA_UNAVAILABLE") from exc
+    if hashlib.sha256(content).hexdigest() != ORIGIN_CA_SHA256:
+        raise Gate("ORIGIN_CA_HASH_MISMATCH")
+    return ORIGIN_CA
+
+
+def public_oauth_providers_over_verified_origin() -> bytes:
+    """Confirm Caddy really serves the OAuth endpoint with trusted HTTPS."""
+    ca = verified_origin_ca()
+    result = command([
+        "/usr/bin/curl", "--noproxy", "*", "--silent", "--show-error",
+        "--fail", "--connect-timeout", "5", "--max-time", "12",
+        "--max-redirs", "0",
+        "--cacert", str(ca),
+        "--resolve", f"{HOST}:{ORIGIN_PORT}:127.0.0.1",
+        "--header", "Cache-Control: no-store",
+        "--write-out", "\n%{http_code}",
+        f"https://{HOST}:{ORIGIN_PORT}/api/auth/providers",
+    ], timeout=16, failure_code="PUBLIC_CADDY_HTTPS_FAILED")
+    body, marker, status = result.rpartition(b"\n")
+    if not marker or status != b"200" or not 0 < len(body) < 8192:
+        raise Gate("PUBLIC_CADDY_HTTPS_STATUS")
+    return body
+
+
 def preflight(sha: str):
     if os.geteuid() != 0 or not re.fullmatch("[a-f0-9]{40}", sha):
         raise Gate("ROOT_OR_SHA_INVALID")
@@ -699,6 +796,7 @@ def preflight(sha: str):
     caddy = CADDY_SITE.read_text(encoding="utf-8")
     port = proxy_port(args, caddy)
     new_caddy = public_caddy_config(caddy, port)
+    verified_origin_ca()  # Fail before service downtime if CA is absent or unsafe.
     version = command(["node", "--version"]).decode().strip()
     if not re.fullmatch(r"v24\.\d+\.\d+", version):
         raise Gate("NODE_24_REQUIRED")
@@ -734,7 +832,7 @@ def migrate_live_database(source: Path, db: Path) -> bool:
     return True
 
 
-def rollout(sha: str, *, stage_only: bool = False) -> None:
+def rollout(sha: str, *, stage_only: bool = False, backend_only: bool = False) -> None:
     (old_backend, old_static, db, old_env, old_caddy,
      new_caddy, port, auth_py, approved_args) = preflight(sha)
     print("RELEASE_PREFLIGHT=PASS", flush=True)
@@ -742,26 +840,37 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
         source = source_archive(sha, Path(workdir))
         backend_candidate = BACKEND_ROOT / "releases" / sha
         static_candidate = STATIC_ROOT / "releases" / sha
+        if backend_only:
+            verify_predeployed_four_provider_ui(source, old_static)
         if (backend_candidate.exists() or backend_candidate.is_symlink() or
-                static_candidate.exists() or static_candidate.is_symlink()):
+                (not backend_only and
+                 (static_candidate.exists() or static_candidate.is_symlink()))):
             raise Gate("RELEASE_ALREADY_STAGED")
+        stage_step = "COPY_BACKEND"
         try:
             new_backend = stage_backend(source, sha, old_backend)
-            new_static = stage_static(source, sha)
+            stage_step = "BUILD_STATIC"
+            new_static = old_static if backend_only else stage_static(source, sha)
+            stage_step = "CREATE_ISOLATED_PYTHON"
             isolated_site = stage_isolated_python(auth_py, new_backend, source)
+            stage_step = "READ_SERVICE_PROCESS"
             _, _, stage_process_env = running_process()
+            stage_step = "LOCATE_STAGED_MODULES"
             modules_root = staged_modules_root(new_backend)
+            stage_step = "RESOLVE_MODULE_PATH"
             prepared_path = service_python_path(
                 isolated_site, stage_process_env, str(modules_root)
             )
             check_env = os.environ.copy()
             check_env["PYTHONPATH"] = prepared_path
+            stage_step = "CHECK_LEGACY_INTERPRETER"
             command([str(auth_py), "-c",
                      "import fastapi, uvicorn, httpx, pwdlib, joserfc, cryptography"],
                     timeout=30, env=check_env,
                     failure_code="LIVE_PYTHON_WITH_STAGED_DEPS_FAILED")
             # Find specs without running app-level startup or touching SQLite.
             expected = "fh_email_auth,fh_auth"
+            stage_step = "CHECK_NEW_MODULE_IMPORT"
             command([str(auth_py), "-c",
                      "import importlib.util,pathlib,sys; root=pathlib.Path(sys.argv[1]); "
                      "assert all(pathlib.Path(importlib.util.find_spec(p).origin).parent == "
@@ -769,41 +878,56 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
                      str(modules_root), expected],
                     timeout=30, env=check_env,
                     failure_code="NEW_AUTH_SOURCE_IMPORT_MISMATCH")
+            stage_step = "CHECK_SERVICE_USER_ACCESS"
             verify_service_user_module_access(auth_py, modules_root, check_env,
                                               new_backend)
             # Validate the exact runtime used by the new systemd ExecStart.
             # The original interpreter can disappear when the current symlink
             # changes; do not depend on its executable or shebang at runtime.
             runtime_python = new_backend / ".oauth-venv" / "bin" / "python"
+            stage_step = "READ_SERVICE_USER"
             user = command(
                 ["systemctl", "show", "--value", "-p", "User", SERVICE],
                 timeout=12, failure_code="SERVICE_USER_UNAVAILABLE",
             ).decode().strip()
             if not re.fullmatch(r"[a-z_][a-z0-9_-]*", user):
                 raise Gate("SERVICE_USER_INVALID")
+            try:
+                account = pwd.getpwnam(user)
+            except KeyError as exc:
+                raise Gate("SERVICE_ACCOUNT_NOT_FOUND") from exc
+            if account.pw_uid <= 0 or account.pw_gid <= 0:
+                raise Gate("SERVICE_ACCOUNT_PRIVILEGED")
             service_env = {
                 "PATH": "/usr/local/bin:/usr/bin:/bin",
                 "PYTHONPATH": prepared_path,
                 "PYTHONNOUSERSITE": "1",
             }
+            stage_step = "CHECK_PRIVATE_RUNTIME"
             command(
-                ["runuser", "-u", user, "--", str(runtime_python), "-c",
+                [str(runtime_python), "-c",
                  "import uvicorn,fastapi,fh_email_auth,fh_auth"],
                 cwd=modules_root, env=service_env, timeout=30,
+                run_as=(account.pw_uid, account.pw_gid),
                 failure_code="NEW_AUTH_RUNTIME_UNREADABLE_BY_SERVICE_USER",
             )
+            stage_step = "BUILD_SYSTEMD_DROPIN"
             dropin_content = systemd_oauth_dropin(
                 modules_root, prepared_path, runtime_python, approved_args,
             )
+            stage_step = "COMPILE_BACKEND"
             command([sys.executable, "-m", "compileall", "-q", str(new_backend)],
                     timeout=45, failure_code="BACKEND_COMPILE_FAILED")
         except Exception:
+            print("FAILED_STAGING_STEP=" + stage_step, flush=True)
             # Only delete this run's unactivated candidates, never the
             # symlinked live release or data; make failed staging retry-safe.
             try:
                 if (current_release(BACKEND_ROOT) == old_backend and
                         current_release(STATIC_ROOT) == old_static):
-                    for candidate in (backend_candidate, static_candidate):
+                    candidates = ((backend_candidate,) if backend_only else
+                                  (backend_candidate, static_candidate))
+                    for candidate in candidates:
                         if candidate.is_dir() and not candidate.is_symlink():
                             shutil.rmtree(candidate)
                     print("FAILED_STAGING_CLEANED=YES", flush=True)
@@ -830,10 +954,13 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
             if (current_release(BACKEND_ROOT) != old_backend or
                     current_release(STATIC_ROOT) != old_static):
                 raise Gate("STAGE_ONLY_RELEASE_CHANGED")
-            for candidate, parent in (
-                (backend_candidate, BACKEND_ROOT / "releases"),
-                (static_candidate, STATIC_ROOT / "releases"),
-            ):
+            candidates = (
+                ((backend_candidate, BACKEND_ROOT / "releases"),)
+                if backend_only else
+                ((backend_candidate, BACKEND_ROOT / "releases"),
+                 (static_candidate, STATIC_ROOT / "releases"))
+            )
+            for candidate, parent in candidates:
                 if (candidate.is_symlink() or
                         candidate.parent.resolve(strict=True) != parent.resolve(strict=True) or
                         not candidate.is_dir()):
@@ -889,25 +1016,30 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
             atomic_file(CADDY_SITE, new_caddy.encode("utf-8"), None)
             command(["caddy", "validate", "--config", str(CADDY_MAIN)], timeout=30)
             command(["systemctl", "reload", "caddy.service"], timeout=30)
-            switch_release(STATIC_ROOT, new_static)
+            if not backend_only:
+                switch_release(STATIC_ROOT, new_static)
             validate_running_oauth(port, PROVIDERS)
-            # HTTPS origin HTTP response must actually reach production auth.
-            data = command([
-                "curl", "--fail", "--silent", "--show-error",
-                "--max-time", "12", "--resolve", HOST + ":443:127.0.0.1",
-                "https://" + HOST + "/api/auth/providers",
-            ], timeout=16)
+            # Caddy is on :8444; :443 is Xray on this VPS. Verify both
+            # hostname and trust chain with the pinned Cloudflare Origin RSA CA.
+            data = public_oauth_providers_over_verified_origin()
             try:
                 exposed = json.loads(data)
             except ValueError as exc:
                 raise Gate("PUBLIC_CADDY_BAD_JSON") from exc
-            if exposed != {"enabled": True, "providers": PROVIDERS}:
+            exposed_providers = exposed.get("providers") if isinstance(exposed, dict) else None
+            if (not isinstance(exposed, dict) or exposed.get("enabled") is not True or
+                    not isinstance(exposed_providers, list) or
+                    len(exposed_providers) != len(PROVIDERS) or
+                    any(not isinstance(p, str) for p in exposed_providers) or
+                    set(exposed_providers) != set(PROVIDERS)):
                 raise Gate("PUBLIC_CADDY_PROVIDER_MISMATCH")
             print("PUBLIC_CADDY_PROVIDERS=PASS", flush=True)
             print("PRODUCTION_OAUTH=DEPLOYED", flush=True)
             print("DEPLOYED_COMMIT=" + sha, flush=True)
-            print("PUBLIC_PROVIDERS=google,yandex,vk", flush=True)
-            print("TELEGRAM=DISABLED", flush=True)
+            print("PUBLIC_PROVIDERS=google,yandex,vk,telegram", flush=True)
+            print("STATIC_FRONTEND_REUSED=" + ("YES" if backend_only else "NO"),
+                  flush=True)
+            print("TELEGRAM=ENABLED", flush=True)
             print("EMAIL_REGISTRATION_GATE=UNCHANGED", flush=True)
             print("DATABASE_MIGRATED=" +
                   ("YES" if schema_changed_now else "ALREADY_READY"), flush=True)
@@ -923,7 +1055,8 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
                     if DROPIN.exists():
                         DROPIN.unlink()
                     switch_release(BACKEND_ROOT, old_backend)
-                    switch_release(STATIC_ROOT, old_static)
+                    if not backend_only:
+                        switch_release(STATIC_ROOT, old_static)
                     command(["systemctl", "daemon-reload"], timeout=25)
                     command(["systemctl", "restart", SERVICE], timeout=40)
                     command(["caddy", "validate", "--config", str(CADDY_MAIN)], timeout=30)
@@ -936,7 +1069,7 @@ def rollout(sha: str, *, stage_only: bool = False) -> None:
             raise
 
 
-def safe_runtime_diagnostics(exc: Exception) -> tuple[str, str]:
+def safe_runtime_diagnostics(exc: Exception) -> tuple[str, str, int, int, str]:
     """Report only fixed category and source-function name, never exception text."""
     if isinstance(exc, FileNotFoundError):
         category = "OS_FILE_NOT_FOUND"
@@ -967,17 +1100,40 @@ def safe_runtime_diagnostics(exc: Exception) -> tuple[str, str]:
         "safe_uvicorn_argv", "systemd_oauth_dropin", "preflight",
         "rollout", "save_private_release_receipt", "atomic_file",
         "migrate_live_database", "validate_running_oauth",
-        "current_release", "switch_release",
+        "current_release", "switch_release", "command",
+        "running_process", "find_auth_python", "ensure_supported_systemd_launch",
+        "safe_runtime_diagnostics",
     }
     found = "UNKNOWN"
+    inner_line = 0
+    rollout_line = 0
     trace = exc.__traceback__
     while trace is not None:
         frame = trace.tb_frame
-        if (frame.f_code.co_filename == __file__ and
-                frame.f_code.co_name in stages):
-            found = frame.f_code.co_name.upper()
+        if frame.f_code.co_filename == __file__:
+            if frame.f_code.co_name == "rollout":
+                rollout_line = trace.tb_lineno
+            if frame.f_code.co_name in stages:
+                # Traceback walks from outermost to innermost: keep the last
+                # allowlisted local frame, never the original path/message.
+                found = frame.f_code.co_name.upper()
+                inner_line = trace.tb_lineno
         trace = trace.tb_next
-    return category, found
+    target = "NOT_APPLICABLE"
+    if isinstance(exc, FileNotFoundError):
+        target = "OTHER"
+        filename = exc.filename
+        if isinstance(filename, str):
+            base = Path(filename).name
+            if base in {"runuser", "systemctl", "npm", "node", "uv", "test"}:
+                target = "COMMAND_" + base.upper()
+            elif base in {"python", "python3", "python3.12", "uvicorn"}:
+                target = "PYTHON_EXECUTABLE"
+            elif filename.startswith(str(BACKEND_ROOT / "releases") + "/"):
+                target = "STAGED_BACKEND_RESOURCE"
+            elif filename.startswith(str(STATIC_ROOT / "releases") + "/"):
+                target = "STAGED_STATIC_RESOURCE"
+    return category, found, inner_line, rollout_line, target
 
 
 def main() -> int:
@@ -986,13 +1142,17 @@ def main() -> int:
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--apply", action="store_true")
     action.add_argument("--stage-only", action="store_true")
+    parser.add_argument("--backend-only", action="store_true",
+                        help="Re-use vetted live static UI without changing PWA")
     args = parser.parse_args()
     try:
         if args.apply:
-            rollout(args.sha)
+            rollout(args.sha, backend_only=args.backend_only)
         elif args.stage_only:
-            rollout(args.sha, stage_only=True)
+            rollout(args.sha, stage_only=True, backend_only=args.backend_only)
         else:
+            if args.backend_only:
+                raise Gate("BACKEND_ONLY_ACTION_REQUIRED")
             preflight(args.sha)
             print("RELEASE_PREFLIGHT=PASS")
             print("DEPLOYMENT_NOT_STARTED=YES")
@@ -1002,9 +1162,12 @@ def main() -> int:
         print("FAILURE_CODE=" + exc.code)
         return 1
     except Exception as exc:
-        category, stage = safe_runtime_diagnostics(exc)
+        category, stage, inner_line, rollout_line, target = safe_runtime_diagnostics(exc)
         print("SAFE_EXCEPTION_CATEGORY=" + category)
         print("SAFE_EXCEPTION_STAGE=" + stage)
+        print("SAFE_EXCEPTION_LINE=" + str(inner_line))
+        print("SAFE_ROLLOUT_LINE=" + str(rollout_line))
+        print("SAFE_MISSING_RESOURCE=" + target)
         print("RAW_EXCEPTION_PRINTED=NO")
         print("RELEASE_STATUS=FAILED")
         print("FAILURE_CODE=UNEXPECTED_RUNTIME")
