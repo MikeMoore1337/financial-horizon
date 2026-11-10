@@ -119,6 +119,15 @@ export function toBudgetOperations(
         && (typeof assignment.categoryId !== 'string' || !assignment.categoryId.trim()))) {
       fail('invalid or duplicate category assignment');
     }
+    // Category assignments are defined only for actual spending in #35.
+    // A restored or remote snapshot must not silently attach a category to
+    // a transfer, income, adjustment, or incoming linked payment.
+    const target = transactions.get(assignment.transactionId)!;
+    const targetPostings = postings.get(assignment.transactionId) ?? [];
+    if (target.kind !== 'expense' && !(target.kind === 'payment'
+      && targetPostings.length === 1 && targetPostings[0]!.signedMinor < 0)) {
+      fail('category assignment requires an expense or debit payment');
+    }
     categories.set(assignment.transactionId, assignment.categoryId);
   }
 
