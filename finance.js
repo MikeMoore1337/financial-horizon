@@ -121,8 +121,9 @@ export function emptyState() {return {version:2,revision:0,entries:[],loans:[],s
 export const PAYMENT_METHODS_VERSION=1;
 export const MAX_PAYMENT_METHODS=6;
 export const MAX_QR_BYTES=192*1024;
+export const MAX_QR_TOTAL_CHARS=2_000_000; // keep QR attachments compatible with 8 MB encrypted backups
 const PAYMENT_TYPES=new Set(['payment_url','sbp_link','qr_image','requisites','instructions']);
-const SECRET_LABEL=/\b(?:password|passphrase|cvv|cvc|pin|otp|secret|access[_-]?token|api[_-]?key)\b|парол[ьяеи]|секрет|токен|пин.код/i;
+const SECRET_LABEL=/\b(?:password|passphrase|cvv|cvc|pin|otp|secret|token|access[_-]?token|api[_-]?key|authorization)\b|парол[ьяеи]|секрет|токен|пин.код/i;
 
 export function safePaymentUrl(value){
  if(typeof value!=='string'||!value||value.length>2048||/[\s\u0000-\u001f\u007f]/.test(value))
@@ -162,6 +163,7 @@ export function validatePaymentMethods(methods,{strict=false}={}){
      typeof m.label!=='string'||!m.label.trim()||m.label.length>80||
      typeof m.primary!=='boolean')throw Error('Повреждены способы оплаты');
   ids.add(m.id);if(m.primary)primaries++;
+  if(strict&&SECRET_LABEL.test(m.label))throw Error('Не сохраняйте пароли, CVV, токены и другие секреты');
   if(m.type==='qr_image'){
    if(m.imageData!==undefined&&(typeof m.imageData!=='string'||m.imageData.length>Math.ceil(MAX_QR_BYTES/3)*4+64))
     throw Error('Повреждён размер QR-изображения');
@@ -171,7 +173,7 @@ export function validatePaymentMethods(methods,{strict=false}={}){
     throw Error('Повреждены сведения для оплаты');
    if(strict){
     if(!m.value.trim())throw Error('Заполните сведения для оплаты');
-    if(SECRET_LABEL.test(m.value)||SECRET_LABEL.test(m.label))
+    if(SECRET_LABEL.test(m.value))
      throw Error('Не сохраняйте пароли, CVV, токены и другие секреты');
     if(m.type==='payment_url'||m.type==='sbp_link')safePaymentUrl(m.value);
    }
@@ -241,7 +243,9 @@ export function validateState(s){
    if(x[field]!==undefined&&(!Number.isSafeInteger(x[field])||x[field]<0))
     throw Error('Неверные суммы в финансовых данных');
  }
+ let qrChars=0;
  for(const entry of s.entries){
+  for(const method of entry.paymentMethods||[])if(method.type==='qr_image')qrChars+=method.imageData?.length||0;
   if(entry.paymentMethodsVersion!==undefined&&entry.paymentMethodsVersion!==PAYMENT_METHODS_VERSION)
    throw Error('Неизвестная версия способов оплаты');
   validatePaymentMethods(entry.paymentMethods);
@@ -249,6 +253,7 @@ export function validateState(s){
      (entry.kind!=='expense'||!['monthly','yearly'].includes(entry.recurrence)))
    throw Error('Способы оплаты привязаны к нерегулярной записи');
  }
+ if(qrChars>MAX_QR_TOTAL_CHARS)throw Error('Превышен общий лимит QR-изображений для резервного копирования');
  for(const loan of s.loans){
   if(loan.schedule!==undefined&&!Array.isArray(loan.schedule))
    throw Error('Повреждён график кредита');
