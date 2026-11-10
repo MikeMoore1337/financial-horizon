@@ -399,6 +399,29 @@ async function handleAction(button){
  if(type==='new-entry'){openEntry(null,button.dataset.kind||'expense');return;}
  if(type==='new-loan'){openLoan();return;}
  if(type==='edit-entry'){openEntry(id);return;}
+ if(type==='open-payment-methods'){openPaymentMethods();return;}
+ if(type==='close-payment-methods'){$('#payment-methods-dialog').close();return;}
+ if(type==='reset-payment-method'){resetPaymentMethodForm();return;}
+ if(type==='edit-payment-method'){editPaymentMethod(id);return;}
+ if(type==='primary-payment-method'){
+  const form=$('#payment-method-form'),entry=currentPaymentEntry();
+  await mutate(s=>{
+   choosePrimaryPaymentMethod(s,entry.id,id);
+   audit(s,'payment-method-primary','Изменён основной способ для записи '+entry.id);
+  },'Основной способ изменён',revisionForForm(form));
+  stampFormRevision(form);stampFormRevision($('#entry-form'));
+  renderPaymentMethods();syncEntryPaymentAccess();return;
+ }
+ if(type==='delete-payment-method'){
+  const form=$('#payment-method-form'),entry=currentPaymentEntry(),revision=revisionForForm(form);
+  if(!await requireConfirm('Удалить способ оплаты?','Будет удалён только способ оплаты. Расход, график и фактические платежи сохранятся.'))return;
+  await mutate(s=>{
+   deletePaymentMethod(s,entry.id,id);
+   audit(s,'payment-method-delete','Удалён способ оплаты для записи '+entry.id);
+  },'Способ оплаты удалён',revision);
+  stampFormRevision(form);stampFormRevision($('#entry-form'));
+  resetPaymentMethodForm();renderPaymentMethods();syncEntryPaymentAccess();return;
+ }
  if(type==='edit-loan'){openLoan(id);return;}
  if(type==='pay'){openPayment(id);return;}
  if(type==='edit-payment'){const p=state.loanPayments.find(x=>x.id===id&&!x.voidedAt);if(p)openPayment(p.loanId,id);return;}
@@ -516,6 +539,8 @@ async function saveEntry(form){
  const kind=formValue(form,'kind'),date=formValue(form,'date'),recurrence=formValue(form,'recurrence'),category=formValue(form,'category');
  if(!title||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!['income','expense'].includes(kind)||!['monthly','once','yearly'].includes(recurrence)||amountCents<1)throw Error('Заполните корректные поля записи');
  if(!state.categories.includes(category))throw Error('Категория не найдена');
+ if(state.entries.find(e=>e.id===id)?.paymentMethods?.length&&(kind!=='expense'||recurrence==='once'))
+  throw Error('Сначала удалите способы оплаты, затем измените тип или периодичность расхода');
  await mutate(s=>applyEntry(s,{id,title,amountCents,kind,date,recurrence,category}),id?'Запись обновлена':'Запись добавлена',revisionForForm(form));
  $('#entry-dialog').close();
 }
@@ -567,6 +592,7 @@ async function onFormSubmit(event){
  event.preventDefault();if(busy)return;
  try{
   if(form.getAttribute('id')==='entry-form')await saveEntry(form);
+  if(form.getAttribute('id')==='payment-method-form')await savePaymentMethodForm(form);
   if(form.getAttribute('id')==='loan-form')await saveLoan(form);
   if(form.getAttribute('id')==='payment-form')await savePayment(form);
   if(form.getAttribute('id')==='settlement-form')await saveSettlement(form);
@@ -598,6 +624,8 @@ function bindEvents(){
  document.addEventListener('submit',onFormSubmit);
  $('#theme-toggle').addEventListener('click',()=>{themeSet(document.body.dataset.theme==='dark'?'light':'dark');render();});
  $('#top-add').addEventListener('click',()=>openEntry());
+ $('#entry-form').addEventListener('change',syncEntryPaymentAccess);
+ $('#payment-method-type').addEventListener('change',updateMethodType);
  $('#payment-form').addEventListener('input',updatePaymentPreview);
  $('#payment-form').addEventListener('change',updatePaymentPreview);
  $('#payment-loan').addEventListener('change',()=>{const l=state.loans.find(x=>x.id===$('#payment-loan').value);if(l){$('#payment-form').elements.amount.value=numberInput(loanLedger(l,state.loanPayments).monthlyCents);updatePaymentPreview();}});
