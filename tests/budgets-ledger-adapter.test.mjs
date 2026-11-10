@@ -141,3 +141,28 @@ test('payment link must carry exactly one valid fact key, even with malformed se
       paymentLinks: [{ profileId, ...link }] }), /ambiguous payment link|invalid payment fact ID/);
   }
 });
+
+
+test('non-spending operations cannot receive budget category assignments', () => {
+  const ledger = fixture();
+  for (const transactionId of ['transfer', 'income', 'reservation']) {
+    assert.throws(
+      () => toBudgetOperations(ledger, [assignment(transactionId, 'food')]),
+      /category assignment requires an expense or debit payment/,
+      transactionId,
+    );
+  }
+  const incoming = snapshot(
+    [tx('incoming', 'payment')],
+    [post('incoming', 'bank-a', 15_000)],
+    [{ profileId, transactionId: 'incoming', settlementId: 'income-fact' }],
+  );
+  assert.throws(
+    () => toBudgetOperations(incoming, [assignment('incoming', 'food')]),
+    /category assignment requires an expense or debit payment/,
+  );
+  // Valid expense and debit linked payment remain eligible for categories.
+  assert.equal(toBudgetOperations(ledger, [
+    assignment('expense', 'food'), assignment('loan', 'food'),
+  ]).filter(op => op.categoryId === 'food').length, 2);
+});
