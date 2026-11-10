@@ -117,6 +117,112 @@ export function createSampleState() {
  };
 }
 export function emptyState() {return {version:2,revision:0,entries:[],loans:[],settlements:[],loanPayments:[],categories:['Жильё','Кредиты','Работа','Связь','Покупки','Подписки','Здоровье','Другое'],audit:[],settings:{currency:'RUB'}};}
+
+export const PAYMENT_METHODS_VERSION=1;
+export const MAX_PAYMENT_METHODS=6;
+export const MAX_QR_BYTES=192*1024;
+const PAYMENT_TYPES=new Set(['payment_url','sbp_link','qr_image','requisites','instructions']);
+const SECRET_LABEL=/\b(?:password|passphrase|cvv|cvc|pin|otp|secret|access[_-]?token|api[_-]?key)\b|парол[ьяеи]|секрет|токен|пин.код/i;
+
+export function safePaymentUrl(value){
+ if(typeof value!=='string'||!value||value.length>2048||/[\s\u0000-\u001f\u007f]/.test(value))
+  throw Error('Укажите корректную защищённую ссылку HTTPS');
+ let url;
+ try{url=new URL(value);}catch{throw Error('Укажите корректную защищённую ссылку HTTPS');}
+ if(url.protocol!=='https:'||!url.hostname.includes('.')||url.username||url.password||
+    /^(?:localhost|127\.|10\.|192\.168\.|169\.254\.|0\.|::1)/i.test(url.hostname))
+  throw Error('Разрешены только внешние ссылки HTTPS без встроенных учётных данных');
+ if([...url.searchParams.keys()].some(key=>SECRET_LABEL.test(key)))
+  throw Error('Ссылка содержит секретный параметр, который нельзя сохранять');
+ return {href:url.href,hostname:url.hostname};
+}
+
+export function validQrData(data){
+ if(typeof data!=='string'||data.length>Math.ceil(MAX_QR_BYTES/3)*4+64)return false;
+ const match=/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/.exec(data);
+ if(!match||match[2].length%4!==0)return false;
+ try{
+  const prefix=atob(match[2].slice(0,32)),bytes=Array.from(prefix,c=>c.charCodeAt(0));
+  const png=bytes.slice(0,8).join(',')==='137,80,78,71,13,10,26,10';
+  const jpeg=bytes[0]===255&&bytes[1]===216&&bytes[2]===255;
+  const webp=prefix.startsWith('RIFF')&&prefix.slice(8,12)==='WEBP';
+  return (match[1]==='png'&&png)||(match[1]==='jpeg'&&jpeg)||(match[1]==='webp'&&webp);
+ }catch{return false;}
+}
+
+export function validatePaymentMethods(methods,{strict=false}={}){
+ if(methods===undefined)return;
+ if(!Array.isArray(methods)||methods.length>MAX_PAYMENT_METHODS)
+  throw Error('Некорректный список способов оплаты');
+ const ids=new Set();
+ let primaries=0;
+ for(const m of methods){
+  if(!m||typeof m!=='object'||Array.isArray(m)||typeof m.id!=='string'||!m.id||
+     m.id.length>128||ids.has(m.id)||!PAYMENT_TYPES.has(m.type)||
+     typeof m.label!=='string'||!m.label.trim()||m.label.length>80||
+     typeof m.primary!=='boolean')throw Error('Повреждены способы оплаты');
+  ids.add(m.id);if(m.primary)primaries++;
+  if(m.type==='qr_image'){
+   if(m.imageData!==undefined&&(typeof m.imageData!=='string'||m.imageData.length>Math.ceil(MAX_QR_BYTES/3)*4+64))
+    throw Error('Повреждён размер QR-изображения');
+   if(strict&&!validQrData(m.imageData))throw Error('QR-изображение отсутствует или повреждено');
+  }else{
+   if(typeof m.value!=='string'||m.value.length>(m.type==='requisites'?800:m.type==='instructions'?1200:2048))
+    throw Error('Повреждены сведения для оплаты');
+   if(strict){
+    if(!m.value.trim())throw Error('Заполните сведения для оплаты');
+    if(SECRET_LABEL.test(m.value)||SECRET_LABEL.test(m.label))
+     throw Error('Не сохраняйте пароли, CVV, токены и другие секреты');
+    if(m.type==='payment_url'||m.type==='sbp_link')safePaymentUrl(m.value);
+   }
+  }
+ }
+ if(methods.length&&primaries!==1)throw Error('Выберите один основной способ оплаты');
+}
+
+function activeRegularExpense(state,entryId){
+ const entry=state.entries.find(e=>e.id===entryId&&!e.deletedAt);
+ if(!entry||entry.kind!=='expense'||!['monthly','yearly'].includes(entry.recurrence))
+  throw Error('Способы оплаты доступны только для существующего регулярного расхода');
+ return entry;
+}
+export function upsertPaymentMethod(state,entryId,input,{idFactory=()=>crypto.randomUUID()}={}){
+ const entry=activeRegularExpense(state,entryId),methods=[...(entry.paymentMethods||[])];
+ const index=input.id?methods.findIndex(x=>x.id===input.id):-1;
+ if(input.id&&index<0)throw Error('Способ оплаты не найден');
+ if(index<0&&methods.length>=MAX_PAYMENT_METHODS)throw Error('Можно сохранить не более шести способов оплаты');
+ const old=index>=0?methods[index]:null;
+ const method={id:old?.id||idFactory(),type:input.type,label:input.label.trim(),
+  primary:Boolean(input.primary),...(input.type==='qr_image'?{imageData:input.imageData}:{value:input.value?.trim()??''})};
+ validatePaymentMethods([{...method,primary:true}],{strict:true});
+ if(index>=0)methods[index]=method;else methods.push(method);
+ if(method.primary){
+  for(const item of methods)item.primary=item.id===method.id;
+ }else if(old?.primary){
+  const successor=methods.find(x=>x.id!==method.id);
+  if(successor)successor.primary=true;
+  else method.primary=true;
+ }else if(!methods.some(x=>x.primary))methods[0].primary=true;
+ validatePaymentMethods(methods);
+ entry.paymentMethods=methods;entry.paymentMethodsVersion=PAYMENT_METHODS_VERSION;
+ return method.id;
+}
+export function deletePaymentMethod(state,entryId,methodId){
+ const entry=activeRegularExpense(state,entryId),methods=[...(entry.paymentMethods||[])];
+ const index=methods.findIndex(x=>x.id===methodId);if(index<0)throw Error('Способ оплаты не найден');
+ const wasPrimary=methods[index].primary;methods.splice(index,1);
+ if(wasPrimary&&methods.length)methods[0].primary=true;
+ validatePaymentMethods(methods);
+ entry.paymentMethods=methods;entry.paymentMethodsVersion=PAYMENT_METHODS_VERSION;
+}
+export function choosePrimaryPaymentMethod(state,entryId,methodId){
+ const entry=activeRegularExpense(state,entryId),methods=entry.paymentMethods||[];
+ if(!methods.some(x=>x.id===methodId))throw Error('Способ оплаты не найден');
+ for(const method of methods)method.primary=method.id===methodId;
+ validatePaymentMethods(methods);
+ entry.paymentMethodsVersion=PAYMENT_METHODS_VERSION;
+}
+
 export function validateState(s){
  // v1 remains readable for historical IndexedDB records and encrypted backups.
  if(!s || (s.version!==1&&s.version!==2) || !Array.isArray(s.entries) ||
@@ -134,6 +240,14 @@ export function validateState(s){
   for(const field of moneyFields)
    if(x[field]!==undefined&&(!Number.isSafeInteger(x[field])||x[field]<0))
     throw Error('Неверные суммы в финансовых данных');
+ }
+ for(const entry of s.entries){
+  if(entry.paymentMethodsVersion!==undefined&&entry.paymentMethodsVersion!==PAYMENT_METHODS_VERSION)
+   throw Error('Неизвестная версия способов оплаты');
+  validatePaymentMethods(entry.paymentMethods);
+  if(entry.paymentMethods?.length&&
+     (entry.kind!=='expense'||!['monthly','yearly'].includes(entry.recurrence)))
+   throw Error('Способы оплаты привязаны к нерегулярной записи');
  }
  for(const loan of s.loans){
   if(loan.schedule!==undefined&&!Array.isArray(loan.schedule))
