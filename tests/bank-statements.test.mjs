@@ -845,7 +845,7 @@ test('indexed reconciliation detects both directions of transfers across bank st
 
 test('legacy movements lacking fingerprints are flagged for explicit review, not silently imported', async () => {
   const { preview } = await previewOf(base +
-    '07.11.2026;-100,00;Кофе;Основной;;расход;Питание;\\n'.replace('\\n', '\n'));
+    '07.11.2026;-100,00;Кофе;Основной;;расход;Питание;\n');
   const operation = operationAt(preview, 0);
   assert.ok(operation);
   const saved = {
