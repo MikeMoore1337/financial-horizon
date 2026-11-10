@@ -889,7 +889,7 @@ class ReleaseContracts(unittest.TestCase):
                 (path / "assets/providers").mkdir(parents=True)
                 for name in (
                     "account-oauth.js", "auth-ui.js",
-                    "assets/providers/google.svg", "assets/providers/yandex.svg",
+                    "assets/providers/google.svg", "assets/providers/yandex.svg", "assets/providers/yandex.webp",
                     "assets/providers/vk.svg", "assets/providers/telegram.svg",
                     "index.html", "account.html", "sw.js", "manifest.webmanifest",
                 ):
