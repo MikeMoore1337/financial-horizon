@@ -1,4 +1,4 @@
-import {cents,rubles,numberInput,monthKey,monthIndex,shiftMonth,monthLabel,dayInMonth,loanLedger,previewLoanPayment,getMonthEvents,monthTotals,createSampleState,isActive,emptyState,payoffMonths} from './finance.js';
+import {cents,rubles,numberInput,monthKey,monthIndex,shiftMonth,monthLabel,dayInMonth,loanLedger,previewLoanPayment,getMonthEvents,monthTotals,createSampleState,isActive,emptyState,payoffMonths,MAX_QR_BYTES,validQrData,safePaymentUrl,upsertPaymentMethod,deletePaymentMethod,choosePrimaryPaymentMethod} from './finance.js';
 import {readState,updateState,replaceState,askPersistentStorage,storageStatus,selectStateScope,revokeStateScope} from './storage.js?rev=auth-scopes-v18';
 import {encryptBackup,decryptBackup} from './backup.js';
 import {parseSchedule} from './schedule.js';
@@ -199,11 +199,154 @@ function openDialog(sel){
 }
 function formValue(form,name){return form.elements.namedItem(name).value;}
 function fillSelect(el,items,selected){el.innerHTML=items.map(x=>`<option value="${escapeHtml(x.id)}" ${x.id===selected?'selected':''}>${escapeHtml(x.title)}</option>`).join('');}
+
+const paymentTypeNames={
+ payment_url:'Ссылка',qr_image:'QR-код',sbp_link:'СБП',requisites:'Реквизиты',instructions:'Инструкция'
+};
+function syncEntryPaymentAccess(){
+ const form=$('#entry-form'),id=formValue(form,'id');
+ const entry=state.entries.find(e=>e.id===id&&!e.deletedAt);
+ $('#entry-methods-access').hidden=!(entry&&formValue(form,'kind')==='expense'&&
+   ['monthly','yearly'].includes(formValue(form,'recurrence')));
+ $('#entry-method-count').textContent=String(entry?.paymentMethods?.length||0);
+}
+function updateMethodType(){
+ const type=formValue($('#payment-method-form'),'type'),isQr=type==='qr_image';
+ $('#payment-method-text-field').hidden=isQr;
+ $('#payment-method-qr-field').hidden=!isQr;
+ const f=$('#payment-method-form');f.elements.value.required=!isQr;
+ $('#payment-method-value-label').textContent=type==='requisites'?'Реквизиты и назначение':type==='instructions'?'Порядок оплаты':'Адрес HTTPS';
+ f.elements.value.placeholder=type==='sbp_link'?'https://qr.nspk.ru/...':type==='requisites'?'Банк, номер счёта, получатель, назначение':type==='instructions'?'Как оплатить этот расход':'https://example.com/pay';
+}
+function resetPaymentMethodForm(){
+ const form=$('#payment-method-form');form.reset();form.elements.methodId.value='';
+ $('#payment-method-save-title').textContent='Новый способ оплаты';updateMethodType();
+}
+function currentPaymentEntry(){
+ const id=$('#payment-method-form').dataset.entryId;
+ const entry=state?.entries.find(e=>e.id===id&&!e.deletedAt);
+ if(!entry||entry.kind!=='expense'||!['monthly','yearly'].includes(entry.recurrence))
+  throw Error('Регулярный расход недоступен');
+ return entry;
+}
+function renderPaymentMethods(){
+ const entry=currentPaymentEntry(),list=$('#payment-methods-list');list.replaceChildren();
+ const methods=entry.paymentMethods||[];
+ if(!methods.length){
+  const empty=document.createElement('p');empty.className='form-note';
+  empty.textContent='Способы оплаты пока не добавлены.';list.append(empty);
+ }
+ for(const method of methods){
+  const row=document.createElement('div');row.className='archive-row';
+  row.style.alignItems='start';row.style.gap='10px';
+  const info=document.createElement('div');info.style.minWidth='0';
+  const name=document.createElement('strong');name.textContent=method.label;info.append(name);
+  const type=document.createElement('p');type.className='small-hint';
+  type.textContent=paymentTypeNames[method.type]+(method.primary?' · Основной':'');
+  info.append(type);
+  if(method.type==='qr_image'){
+   if(validQrData(method.imageData)){
+    const img=document.createElement('img');img.src=method.imageData;img.alt='Сохранённый QR-код';
+    img.style.cssText='display:block;max-width:160px;max-height:160px;object-fit:contain';
+    img.onerror=()=>{img.remove();const err=document.createElement('p');err.textContent='Изображение повреждено. Замените файл.';info.append(err);};
+    info.append(img);
+   }else{
+    const missing=document.createElement('p');missing.textContent='Изображение отсутствует или повреждено. Измените способ оплаты.';info.append(missing);
+   }
+  }else if(method.type==='payment_url'||method.type==='sbp_link'){
+   try{
+    const link=safePaymentUrl(method.value),anchor=document.createElement('a');
+    anchor.href=link.href;anchor.target='_blank';anchor.rel='noopener noreferrer';anchor.referrerPolicy='no-referrer';
+    anchor.textContent='Открыть: '+link.hostname;info.append(anchor);
+    if(method.type==='sbp_link'){
+     const hint=document.createElement('p');hint.className='small-hint';
+     hint.textContent='Если ссылка СБП не поддерживается устройством, воспользуйтесь QR или реквизитами.';
+     info.append(hint);
+    }
+   }catch{
+    const invalid=document.createElement('p');invalid.textContent='Небезопасная или неподдерживаемая ссылка. Исправьте её.';info.append(invalid);
+   }
+  }else{
+   const value=document.createElement('p');value.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';
+   value.textContent=method.value;info.append(value);
+  }
+  const actions=document.createElement('div');actions.style.cssText='display:flex;gap:6px;flex-wrap:wrap';
+  function addButton(label,action){
+   const button=document.createElement('button');button.type='button';button.className='button-text';
+   button.textContent=label;button.dataset.action=action;button.dataset.id=method.id;
+   actions.append(button);
+  }
+  if(!method.primary)addButton('Основным','primary-payment-method');
+  addButton('Изменить','edit-payment-method');addButton('Удалить','delete-payment-method');
+  row.append(info,actions);list.append(row);
+ }
+}
+function openPaymentMethods(){
+ const entry=state.entries.find(e=>e.id===formValue($('#entry-form'),'id')&&!e.deletedAt);
+ if(!entry||entry.kind!=='expense'||!['monthly','yearly'].includes(entry.recurrence))
+  throw Error('Сначала сохраните регулярный расход');
+ const form=$('#payment-method-form');form.dataset.entryId=entry.id;
+ resetPaymentMethodForm();stampFormRevision(form);
+ $('#payment-methods-heading').textContent='Способы оплаты: '+entry.title;
+ renderPaymentMethods();openDialog('#payment-methods-dialog');
+}
+function editPaymentMethod(id){
+ const method=currentPaymentEntry().paymentMethods?.find(x=>x.id===id);
+ if(!method)throw Error('Способ оплаты не найден');
+ const form=$('#payment-method-form');form.reset();
+ form.elements.methodId.value=method.id;form.elements.type.value=method.type;
+ form.elements.label.value=method.label;form.elements.value.value=method.value||'';
+ form.elements.primary.checked=method.primary;
+ $('#payment-method-save-title').textContent='Изменить способ оплаты';updateMethodType();
+}
+async function localQrImage(file){
+ if(!file||!['image/png','image/jpeg','image/webp'].includes(file.type)||
+    file.size===0||file.size>MAX_QR_BYTES)
+  throw Error('Используйте PNG, JPEG или WebP размером до 192 КБ');
+ const data=await new Promise((resolve,reject)=>{
+  const reader=new FileReader();
+  reader.onload=()=>resolve(reader.result);
+  reader.onerror=()=>reject(Error('Не удалось прочитать QR-изображение'));
+  reader.readAsDataURL(file);
+ });
+ if(!validQrData(data))throw Error('Содержимое QR-файла не соответствует его формату');
+ const blobUrl=URL.createObjectURL(file);
+ try{
+  await new Promise((resolve,reject)=>{
+   const img=new Image();
+   img.onload=()=>{
+    if(!img.naturalWidth||!img.naturalHeight||img.naturalWidth>4096||img.naturalHeight>4096)
+     reject(Error('Недопустимые размеры QR-изображения'));
+    else resolve();
+   };
+   img.onerror=()=>reject(Error('QR-изображение повреждено'));
+   img.src=blobUrl;
+  });
+ }finally{URL.revokeObjectURL(blobUrl);}
+ return data;
+}
+async function savePaymentMethodForm(form){
+ const entry=currentPaymentEntry(),id=formValue(form,'methodId'),type=formValue(form,'type');
+ const original=entry.paymentMethods?.find(m=>m.id===id);
+ const input={id,type,label:formValue(form,'label'),primary:form.elements.primary.checked};
+ if(type==='qr_image'){
+  const file=form.elements.qrFile.files?.[0];
+  input.imageData=file?await localQrImage(file):original?.type==='qr_image'?original.imageData:undefined;
+ }else input.value=formValue(form,'value');
+ if(!form.isConnected)throw Error('Сеанс редактирования завершён');
+ await mutate(s=>{
+  upsertPaymentMethod(s,entry.id,input);
+  audit(s,'payment-method-save','Сохранён способ оплаты для записи '+entry.id);
+ },'Способ оплаты сохранён',revisionForForm(form));
+ stampFormRevision(form);stampFormRevision($('#entry-form'));
+ resetPaymentMethodForm();renderPaymentMethods();syncEntryPaymentAccess();
+}
+
 function openEntry(id=null,kind='expense'){
  const form=$('#entry-form');form.reset();stampFormRevision(form);const record=state.entries.find(x=>x.id===id);$('#entry-heading').textContent=record?'Изменить запись':'Добавить запись';
  form.elements.id.value=id||'';form.elements.title.value=record?.title||'';form.elements.kind.value=record?.kind||kind;form.elements.amount.value=record?numberInput(record.amountCents):'';
  form.elements.date.value=record?.date||today();form.elements.recurrence.value=record?.recurrence||'monthly';
- fillSelect($('#entry-category'),state.categories.map(x=>({id:x,title:x})),record?.category||'Другое');openDialog('#entry-dialog');
+ fillSelect($('#entry-category'),state.categories.map(x=>({id:x,title:x})),record?.category||'Другое');syncEntryPaymentAccess();openDialog('#entry-dialog');
 }
 function openLoan(id=null){
  const form=$('#loan-form');form.reset();stampFormRevision(form);const record=state.loans.find(x=>x.id===id);$('#loan-heading').textContent=record?'Изменить кредит':'Добавить кредит';
