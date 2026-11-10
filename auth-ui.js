@@ -76,7 +76,7 @@ export async function cloudLogout({fetcher=fetch}={}) {
 /** Approved design C - fail-closed OAuth choices below the existing email form. */
 const PROVIDER_ICONS=Object.freeze({
   google:'./assets/providers/google.svg',
-  yandex:'./assets/providers/yandex.svg',
+  yandex:'./assets/providers/yandex.webp',
   vk:'./assets/providers/vk.svg',
   telegram:'./assets/providers/telegram.svg'
 });
