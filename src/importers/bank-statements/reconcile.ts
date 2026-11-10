@@ -39,6 +39,7 @@ export function reconcileBankStatement(
   const bySource = new Map<string, ExistingBankMovement[]>();
   const byBankId = new Map<string, ExistingBankMovement[]>();
   const byFingerprint = new Map<string, ExistingBankMovement[]>();
+  const byLegacyContent = new Map<string, ExistingBankMovement[]>();
   const byTransferAccount = new Map<string, ExistingBankMovement[]>();
   const ledgerOrder = new Map<ExistingBankMovement, number>();
   const bucket = <T>(map: Map<string, T[]>, key: string, item: T) => {
@@ -48,6 +49,12 @@ export function reconcileBankStatement(
   };
   const identity = (...fields: (string | number | null | undefined)[]) =>
     JSON.stringify(fields);
+  // Older manually recorded movements may have no bank-import fingerprint.
+  // Compare their essential fields conservatively, for manual review only.
+  const legacySignature = (m: Pick<ExistingBankMovement,
+    'accountId' | 'date' | 'kind' | 'amountCents' | 'targetAccountId' | 'description'>) =>
+    identity(m.accountId, m.date, m.kind, m.amountCents, m.targetAccountId ?? null,
+      m.description.trim().toLocaleLowerCase('ru-RU'));
   for (const movement of existing) {
     if (movement.voidedAt) continue;
     ledgerOrder.set(movement, ledgerOrder.size);
@@ -56,6 +63,9 @@ export function reconcileBankStatement(
       bucket(byBankId, identity(movement.accountId, movement.externalId), movement);
     }
     if (movement.fingerprint) bucket(byFingerprint, movement.fingerprint, movement);
+    else if (movement.kind !== 'transfer') {
+      bucket(byLegacyContent, legacySignature(movement), movement);
+    }
     if (movement.kind === 'transfer') {
       bucket(byTransferAccount,
         identity(movement.date, movement.amountCents, movement.accountId), movement);
@@ -113,6 +123,11 @@ export function reconcileBankStatement(
     }
 
     const candidates = new Set(byFingerprint.get(op.fingerprint) || []);
+    // Missing legacy fingerprints must not cause an unseen duplicate to be
+    // classified as ready. Such matches are never promoted to exact duplicates.
+    for (const candidate of byLegacyContent.get(legacySignature(op)) || []) {
+      candidates.add(candidate);
+    }
     if (op.kind === 'transfer') {
       for (const accountId of [op.accountId, op.targetAccountId]) {
         if (!accountId) continue;
