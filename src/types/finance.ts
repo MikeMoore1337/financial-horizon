@@ -14,12 +14,7 @@ export type ISOMonth = string & { readonly [monthBrand]: 'YYYY-MM' };
 export type FinanceId = string & { readonly [identifierBrand]: 'finance-id' };
 export type Recurrence = 'once' | 'monthly' | 'yearly';
 
-export type PaymentMethodType =
-  | 'payment_url'
-  | 'qr_image'
-  | 'sbp_link'
-  | 'requisites'
-  | 'instructions';
+export type PaymentMethodType = 'payment_url' | 'qr_image' | 'sbp_link' | 'requisites' | 'instructions';
 
 export interface PaymentMethod {
   id: string;
