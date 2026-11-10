@@ -24,7 +24,7 @@ test('branded icons match independently pinned source byte hashes',()=>{
       const xml=bytes.toString('utf8');
       assert.match(xml,/^<svg\b[^>]*xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
       assert.match(xml,/<path\b/);
-      assert.doesNotMatch(xml,/<(?:script|foreignObject|image|iframe)\b|onload=|onerror=|xlink:href|https?:\/\//i);
+      assert.doesNotMatch(xml,/<(?:script|foreignObject|image|iframe)\b|onload=|onerror=|xlink:href|(?:href|src)=["\x27]https?:\/\//i);
     }else{
       assert.equal(bytes.toString('ascii',0,4),'RIFF');
       assert.equal(bytes.toString('ascii',8,12),'WEBP');
