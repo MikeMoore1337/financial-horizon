@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
  emptyState,validateState,getMonthEvents,upsertPaymentMethod,deletePaymentMethod,
- choosePrimaryPaymentMethod,safePaymentUrl,validQrData,MAX_PAYMENT_METHODS,
+ choosePrimaryPaymentMethod,safePaymentUrl,validQrData,MAX_PAYMENT_METHODS,MAX_QR_TOTAL_CHARS,
 } from '../finance.js';
 import {migrateState} from '../state-migrations.js';
 import {encryptBackup,decryptBackup} from '../backup.js';
@@ -52,7 +52,7 @@ test('method count, record ownership and link scheme guardrails',()=>{
  assert.throws(()=>upsertPaymentMethod(state,'expense-1',method('payment_url','https://ok.example')));
  state.entries[0].recurrence='monthly';
  for(const url of ['http://billing.example','data:text/plain,hi','https://user@billing.example',
-  'https://localhost/pay','https://127.0.0.1/pay'])
+  'https://localhost/pay','https://127.0.0.1/pay','https://billing.example/?token=credential'])
   assert.throws(()=>safePaymentUrl(url));
  assert.equal(safePaymentUrl('https://billing.example/pay').hostname,'billing.example');
  for(let i=0;i<MAX_PAYMENT_METHODS;i++)
@@ -90,4 +90,21 @@ test('optional payment metadata migration, legacy input and encrypted recovery',
  assert.deepEqual(restored,state);
  assert.deepEqual(restored.settlements,state.settlements);
  assert.deepEqual(getMonthEvents(restored,'2026-11'),getMonthEvents(state,'2026-11'));
+});
+
+test('secrets in names and text are rejected, aggregate QR attachment budget is bounded',()=>{
+ const state=fixture();
+ for(const input of [
+  {type:'instructions',label:'Пароль от банка',value:'Не записывайте'},
+  {type:'requisites',label:'Реквизиты',value:'CVV: 123'},
+  {type:'qr_image',label:'Секретный токен',imageData:qrData},
+ ])assert.throws(()=>upsertPaymentMethod(state,'expense-1',{...input,primary:false}));
+ assert.equal(state.entries[0].paymentMethods,undefined);
+ const payload='data:image/png;base64,'+'A'.repeat(250000);
+ for(let i=0;i<9;i++){
+  state.entries.push({...state.entries[0],id:'qr-budget-'+i,
+   paymentMethodsVersion:1,paymentMethods:[{id:'qr-'+i,type:'qr_image',label:'QR',primary:true,imageData:payload}]});
+ }
+ assert.ok(payload.length*9>MAX_QR_TOTAL_CHARS);
+ assert.throws(()=>validateState(state),/общий лимит QR/);
 });
