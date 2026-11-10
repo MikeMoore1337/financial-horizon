@@ -19,6 +19,7 @@
   },
   "include": [
     "src/types/**/*.ts",
+    "src/importers/bank-statements/**/*.ts",
     "src/domain/loans/**/*.ts",
     "src/domain/goals/**/*.ts",
     "src/domain/cashflow/**/*.ts",
