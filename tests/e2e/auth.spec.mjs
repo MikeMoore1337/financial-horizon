@@ -36,7 +36,7 @@ test('two accounts + guest on same origin isolate real IndexedDB',async({page,co
  await view(page,'obligations');
  const desktop=page.locator('.records-table tr').filter({hasText:'E2E tenant A only'})
   .locator('[data-action="edit-entry"]');
- const mobile=page.locator('.records-mobile-row').filter({hasText:'E2E tenant A only'})
+ const mobile=page.locator('.record-mobile-row').filter({hasText:'E2E tenant A only'})
   .locator('[data-action="edit-entry"]');
  await (await desktop.isVisible()?desktop:mobile).click();
  await page.locator('[data-action="open-payment-methods"]').click();
