@@ -26,7 +26,7 @@ function qrPng(){
 async function editRegularExpense(page,title){
  await view(page,'obligations');
  const desktop=page.locator('.records-table tr').filter({hasText:title}).locator('[data-action="edit-entry"]');
- const mobile=page.locator('.records-mobile-row').filter({hasText:title}).locator('[data-action="edit-entry"]');
+ const mobile=page.locator('.record-mobile-row').filter({hasText:title}).locator('[data-action="edit-entry"]');
  await (await desktop.isVisible()?desktop:mobile).click();
  await page.locator('[data-action="open-payment-methods"]').click();
  await expect(page.locator('#payment-methods-dialog')).toBeVisible();
