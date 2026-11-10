@@ -1,4 +1,4 @@
-import {mountAccountOAuth} from './auth-ui.js?rev=oauth-four-v2';
+import {mountAccountOAuth} from './auth-ui.js?rev=oauth-brand-originals-v1';
 
 const section=document.querySelector('#oauth-login');
 function refreshOAuthLogin(){

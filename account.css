@@ -60,6 +60,7 @@
 .oauth-provider-link:hover{background:var(--soft);border-color:var(--accent)}
 .oauth-provider-link:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
 .oauth-provider-icon{width:24px;height:24px;flex-shrink:0;object-fit:contain}
+.oauth-provider-icon[src$="/google.svg"]{box-sizing:border-box;padding:2px;background:#fff;border-radius:50%}
 .oauth-provider-label{flex:1;min-width:0;overflow-wrap:break-word}
 .oauth-provider-chevron{display:none;color:var(--sub);font-size:18px;font-weight:400}
 .oauth-note{font-size:12px;line-height:1.55;margin:13px 0 0}
