@@ -1,9 +1,6 @@
 import {test,expect} from '@playwright/test';
 import {deflateSync} from 'node:zlib';
-import {
- observe,visitGuest,view,addEntry,scopedState,
- 
-} from './helpers.mjs';
+import {observe,visitGuest,view,addEntry,scopedState} from './helpers.mjs';
 
 function chunk(type,data){
  const length=Buffer.alloc(4);length.writeUInt32BE(data.length);
@@ -109,6 +106,18 @@ test('five methods, primary, text edit, QR and history survive offline restart a
   return urls.filter(url=>url.includes('/api/')||url.includes('data:image/'));
  });
  expect(requests).toEqual([]);
+ await editRegularExpense(page,'E2E recurring provider');
+ await page.locator('#payment-methods-list .archive-row')
+  .filter({hasText:'Реквизиты'})
+  .locator('[data-action="delete-payment-method"]').click();
+ await expect(page.locator('#confirmation-dialog')).toBeVisible();
+ await page.locator('#confirm-yes').click();
+ await expect.poll(async()=> (await scopedState(page,'state')).entries[0].paymentMethods.length).toBe(4);
+ await expect.poll(async()=> (await scopedState(page,'state')).entries[0].paymentMethods
+  .find(method=>method.primary)?.type).toBe('payment_url');
+ expect((await scopedState(page,'state')).settlements).toEqual(original.settlements);
+ await page.locator('#payment-methods-dialog [data-action="close-payment-methods"]').first().click();
+ await page.locator('#entry-form button[value="cancel"]').first().click();
  watch.assertClean();
 });
 
@@ -141,16 +150,21 @@ test('invalid links, malicious text and QR files never execute or silently persi
  });
  await f.locator('button[type="submit"]').click();
  expect((await scopedState(page,'state')).entries[0].paymentMethods).toHaveLength(1);
- // Expected validation errors are intentionally surfaced; no sensitive data is logged.
+ // A real IndexedDB transaction abort must never leave partially updated payment methods.
+ await f.locator('[name="type"]').selectOption('instructions');
+ await f.locator('[name="label"]').fill('Несохранённая инструкция');
+ await f.locator('[name="value"]').fill('Тест отказа записи');
+ await page.evaluate(()=>{
+  const original=IDBObjectStore.prototype.put;
+  IDBObjectStore.prototype.put=function(value,key){
+   if(key==='state'){this.transaction.abort();throw Error('TEST_IDB_WRITE_DENIED');}
+   return original.call(this,value,key);
+  };
+ });
+ await f.locator('button[type="submit"]').click();
+ await expect.poll(async()=> (await scopedState(page,'state')).entries[0].paymentMethods.length).toBe(1);
+ // Expected validation and storage errors are intentionally surfaced; no external requests.
  expect(watch.unplanned).toEqual([]);
  expect(watch.exceptions).toEqual([]);
 });
 
-test('temporary CI format diagnostics for #136', async () => {
- const {readFile} = await import('node:fs/promises');
- const prettier = await import('prettier');
- const file='src/types/finance.ts';
- const raw=await readFile(file,'utf8');
- const formatted=await prettier.format(raw,{...await prettier.resolveConfig(file),filepath:file});
- if(raw!==formatted)console.log('PRETTIER_136_START\n'+formatted+'\nPRETTIER_136_END');
-});
