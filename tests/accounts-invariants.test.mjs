@@ -525,3 +525,26 @@ test('void metadata without its cash reversal is not a completed linked payment'
   missing.postings = missing.postings.filter(x => x.transactionId !== uuid(31));
   assert.throws(() => assertLedgerState(missing), /Факт отмены/);
 });
+
+
+test('linked payment reversal offsets its original monthly expense/income category', () => {
+  for (const source of ['loanPayment', 'settlement']) {
+    const restored = snapshotWithAtomicLinkedVoid(source);
+    const flow = monthlyCashFlowMinor(restored, '2026-11');
+    assert.deepEqual(flow, {incomeMinor: 0, expenseMinor: 0},
+      'A confirmed payment with its exact compensation must not inflate monthly income or expenses');
+    assert.equal(totalBalanceMinor(restored), source === 'loanPayment' ? 101000 : 10000);
+  }
+});
+
+test('compensating linked expense in another month reduces expense, not creates income', () => {
+  const state = snapshotWithAtomicLinkedVoid('loanPayment');
+  const reverse = state.transactions.find(tx => tx.kind === 'reversal');
+  reverse.occurredOn = '2026-12-07';
+  assert.doesNotThrow(() => assertLedgerState(state));
+  assert.deepEqual(monthlyCashFlowMinor(state, '2026-11'),
+    {incomeMinor: 0, expenseMinor: 500});
+  assert.deepEqual(monthlyCashFlowMinor(state, '2026-12'),
+    {incomeMinor: 0, expenseMinor: -500});
+  assert.equal(totalBalanceMinor(state), 101000);
+});
