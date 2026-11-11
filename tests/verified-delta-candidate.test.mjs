@@ -156,3 +156,45 @@ test('unbalanced transfers, unproven accounts and malformed money fail closed', 
       payload: {...change(1, 0, correct).payload, extra: injected,
         accounts: [account(A, 2, 9900), account(B, 2, 10_100)]}}), guard()));
 });
+
+
+test('linked payment compensation requires a fact-void event in the same revision', () => {
+  const payment = transaction(T1, [post(A, -1200)]);
+  payment.data.kind = 'payment';
+  payment.data.payment_link = {loan_payment_id: B, settlement_id: null};
+  const oldFact = {id: B, entity_revision: 1, kind: 'loan_payment',
+    data: {loan_id: 'b0000000-0000-4000-8000-000000000009',
+      paid_on: '2026-11-11', amount_minor: 1200,
+      strategy: 'term', voided_at: null}};
+  const before = {...local(), revision: 5,
+    entities: [account(A, 2, 8800), payment, oldFact]};
+  const reversed = transaction(T2, [post(A, 1200)]);
+  reversed.data.kind = 'reversal';
+  reversed.data.reversed_transaction_id = T1;
+  const voided = {...oldFact, entity_revision: 2,
+    data: {...oldFact.data, voided_at: '2026-11-11T12:00:00Z'}};
+  const valid = {schema_version: 1, from_revision: 5, to_revision: 6,
+    next_since_revision: 6, has_more: false, changes: [
+      change(6, 0, reversed, [account(A, 3, 10_000)]),
+      change(6, 1, voided),
+    ]};
+  const next = applyFinanceDeltaCandidate(before, valid, guard());
+  assert.equal(next.revision, 6);
+  assert.equal(next.entities.find(x => x.id === B).data.voided_at,
+    '2026-11-11T12:00:00Z');
+  const split = {...valid, changes: valid.changes.slice(0, 1)};
+  expectHold(() => applyFinanceDeltaCandidate(before, split, guard()));
+});
+
+test('never accepts a past-revision event or an empty has_more page', () => {
+  const orig = local();
+  const valid = page(change(1, 0, transaction(T1, [post(A, -100)]),
+    [account(A, 2, 9900)]));
+  expectHold(() => applyFinanceDeltaCandidate(orig, {
+    ...valid, changes: [{...valid.changes[0], revision: 0}],
+  }, guard()));
+  expectHold(() => applyFinanceDeltaCandidate(orig, {
+    ...valid, changes: [], has_more: true, to_revision: 2,
+    next_since_revision: 0,
+  }, guard()));
+});
