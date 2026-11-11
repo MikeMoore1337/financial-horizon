@@ -141,6 +141,39 @@ test('percentage changes are exact integer basis points; undefined from zero or 
   assert.equal(compareReportPeriods(report([]), report([income])).hasComparableHistory, false);
 });
 
+test('multi-month comparison rejects missing history and partial calendar coverage', () => {
+  const previous = buildAnalyticsReport({ from: '2026-01-01', to: '2026-02-28',
+    transactions: [tx('jan', '2026-01-07', 'expense', -30_000),
+      tx('feb', '2026-02-07', 'expense', -10_000)] });
+  const incomplete = buildAnalyticsReport({ from: '2026-03-01', to: '2026-04-30',
+    transactions: [tx('mar', '2026-03-07', 'expense', -15_000)] });
+  const unsafeComparison = compareReportPeriods(incomplete, previous);
+  assert.equal(unsafeComparison.hasComparableHistory, false);
+  assert.equal(unsafeComparison.expense.changeBps, null);
+  assert.equal(unsafeComparison.income.changeBps, null);
+  assert.equal(unsafeComparison.net.changeBps, null);
+  assert.equal(unsafeComparison.expense.deltaMinor, -25_000); // Absolute delta remains explicit.
+
+  const complete = buildAnalyticsReport({ from: '2026-03-01', to: '2026-04-30',
+    transactions: [tx('mar', '2026-03-07', 'expense', -15_000),
+      tx('apr', '2026-04-07', 'expense', -5_000)] });
+  const actualComparison = compareReportPeriods(complete, previous);
+  assert.equal(actualComparison.hasComparableHistory, true);
+  assert.equal(actualComparison.expense.changeBps, -5_000);
+
+  const byMonth = buildAnalyticsReport({ from: '2026-01-01', to: '2026-03-31',
+    transactions: [tx('jan', '2026-01-07', 'expense', -10_000),
+      tx('feb', '2026-02-07', 'expense', -20_000)] });
+  assert.equal(compareReportMonths(byMonth, '2026-02', '2026-01').expense.changeBps, 10_000);
+  assert.equal(compareReportMonths(byMonth, '2026-03', '2026-02').hasComparableHistory, false);
+
+  const partial = buildAnalyticsReport({ from: '2026-01-15', to: '2026-02-28',
+    transactions: [tx('jan', '2026-01-17', 'expense', -10_000),
+      tx('feb', '2026-02-07', 'expense', -20_000)] });
+  assert.equal(compareReportMonths(partial, '2026-02', '2026-01').hasComparableHistory, false);
+  assert.equal(compareReportMonths(partial, '2026-02', '2026-01').expense.changeBps, null);
+});
+
 test('absent history explicitly differs from actual zero and from unconfigured plans', () => {
   const x = report([]);
   assert.equal(x.totals.hasActual, false);

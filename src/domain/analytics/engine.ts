@@ -312,7 +312,12 @@ function change(currentMinor: number, previousMinor: number, comparable: boolean
     changeBps: comparable ? percentageChangeBps(currentMinor, previousMinor) : null };
 }
 export function compareReportPeriods(current: AnalyticsReport, previous: AnalyticsReport): PeriodComparison {
-  const comparable = current.totals.hasActual && previous.totals.hasActual;
+  // One real transaction in a multi-month range does not establish complete history.
+  // A partial calendar month is likewise not comparable with a full-month report.
+  const hasCompleteActual = (report: AnalyticsReport): boolean =>
+    report.totals.hasActual && report.monthly.length > 0 && report.monthly.every(row =>
+      row.hasActual && fullCalendarMonth(row.month, report.period.from, report.period.to));
+  const comparable = hasCompleteActual(current) && hasCompleteActual(previous);
   return {
     hasComparableHistory: comparable,
     income: change(current.totals.incomeMinor, previous.totals.incomeMinor, comparable),
@@ -327,9 +332,9 @@ export function compareReportMonths(report: AnalyticsReport, current: string, pr
   const b = report.monthly.find(x => x.month === previous);
   if (!a || !b) throw new RangeError('Месяц вне отчётного периода');
   return compareReportPeriods(
-    { ...report, totals: { ...report.totals, hasActual: a.hasActual,
+    { ...report, monthly: [a], totals: { ...report.totals, hasActual: a.hasActual,
       incomeMinor: a.incomeMinor, expenseMinor: a.expenseMinor, netMinor: a.netMinor } },
-    { ...report, totals: { ...report.totals, hasActual: b.hasActual,
+    { ...report, monthly: [b], totals: { ...report.totals, hasActual: b.hasActual,
       incomeMinor: b.incomeMinor, expenseMinor: b.expenseMinor, netMinor: b.netMinor } },
   );
 }
