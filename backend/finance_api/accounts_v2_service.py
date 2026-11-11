@@ -5,6 +5,8 @@ gate remain unchanged. Only use after a trusted FH session has supplied scope.
 """
 from __future__ import annotations
 
+from uuid import uuid5
+
 from sqlalchemy.engine import Engine
 
 from backend.finance_db.ledger_service import (
@@ -36,6 +38,21 @@ def submit_account_v2_candidate(
         raise FinanceCommandError(
             "invalid_command", "Некорректная финансовая команда", 422,
         ) from None
+
+    # A public candidate MUST NOT accept client claims that an obligation
+    # or loan has been paid. Mint stable transaction/fact IDs using the
+    # authenticated profile and original mutation UUID, preserving the same
+    # SQL request fingerprint on every identical network retry.
+    if validated["action"] in ("settlement.payment.record", "loan.payment.record"):
+        seed = f'financial-horizon:payment:v2:{validated["action"]}:{validated["client_mutation_id"]}'
+        validated = {
+            **validated,
+            "payload": {
+                **validated["payload"],
+                "fact_id": str(uuid5(scope.profile_id, seed + ":fact")),
+                "transaction_id": str(uuid5(scope.profile_id, seed + ":transaction")),
+            },
+        }
 
     return submit_account_command(
         engine, scope=scope, command=validated, if_match=if_match,
