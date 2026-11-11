@@ -199,3 +199,91 @@ def test_real_ts_wire_respects_etag_conflicts_and_foreign_account_scope(env):
     assert balances(foreign_client.get("/api/finance/v1/state").json()) == {
         account_foreign: 8000,
     }
+
+
+NODE_SNAPSHOT_SCRIPT = """
+import {decodeCompleteFinanceState} from './src/domain/accounts/server-snapshot.ts';
+const request = JSON.parse(process.argv[1]);
+const view = decodeCompleteFinanceState(
+  request.state, request.profileId, request.verifiedActorUserId
+);
+process.stdout.write(JSON.stringify(view));
+"""
+
+
+def decode_authenticated_server_state(response, *, profile_id: str, user_id: str) -> dict:
+    """Actual TypeScript hydration of the REAL authenticated PostgreSQL API."""
+    assert response.status_code == 200, response.text
+    args = {"state": response.json(), "profileId": profile_id,
+            "verifiedActorUserId": user_id}
+    process = subprocess.run(  # noqa: S603 - reviewed fixed Node executable and script
+        ["node", "--disable-warning=ExperimentalWarning", "--input-type=module",
+         "-e", NODE_SNAPSHOT_SCRIPT, json.dumps(args)],
+        cwd=REPO, capture_output=True, text=True, check=False, timeout=8,
+    )
+    assert process.returncode == 0, (
+        "The TypeScript ledger adapter rejected the server's own state: " +
+        process.stderr[:500]
+    )
+    return json.loads(process.stdout)
+
+
+def test_authentic_pg_snapshot_decodes_through_real_typescript_adapter(env):
+    user_id, cookie = env["first"]
+    account_a = env["account"](user_id, opening=15_000)
+    account_b = env["account"](user_id, opening=1_000)
+    profile = str(env["scope"](user_id).profile_id)
+    client = env["client"](cookie)
+
+    before = client.get("/api/finance/v1/state")
+    decoded_before = decode_authenticated_server_state(
+        before, profile_id=profile, user_id=user_id)
+    assert decoded_before["ledger"]["profileId"] == profile
+    assert decoded_before["ledger"]["revision"] == before.json()["revision"]
+    assert decoded_before["totalMinor"] == 16_000
+    assert decoded_before["availableMinor"] == 16_000
+    assert decoded_before["ledger"]["transactions"] == []
+
+    transfer = encode("transfer", {
+        "clientMutationId": str(uuid4()),
+        "baseRevision": before.json()["revision"],
+        "expectedEntityRevisions": {
+            account_a: revisions(before.json())[account_a],
+            account_b: revisions(before.json())[account_b],
+        },
+        "ifMatch": before.headers["ETag"],
+        "fromAccountId": account_a, "toAccountId": account_b,
+        "amountMinor": 100_000, "occurredOn": "2026-11-11",
+    })
+    assert post(client, transfer).status_code == 201
+    after = client.get("/api/finance/v1/state")
+    decoded_after = decode_authenticated_server_state(
+        after, profile_id=profile, user_id=user_id)
+    view = decoded_after["ledger"]
+    assert decoded_after["totalMinor"] == 16_000
+    assert decoded_after["availableMinor"] == 16_000
+    assert {a["id"]: a["openingMinor"] for a in view["accounts"]} == {
+        account_a: 15_000, account_b: 1_000,
+    }
+    assert len(view["transactions"]) == 1
+    assert view["transactions"][0]["kind"] == "transfer"
+    assert view["transactions"][0]["actorUserId"] == user_id
+    assert sorted(x["signedMinor"] for x in view["postings"]) == [-100_000, 100_000]
+    # A transfer cannot create actual income or expense.
+    assert sorted(x["data"]["balance_minor"] for x in after.json()["entities"]
+                  if x["kind"] == "account") == [-85_000, 101_000]
+
+    # Only a server-verified principal may hydrate the owner's state.
+    foreign_user, foreign_cookie = env["new_user"]()
+    foreign_profile = str(env["scope"](foreign_user).profile_id)
+    hostile = subprocess.run(  # noqa: S603 - fixed executable/script
+        ["node", "--disable-warning=ExperimentalWarning", "--input-type=module",
+         "-e", NODE_SNAPSHOT_SCRIPT, json.dumps({
+             "state": after.json(), "profileId": foreign_profile,
+             "verifiedActorUserId": foreign_user,
+         })],
+        cwd=REPO, capture_output=True, text=True, check=False, timeout=8,
+    )
+    assert hostile.returncode != 0
+    assert "INVALID_FINANCE_SNAPSHOT" in hostile.stderr
+    assert client.get("/api/finance/v1/state").json()["revision"] == after.json()["revision"]
