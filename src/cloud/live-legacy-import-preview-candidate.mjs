@@ -68,8 +68,10 @@ export async function planLiveLegacyImportPreviewCandidate({
   const matched = await planVerifiedLegacyImportCandidate({
     verified: again, target: pinnedTarget, consent: previewConsent, signal,
   });
-  if (preview.sourceSha256 !== matched.sourceSha256 ||
-      preview.sourceKey !== undefined && preview.sourceKey !== matched.sourceKey ||
+  if (original.scope !== again.scope ||
+      original.sourceKey !== again.sourceKey ||
+      original.sourceRevision !== again.sourceRevision ||
+      preview.sourceSha256 !== matched.sourceSha256 ||
       preview.sourceScope !== matched.sourceScope ||
       preview.sourceRevision !== matched.sourceRevision ||
       preview.recordCount !== matched.recordCount ||
