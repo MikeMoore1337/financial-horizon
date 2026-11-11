@@ -30,7 +30,8 @@ _TYPES = frozenset(("bank", "card", "cash", "savings", "other"))
 _INTERNAL_ACTIONS = frozenset((
     "obligation.create", "account.create", "account.update", "account.archive", "account.unarchive",
     "transaction.record", "account.transfer", "transaction.reverse",
-    "settlement.payment.record", "loan.payment.record", "reserve.allocate",
+    "settlement.payment.record", "loan.payment.record",
+    "settlement.payment.void", "loan.payment.void", "reserve.allocate",
 ))
 _PUBLIC_V1_ACTIONS = frozenset(("obligation.create", "account.transfer", "reserve.allocate", "transaction.reverse"))
 # The proposed v2 transport has a deliberately narrower whitelist than internal
@@ -424,6 +425,44 @@ def _transaction_sync_entity(session: Session, profile_id: UUID, txid: UUID) -> 
     }
 
 
+def _payment_fact_sync_entity(
+    session: Session, profile_id: UUID, fact_id: UUID, *, settlement: bool,
+) -> dict[str, Any]:
+    """Complete fact image matching the authoritative /state and /changes schema."""
+    if settlement:
+        row = session.execute(text("""
+            SELECT id,entity_revision,obligation_id,occurrence_on,paid_on,
+                   amount_minor,voided_at FROM settlements
+            WHERE profile_id=:p AND id=:fact
+        """), {"p": profile_id, "fact": fact_id}).mappings().one()
+        data = {
+            "obligation_id": str(row["obligation_id"]),
+            "occurrence_on": row["occurrence_on"].isoformat(),
+            "paid_on": row["paid_on"].isoformat(),
+            "amount_minor": int(row["amount_minor"]),
+            "voided_at": row["voided_at"].isoformat() if row["voided_at"] else None,
+        }
+        kind = "settlement"
+    else:
+        row = session.execute(text("""
+            SELECT id,entity_revision,loan_id,paid_on,amount_minor,
+                   strategy,voided_at FROM loan_payments
+            WHERE profile_id=:p AND id=:fact
+        """), {"p": profile_id, "fact": fact_id}).mappings().one()
+        data = {
+            "loan_id": str(row["loan_id"]),
+            "paid_on": row["paid_on"].isoformat(),
+            "amount_minor": int(row["amount_minor"]),
+            "strategy": row["strategy"],
+            "voided_at": row["voided_at"].isoformat() if row["voided_at"] else None,
+        }
+        kind = "loan_payment"
+    return {
+        "id": str(row["id"]), "entity_revision": int(row["entity_revision"]),
+        "kind": kind, "data": data,
+    }
+
+
 def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any],
            versions: Mapping[str, int], new_revision: int) -> dict[str, Any]:
     p = scope.profile_id
@@ -668,6 +707,88 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             link_field: str(fact_id),
         }
         extra_changes.append(("upsert", fact_id, 1, fact_payload))
+    elif action in ("settlement.payment.void", "loan.payment.void"):
+        # A payment fact and its cash movement cannot be cancelled in separate
+        # commits. The new Alembic 0002 deferred SQL triggers reject either
+        # half of a compensation, even if a trusted caller bypasses this code.
+        is_settlement = action == "settlement.payment.void"
+        _shape(payload, {"transaction_id", "fact_id", "account_id", "reason"},
+               {"transaction_id", "fact_id", "account_id", "reason"})
+        original_id = _uuid(payload["transaction_id"])
+        fact_id = _uuid(payload["fact_id"])
+        acc_id = _uuid(payload["account_id"])
+        reason = payload["reason"]
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 500:
+            raise _reject("Укажите причину отмены оплаты")
+
+        # Profile row FOR UPDATE in submit_account_command serializes all
+        # competing commands. Every ID below is additionally profile-scoped.
+        link = session.execute(text("""
+            SELECT link.settlement_id,link.loan_payment_id,
+                   tx.kind,tx.entity_revision
+            FROM ledger_payment_links link
+            JOIN ledger_transactions tx
+              ON tx.profile_id=link.profile_id AND tx.id=link.transaction_id
+            WHERE link.profile_id=:p AND link.transaction_id=:tx
+            FOR UPDATE OF tx
+        """), {"p": p, "tx": original_id}).mappings().one_or_none()
+        if (link is None or link["kind"] != "payment"
+            or (link["settlement_id"] if is_settlement else link["loan_payment_id"]) != fact_id
+            or (link["loan_payment_id"] if is_settlement else link["settlement_id"]) is not None):
+            raise FinanceCommandError("semantic_conflict", "Связанная оплата недоступна", 409)
+        _require_revision(versions, original_id, link["entity_revision"])
+        already = session.execute(text("""
+            SELECT 1 FROM ledger_transactions
+            WHERE profile_id=:p AND reversed_transaction_id=:tx
+        """), {"p": p, "tx": original_id}).first()
+        if already:
+            raise FinanceCommandError("semantic_conflict", "Оплата уже отменена", 409)
+
+        fact_table = "settlements" if is_settlement else "loan_payments"
+        # Fixed trusted table names, never interpolated from JSON.
+        fact = session.execute(text(f"""
+            SELECT entity_revision,voided_at FROM {fact_table}
+            WHERE profile_id=:p AND id=:fact FOR UPDATE
+        """), {"p": p, "fact": fact_id}).mappings().one_or_none()
+        if fact is None or fact["voided_at"] is not None:
+            raise FinanceCommandError("semantic_conflict", "Факт оплаты уже аннулирован", 409)
+        _require_revision(versions, fact_id, fact["entity_revision"])
+        account = _account(session, p, acc_id, versions, archived=True)
+        original_posting = session.execute(text("""
+            SELECT account_id,signed_minor FROM ledger_postings
+            WHERE profile_id=:p AND transaction_id=:tx
+        """), {"p": p, "tx": original_id}).mappings().all()
+        if (len(original_posting) != 1
+            or original_posting[0]["account_id"] != account["id"]):
+            raise FinanceCommandError("semantic_conflict",
+                                      "Счёт исходной оплаты не совпадает", 409)
+        original_minor = _safe_balance(original_posting[0]["signed_minor"])
+        if original_minor == 0 or abs(original_minor) > MAX_MINOR:
+            raise FinanceCommandError("semantic_conflict", "Повреждённая оплата", 409)
+
+        target = uuid4()
+        # Guarded SQL columns allow only a one-time void of this fact.
+        session.execute(text(f"""
+            UPDATE {fact_table} SET voided_at=now(),
+              entity_revision=entity_revision+1
+            WHERE profile_id=:p AND id=:fact
+        """), {"p": p, "fact": fact_id})
+        _post(session, p, target, "reversal", scope.user_id,
+              datetime.now(timezone.utc).date(), [(acc_id, -original_minor)],
+              reversed_id=original_id, note=reason.strip())
+        affected_revision = 1
+        change_kind = "ledger_posted"
+        change_payload = {
+            "transaction_kind": "reversal", "reversed_transaction_id": str(original_id),
+            "account_id": str(acc_id),
+        }
+        next_fact_revision = int(fact["entity_revision"]) + 1
+        extra_changes.append((
+            "upsert", fact_id, next_fact_revision,
+            {"entity": _payment_fact_sync_entity(
+                session, p, fact_id, settlement=is_settlement,
+            )},
+        ))
     elif action == "reserve.allocate":
         required = {"reserve_id", "account_id", "delta_minor"}
         _shape(payload, required, required)
