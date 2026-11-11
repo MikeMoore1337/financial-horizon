@@ -23,10 +23,11 @@ def submit_account_v2_candidate(
     engine: Engine, *, scope: VerifiedFinanceScope, command: object,
     if_match: str, idempotency_key: str,
 ) -> FinanceResult:
-    """Validate the exact narrow v2 candidate before a single SQL transaction.
+    """Validate the exact scoped v2 candidate before a single SQL transaction.
 
     Unlike the internal compatibility mode, this entrypoint NEVER enables
-    payment/reserve/loan commands. The core enforces the same whitelist even
+    unapproved reserve/loan mutation internals. It supports only the
+    strictly validated account and linked-payment v2 proposal. The core enforces the same whitelist even
     if a later caller erroneously bypasses this transport validator.
     """
     try:
