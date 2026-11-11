@@ -25,11 +25,17 @@ All pending outbox entries and manual conflicts are preserved unchanged.
 
 ## Important integration and release gates
 
-The returned in-memory state is **not durable** and does NOT prove sync.
-Issue #68 must still deliver the native encrypted IndexedDB CAS transaction
-of server image + cursor + applied receipt proof + outbox under one active
-account scope. The existing #34 protected candidate uses a different
-legacy finance state format and cannot be silently repurposed.
+The pure validator's returned in-memory state is **not durable** on its own.
+`src/cloud/encrypted-cloud-cache-candidate.mjs` now performs a separate
+inactive encrypted-cache step through the existing #34 native IndexedDB
+CAS mechanism. After explicit account-scoped initialization it seals the
+server image and cursor as a `snapshot.cloudFinance` sidecar, preserving
+legacy financial state, outbox and conflict arrays in one encrypted commit.
+It refuses to overwrite a pre-existing sidecar or pending local operations,
+and a stale tab or revoked/unlocked local keyset cannot report success.
+This is a verified **cache candidate**, not an account cutover or a sync
+engine: no HTTP upload, applied receipt proof, queue flush, encrypted remote
+reconciliation, live UI state or real multi-device acceptance is enabled.
 
 A real integration must additionally implement:
 
