@@ -387,22 +387,40 @@ export async function persistAuthenticatedFinanceReceiptCandidate({
   // The accepted v1 API pages changes by whole PostgreSQL revisions.
   // No partial page, missing fact, competing revision or client-supplied
   // receipt can ever cause the outbox to be cleared.
-  if (ack.revision !== cloud.revision + 1 ||
-      delta.from_revision !== cloud.revision ||
+  // A crash may happen AFTER the independent delta was already
+  // persisted but BEFORE the ACK was durably recorded. The server receipt
+  // can then describe an older revision: re-fetch exactly that historical
+  // delta, verify it again, and clear only this UUID without changing
+  // current balances or moving the cursor backwards.
+  const previouslyApplied = ack.revision <= cloud.revision;
+  const expectedFromRevision = previouslyApplied
+    ? ack.revision - 1 : cloud.revision;
+  if ((!previouslyApplied && ack.revision !== cloud.revision + 1) ||
+      first.command.base_revision !== ack.revision - 1 ||
+      delta.from_revision !== expectedFromRevision ||
+      !integer(delta.to_revision, ack.revision) ||
       delta.next_since_revision !== ack.revision ||
+      typeof delta.has_more !== 'boolean' ||
       ack.changes.some((entry, index) =>
         !plain(entry) || entry.revision !== ack.revision ||
         !integer(entry.ordinal, 0) || entry.ordinal !== index) ||
       canonical(ack.changes) !== canonical(delta.changes)) {
     hold('Квитанция не совпадает с независимым серверным журналом');
   }
-  const checked = applyFinanceDeltaCandidate(
-    {...cloud, generation: identity.generation,
-     pending: current.outbox, conflicts: current.conflicts},
-    delta, identity,
-  );
-  if (checked.revision !== ack.revision) {
-    hold('Подтверждённая ревизия не записана');
+  let checked;
+  if (previouslyApplied) {
+    // The authenticated cloud image already contains revision ack.revision.
+    // A future delta must never replay this old cash movement twice.
+    checked = {revision: cloud.revision, entities: cloud.entities};
+  } else {
+    checked = applyFinanceDeltaCandidate(
+      {...cloud, generation: identity.generation,
+       pending: current.outbox, conflicts: current.conflicts},
+      delta, identity,
+    );
+    if (checked.revision !== ack.revision) {
+      hold('Подтверждённая ревизия не записана');
+    }
   }
   const storedProofs = cloud.appliedReceipts || [];
   if (!Array.isArray(storedProofs) || storedProofs.length >= 2000 ||
@@ -430,7 +448,8 @@ export async function persistAuthenticatedFinanceReceiptCandidate({
   return Object.freeze({
     status: 'DURABLY_CONFIRMED',
     bundleEpoch: nextEpoch, serverRevision: ack.revision,
-    pending: current.outbox.length - 1, serverBalanceChanged: true,
+    pending: current.outbox.length - 1,
+    serverBalanceChanged: !previouslyApplied,
     // The server already committed it; this method only reconciles locally.
     sentByThisFunction: false,
   });
