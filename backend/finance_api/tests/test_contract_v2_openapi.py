@@ -9,6 +9,7 @@ from backend.finance_api.contracts import V1Command
 from backend.finance_api.contracts_v2_candidate import (
     ACTIONS, ACCOUNT_KINDS, AccountV2Candidate, AccountCreateV2,
     AccountUpdateV2, AccountArchiveV2, TransactionRecordV2,
+    SettlementPaymentRecordV2, LoanPaymentRecordV2, PaymentVoidV2,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -21,6 +22,10 @@ PAYLOADS = {
     "account.archive": ("AccountArchiveV2", AccountArchiveV2),
     "account.unarchive": ("AccountUnarchiveV2", AccountArchiveV2),
     "transaction.record": ("TransactionRecordV2", TransactionRecordV2),
+    "settlement.payment.record": ("SettlementPaymentRecordV2", SettlementPaymentRecordV2),
+    "loan.payment.record": ("LoanPaymentRecordV2", LoanPaymentRecordV2),
+    "settlement.payment.void": ("PaymentVoidV2", PaymentVoidV2),
+    "loan.payment.void": ("PaymentVoidV2", PaymentVoidV2),
 }
 
 
@@ -80,6 +85,10 @@ def test_v2_command_schema_matches_exact_five_backend_candidate_actions():
     assert schemas["AccountCreateV2"]["properties"]["currency"]["const"] == "RUB"
     assert schemas["AccountCreateV2"]["properties"]["opening_minor"]["minimum"] == -1_000_000_000_000
     assert schemas["TransactionRecordV2"]["properties"]["signed_minor"]["maximum"] == 1_000_000_000_000
+    assert v2["x-payment-id-allocation"].startswith("Both fact_id and transaction_id")
+    assert "one PostgreSQL COMMIT" in v2["x-atomic-linked-void"]
+    assert {"settlement.payment.record", "loan.payment.record",
+            "settlement.payment.void", "loan.payment.void"} <= actions
 
 
 def test_contract_lists_exact_existing_api_transport_guards():
