@@ -7,12 +7,18 @@ the linked-payment void contract and all release gates are still mandatory.
 from __future__ import annotations
 
 from datetime import date
+import json
 import re
 from typing import Any, Literal
 
+from fastapi import Request
 from pydantic import Field, StrictInt, field_validator, model_validator
 
-from .contracts import MAX_JS_INT, MAX_MINOR, UUID_PATTERN, Wire
+from backend.finance_db.ledger_service import FinanceCommandError
+from .contracts import (
+    MAX_JS_INT, MAX_MINOR, MAX_REQUEST_BYTES, UUID_PATTERN, Wire,
+    _reject_duplicate_json_keys,
+)
 
 ACCOUNT_KINDS = ("bank", "card", "cash", "savings", "other")
 ACTIONS = (
@@ -157,3 +163,41 @@ def validate_v2_account_candidate(
         **candidate.model_dump(),
         "payload": payload.model_dump(exclude_unset=True),
     }
+
+async def parse_v2_account_command(request: Request) -> dict[str, Any]:
+    """Validate an opt-in candidate with v1-equivalent bounded JSON transport.
+
+    Revalidate the real FH session after the final streamed chunk and before
+    the SQL transaction. Never accept client-provided actor/profile metadata.
+    """
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+        raise FinanceCommandError("invalid_command", "Требуется application/json", 422)
+    declared = request.headers.get("content-length")
+    if declared is not None and (
+        not declared.isascii() or not declared.isdecimal()
+        or len(declared) > 12 or int(declared) > MAX_REQUEST_BYTES
+    ):
+        raise FinanceCommandError("invalid_command", "Слишком большой запрос", 413)
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_REQUEST_BYTES:
+            raise FinanceCommandError("invalid_command", "Слишком большой запрос", 413)
+        chunks.append(chunk)
+    try:
+        raw = json.loads(
+            b"".join(chunks),
+            parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite")),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+        return validate_v2_account_candidate(
+            raw,
+            if_match=request.headers.get("if-match", ""),
+            idempotency_key=request.headers.get("idempotency-key", ""),
+        )
+    except (ValueError, TypeError, UnicodeDecodeError, RecursionError, OverflowError):
+        # Never echo malformed JSON or Pydantic validation details.
+        raise FinanceCommandError(
+            "invalid_command", "Некорректная финансовая команда", 422,
+        ) from None
