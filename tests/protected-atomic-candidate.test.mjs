@@ -4,6 +4,10 @@ import {
   initializeEncryptedCloudCacheCandidate,
   persistEncryptedCloudDeltaCandidate,
 } from '../src/cloud/encrypted-cloud-cache-candidate.mjs';
+import {
+  enqueueEncryptedFinanceCommandCandidate,
+  classifyFinanceOutboxResponseCandidate,
+} from '../src/cloud/encrypted-command-outbox-candidate.mjs';
 import {LocalBudgetSession} from '../src/security/local-budget-session.ts';
 import {
   ATOMIC_ENCRYPTED_DB, createAtomicEncryptedCandidate, getAtomicEncryptedKeyset,
@@ -600,4 +604,192 @@ test('#68 encrypted delta and stale writer failures preserve every committed byt
   assert.deepEqual(await readAtomicEncryptedCandidate(USER_A, first), prior);
   first.logout();
   second.logout();
+});
+
+
+const PENDING_ID = 'd0000000-0000-4000-8000-000000000001';
+const NEW_ACCOUNT_ID = 'b0000000-0000-4000-8000-000000000001';
+const CLOUD_ETAG = '"fh-synthetic-revision-zero"';
+const pendingCommand = (amount = 12_345, mutationId = PENDING_ID) => ({
+  schema_version: 2,
+  client_mutation_id: mutationId,
+  base_revision: 0,
+  action: 'account.create',
+  expected_entity_revisions: {},
+  payload: {
+    id: NEW_ACCOUNT_ID,
+    name: 'Synthetic cash to encrypt',
+    kind: 'cash',
+    currency: 'RUB',
+    opening_minor: amount,
+  },
+});
+async function preparedOfflineQueue() {
+  const db = mount();
+  await createAtomicEncryptedCandidate(USER_A, PASS, {
+    ...clone(SOURCE), outbox: [], conflicts: [],
+  });
+  const session = await unlock(USER_A);
+  const identity = cloudAuth(session);
+  await initializeEncryptedCloudCacheCandidate({
+    scope: USER_A, session, identity, pages: cloudPages(), expectedEpoch: 0,
+    confirmedAccountCacheInitialization: true,
+  });
+  return {db, session, identity};
+}
+
+test('#68 offline v2 command is encrypted and never changes confirmed account balance', async () => {
+  const {db, session, identity} = await preparedOfflineQueue();
+  const previousFetch = globalThis.fetch;
+  let sends = 0;
+  globalThis.fetch = () => { sends++; throw Error('Network use forbidden'); };
+  try {
+    const queued = await enqueueEncryptedFinanceCommandCandidate({
+      scope: USER_A, session, identity, command: pendingCommand(),
+      ifMatch: CLOUD_ETAG, expectedEpoch: 1,
+    });
+    assert.equal(queued.status, 'QUEUED_ENCRYPTED');
+    assert.equal(queued.bundleEpoch, 2);
+    assert.equal(queued.pending, 1);
+    assert.equal(queued.serverBalanceChanged, false);
+    assert.equal(queued.sent, false);
+    const state = await readAtomicEncryptedCandidate(USER_A, session);
+    assert.equal(state.epoch, 2);
+    assert.equal(state.outbox.length, 1);
+    assert.equal(state.outbox[0].status, 'pending');
+    assert.equal(state.outbox[0].mutationId, PENDING_ID);
+    assert.equal(state.outbox[0].command.payload.opening_minor, 12_345);
+    assert.match(state.outbox[0].fingerprint, /^[a-f0-9]{64}$/);
+    assert.equal(state.snapshot.title, SOURCE.snapshot.title);
+    assert.equal(state.snapshot.cloudFinance.entities[0].data.balance_minor, 10_000);
+    assert.deepEqual(state.conflicts, []);
+    const saved = JSON.stringify([...db.tables.get('bundles').values()]);
+    for (const privateField of [PENDING_ID, NEW_ACCOUNT_ID,
+      'Synthetic cash to encrypt', '12345', CLOUD_ETAG]) {
+      assert.equal(saved.includes(privateField), false, 'Outbox plaintext in IndexedDB');
+    }
+    assert.equal(sends, 0);
+  } finally {
+    session.logout();
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('#68 idempotent local retries neither duplicate nor change money', async () => {
+  const {session, identity} = await preparedOfflineQueue();
+  const args = {
+    scope: USER_A, session, identity, command: pendingCommand(),
+    ifMatch: CLOUD_ETAG, expectedEpoch: 1,
+  };
+  const first = await enqueueEncryptedFinanceCommandCandidate(args);
+  assert.equal(first.bundleEpoch, 2);
+  // Identical JSON with re-ordered fields must produce same local fingerprint.
+  const equivalent = structuredClone(args.command);
+  equivalent.payload = Object.fromEntries(Object.entries(equivalent.payload).reverse());
+  const repeat = await enqueueEncryptedFinanceCommandCandidate({
+    ...args, command: equivalent, expectedEpoch: 2,
+  });
+  assert.equal(repeat.status, 'ALREADY_QUEUED');
+  assert.equal(repeat.bundleEpoch, 2);
+  const conflicting = {...args, command: pendingCommand(12_346), expectedEpoch: 2};
+  await assert.rejects(
+    () => enqueueEncryptedFinanceCommandCandidate(conflicting), /SYNC_HOLD/,
+  );
+  await assert.rejects(
+    () => enqueueEncryptedFinanceCommandCandidate({
+      ...args, ifMatch: '"a-different-etag"', expectedEpoch: 2,
+    }), /SYNC_HOLD/,
+  );
+  const state = await readAtomicEncryptedCandidate(USER_A, session);
+  assert.equal(state.epoch, 2);
+  assert.equal(state.outbox.length, 1);
+  assert.equal(state.outbox[0].command.payload.opening_minor, 12_345);
+  session.logout();
+});
+
+test('#68 stale tab, other account and revoked session cannot enqueue financial writes', async () => {
+  mount();
+  await createAtomicEncryptedCandidate(USER_A, PASS, {
+    ...clone(SOURCE), outbox: [], conflicts: [],
+  });
+  const first = await unlock(USER_A);
+  const second = await unlock(USER_A);
+  await initializeEncryptedCloudCacheCandidate({
+    scope: USER_A, session: first, identity: cloudAuth(first),
+    pages: cloudPages(), expectedEpoch: 0,
+    confirmedAccountCacheInitialization: true,
+  });
+  const args = {scope: USER_A, session: first,
+    identity: cloudAuth(first), command: pendingCommand(),
+    ifMatch: CLOUD_ETAG, expectedEpoch: 1};
+  assert.equal((await enqueueEncryptedFinanceCommandCandidate(args)).bundleEpoch, 2);
+  await assert.rejects(() => enqueueEncryptedFinanceCommandCandidate({
+    ...args, session: second, identity: cloudAuth(second),
+  }), /SYNC_HOLD|другой вкладке/);
+  await assert.rejects(() => enqueueEncryptedFinanceCommandCandidate({
+    ...args, scope: USER_B, expectedEpoch: 2,
+  }), /SYNC_HOLD/);
+  first.logout();
+  await assert.rejects(() => enqueueEncryptedFinanceCommandCandidate({
+    ...args, expectedEpoch: 2,
+  }), /SYNC_HOLD/);
+  const latest = await readAtomicEncryptedCandidate(USER_A, second);
+  assert.equal(latest.epoch, 2);
+  assert.equal(latest.outbox.length, 1);
+  assert.equal(latest.snapshot.cloudFinance.entities[0].data.balance_minor, 10_000);
+  second.logout();
+});
+
+test('#68 malformed command/getter is rejected before crypto or IDB mutation', async () => {
+  const {session, identity} = await preparedOfflineQueue();
+  const args = {scope: USER_A, session, identity,
+    ifMatch: CLOUD_ETAG, expectedEpoch: 1};
+  for (const cmd of [
+    {...pendingCommand(), schema_version: 1},
+    {...pendingCommand(), base_revision: 1},
+    pendingCommand(1.5),
+    pendingCommand(0, 'not-a-uuid'),
+    {...pendingCommand(), action: 'reserve.allocate'},
+    {...pendingCommand(), profile_id: CLOUD_PROFILE},
+  ]) await assert.rejects(
+    () => enqueueEncryptedFinanceCommandCandidate({...args, command: cmd}), /SYNC_HOLD/,
+  );
+  let getterInvocations = 0;
+  const accessors = pendingCommand();
+  Object.defineProperty(accessors.payload, 'name', {
+    enumerable: true,
+    get() { getterInvocations++; return 'attacker-controlled'; },
+  });
+  await assert.rejects(
+    () => enqueueEncryptedFinanceCommandCandidate({
+      ...args, command: accessors,
+    }), /SYNC_HOLD/,
+  );
+  assert.equal(getterInvocations, 0);
+  assert.equal((await readAtomicEncryptedCandidate(USER_A, session)).epoch, 1);
+  session.logout();
+});
+
+test('#68 network ACK cannot silently settle the queue; backoff retains mutation UUID', () => {
+  for (const code of [200, 201]) {
+    assert.deepEqual(classifyFinanceOutboxResponseCandidate(code), {
+      decision: 'VERIFY_DURABLE_RECEIPT_AND_DELTA', retryDelayMs: null,
+    });
+  }
+  for (const code of [401, 403]) {
+    assert.equal(classifyFinanceOutboxResponseCandidate(code).decision, 'AUTH_HOLD');
+  }
+  for (const code of [409, 412]) {
+    assert.equal(classifyFinanceOutboxResponseCandidate(code).decision, 'CONFLICT_HOLD');
+  }
+  assert.equal(classifyFinanceOutboxResponseCandidate(410).decision,
+    'SNAPSHOT_REQUIRED_HOLD');
+  assert.deepEqual(classifyFinanceOutboxResponseCandidate(null, 0), {
+    decision: 'RETRY_SAME_UUID', retryDelayMs: 1000,
+  });
+  assert.deepEqual(classifyFinanceOutboxResponseCandidate(503, 31), {
+    decision: 'RETRY_SAME_UUID', retryDelayMs: 60_000,
+  });
+  assert.equal(classifyFinanceOutboxResponseCandidate(422).decision, 'RECOVERY_HOLD');
+  assert.throws(() => classifyFinanceOutboxResponseCandidate(503, -1), /SYNC_HOLD/);
 });
