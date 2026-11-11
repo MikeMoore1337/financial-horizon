@@ -142,7 +142,7 @@ def test_unmounted_v2_rejects_idor_and_unsafe_actions(env):
 
     # A future caller cannot turn the v2 allowlist into general internal
     # command execution, even if the narrower transport validator is bypassed.
-    forbidden = v2(fresh_b, "loan.payment.record", {
+    forbidden = v2(fresh_b, "reserve.allocate", {
         "account_id": account_id,
     })
     with pytest.raises(FinanceCommandError) as excluded:
