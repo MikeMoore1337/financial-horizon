@@ -69,8 +69,25 @@ jobs:
           cache-dependency-path: backend/requirements-test.txt
       - run: npm ci
       - run: python -m pip install -r backend/requirements-test.txt
-      - run: npx playwright install --with-deps chromium webkit
-      - run: npm run test:e2e
+      # Installing browser packages and host libraries in one opaque command
+      # previously left synthetic E2E jobs cancelled without a usable failure
+      # receipt. Cache only downloadable browser binaries, not host libraries.
+      - name: Cache exact-lockfile Playwright browsers
+        id: playwright-browser-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-browsers-${{ hashFiles('package-lock.json') }}
+      - name: Install Playwright host libraries (bounded)
+        timeout-minutes: 8
+        run: npx playwright install-deps chromium webkit
+      - name: Install exact Playwright browser binaries (bounded)
+        if: steps.playwright-browser-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 8
+        run: npx playwright install chromium webkit
+      - name: Run actual Chromium + WebKit E2E
+        timeout-minutes: 12
+        run: npm run test:e2e
         env:
           FH_E2E_PYTHON: python3
       - name: Upload synthetic-only failing browser artifacts
