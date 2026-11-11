@@ -793,3 +793,78 @@ test('#68 network ACK cannot silently settle the queue; backoff retains mutation
   assert.equal(classifyFinanceOutboxResponseCandidate(422).decision, 'RECOVERY_HOLD');
   assert.throws(() => classifyFinanceOutboxResponseCandidate(503, -1), /SYNC_HOLD/);
 });
+
+
+test('#68 encrypted queue survives logout, browser restart and a new unlock generation', async () => {
+  mount();
+  await createAtomicEncryptedCandidate(USER_A, PASS, {
+    ...clone(SOURCE), outbox: [], conflicts: [],
+  });
+  const oldSession = await unlock(USER_A);
+  const oldIdentity = cloudAuth(oldSession);
+  await initializeEncryptedCloudCacheCandidate({
+    scope: USER_A, session: oldSession, identity: oldIdentity,
+    pages: cloudPages(), expectedEpoch: 0,
+    confirmedAccountCacheInitialization: true,
+  });
+  const first = await enqueueEncryptedFinanceCommandCandidate({
+    scope: USER_A, session: oldSession, identity: oldIdentity,
+    command: pendingCommand(), ifMatch: CLOUD_ETAG, expectedEpoch: 1,
+  });
+  assert.equal(first.bundleEpoch, 2);
+  const oldGeneration = oldSession.lifecycleVersion;
+  oldSession.logout();
+
+  const restored = new LocalBudgetSession();
+  restored.selectScope(USER_A);
+  const keyset = await getAtomicEncryptedKeyset(USER_A);
+  await restored.unlock(keyset, {passphrase: PASS});
+  restored.lock();
+  await restored.unlock(keyset, {passphrase: PASS});
+  const freshIdentity = cloudAuth(restored);
+  assert.notEqual(freshIdentity.generation, oldGeneration);
+  assert.equal(restored.state, 'unlocked');
+  const current = await readAtomicEncryptedCandidate(USER_A, restored);
+  assert.equal(current.epoch, 2);
+  assert.equal(current.outbox.length, 1);
+  assert.equal(current.outbox[0].generation, oldGeneration);
+
+  const duplicate = await enqueueEncryptedFinanceCommandCandidate({
+    scope: USER_A, session: restored, identity: freshIdentity,
+    command: pendingCommand(), ifMatch: CLOUD_ETAG, expectedEpoch: 2,
+  });
+  assert.equal(duplicate.status, 'ALREADY_QUEUED');
+  assert.equal(duplicate.bundleEpoch, 2);
+  const newCommand = {
+    schema_version: 2,
+    client_mutation_id: 'f0000000-0000-4000-8000-000000000002',
+    base_revision: 0, action: 'account.update',
+    expected_entity_revisions: {[CLOUD_ACCOUNT]: 1},
+    payload: {account_id: CLOUD_ACCOUNT, name: 'Offline update after restart',
+      kind: 'cash'},
+  };
+  const next = await enqueueEncryptedFinanceCommandCandidate({
+    scope: USER_A, session: restored, identity: freshIdentity,
+    command: newCommand, ifMatch: CLOUD_ETAG, expectedEpoch: 2,
+  });
+  assert.equal(next.pending, 2);
+  assert.equal(next.bundleEpoch, 3);
+
+  const synced = await persistEncryptedCloudDeltaCandidate({
+    scope: USER_A, session: restored, identity: freshIdentity,
+    page: verifiedChange(), expectedEpoch: 3,
+  });
+  assert.equal(synced.status, 'ENCRYPTED_DELTA_SAVED');
+  assert.equal(synced.bundleEpoch, 4);
+  const after = await readAtomicEncryptedCandidate(USER_A, restored);
+  assert.equal(after.snapshot.cloudFinance.revision, 1);
+  assert.equal(after.snapshot.cloudFinance.generation, freshIdentity.generation);
+  assert.equal(after.snapshot.cloudFinance.entities.find(e => e.id === CLOUD_ACCOUNT)
+    .data.balance_minor, 9_500);
+  assert.equal(after.outbox.length, 2);
+  assert.deepEqual(after.outbox.map(x => x.mutationId),
+    [PENDING_ID, newCommand.client_mutation_id]);
+  assert.equal(after.outbox[0].status, 'pending');
+  assert.equal(after.outbox[1].status, 'pending');
+  restored.logout();
+});
