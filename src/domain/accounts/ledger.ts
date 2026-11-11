@@ -214,10 +214,16 @@ export function monthlyCashFlowMinor(state: LedgerState, month: string): { incom
       : tx;
     if (!original) throw new Error('Отмена без исходной операции');
     const impact = impactByTransaction.get(tx.id) ?? 0;
-    if (original.kind === 'income' || (original.kind === 'payment' && impact > 0)) {
+    // For a payment reversal, categorize using the ORIGINAL confirmed
+    // payment direction, never the opposite sign of its compensation.
+    // Otherwise a refunded expense becomes an artificial new income,
+    // inflating both monthly income and expense while net cash remains zero.
+    const originalImpact = impactByTransaction.get(original.id) ?? 0;
+    const flow = original.kind === 'payment'
+      ? (originalImpact > 0 ? 'income' : 'expense') : original.kind;
+    if (flow === 'income') {
       incomeMinor = add(incomeMinor, impact);
-    }
-    if (original.kind === 'expense' || (original.kind === 'payment' && impact < 0)) {
+    } else if (flow === 'expense') {
       expenseMinor = add(expenseMinor, -impact);
     }
   }
