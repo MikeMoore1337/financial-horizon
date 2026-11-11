@@ -8,6 +8,15 @@ preview from a trusted result of `verifyLiveLegacyBackup`; it cannot validate
 an untrusted snapshot on its own, and it does not claim that the user has
 physically retained the backup.
 
+`src/cloud/live-legacy-import-preview-candidate.mjs` now bridges the actual
+read-only legacy IndexedDB check and encrypted backup decryption to this
+preview, then **repeats both real checks after SHA-256 hashing**. A source
+change, account-claim switch or mismatch with the independently encrypted
+backup rejects the preview. The source remains unchanged, the backup password
+stays local, and neither adapter calls HTTP or creates any cloud record.
+Because the browser's legacy writers are not yet fenced by #68, even a
+successful second check is still **not permission to cut over or upload**.
+
 ## Safe preview inputs
 
 - Explicit authenticated destination `account:<verified FH user ID>` and
