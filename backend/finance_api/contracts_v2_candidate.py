@@ -181,7 +181,7 @@ async def parse_v2_account_command(request: Request) -> dict[str, Any]:
     # Match the accepted v1 precondition contract, without reading or
     # executing a financial command under a missing/weak server ETag.
     if_match = request.headers.get("if-match", "")
-    if re.fullmatch(r'"[^"\\r\\n]{1,254}"', if_match) is None:
+    if re.fullmatch(r'"[^"\r\n]{1,254}"', if_match) is None:
         raise FinanceCommandError(
             "precondition_required", "Требуется сильный If-Match", 428,
         )
