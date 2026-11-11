@@ -161,7 +161,7 @@ function validateCommand(command) {
   for (const name of ['paid_on', 'occurred_on', 'occurrence_on']) {
     if (Object.hasOwn(dto.payload, name)) {
       const value = dto.payload[name];
-      if (typeof value !== 'string' || !/^\\d{4}-\\d{2}-\\d{2}$/.test(value) ||
+      if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
           !Number.isFinite(Date.parse(value + 'T00:00:00Z')) ||
           new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) !== value) {
         hold('Недопустимая дата финансовой операции');
