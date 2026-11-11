@@ -187,7 +187,9 @@ export function decodeCompleteFinanceState(
   }
   const voids: LinkedPaymentVoidProof[] = [];
   for (const link of paymentLinks) {
-    const factId = 'settlementId' in link ? link.settlementId : link.loanPaymentId;
+    const factId = requireUUID(
+      'settlementId' in link ? link.settlementId : link.loanPaymentId,
+    );
     const source = 'settlementId' in link ? 'settlement' : 'loanPayment';
     const fact = facts.get((source === 'settlement' ? 'settlement' : 'loan_payment') + ':' + factId);
     if (!fact || fact.kind !== (source === 'settlement' ? 'settlement' : 'loan_payment')) {
