@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Financial Horizon - Account commands v2 candidate (not enabled)",
+    "title": "Financial Horizon - Accounts and linked payment v2 candidate (NOT LIVE)",
     "version": "2.0.0-candidate",
-    "description": "Non-public proposal for #33/#67. Requires separate approval; no published v2 finance API or production deployment."
+    "description": "Unapproved feature-off #33/#67 proposal: account CRUD, actual cash movements, confirmed linked obligations/loans, one-step fact void + append-only cash reversal. No deployment. Source-owned server-generated payment fact/transaction UUIDs from owner-scoped mutation keys."
   },
   "x-go-live": "NO_GO",
   "x-account-v2-opt-in-default": false,
@@ -363,7 +363,11 @@
               "account.update",
               "account.archive",
               "account.unarchive",
-              "transaction.record"
+              "transaction.record",
+              "settlement.payment.record",
+              "loan.payment.record",
+              "settlement.payment.void",
+              "loan.payment.void"
             ]
           },
           "expected_entity_revisions": {
@@ -377,7 +381,7 @@
               }
             },
             "additionalProperties": false,
-            "description": "Exactly one matching account revision for account modifications and transaction.record; empty for create. Relational binding enforced by the backend validator."
+            "description": "Exactly all required entity revisions. Create: empty. Account change/transaction: account ID. Payment record: funding account and obligation/loan. Payment void: original transaction, fact, funding account. Checked by strict server validator."
           },
           "payload": {
             "type": "object"
@@ -463,6 +467,70 @@
                 }
               }
             }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "settlement.payment.record"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/SettlementPaymentRecordV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "loan.payment.record"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/LoanPaymentRecordV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "settlement.payment.void"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/PaymentVoidV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "loan.payment.void"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/PaymentVoidV2"
+                }
+              }
+            }
           }
         ]
       },
@@ -530,7 +598,113 @@
             "minimum": 0
           }
         }
+      },
+      "SettlementPaymentRecordV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "obligation_id",
+          "account_id",
+          "amount_minor",
+          "paid_on",
+          "occurrence_on"
+        ],
+        "properties": {
+          "obligation_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "account_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "amount_minor": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000000
+          },
+          "paid_on": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "occurrence_on": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          }
+        }
+      },
+      "LoanPaymentRecordV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "loan_id",
+          "account_id",
+          "amount_minor",
+          "paid_on",
+          "strategy"
+        ],
+        "properties": {
+          "loan_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "account_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "amount_minor": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000000
+          },
+          "paid_on": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "strategy": {
+            "type": "string",
+            "enum": [
+              "term",
+              "amount"
+            ]
+          }
+        }
+      },
+      "PaymentVoidV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "transaction_id",
+          "fact_id",
+          "account_id",
+          "reason"
+        ],
+        "properties": {
+          "transaction_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "fact_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "account_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "\\S"
+          }
+        }
       }
     }
-  }
+  },
+  "x-payment-id-allocation": "Both fact_id and transaction_id are server-generated deterministically from authenticated profile, action and client_mutation_id. The client may never provide either ID for payment.record.",
+  "x-atomic-linked-void": "Payment void updates only fact.voided_at/entity_revision and appends the inverse posting in one PostgreSQL COMMIT; deferred SQL triggers reject either half and stable idempotency receipt prevents double refund."
 }
