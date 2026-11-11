@@ -10,8 +10,12 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const scopePattern = /^account:[0-9a-f]{32}$/;
 const epochPattern = /^[0-9a-f]{32}$/;
 const moneyLimit = 1_000_000_000_000;
-const kinds = new Set(['account', 'obligation', 'loan', 'reserve',
-  'transaction', 'settlement', 'loan_payment']);
+// /state pages are ordered by kind and then by UUID (PostgreSQL ordering).
+// A cursor must name the actual last entity; a fabricated forward jump would
+// hide financial records despite an apparently complete set of pages.
+const kindOrder = ['account', 'obligation', 'loan', 'reserve',
+  'transaction', 'settlement', 'loan_payment'];
+const kinds = new Set(kindOrder);
 const changes = new Set(['upsert', 'tombstone', 'ledger_posted']);
 
 function reject(message) {
@@ -117,6 +121,7 @@ export function verifyFinanceSnapshotPagesCandidate(
   }
   let revision = null;
   let expectedCursor = null;
+  let lastEntity = null;
   const entities = new Map();
   for (let i = 0; i < pages.length; i++) {
     if (signal.aborted) reject('Сессия отозвана');
@@ -130,15 +135,26 @@ export function verifyFinanceSnapshotPagesCandidate(
     if (body.revision !== revision) reject('Снимок изменился во время чтения');
     for (const item of body.entities) {
       const entity = validEntity(item);
+      if (lastEntity) {
+        const previousKind = kindOrder.indexOf(lastEntity.kind);
+        const currentKind = kindOrder.indexOf(entity.kind);
+        if (currentKind < previousKind ||
+            (currentKind === previousKind && entity.id <= lastEntity.id)) {
+          reject('Страницы финансового снимка перепутаны или повторены');
+        }
+      }
       if (entities.has(entity.id)) reject('Повторяющаяся серверная сущность');
       entities.set(entity.id, entity);
+      lastEntity = entity;
     }
     if (entities.size > 100_000) reject('Слишком большой снимок');
     const next = body.next_cursor;
     if (next !== undefined && next !== null) {
-      if (i === pages.length - 1 ||
-          typeof next !== 'string' || !next.startsWith(String(revision) + ':')) {
-        reject('Снимок обрывается на странице');
+      const actualCursor = lastEntity
+        ? revision + ':' + lastEntity.kind + ':' + lastEntity.id : null;
+      if (i === pages.length - 1 || typeof next !== 'string' ||
+          next !== actualCursor || body.entities.length === 0) {
+        reject('Снимок обрывается или курсор не соответствует записям');
       }
       expectedCursor = next;
     } else {
