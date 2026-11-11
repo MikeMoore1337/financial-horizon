@@ -99,12 +99,17 @@ export async function persistEncryptedCloudDeltaCandidate({
   const before = bundle.snapshot.cloudFinance;
   if (!before || before.schemaVersion !== 1 ||
       before.scope !== scope || before.profileId !== identity.profileId ||
-      before.generation !== identity.generation ||
+      !Number.isSafeInteger(before.generation) || before.generation < 1 ||
       before.epoch !== identity.epoch) {
     hold('Серверный финансовый снимок не совпадает с сеансом');
   }
   const checked = applyFinanceDeltaCandidate(
-    {...before, pending: bundle.outbox, conflicts: bundle.conflicts},
+    // Session generation fences only work within a live unlock. It can
+    // legitimately change across a restart or a fresh local unlock.
+    // The persistent account scope, profile and cutover epoch were validated
+    // against a fresh authenticated+unlocked session above.
+    {...before, generation: identity.generation,
+     pending: bundle.outbox, conflicts: bundle.conflicts},
     page, identity,
   );
   if (checked.revision === before.revision && page.changes.length === 0) {
