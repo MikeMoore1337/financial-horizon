@@ -1234,10 +1234,8 @@ def test_internal_account_archival_blocks_edits_until_restored(env):
     assert rejected.value.code == "semantic_conflict"
     unchanged = snapshot(env, token)
     assert unchanged.headers["etag"] == archived.headers["etag"]
-    assert unchanged.json() == archived.json() or (
-        # server_at is expected to change even when the journal is unchanged
-        unchanged.json()["revision"] == archived.json()["revision"]
-    )
+    # Server timestamp can change between reads; the revision must not.
+    assert unchanged.json()["revision"] == archived.json()["revision"]
     current = next(e for e in unchanged.json()["entities"] if e["id"] == account_id)
     assert current["data"]["name"] == "Synthetic account"
     assert current["data"]["type"] == "bank"
