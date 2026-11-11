@@ -730,7 +730,6 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             JOIN ledger_transactions tx
               ON tx.profile_id=link.profile_id AND tx.id=link.transaction_id
             WHERE link.profile_id=:p AND link.transaction_id=:tx
-            FOR UPDATE OF tx
         """), {"p": p, "tx": original_id}).mappings().one_or_none()
         if (link is None or link["kind"] != "payment"
             or (link["settlement_id"] if is_settlement else link["loan_payment_id"]) != fact_id
