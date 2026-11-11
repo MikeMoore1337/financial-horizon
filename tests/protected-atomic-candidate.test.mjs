@@ -1367,3 +1367,81 @@ test('#68 competing tabs cannot clear the same encrypted ACK twice', async () =>
   first.logout();
   second.logout();
 });
+
+
+test('#68 historical ACK after encrypted delta recovers pending UUID without double posting', async () => {
+  const {session, identity} = await pendingAccountCreate();
+  const {receipt, deltaPage} = confirmedReceiptData();
+  // Simulate network loss after verified /changes was already stored but
+  // before the immutable receipt was reconciled and removed from outbox.
+  const applied = await persistEncryptedCloudDeltaCandidate({
+    scope: USER_A, session, identity, expectedEpoch: 2, page: deltaPage,
+  });
+  assert.equal(applied.bundleEpoch, 3);
+  const before = await readAtomicEncryptedCandidate(USER_A, session);
+  assert.equal(before.snapshot.cloudFinance.revision, 1);
+  assert.equal(before.outbox.length, 1);
+  const restored = await persistAuthenticatedFinanceReceiptCandidate({
+    scope: USER_A, session, identity, expectedEpoch: 3,
+    receipt: {...receipt, replayed: true}, deltaPage,
+    commandHttpStatus: 200, deltaHttpStatus: 200,
+  });
+  assert.equal(restored.status, 'DURABLY_CONFIRMED');
+  assert.equal(restored.serverBalanceChanged, false);
+  assert.equal(restored.bundleEpoch, 4);
+  const after = await readAtomicEncryptedCandidate(USER_A, session);
+  assert.equal(after.snapshot.cloudFinance.revision, 1);
+  assert.deepEqual(after.snapshot.cloudFinance.entities,
+    before.snapshot.cloudFinance.entities);
+  assert.equal(after.outbox.length, 0);
+  assert.equal(after.snapshot.cloudFinance.appliedReceipts.length, 1);
+  assert.equal(after.snapshot.cloudFinance.entities.find(e => e.id === NEW_ACCOUNT_ID)
+    .data.balance_minor, 12_345);
+  session.logout();
+});
+
+test('#68 historical server receipt recovery re-fetches the original committed revision', async () => {
+  const {session, identity} = await pendingAccountCreate();
+  const {receipt, deltaPage} = confirmedReceiptData();
+  await persistEncryptedCloudDeltaCandidate({
+    scope: USER_A, session, identity, expectedEpoch: 2, page: deltaPage,
+  });
+  const urls = [];
+  const fetchImpl = async (url, init) => {
+    urls.push(url);
+    if (urls.length === 1) return mockFinanceJson(
+      {...receipt, replayed: true}, 200,
+    );
+    if (urls.length === 2) return mockFinanceJson(deltaPage, 200);
+    throw Error('Unexpected third financial request');
+  };
+  const confirmed = await dispatchOneEncryptedFinanceCommandCandidate({
+    scope: USER_A, session, identity, expectedEpoch: 3,
+    origin: TEST_ORIGIN, explicitNetworkCandidateConsent: true, fetchImpl,
+  });
+  assert.equal(confirmed.status, 'DURABLY_CONFIRMED');
+  assert.equal(confirmed.serverBalanceChanged, false);
+  assert.equal(urls.length, 2);
+  assert.equal(urls[1], TEST_ORIGIN +
+    '/api/finance/v1/changes?since_revision=0&limit_revisions=1');
+  assert.equal((await readAtomicEncryptedCandidate(USER_A, session)).outbox.length, 0);
+  session.logout();
+});
+
+test('#68 historical ACK fails closed when original server event cannot be recovered', async () => {
+  const {session, identity} = await pendingAccountCreate();
+  const {receipt, deltaPage} = confirmedReceiptData();
+  await persistEncryptedCloudDeltaCandidate({
+    scope: USER_A, session, identity, expectedEpoch: 2, page: deltaPage,
+  });
+  const before = await readAtomicEncryptedCandidate(USER_A, session);
+  const corrupt = {...deltaPage, changes: [{...deltaPage.changes[0],
+    payload: {entity: confirmedAccountEvent(12_346).payload.entity}}]};
+  await assert.rejects(() => persistAuthenticatedFinanceReceiptCandidate({
+    scope: USER_A, session, identity, expectedEpoch: 3,
+    receipt, deltaPage: corrupt,
+    commandHttpStatus: 201, deltaHttpStatus: 200,
+  }), /SYNC_HOLD/);
+  assert.deepEqual(await readAtomicEncryptedCandidate(USER_A, session), before);
+  session.logout();
+});
