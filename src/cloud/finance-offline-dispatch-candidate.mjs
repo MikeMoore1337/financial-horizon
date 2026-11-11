@@ -10,6 +10,7 @@ import {readAtomicEncryptedCandidate} from '../security/protected-atomic-candida
 import {
   persistAuthenticatedFinanceReceiptCandidate,
   classifyFinanceOutboxResponseCandidate,
+  recordEncryptedFinanceRetryCandidate,
 } from './encrypted-command-outbox-candidate.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -76,10 +77,26 @@ async function jsonResponse(response) {
     return JSON.parse(raw);
   } finally { reader.releaseLock(); }
 }
-function control(action, delay = null) {
+function control(action, delay = null, bundleEpoch = null) {
   return Object.freeze({status: action, retryDelayMs: delay,
-    sentByThisCall: false, queuePreserved: true,
+    bundleEpoch, sentByThisCall: true, queuePreserved: true,
     serverCommitNotYetReconciled: true});
+}
+async function retryAfterTransientFailure({
+  scope, session, identity, expectedEpoch, item, httpStatus,
+}) {
+  const policy = classifyFinanceOutboxResponseCandidate(
+    httpStatus, item.attempts,
+  );
+  if (policy.decision !== 'RETRY_SAME_UUID') {
+    return control(policy.decision, policy.retryDelayMs);
+  }
+  // Retry count persists in the SAME encrypted account outbox. No
+  // unbounded loop, timer or automatic network request is scheduled.
+  const saved = await recordEncryptedFinanceRetryCandidate({
+    scope, session, identity, expectedEpoch, mutationId: item.mutationId,
+  });
+  return control(policy.decision, policy.retryDelayMs, saved.bundleEpoch);
 }
 
 /**
@@ -151,12 +168,15 @@ export async function dispatchOneEncryptedFinanceCommandCandidate({
     if (session.lifecycleSignal.aborted || identity.signal?.aborted) {
       return control('AUTH_HOLD');
     }
-    const result = classifyFinanceOutboxResponseCandidate(null, item.attempts);
-    return control(result.decision, result.retryDelayMs);
+    return retryAfterTransientFailure({
+      scope, session, identity, expectedEpoch, item, httpStatus: null,
+    });
   }
   if (posted.status !== 200 && posted.status !== 201) {
-    const result = classifyFinanceOutboxResponseCandidate(posted.status, item.attempts);
-    return control(result.decision, result.retryDelayMs);
+    return retryAfterTransientFailure({
+      scope, session, identity, expectedEpoch, item,
+      httpStatus: posted.status,
+    });
   }
   let receipt;
   try { receipt = await jsonResponse(posted); }
@@ -186,8 +206,9 @@ export async function dispatchOneEncryptedFinanceCommandCandidate({
   active(scope, session, identity);
   // This either commits a complete validated server delta and receipt in one
   // IDB transaction or throws with the previous outbox still encrypted.
-  return persistAuthenticatedFinanceReceiptCandidate({
+  const reconciled = await persistAuthenticatedFinanceReceiptCandidate({
     scope, session, identity, expectedEpoch, receipt, deltaPage,
     commandHttpStatus: posted.status, deltaHttpStatus: deltaResponse.status,
   });
+  return Object.freeze({...reconciled, sentByThisCall: true});
 }
