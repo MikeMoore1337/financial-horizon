@@ -127,7 +127,7 @@ export async function persistEncryptedCloudDeltaCandidate({
   const proofs = before.appliedReceipts || [];
   if (!Array.isArray(proofs) || proofs.length > 2000 ||
       proofs.some(x => !x || typeof x !== 'object' ||
-        !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/.test(x.mutationId) ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(x.mutationId) ||
         !/^[a-f0-9]{64}$/.test(x.fingerprint) ||
         !Number.isSafeInteger(x.revision) || x.revision < 1)) {
     hold('История подтверждённых операций повреждена');
