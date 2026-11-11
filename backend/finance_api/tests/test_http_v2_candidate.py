@@ -235,3 +235,46 @@ def test_v2_candidate_account_scope_conflict_and_stale_etag(v2_env):
     assert denied.status_code == 409
     assert snapshot(second_user).json()["entities"] == []
     assert balance(v2_env, uid, account_id) == 500
+
+
+def test_v2_candidate_missing_or_weak_etag_fails_428_without_cash_mutation(v2_env):
+    uid, token = v2_env["first"]
+    client = v2_env["v2_client"](token)
+    before = snapshot(client)
+    command = request(before, "account.create", {
+        "id": str(uuid4()), "name": "Precondition guard", "kind": "cash",
+        "currency": "RUB", "opening_minor": 700,
+    })
+    for etag in (None, 'W/"old"', '"broken'):
+        headers = {"Origin": ORIGIN, "Idempotency-Key": command["client_mutation_id"]}
+        if etag is not None:
+            headers["If-Match"] = etag
+        denied = client.post("/api/finance/v2/commands", json=command, headers=headers)
+        assert denied.status_code == 428, denied.text
+        assert denied.json()["code"] == "precondition_required"
+    assert snapshot(client).json()["revision"] == before.json()["revision"]
+
+
+def test_v2_candidate_email_logout_invalidates_both_finance_cookie_paths(v2_env):
+    uid, token = v2_env["first"]
+    client = v2_env["v2_client"](token)
+    before = snapshot(client)
+    command = request(before, "account.create", {
+        "id": str(uuid4()), "name": "No post after logout", "kind": "cash",
+        "currency": "RUB", "opening_minor": 100,
+    })
+    logout = client.post("/api/auth/email/logout", headers={"Origin": ORIGIN}, json={})
+    assert logout.status_code == 200, logout.text
+    cookies = logout.headers.get_list("set-cookie")
+    assert any(
+        "fh_finance_session=" in cookie and "Path=/api/finance/v1" in cookie
+        for cookie in cookies
+    )
+    assert any(
+        "fh_finance_session=" in cookie and "Path=/api/finance/v2" in cookie
+        for cookie in cookies
+    )
+    denied = post(client, before, command)
+    assert denied.status_code == 401
+    assert denied.json()["code"] == "unauthenticated"
+    assert v2_env["scope"](uid).user_id == uid
