@@ -109,7 +109,74 @@ function validateCommand(command) {
       Object.keys(dto.expected_entity_revisions).length > 100 ||
       Object.entries(dto.expected_entity_revisions).some(([id, rev]) =>
         !UUID.test(id) || !integer(rev, 1))) hold('Неверные ревизии сущностей');
-  for (const [name, value] of Object.entries(dto.payload)) {
+  // Mirror the exact account IDs whose revisions the server will lock.
+  // Rejecting invalid commands before queueing prevents persistent offline
+  // entries that can never succeed after a network reconnect.
+  let requiredRevisions;
+  if (dto.action === 'account.create') {
+    requiredRevisions = [];
+  } else if (dto.action === 'settlement.payment.record') {
+    requiredRevisions = [dto.payload.account_id, dto.payload.obligation_id];
+  } else if (dto.action === 'loan.payment.record') {
+    requiredRevisions = [dto.payload.account_id, dto.payload.loan_id];
+  } else if (dto.action.endsWith('.payment.void')) {
+    requiredRevisions = [dto.payload.account_id,
+      dto.payload.fact_id, dto.payload.transaction_id];
+  } else {
+    requiredRevisions = [dto.payload.account_id];
+  }
+  const revisionKeys = Object.keys(dto.expected_entity_revisions);
+  if (new Set(requiredRevisions).size !== requiredRevisions.length ||
+      revisionKeys.length !== requiredRevisions.length ||
+      requiredRevisions.some(id => !UUID.test(id) ||
+        !Object.hasOwn(dto.expected_entity_revisions, id))) {
+    hold('Отсутствуют точные ревизии финансовых сущностей');
+  }
+  if (Object.hasOwn(dto.payload, 'currency') && dto.payload.currency !== 'RUB') {
+    hold('Поддерживаются только рубли');
+  }
+  if (Object.hasOwn(dto.payload, 'kind')) {
+    const kinds = dto.action === 'transaction.record'
+      ? ['income', 'expense', 'adjustment']
+      : ['bank', 'card', 'cash', 'savings', 'other'];
+    if (!kinds.includes(dto.payload.kind)) hold('Недопустимый тип операции');
+  }
+  if (Object.hasOwn(dto.payload, 'strategy') &&
+      !['term', 'amount'].includes(dto.payload.strategy)) {
+    hold('Недопустимая стратегия платежа');
+  }
+  for (const name of ['name', 'reason']) {
+    if (Object.hasOwn(dto.payload, name) &&
+        (typeof dto.payload[name] !== 'string' ||
+         !dto.payload[name].trim() ||
+         dto.payload[name].length > (name === 'name' ? 160 : 500))) {
+      hold('Не заполнено обязательное поле команды');
+    }
+  }
+  if (Object.hasOwn(dto.payload, 'note') &&
+      dto.payload.note !== null &&
+      (typeof dto.payload.note !== 'string' || dto.payload.note.length > 500)) {
+    hold('Недопустимое примечание');
+  }
+  for (const name of ['paid_on', 'occurred_on', 'occurrence_on']) {
+    if (Object.hasOwn(dto.payload, name)) {
+      const value = dto.payload[name];
+      if (typeof value !== 'string' || !/^\\d{4}-\\d{2}-\\d{2}$/.test(value) ||
+          !Number.isFinite(Date.parse(value + 'T00:00:00Z')) ||
+          new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) !== value) {
+        hold('Недопустимая дата финансовой операции');
+      }
+    }
+  }
+  if (dto.action === 'transaction.record') {
+    const minor = dto.payload.signed_minor;
+    if (minor === 0 ||
+        (dto.payload.kind === 'income' && minor <= 0) ||
+        (dto.payload.kind === 'expense' && minor >= 0)) {
+      hold('Знак суммы не соответствует направлению операции');
+    }
+  }
+    for (const [name, value] of Object.entries(dto.payload)) {
     if ((name === 'opening_minor' || name === 'signed_minor') &&
         !integer(value, -1_000_000_000_000, 1_000_000_000_000)) {
       hold('Недопустимая сумма');
