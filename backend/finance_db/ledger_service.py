@@ -35,7 +35,7 @@ _INTERNAL_ACTIONS = frozenset((
 ))
 _PUBLIC_V1_ACTIONS = frozenset(("obligation.create", "account.transfer", "reserve.allocate", "transaction.reverse"))
 # The proposed v2 transport has a deliberately narrower whitelist than internal
-# commands. No v2 HTTP route is mounted, and the default callable remains v1.
+# commands. The v2 HTTP route is disabled by default; v1 remains the default.
 _PUBLIC_V2_ACCOUNT_ACTIONS = frozenset((
     "account.create", "account.update", "account.archive", "account.unarchive",
     "transaction.record", "settlement.payment.record", "loan.payment.record",
