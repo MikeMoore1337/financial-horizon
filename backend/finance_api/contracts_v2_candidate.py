@@ -178,6 +178,13 @@ async def parse_v2_account_command(request: Request) -> dict[str, Any]:
         or len(declared) > 12 or int(declared) > MAX_REQUEST_BYTES
     ):
         raise FinanceCommandError("invalid_command", "Слишком большой запрос", 413)
+    # Match the accepted v1 precondition contract, without reading or
+    # executing a financial command under a missing/weak server ETag.
+    if_match = request.headers.get("if-match", "")
+    if re.fullmatch(r'"[^"\\r\\n]{1,254}"', if_match) is None:
+        raise FinanceCommandError(
+            "precondition_required", "Требуется сильный If-Match", 428,
+        )
     chunks: list[bytes] = []
     total = 0
     async for chunk in request.stream():
