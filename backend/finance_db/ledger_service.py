@@ -743,12 +743,18 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         if already:
             raise FinanceCommandError("semantic_conflict", "Оплата уже отменена", 409)
 
-        fact_table = "settlements" if is_settlement else "loan_payments"
-        # Fixed trusted table names, never interpolated from JSON.
-        fact = session.execute(text(f"""
-            SELECT entity_revision,voided_at FROM {fact_table}
-            WHERE profile_id=:p AND id=:fact FOR UPDATE
-        """), {"p": p, "fact": fact_id}).mappings().one_or_none()
+        # Use two static SQL statements. Never build table names even from an
+        # internal enum: this boundary must remain auditable by AppSec tools.
+        if is_settlement:
+            fact = session.execute(text("""
+                SELECT entity_revision,voided_at FROM settlements
+                WHERE profile_id=:p AND id=:fact FOR UPDATE
+            """), {"p": p, "fact": fact_id}).mappings().one_or_none()
+        else:
+            fact = session.execute(text("""
+                SELECT entity_revision,voided_at FROM loan_payments
+                WHERE profile_id=:p AND id=:fact FOR UPDATE
+            """), {"p": p, "fact": fact_id}).mappings().one_or_none()
         if fact is None or fact["voided_at"] is not None:
             raise FinanceCommandError("semantic_conflict", "Факт оплаты уже аннулирован", 409)
         _require_revision(versions, fact_id, fact["entity_revision"])
@@ -767,11 +773,18 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
 
         target = uuid4()
         # Guarded SQL columns allow only a one-time void of this fact.
-        session.execute(text(f"""
-            UPDATE {fact_table} SET voided_at=now(),
-              entity_revision=entity_revision+1
-            WHERE profile_id=:p AND id=:fact
-        """), {"p": p, "fact": fact_id})
+        if is_settlement:
+            session.execute(text("""
+                UPDATE settlements SET voided_at=now(),
+                  entity_revision=entity_revision+1
+                WHERE profile_id=:p AND id=:fact
+            """), {"p": p, "fact": fact_id})
+        else:
+            session.execute(text("""
+                UPDATE loan_payments SET voided_at=now(),
+                  entity_revision=entity_revision+1
+                WHERE profile_id=:p AND id=:fact
+            """), {"p": p, "fact": fact_id})
         _post(session, p, target, "reversal", scope.user_id,
               datetime.now(timezone.utc).date(), [(acc_id, -original_minor)],
               reversed_id=original_id, note=reason.strip())
