@@ -332,3 +332,140 @@ def test_v2_candidate_revoked_during_stream_never_commits(env, v2_env):
     state = get_account_snapshot(v2_env["engine"], scope=v2_env["scope"](uid))
     assert state.body["revision"] == before.json()["revision"]
     assert state.body["entities"] == before.json()["entities"]
+
+
+@pytest.mark.parametrize("kind,direction", [
+    ("loan", "expense"), ("settlement", "expense"), ("settlement", "income"),
+])
+def test_v2_candidate_linked_record_void_is_one_exact_cash_compensation(v2_env, kind, direction):
+    """Real FH session -> v2 HTTP -> RLS PostgreSQL -> second-device snapshot."""
+    from sqlalchemy import text
+    from backend.finance_db.db import finance_transaction
+
+    uid, token = v2_env["first"]
+    c1 = v2_env["v2_client"](token)
+    account_id = v2_env["account"](uid, opening=20_000)
+    source_id = str(uuid4())
+    with finance_transaction(v2_env["engine"], verified_user_id=uid,
+                             profile_id=v2_env["scope"](uid).profile_id) as db:
+        if kind == "loan":
+            db.execute(text("""
+                INSERT INTO loans
+                 (profile_id,id,title,opening_minor,payment_minor,apr_basis_points,
+                  term_months,due_day,as_of_date)
+                VALUES (:p,:id,'Synthetic debt',50000,5000,1200,24,8,'2026-11-08')
+            """), {"p": v2_env["scope"](uid).profile_id, "id": source_id})
+            action = "loan.payment.record"
+            payload = {"loan_id": source_id, "account_id": account_id,
+                       "amount_minor": 1_200, "paid_on": "2026-11-11", "strategy": "term"}
+        else:
+            db.execute(text("""
+                INSERT INTO obligations
+                  (profile_id,id,title,direction,amount_minor,starts_on)
+                VALUES (:p,:id,'Synthetic bill',:direction,5000,'2026-11-08')
+            """), {"p": v2_env["scope"](uid).profile_id,
+                   "id": source_id, "direction": direction})
+            action = "settlement.payment.record"
+            payload = {"obligation_id": source_id, "account_id": account_id,
+                       "amount_minor": 1_200, "paid_on": "2026-11-11",
+                       "occurrence_on": "2026-11-08"}
+
+    before = snapshot(c1)
+    cmd = request(before, action, payload, revisions(before, account_id, source_id))
+    record = post(c1, before, cmd)
+    assert record.status_code == 201, record.text
+    result = record.json()
+    assert result["schema_version"] == 2
+    assert len(result["changes"]) == 2
+    assert [x["ordinal"] for x in result["changes"]] == [0, 1]
+    payment_tx = result["changes"][0]["entity_id"]
+    payment_fact = result["changes"][1]["entity_id"]
+    assert payment_tx not in (source_id, account_id, payment_fact)
+    signed = 1_200 if kind == "settlement" and direction == "income" else -1_200
+    assert result["changes"][0]["payload"]["signed_minor"] == signed
+    assert result["changes"][1]["payload"]["entity"]["data"]["voided_at"] is None
+    assert balance(v2_env, uid, account_id) == 20_000 + signed
+
+    # Stable server-generated identifiers preserve the original fingerprint.
+    replay = post(c1, before, cmd)
+    assert replay.status_code == 200 and replay.json()["replayed"] is True
+    assert replay.json()["revision"] == result["revision"]
+    assert replay.json()["changes"][0]["entity_id"] == payment_tx
+    assert replay.json()["changes"][1]["entity_id"] == payment_fact
+    assert balance(v2_env, uid, account_id) == 20_000 + signed
+
+    # Other authenticated device sees exact same committed state.
+    c2 = v2_env["v2_client"](token)
+    after = snapshot(c2)
+    assert next(x for x in after.json()["entities"]
+                if x["id"] == account_id)["data"]["balance_minor"] == 20_000 + signed
+    undo = request(after, "loan.payment.void" if kind == "loan" else "settlement.payment.void",
+                   {"transaction_id": payment_tx, "fact_id": payment_fact,
+                    "account_id": account_id, "reason": "Ошибка платежа"},
+                   revisions(after, account_id, payment_tx, payment_fact))
+    compensated = post(c2, after, undo)
+    assert compensated.status_code == 201, compensated.text
+    cancel = compensated.json()
+    assert cancel["schema_version"] == 2
+    assert len(cancel["changes"]) == 2
+    assert cancel["changes"][0]["payload"]["reversed_transaction_id"] == payment_tx
+    assert cancel["changes"][0]["payload"]["entity"]["data"]["postings"] == [{
+        "account_id": account_id, "signed_minor": -signed,
+    }]
+    assert cancel["changes"][1]["entity_id"] == payment_fact
+    assert cancel["changes"][1]["entity_revision"] == 2
+    assert cancel["changes"][1]["payload"]["entity"]["data"]["voided_at"] is not None
+    assert balance(v2_env, uid, account_id) == 20_000
+
+    original_replay = post(c2, after, undo)
+    assert original_replay.status_code == 200
+    assert original_replay.json()["replayed"] is True
+    fresh = snapshot(c1)
+    second_void = request(fresh, undo["action"], undo["payload"],
+                          revisions(fresh, account_id, payment_tx, payment_fact))
+    rejected = post(c1, fresh, second_void)
+    assert rejected.status_code == 409
+    assert balance(v2_env, uid, account_id) == 20_000
+    delta = c1.get("/api/finance/v1/changes", params={
+        "since_revision": after.json()["revision"], "limit_revisions": 1,
+    })
+    assert delta.status_code == 200, delta.text
+    assert delta.json()["changes"] == cancel["changes"]
+
+
+def test_v2_candidate_linked_payment_cannot_be_voided_by_other_user(v2_env):
+    from sqlalchemy import text
+    from backend.finance_db.db import finance_transaction
+
+    uid, token = v2_env["first"]
+    owner = v2_env["v2_client"](token)
+    account_id = v2_env["account"](uid, opening=12_000)
+    loan_id = str(uuid4())
+    with finance_transaction(v2_env["engine"], verified_user_id=uid,
+                             profile_id=v2_env["scope"](uid).profile_id) as db:
+        db.execute(text("""
+            INSERT INTO loans
+             (profile_id,id,title,opening_minor,payment_minor,apr_basis_points,
+              term_months,due_day,as_of_date)
+            VALUES (:p,:id,'Private loan',20000,2000,1000,12,8,'2026-11-08')
+        """), {"p": v2_env["scope"](uid).profile_id, "id": loan_id})
+    before = snapshot(owner)
+    record = post(owner, before, request(before, "loan.payment.record", {
+        "loan_id": loan_id, "account_id": account_id,
+        "amount_minor": 900, "paid_on": "2026-11-11", "strategy": "term",
+    }, revisions(before, account_id, loan_id)))
+    assert record.status_code == 201, record.text
+    transaction_id = record.json()["changes"][0]["entity_id"]
+    fact_id = record.json()["changes"][1]["entity_id"]
+
+    other_uid, other_token = v2_env["new_user"]()
+    other = v2_env["v2_client"](other_token)
+    foreign = snapshot(other)
+    attempt = request(foreign, "loan.payment.void", {
+        "transaction_id": transaction_id, "fact_id": fact_id,
+        "account_id": account_id, "reason": "Unauthorized refund",
+    }, {transaction_id: 1, fact_id: 1, account_id: 2})
+    denied = post(other, foreign, attempt)
+    assert denied.status_code == 409
+    assert balance(v2_env, uid, account_id) == 11_100
+    assert snapshot(other).json()["entities"] == []
