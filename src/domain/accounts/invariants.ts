@@ -4,7 +4,10 @@
  * local command simulation. Authoritative SQL/RLS checks remain in #66/#67.
  */
 import { MAX_MINOR } from './money.ts';
-import type { LedgerState, LedgerPosting, LedgerTransaction } from './ledger.ts';
+import type {
+  LedgerState, LedgerPosting, LedgerTransaction, PaymentLink,
+  LinkedPaymentVoidProof,
+} from './ledger.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const ACTOR = /^[0-9a-f]{32}$/;
@@ -109,6 +112,7 @@ export function assertLedgerState(state: LedgerState): void {
   const linkedTransactionIds = new Set<string>();
   const loanPaymentTransactionIds = new Set<string>();
   const linkedPaymentFacts = new Set<string>();
+  const linksByTransaction = new Map<string, PaymentLink>();
   for (const link of state.paymentLinks) {
     if (!link || typeof link !== 'object' || link.profileId !== state.profileId) throw new Error('Чужая связь оплаты');
     requireUUID(link.transactionId);
@@ -123,7 +127,59 @@ export function assertLedgerState(state: LedgerState): void {
     if (linkedPaymentFacts.has(factKey)) throw new Error('Факт оплаты списан более одного раза');
     linkedPaymentFacts.add(factKey);
     linkedTransactionIds.add(link.transactionId);
+    linksByTransaction.set(link.transactionId, link);
     if (hasLoan) loanPaymentTransactionIds.add(link.transactionId);
+  }
+
+  // Existing legacy snapshots may omit this metadata, but a newer linked
+  // payment cancellation is valid only if the authoritative server also
+  // supplies its corresponding voided settlement/loan-payment fact. The
+  // browser never authorizes the void: PostgreSQL 0002 is authoritative.
+  const proofs = state.linkedPaymentVoids ?? [];
+  if (!Array.isArray(proofs) || proofs.length > state.transactions.length) {
+    throw new Error('Повреждены факты аннулированной оплаты');
+  }
+  const voidedByPayment = new Map<string, LinkedPaymentVoidProof>();
+  const seenVoidedFacts = new Set<string>();
+  const seenReversalTransactions = new Set<string>();
+  for (const proof of proofs) {
+    if (!proof || typeof proof !== 'object' ||
+        proof.profileId !== state.profileId ||
+        (proof.source !== 'settlement' && proof.source !== 'loanPayment')) {
+      throw new Error('Чужой или неизвестный факт отмены оплаты');
+    }
+    requireUUID(proof.transactionId);
+    requireUUID(proof.factId);
+    requireUUID(proof.reversedByTransactionId);
+    requireRevision(proof.entityRevision, false);
+    // A void advances the stored fact entity_revision from 1 to at least 2.
+    if (proof.entityRevision < 2 || typeof proof.voidedAt !== 'string') {
+      throw new Error('Не подтверждена ревизия аннулированной оплаты');
+    }
+    const timestamp = proof.voidedAt;
+    const m = /^(\d{4}-\d{2}-\d{2})T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,6})?(?:Z|\+00:00)$/.exec(timestamp);
+    const millis = Date.parse(timestamp);
+    if (!m || !Number.isFinite(millis) ||
+        new Date(millis).toISOString().slice(0, 10) !== m[1]) {
+      throw new Error('Неверная серверная дата отмены оплаты');
+    }
+    const link = linksByTransaction.get(proof.transactionId);
+    const expectedFact = link && (proof.source === 'settlement'
+      ? ('settlementId' in link ? link.settlementId : undefined)
+      : ('loanPaymentId' in link ? link.loanPaymentId : undefined));
+    const reversed = transactions.get(proof.reversedByTransactionId);
+    if (expectedFact !== proof.factId ||
+        transactions.get(proof.transactionId)?.kind !== 'payment' ||
+        !reversed || reversed.kind !== 'reversal' ||
+        reversed.reversedTransactionId !== proof.transactionId ||
+        voidedByPayment.has(proof.transactionId) ||
+        seenVoidedFacts.has(proof.source + ':' + proof.factId) ||
+        seenReversalTransactions.has(proof.reversedByTransactionId)) {
+      throw new Error('Факт отмены не совпадает со связанной проводкой');
+    }
+    voidedByPayment.set(proof.transactionId, proof);
+    seenVoidedFacts.add(proof.source + ':' + proof.factId);
+    seenReversalTransactions.add(proof.reversedByTransactionId);
   }
 
   const reversed = new Set<string>();
@@ -138,9 +194,12 @@ export function assertLedgerState(state: LedgerState): void {
       reversed.add(tx.reversedTransactionId!);
       const original = transactions.get(tx.reversedTransactionId!);
       if (!original || original.kind === 'reversal') throw new Error('Невозможно отменить несуществующую операцию');
-      // Without an atomically voided loan/settlement fact, a refunded linked
-      // payment would misstate both available cash and the outstanding debt.
-      if (original.kind === 'payment') throw new Error('Связанная оплата отменена без аннулирования факта платежа');
+      // A linked payment reversal requires the exact server-verified fact
+      // void, not merely an opposite signed posting in the client cache.
+      if (original.kind === 'payment' &&
+          voidedByPayment.get(original.id)?.reversedByTransactionId !== tx.id) {
+        throw new Error('Связанная оплата отменена без аннулирования факта платежа');
+      }
       const sourcePair = postings.get(original.id) ?? [];
       if (!sourcePair.length || sourcePair.length !== pair.length) throw new Error('Неверное число компенсирующих проводок');
       const inverse = new Map(sourcePair.map(item => [item.accountId, -item.signedMinor]));
