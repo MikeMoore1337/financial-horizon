@@ -28,6 +28,10 @@ writing. Monetary values are integer kopecks, `RUB` only.
 | `account.archive` | `account_id` | Exactly this account |
 | `account.unarchive` | `account_id` | Exactly this account |
 | `transaction.record` | `id`, `account_id`, `kind`, signed `signed_minor`, `occurred_on`, optional `note` | Exactly this account |
+| `settlement.payment.record` | `obligation_id`, `account_id`, `amount_minor`, `paid_on`, `occurrence_on` | Funding account + obligation |
+| `loan.payment.record` | `loan_id`, `account_id`, `amount_minor`, `paid_on`, `strategy` | Funding account + loan |
+| `settlement.payment.void` | `transaction_id`, `fact_id`, `account_id`, `reason` | Original transaction + fact + account |
+| `loan.payment.void` | `transaction_id`, `fact_id`, `account_id`, `reason` | Original transaction + fact + account |
 
 UUIDs for a proposed new account or transaction come from the client
 and are checked for canonical format; the server-generated **actor/profile**
@@ -51,10 +55,14 @@ alter real balances. Planned obligations and reserves are distinct.
   The application factory defaults to `enable_account_v2_candidate=False`.
   The production configuration never enables it; only synthetic tests opt in.
   Never expose `allow_internal=True` to HTTP.
-- Linked obligation/loan payments, funding accounts, and atomic
-  `void + compensated reversal` need a separately approved v2 DTO and
-  the required #66 database grants/deferred invariants. Generic v1 reversal
-  deliberately refuses linked payments.
+- Linked obligation/loan payment commands now have **unapproved candidate**
+  v2 DTOs with an explicit funding account and SQL checks from
+  `0002_linked_void`. Payment record IDs are minted deterministically from
+  the authenticated profile, action and mutation UUID; the client cannot
+  provide these IDs. Payment void and compensating reversal commit together.
+  The new DDL/grants/triggers require independent database review and a
+  controlled migration/restore before this can become a public feature.
+  Generic v1 reversal deliberately refuses linked payments.
 - An approved, reviewed HTTP OpenAPI contract and explicit #67 agreement are
   required **before deployment or runtime enablement** of the candidate.
 - Required readiness: #66 encrypted PostgreSQL/offsite backup/restore/PITR,
@@ -66,7 +74,7 @@ alter real balances. Planned obligations and reserves are distinct.
 
 The machine-readable but **not approved** candidate lives in
 `backend/finance_api/finance-v2-accounts-candidate.openapi.json`.
-`backend/finance_api/tests/test_contract_v2_openapi.py` checks the five
+`backend/finance_api/tests/test_contract_v2_openapi.py` checks all nine
 Pydantic action/payload definitions against this draft, its session-cookie
 scope and the required HTTP errors. It does not publish or authorize the
 API; production and the accepted v1 OpenAPI remain unchanged.
@@ -74,7 +82,8 @@ API; production and the accepted v1 OpenAPI remain unchanged.
 `backend/finance_api/tests/test_contract_v2_candidate.py` validates the strict
 unpublished transport without database access. The separately unmounted
 `backend/finance_api/accounts_v2_service.py` binds the validated five-action
-allowlist to the existing authoritative RLS/CAS/receipt PostgreSQL core.
+allowlist to the existing authoritative RLS/CAS/receipt PostgreSQL core,
+including source-verified payment records and append-only compensation.
 `backend/finance_api/tests/test_account_v2_service.py` exercises that private
 adapter on disposable PostgreSQL with real FH SQLite session bootstrapping,
 including stale/replayed commands, actual expense, archive and cross-profile
