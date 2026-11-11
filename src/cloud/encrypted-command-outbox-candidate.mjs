@@ -140,7 +140,7 @@ function existingQueue(queue, scope, identity) {
       queue.some(x => !plain(x) || x.scope !== scope ||
         x.profileId !== identity.profileId ||
         x.epoch !== identity.epoch ||
-        x.generation !== identity.generation ||
+        !integer(x.generation, 1) ||
         !UUID.test(x.mutationId) ||
         !/^[a-f0-9]{64}$/.test(x.fingerprint) ||
         x.status !== 'pending' ||
@@ -177,9 +177,13 @@ export async function enqueueEncryptedFinanceCommandCandidate({
   if (!plain(cloud) || cloud.schemaVersion !== 1 ||
       cloud.scope !== scope || cloud.profileId !== identity.profileId ||
       cloud.epoch !== identity.epoch ||
-      cloud.generation !== identity.generation ||
+      !integer(cloud.generation, 1) ||
       !integer(cloud.revision) ||
       cloud.revision !== pinned.base_revision) hold('Серверная версия изменилась');
+  // The old in-memory unlock generation is not a durable credential.
+  // It may differ after a real browser restart. A fresh FH session and
+  // currently unlocked keyset are checked above; queue identity is fenced
+  // by the persistent account scope, owner profile and cutover epoch.
   existingQueue(current.outbox, scope, identity);
   const duplicate = current.outbox.find(x => x.mutationId === pinned.client_mutation_id);
   if (duplicate) {
