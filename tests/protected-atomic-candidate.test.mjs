@@ -1216,7 +1216,16 @@ test('#68 failures, server conflicts and ambiguous POST response retain queued m
     assert.equal(result.status, expected, String(stage));
     assert.equal(result.queuePreserved, true);
     const current = await readAtomicEncryptedCandidate(USER_A, session);
-    assert.deepEqual(current, prior);
+    if (stage === 503 || stage === 'network') {
+      assert.equal(current.epoch, prior.epoch + 1);
+      assert.equal(current.outbox[0].attempts, prior.outbox[0].attempts + 1);
+      assert.equal(current.outbox[0].mutationId, PENDING_ID);
+      assert.deepEqual(current.outbox[0].command, prior.outbox[0].command);
+      assert.deepEqual(current.snapshot, prior.snapshot);
+      assert.equal(result.bundleEpoch, current.epoch);
+    } else {
+      assert.deepEqual(current, prior);
+    }
     assert.equal(calls.length, stage === 'delta-missing' ? 2 : 1);
     session.logout();
   }
@@ -1246,4 +1255,47 @@ test('#68 never uploads plaintext to a different-origin endpoint or on revoked s
     }), /SYNC_HOLD/,
   );
   assert.equal(calls, 0);
+});
+
+
+test('#68 transient retries retain encrypted identity and exponential backoff across restart', async () => {
+  const {session, identity} = await pendingAccountCreate();
+  let calls = 0;
+  const offline = async () => {
+    calls++;
+    throw Error('Synthetic transport interruption');
+  };
+  const first = await dispatchOneEncryptedFinanceCommandCandidate({
+    scope: USER_A, session, identity, expectedEpoch: 2,
+    origin: TEST_ORIGIN, explicitNetworkCandidateConsent: true,
+    fetchImpl: offline,
+  });
+  assert.equal(first.status, 'RETRY_SAME_UUID');
+  assert.equal(first.retryDelayMs, 1000);
+  assert.equal(first.bundleEpoch, 3);
+  const stored = await readAtomicEncryptedCandidate(USER_A, session);
+  assert.equal(stored.outbox[0].attempts, 1);
+  assert.equal(stored.outbox[0].mutationId, PENDING_ID);
+  session.logout();
+  const recovered = new LocalBudgetSession();
+  recovered.selectScope(USER_A);
+  await recovered.unlock(await getAtomicEncryptedKeyset(USER_A), {passphrase: PASS});
+  const fresh = cloudAuth(recovered);
+  const next = await dispatchOneEncryptedFinanceCommandCandidate({
+    scope: USER_A, session: recovered, identity: fresh,
+    expectedEpoch: 3, origin: TEST_ORIGIN,
+    explicitNetworkCandidateConsent: true, fetchImpl: offline,
+  });
+  assert.equal(next.status, 'RETRY_SAME_UUID');
+  assert.equal(next.retryDelayMs, 2000);
+  assert.equal(next.bundleEpoch, 4);
+  assert.equal(calls, 2);
+  const after = await readAtomicEncryptedCandidate(USER_A, recovered);
+  assert.equal(after.outbox.length, 1);
+  assert.equal(after.outbox[0].attempts, 2);
+  assert.equal(after.outbox[0].mutationId, PENDING_ID);
+  assert.equal(after.outbox[0].ifMatch, CLOUD_ETAG);
+  assert.deepEqual(after.outbox[0].command, stored.outbox[0].command);
+  assert.deepEqual(after.snapshot, stored.snapshot);
+  recovered.logout();
 });
