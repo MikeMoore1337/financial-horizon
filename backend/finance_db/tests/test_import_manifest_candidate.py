@@ -129,7 +129,9 @@ def test_server_existing_account_blocks_import_without_overwriting(context):
     assert ex.value.code == "semantic_conflict"
     batches, rows, revision, financial = batch_rows(engine, scope)
     assert len(batches) == 0 and len(rows) == 0
-    assert revision == 1 and financial == 2
+    # One account plus its normal commit receipt and change-log entry.
+    # These pre-existing rows remain untouched by the rejected import.
+    assert revision == 1 and financial == 3
     after = get_account_snapshot(engine, scope=scope)
     assert after.body == before.body
     assert after.body["entities"][0]["id"] == account_id
