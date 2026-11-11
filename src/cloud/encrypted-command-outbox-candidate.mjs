@@ -66,7 +66,10 @@ function safeJson(value, visited = new Set(), depth = 0) {
     if (!plain(value) || Object.getOwnPropertySymbols(value).length ||
         Object.getOwnPropertyNames(value).length !== Object.keys(value).length ||
         Object.keys(value).length > 100) hold('Некорректная структура команды');
-    result = Object.create(null);
+    // Produce ordinary JSON objects: the independent authoritative delta
+    // validator rejects exotic/null prototypes. Dangerous field names and
+    // accessors are rejected before assigning into this plain object.
+    result = {};
     for (const [name, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(value))) {
       if (name === '__proto__' || name === 'prototype' || name === 'constructor' ||
           !Object.hasOwn(descriptor, 'value')) hold('Недоверенное поле команды');
