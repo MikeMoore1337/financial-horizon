@@ -44,23 +44,42 @@ stale tabs, unsupported actions and queue overflow. A pure retry classifier
 handles network failure, 401, 409/412, 410 and HTTP success without deleting
 an entry or inventing a confirmed settlement.
 
-These are verified **encrypted cache + offline outbox candidates**, not an
-account cutover or a live sync engine. No HTTP send, applied receipt proof,
-queue flush, active UI state or real multi-device acceptance is enabled.
-A 200/201 server response alone does **not** permit deleting an outbox item;
-the corresponding server-committed changes and receipt must be persisted
-atomically and revalidated first.
+These are isolated **encrypted cache + offline outbox + explicit one-shot
+dispatcher candidates**, not a production account cutover or a live sync engine.
+`src/cloud/finance-offline-dispatch-candidate.mjs` supports an explicitly
+opted-in, **same-origin HTTPS** POST of only the first encrypted queued
+command, without storing HTTP credentials or allowing redirects. Its original
+UUID, body and strong If-Match are preserved even across network interruption.
+It then fetches an independent, bounded, uncached server /changes page.
+
+`persistAuthenticatedFinanceReceiptCandidate` requires the complete receipt
+and authoritative journal event images to match before it can remove the first
+outbox entry. Receipt proof, new cursor, account images, unchanged remaining
+queue and conflicts are saved together in one **encrypted native IDB CAS**
+transaction. A 200/201 alone never clears the queue. If a verified delta was
+already saved but the ACK was lost, the dispatcher re-reads the historical
+server revision and durably records its proof without changing balances again.
+The original UUID cannot be reused for different money. Network timeout and
+retryable errors persist a bounded exponential retry counter in the same
+encrypted store, not in a timer or Service Worker background task.
+
+**What remains OFF:** the active PWA does not import any of these modules,
+there is no authenticated host integration, no safe cross-tab network leader
+lease, no conflict-resolution UI and no full two-user/two-device live E2E.
+Only synthetic disposable fixtures exercise the explicit opt-in transport.
+A live backend runtime remains separately guarded by #66/#67/#51/#70.
 
 A real integration must additionally implement:
 
 1. FH session bootstrap and session-derived namespace (never trust cache IDs)
 2. 401/logout/revoke hard stop and cross-tab generation fencing
 3. Conflict/409/412/410 handling with explicit user resolution (no LWW)
-4. Actual HTTP dispatcher with unchanged UUID/fingerprint/If-Match and bounded retry/backoff; classification alone does not send
-5. Atomic persisted proof before replay reconciliation and multi-tab locks
+4. Mount the reviewed dispatcher into the actually authenticated FH session/UI, with safe cross-tab network leader lease and conflict resolution
+5. Validate durable receipt+delta recovery on a real backend and real two-tab encrypted IndexedDB, not just isolated candidate tests
 6. Import #69 only after verified external encrypted backup and explicit consent
 7. Actual two-account, two-device Chromium/WebKit and independent security QA #70
 8. Encrypted production PostgreSQL/backup/restore and reviewed release gates
 
-Until then this module is deliberately pure and unmounted. All tests use
-only synthetic data; no real financial information is stored in GitHub or CI.
+Until then the full sync candidate remains unmounted in the PWA.
+All tests use only synthetic data; no real financial information is stored
+in GitHub or CI. The unapproved public v2 route is OFF by default.
