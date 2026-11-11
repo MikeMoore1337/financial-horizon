@@ -866,5 +866,20 @@ test('#68 encrypted queue survives logout, browser restart and a new unlock gene
     [PENDING_ID, newCommand.client_mutation_id]);
   assert.equal(after.outbox[0].status, 'pending');
   assert.equal(after.outbox[1].status, 'pending');
+  // An already-persisted UUID survives a newer server cursor unchanged.
+  const sameAfterDelta = await enqueueEncryptedFinanceCommandCandidate({
+    scope: USER_A, session: restored, identity: freshIdentity,
+    command: pendingCommand(), ifMatch: CLOUD_ETAG, expectedEpoch: 4,
+  });
+  assert.equal(sameAfterDelta.status, 'ALREADY_QUEUED');
+  assert.equal(sameAfterDelta.bundleEpoch, 4);
+  // A brand new stale command must never be enqueued at the older revision.
+  await assert.rejects(() => enqueueEncryptedFinanceCommandCandidate({
+    scope: USER_A, session: restored, identity: freshIdentity,
+    command: {...newCommand,
+      client_mutation_id: 'f0000000-0000-4000-8000-000000000003'},
+    ifMatch: CLOUD_ETAG, expectedEpoch: 4,
+  }), /SYNC_HOLD/);
+  assert.equal((await readAtomicEncryptedCandidate(USER_A, restored)).outbox.length, 2);
   restored.logout();
 });
