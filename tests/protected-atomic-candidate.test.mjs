@@ -1299,3 +1299,71 @@ test('#68 transient retries retain encrypted identity and exponential backoff ac
   assert.deepEqual(after.snapshot, stored.snapshot);
   recovered.logout();
 });
+
+
+test('#68 failed encrypted ACK commit retains pending money for unchanged server replay', async () => {
+  const {db, session, identity} = await pendingAccountCreate();
+  const prior = await readAtomicEncryptedCandidate(USER_A, session);
+  db.failBundlePut = true;
+  await assert.rejects(
+    () => persistAuthenticatedFinanceReceiptCandidate({
+      scope: USER_A, session, identity, expectedEpoch: 2,
+      ...confirmedReceiptData(),
+    }),
+    /injected bundle write failure/,
+  );
+  db.failBundlePut = false;
+  const afterFailure = await readAtomicEncryptedCandidate(USER_A, session);
+  assert.deepEqual(afterFailure, prior);
+  assert.equal(afterFailure.outbox.length, 1);
+  assert.equal(afterFailure.snapshot.cloudFinance.revision, 0);
+  const replay = confirmedReceiptData();
+  const restored = await persistAuthenticatedFinanceReceiptCandidate({
+    scope: USER_A, session, identity, expectedEpoch: 2,
+    ...replay, receipt: {...replay.receipt, replayed: true},
+    commandHttpStatus: 200,
+  });
+  assert.equal(restored.status, 'DURABLY_CONFIRMED');
+  const done = await readAtomicEncryptedCandidate(USER_A, session);
+  assert.equal(done.outbox.length, 0);
+  assert.equal(done.snapshot.cloudFinance.revision, 1);
+  assert.equal(done.snapshot.cloudFinance.appliedReceipts.length, 1);
+  session.logout();
+});
+
+test('#68 competing tabs cannot clear the same encrypted ACK twice', async () => {
+  mount();
+  await createAtomicEncryptedCandidate(USER_A, PASS, {
+    ...clone(SOURCE), outbox: [], conflicts: [],
+  });
+  const first = await unlock(USER_A);
+  const second = await unlock(USER_A);
+  const one = cloudAuth(first);
+  const two = cloudAuth(second);
+  await initializeEncryptedCloudCacheCandidate({
+    scope: USER_A, session: first, identity: one,
+    pages: cloudPages(), expectedEpoch: 0,
+    confirmedAccountCacheInitialization: true,
+  });
+  await enqueueEncryptedFinanceCommandCandidate({
+    scope: USER_A, session: first, identity: one,
+    command: pendingCommand(), ifMatch: CLOUD_ETAG, expectedEpoch: 1,
+  });
+  const a = await persistAuthenticatedFinanceReceiptCandidate({
+    scope: USER_A, session: first, identity: one,
+    expectedEpoch: 2, ...confirmedReceiptData(),
+  });
+  assert.equal(a.bundleEpoch, 3);
+  await assert.rejects(
+    () => persistAuthenticatedFinanceReceiptCandidate({
+      scope: USER_A, session: second, identity: two,
+      expectedEpoch: 2, ...confirmedReceiptData(),
+    }), /SYNC_HOLD/,
+  );
+  const state = await readAtomicEncryptedCandidate(USER_A, second);
+  assert.equal(state.epoch, 3);
+  assert.equal(state.outbox.length, 0);
+  assert.equal(state.snapshot.cloudFinance.appliedReceipts.length, 1);
+  first.logout();
+  second.logout();
+});
