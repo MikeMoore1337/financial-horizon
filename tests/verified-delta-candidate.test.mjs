@@ -93,7 +93,9 @@ test('contiguous ledger delta applies exactly once and never discards pending ed
 
 test('multi-event revisions and multi-page journal do not split atomic payments', () => {
   const l = local();
-  const expense = transaction(T1, [post(A, -1200)]);
+  const expenseBase = transaction(T1, [post(A, -1200)]);
+  const expense = {...expenseBase, data: {...expenseBase.data,
+    kind: 'payment', payment_link: {loan_payment_id: B, settlement_id: null}}};
   const fact = {id: B, entity_revision: 1, kind: 'loan_payment', data: {
     loan_id: 'b0000000-0000-4000-8000-000000000009',
     paid_on: '2026-11-11', amount_minor: 1200, strategy: 'term', voided_at: null,
