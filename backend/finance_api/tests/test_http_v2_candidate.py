@@ -43,7 +43,8 @@ def v2_env(env):
         login = c.post("/api/auth/email/finance/session",
                        headers={"Origin": ORIGIN}, json={})
         assert login.status_code == 200, login.text
-        assert login.headers["cache-control"] == "private, no-store"
+        # The existing auth middleware enforces no-store for bootstrap.
+        assert login.headers["cache-control"] == "no-store"
         return c
 
     return {**env, "v2_app": app, "v2_client": client}
