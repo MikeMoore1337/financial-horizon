@@ -1,0 +1,37 @@
+name: accounts-approved-ui-33
+on:
+  push:
+    branches: [feat/33-accounts-approved-ui-20261108]
+  pull_request:
+    branches: [feat/33-accounts-ledger-domain]
+
+permissions:
+  contents: read
+
+jobs:
+  accounts-approved-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Verify approved accounts UI types and code quality
+        run: |
+          npm run typecheck
+          npm run lint
+          npm run format:check
+      - name: Verify ledger and React component regressions
+        run: |
+          npm test
+          npm run test:component
+      - name: Verify production bundle and dependency security
+        run: |
+          npm run build
+          npm run test:build
+          npm run audit:deps
