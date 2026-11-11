@@ -198,3 +198,60 @@ test('never accepts a past-revision event or an empty has_more page', () => {
     next_since_revision: 0,
   }, guard()));
 });
+
+test('snapshot cursors name the exact final record and cannot skip or reorder data', () => {
+  const before = {
+    schema_version: 1, profile_id: PROFILE, currency: 'RUB', revision: 7,
+    entities: [account(A, 2, 9000)], next_cursor: '7:account:' + A,
+  };
+  const tail = {
+    schema_version: 1, profile_id: PROFILE, currency: 'RUB', revision: 7,
+    entities: [account(B, 1, 10_000)],
+  };
+  const valid = [
+    {cursorSent: null, body: before},
+    {cursorSent: before.next_cursor, body: tail},
+  ];
+  assert.equal(verifyFinanceSnapshotPagesCandidate(valid, guard()).entities.length, 2);
+
+  const skipped = {...before, next_cursor: '7:account:' + B};
+  expectHold(() => verifyFinanceSnapshotPagesCandidate([
+    {cursorSent: null, body: skipped},
+    {cursorSent: skipped.next_cursor, body: tail},
+  ], guard()));
+
+  const reversed = {...before, entities: [account(B, 1, 10_000)],
+    next_cursor: '7:account:' + B};
+  expectHold(() => verifyFinanceSnapshotPagesCandidate([
+    {cursorSent: null, body: reversed},
+    {cursorSent: reversed.next_cursor, body: {...tail, entities: [account(A, 2, 9000)]}},
+  ], guard()));
+
+  const noData = {...before, entities: [], next_cursor: '7:account:' + A};
+  expectHold(() => verifyFinanceSnapshotPagesCandidate([
+    {cursorSent: null, body: noData},
+    {cursorSent: noData.next_cursor, body: tail},
+  ], guard()));
+
+  // An exactly-full page may legitimately have a cursor followed by a
+  // terminal empty page. The prior cursor must still identify its last row.
+  assert.equal(verifyFinanceSnapshotPagesCandidate([
+    {cursorSent: null, body: before},
+    {cursorSent: before.next_cursor, body: {...tail, entities: []}},
+  ], guard()).entities.length, 1);
+});
+
+test('cannot regress from a higher entity kind to an earlier kind', () => {
+  const loan = {id: A, kind: 'loan', entity_revision: 1,
+    data: {title: 'Synthetic loan', opening_minor: 1000}};
+  const first = {
+    schema_version: 1, profile_id: PROFILE, currency: 'RUB', revision: 2,
+    entities: [loan], next_cursor: '2:loan:' + A,
+  };
+  const next = {...first, entities: [account(B, 1, 10000)]};
+  delete next.next_cursor;
+  expectHold(() => verifyFinanceSnapshotPagesCandidate([
+    {cursorSent: null, body: first},
+    {cursorSent: first.next_cursor, body: next},
+  ], guard()));
+});
