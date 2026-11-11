@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {
+  initializeEncryptedCloudCacheCandidate,
+  persistEncryptedCloudDeltaCandidate,
+} from '../src/cloud/encrypted-cloud-cache-candidate.mjs';
 import {LocalBudgetSession} from '../src/security/local-budget-session.ts';
 import {
   ATOMIC_ENCRYPTED_DB, createAtomicEncryptedCandidate, getAtomicEncryptedKeyset,
@@ -462,4 +466,138 @@ test('review P2: logout between keyset put and transaction commit aborts the rec
   const original=new LocalBudgetSession();original.selectScope(USER_A);
   await original.unlock(await getAtomicEncryptedKeyset(USER_A),{recoveryKey:created.recoveryKey});
   assert.deepEqual((await readAtomicEncryptedCandidate(USER_A,original)).outbox,SOURCE.outbox);
+});
+
+
+const CLOUD_PROFILE = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const CLOUD_ACCOUNT = '10000000-0000-4000-8000-000000000001';
+const CLOUD_TRANSACTION = '10000000-0000-4000-8000-000000000002';
+const cloudAuth = session => ({
+  scope: USER_A, profileId: CLOUD_PROFILE,
+  generation: session.lifecycleVersion, epoch: 'e'.repeat(32),
+  signal: session.lifecycleSignal,
+});
+const cloudAccount = (revision, balance) => ({
+  id: CLOUD_ACCOUNT, kind: 'account', entity_revision: revision,
+  data: {name: 'Synthetic bank', type: 'bank', currency: 'RUB',
+    opening_minor: 10_000, balance_minor: balance,
+    reserved_minor: 0, available_minor: balance, archived_at: null},
+});
+const cloudPages = () => [{
+  cursorSent: null,
+  body: {schema_version: 1, revision: 0, profile_id: CLOUD_PROFILE,
+    currency: 'RUB', entities: [cloudAccount(1, 10_000)]},
+}];
+const verifiedChange = () => ({
+  schema_version: 1, from_revision: 0, to_revision: 1,
+  next_since_revision: 1, has_more: false,
+  changes: [{
+    revision: 1, ordinal: 0, kind: 'ledger_posted',
+    entity_id: CLOUD_TRANSACTION, entity_revision: 1,
+    payload: {
+      entity: {
+        id: CLOUD_TRANSACTION, entity_revision: 1, kind: 'transaction',
+        data: {kind: 'expense', occurred_on: '2026-11-11',
+          posted_at: '2026-11-11T12:00:00Z',
+          note: null, reversed_transaction_id: null,
+          postings: [{account_id: CLOUD_ACCOUNT, signed_minor: -500}]},
+      },
+      accounts: [cloudAccount(2, 9_500)],
+    },
+  }],
+});
+
+test('#68 encrypted cloud cache stores verified server image without overwriting legacy finance', async () => {
+  const db = mount();
+  const original = {...clone(SOURCE), outbox: [], conflicts: []};
+  await createAtomicEncryptedCandidate(USER_A, PASS, original);
+  const session = await unlock(USER_A);
+  const identity = cloudAuth(session);
+  const init = await initializeEncryptedCloudCacheCandidate({
+    scope: USER_A, session, identity, pages: cloudPages(), expectedEpoch: 0,
+    confirmedAccountCacheInitialization: true,
+  });
+  assert.equal(init.status, 'ENCRYPTED_CACHE_ONLY');
+  assert.equal(init.bundleEpoch, 1);
+  let stored = await readAtomicEncryptedCandidate(USER_A, session);
+  assert.equal(stored.schemaVersion, 2);
+  assert.equal(stored.snapshot.title, SOURCE.snapshot.title);
+  assert.equal(stored.snapshot.amountCents, SOURCE.snapshot.amountCents);
+  assert.equal(stored.snapshot.cloudFinance.revision, 0);
+  assert.equal(stored.snapshot.cloudFinance.entities[0].data.balance_minor, 10_000);
+  const ciphertext = JSON.stringify([...db.tables.get('bundles').values()]);
+  for (const secret of [SOURCE.snapshot.title, 'Synthetic bank', CLOUD_PROFILE]) {
+    assert.ok(!ciphertext.includes(secret), 'plaintext must not persist');
+  }
+  const receipt = await persistEncryptedCloudDeltaCandidate({
+    scope: USER_A, session, identity, page: verifiedChange(), expectedEpoch: 1,
+  });
+  assert.equal(receipt.status, 'ENCRYPTED_DELTA_SAVED');
+  assert.equal(receipt.bundleEpoch, 2);
+  assert.equal(receipt.serverRevision, 1);
+  stored = await readAtomicEncryptedCandidate(USER_A, session);
+  assert.equal(stored.epoch, 2);
+  assert.equal(stored.snapshot.cloudFinance.revision, 1);
+  assert.equal(stored.snapshot.cloudFinance.entities.find(x => x.id === CLOUD_ACCOUNT)
+    .data.balance_minor, 9_500);
+  assert.equal(stored.snapshot.title, SOURCE.snapshot.title);
+  assert.deepEqual(stored.outbox, []);
+  assert.deepEqual(stored.conflicts, []);
+  const noChanges = await persistEncryptedCloudDeltaCandidate({
+    scope: USER_A, session, identity, expectedEpoch: 2,
+    page: {schema_version: 1, from_revision: 1,
+      to_revision: 1, next_since_revision: 1, has_more: false, changes: []},
+  });
+  assert.equal(noChanges.status, 'NO_NEW_REVISION');
+  assert.equal((await readAtomicEncryptedCandidate(USER_A, session)).epoch, 2);
+  session.logout();
+});
+
+test('#68 encrypted cache refuses overwriting pending outbox or existing image', async () => {
+  mount();
+  await createAtomicEncryptedCandidate(USER_A, PASS, SOURCE);
+  const session = await unlock(USER_A);
+  await assert.rejects(() => initializeEncryptedCloudCacheCandidate({
+    scope: USER_A, session, identity: cloudAuth(session), pages: cloudPages(),
+    expectedEpoch: 0, confirmedAccountCacheInitialization: true,
+  }), /SYNC_HOLD/);
+  assert.deepEqual((await readAtomicEncryptedCandidate(USER_A, session)).outbox, SOURCE.outbox);
+  assert.equal((await readAtomicEncryptedCandidate(USER_A, session)).epoch, 0);
+  session.logout();
+});
+
+test('#68 encrypted delta and stale writer failures preserve every committed byte', async () => {
+  mount();
+  const original = {...clone(SOURCE), outbox: [], conflicts: []};
+  await createAtomicEncryptedCandidate(USER_A, PASS, original);
+  const first = await unlock(USER_A);
+  const second = await unlock(USER_A);
+  await initializeEncryptedCloudCacheCandidate({
+    scope: USER_A, session: first, identity: cloudAuth(first),
+    pages: cloudPages(), expectedEpoch: 0,
+    confirmedAccountCacheInitialization: true,
+  });
+  // Same account, different unlocked tab: stale epoch cannot write over
+  // the first tab's encrypted cloud image.
+  await assert.rejects(() => initializeEncryptedCloudCacheCandidate({
+    scope: USER_A, session: second, identity: cloudAuth(second),
+    pages: cloudPages(), expectedEpoch: 0,
+    confirmedAccountCacheInitialization: true,
+  }), /SYNC_HOLD/);
+  const prior = await readAtomicEncryptedCandidate(USER_A, first);
+  const corrupt = {...verifiedChange(), changes: [
+    {...verifiedChange().changes[0], ordinal: 7},
+  ]};
+  await assert.rejects(() => persistEncryptedCloudDeltaCandidate({
+    scope: USER_A, session: first, identity: cloudAuth(first),
+    expectedEpoch: 1, page: corrupt,
+  }), /SYNC_HOLD/);
+  assert.deepEqual(await readAtomicEncryptedCandidate(USER_A, first), prior);
+  await assert.rejects(() => persistEncryptedCloudDeltaCandidate({
+    scope: USER_B, session: first, identity: cloudAuth(first),
+    expectedEpoch: 1, page: verifiedChange(),
+  }), /SYNC_HOLD/);
+  assert.deepEqual(await readAtomicEncryptedCandidate(USER_A, first), prior);
+  first.logout();
+  second.logout();
 });
