@@ -178,8 +178,7 @@ export async function enqueueEncryptedFinanceCommandCandidate({
       cloud.scope !== scope || cloud.profileId !== identity.profileId ||
       cloud.epoch !== identity.epoch ||
       !integer(cloud.generation, 1) ||
-      !integer(cloud.revision) ||
-      cloud.revision !== pinned.base_revision) hold('Серверная версия изменилась');
+      !integer(cloud.revision)) hold('Серверная версия изменилась');
   // The old in-memory unlock generation is not a durable credential.
   // It may differ after a real browser restart. A fresh FH session and
   // currently unlocked keyset are checked above; queue identity is fenced
@@ -193,6 +192,10 @@ export async function enqueueEncryptedFinanceCommandCandidate({
     return Object.freeze({status: 'ALREADY_QUEUED', bundleEpoch: expectedEpoch,
       pending: current.outbox.length, serverBalanceChanged: false, sent: false});
   }
+  // A persisted identical mutation remains retryable even when newer
+  // verified server deltas advance the cursor. A NEW mutation must still
+  // start from the exact latest authoritative server revision.
+  if (cloud.revision !== pinned.base_revision) hold('Серверная версия изменилась');
   if (current.outbox.length >= MAX_QUEUE) hold('Достигнут лимит офлайн-операций');
   const item = {
     scope, profileId: identity.profileId,
