@@ -58,6 +58,9 @@ function mount(rows, options={}) {
     if (openCount===2 && typeof options.beforeSecondRead==='function') {
       options.beforeSecondRead(values);
     }
+    if (openCount===3 && typeof options.beforeThirdRead==='function') {
+      options.beforeThirdRead(values);
+    }
     if (openCount===4 && typeof options.beforeFourthRead==='function') {
       options.beforeFourthRead(values);
     }
@@ -263,7 +266,10 @@ test('#69 revalidation catches changed legacy amounts between preview and final 
 
 test('#69 revalidation rejects guest-claim source switch with identical money',async()=>{
   const state=legacy(),backup=await encryptBackup(state,backupPassword);
-  const db=mount({state,'guest-state-v2':state},{beforeFourthRead(values){
+  // Change the claim BETWEEN the first completed full backup comparison
+  // and the second one. Each individual preflight sees a stable snapshot:
+  // only the wrapper's cross-check can catch this scope-switch.
+  const db=mount({state,'guest-state-v2':state},{beforeThirdRead(values){
     values.set('legacy-account-claim-v2',accountA);
   }});
   await assert.rejects(()=>previewFromBrowser(guest(),backup),/IMPORT_HOLD/);
