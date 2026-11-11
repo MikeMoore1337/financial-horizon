@@ -181,10 +181,12 @@ export function applyFinanceDeltaCandidate(
     byId.set(e.id, e);
   }
   let next = local.revision, ordinal = 0;
+  const requiredPaymentFacts = new Map();
+  const observedFactEvents = new Set();
   for (const change of page.changes) {
     if (signal.aborted) reject('Сессия отозвана');
     if (!exactObject(change) || !changes.has(change.kind) ||
-        !uuid.test(change.entity_id) ||
+        !uuid.test(change.entity_id) || change.revision <= local.revision ||
         !safeInt(change.entity_revision, 1) ||
         !safeInt(change.revision, local.revision + 1, page.to_revision) ||
         !safeInt(change.ordinal, 0) || !exactObject(change.payload)) {
@@ -211,6 +213,31 @@ export function applyFinanceDeltaCandidate(
       reject('Событие не соответствует исходной сущности');
     }
     const old = byId.get(entity.id);
+    if (entity.kind === 'settlement' || entity.kind === 'loan_payment') {
+      observedFactEvents.add(change.revision + ':' + entity.id);
+    }
+    // Linked payment and its fact must advance together. A truncated page
+    // missing the fact event must never make a local account appear paid.
+    let relatedPayment = null;
+    if (entity.kind === 'transaction' && entity.data.kind === 'payment') {
+      relatedPayment = entity;
+    }
+    if (entity.kind === 'transaction' && entity.data.kind === 'reversal') {
+      const original = byId.get(entity.data.reversed_transaction_id);
+      if (!original && entity.data.reversed_transaction_id) {
+        reject('Отмена неизвестной финансовой операции');
+      }
+      if (original?.kind === 'transaction' && original.data.kind === 'payment') {
+        relatedPayment = original;
+      }
+    }
+    if (relatedPayment) {
+      const link = relatedPayment.data.payment_link;
+      const factId = link &&
+        (link.settlement_id || link.loan_payment_id);
+      if (!uuid.test(factId)) reject('Не указан связанный факт оплаты');
+      requiredPaymentFacts.set(change.revision + ':' + factId, true);
+    }
     if (old && old.entity_revision >= entity.entity_revision) {
       reject('Сервер прислал неувеличенную ревизию');
     }
@@ -234,7 +261,13 @@ export function applyFinanceDeltaCandidate(
       if (seen.size !== postingIds.size) reject('Не все счета обновлены');
     }
   }
-  if (page.changes.length === 0 && page.next_since_revision !== local.revision) {
+  for (const factKey of requiredPaymentFacts.keys()) {
+    if (!observedFactEvents.has(factKey)) {
+      reject('Оплата и подтверждённый факт разорваны между страницами');
+    }
+  }
+  if (page.changes.length === 0 &&
+      (page.next_since_revision !== local.revision || page.has_more)) {
     reject('Нет подтверждения новой ревизии');
   }
   if (page.changes.length && next !== page.next_since_revision) {
