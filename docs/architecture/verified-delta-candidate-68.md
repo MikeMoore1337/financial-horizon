@@ -33,16 +33,30 @@ server image and cursor as a `snapshot.cloudFinance` sidecar, preserving
 legacy financial state, outbox and conflict arrays in one encrypted commit.
 It refuses to overwrite a pre-existing sidecar or pending local operations,
 and a stale tab or revoked/unlocked local keyset cannot report success.
-This is a verified **cache candidate**, not an account cutover or a sync
-engine: no HTTP upload, applied receipt proof, queue flush, encrypted remote
-reconciliation, live UI state or real multi-device acceptance is enabled.
+The new `src/cloud/encrypted-command-outbox-candidate.mjs` can additionally
+queue a validated v2 command under the same encrypted native IndexedDB CAS,
+binding account scope, authenticated profile, session epoch, exact mutation
+UUID, strong If-Match and SHA-256 fingerprint. A duplicate UUID with an
+identical fingerprint is a no-op; a reused UUID with altered money/ETag
+is rejected. Existing confirmed balances remain unchanged by offline writes.
+The module rejects untrusted JSON getters, guest/cross-account contexts,
+stale tabs, unsupported actions and queue overflow. A pure retry classifier
+handles network failure, 401, 409/412, 410 and HTTP success without deleting
+an entry or inventing a confirmed settlement.
+
+These are verified **encrypted cache + offline outbox candidates**, not an
+account cutover or a live sync engine. No HTTP send, applied receipt proof,
+queue flush, active UI state or real multi-device acceptance is enabled.
+A 200/201 server response alone does **not** permit deleting an outbox item;
+the corresponding server-committed changes and receipt must be persisted
+atomically and revalidated first.
 
 A real integration must additionally implement:
 
 1. FH session bootstrap and session-derived namespace (never trust cache IDs)
 2. 401/logout/revoke hard stop and cross-tab generation fencing
 3. Conflict/409/412/410 handling with explicit user resolution (no LWW)
-4. Retry with unchanged mutation UUID, fingerprint and If-Match; bounded backoff
+4. Actual HTTP dispatcher with unchanged UUID/fingerprint/If-Match and bounded retry/backoff; classification alone does not send
 5. Atomic persisted proof before replay reconciliation and multi-tab locks
 6. Import #69 only after verified external encrypted backup and explicit consent
 7. Actual two-account, two-device Chromium/WebKit and independent security QA #70
