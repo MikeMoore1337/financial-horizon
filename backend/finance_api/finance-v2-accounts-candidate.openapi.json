@@ -14,7 +14,7 @@
   "paths": {
     "/api/finance/v2/commands": {
       "post": {
-        "summary": "Create/edit/archive/restore RUB account or record a confirmed transaction",
+        "summary": "Account CRUD, actual cash, verified linked payment record or atomic fact void and cash compensation (unapproved candidate)",
         "operationId": "accountV2CandidateCommands",
         "x-feature-off": true,
         "x-http-body-max-bytes": 32768,
