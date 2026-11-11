@@ -1,0 +1,536 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Financial Horizon - Account commands v2 candidate (not enabled)",
+    "version": "2.0.0-candidate",
+    "description": "Non-public proposal for #33/#67. Requires separate approval; no published v2 finance API or production deployment."
+  },
+  "x-go-live": "NO_GO",
+  "x-account-v2-opt-in-default": false,
+  "x-approved": false,
+  "x-related-bootstrap": "/api/auth/email/finance/session",
+  "x-authoritative-read": "/api/finance/v1/state",
+  "x-supported-currency": "RUB",
+  "paths": {
+    "/api/finance/v2/commands": {
+      "post": {
+        "summary": "Create/edit/archive/restore RUB account or record a confirmed transaction",
+        "operationId": "accountV2CandidateCommands",
+        "x-feature-off": true,
+        "x-http-body-max-bytes": 32768,
+        "x-reject-duplicate-json-keys": true,
+        "x-verified-session-required": true,
+        "x-no-client-identity": true,
+        "security": [
+          {
+            "financeV2Cookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 256,
+              "pattern": "^\"[^\"\\r\\n]{1,254}\"$"
+            },
+            "description": "Strong server-issued ETag from authoritative /api/finance/v1/state"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "description": "Must exactly match the body client_mutation_id; preserve both on network retries"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountV2Candidate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Idempotent replay of already committed operation; no new debit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandReceipt"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Newly committed single PostgreSQL transaction and durable receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandReceipt"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "financeV2Cookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "fh_finance_session",
+        "description": "HttpOnly, Secure outside tests, SameSite=Strict, Path=/api/finance/v2. Issued only by explicit opt-in test-host bootstrap; SQLite FH session revocation is authoritative.",
+        "x-cookie-path": "/api/finance/v2"
+      }
+    },
+    "schemas": {
+      "AccountCreateV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "currency",
+          "opening_minor"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "\\S"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bank",
+              "card",
+              "cash",
+              "savings",
+              "other"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "const": "RUB"
+          },
+          "opening_minor": {
+            "type": "integer",
+            "minimum": -1000000000000,
+            "maximum": 1000000000000
+          }
+        }
+      },
+      "AccountUpdateV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "account_id",
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "\\S"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bank",
+              "card",
+              "cash",
+              "savings",
+              "other"
+            ]
+          }
+        }
+      },
+      "AccountArchiveV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "account_id"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          }
+        }
+      },
+      "AccountUnarchiveV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "account_id"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          }
+        }
+      },
+      "TransactionRecordV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "account_id",
+          "kind",
+          "signed_minor",
+          "occurred_on"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "account_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "income",
+              "expense",
+              "adjustment"
+            ]
+          },
+          "signed_minor": {
+            "type": "integer",
+            "minimum": -1000000000000,
+            "maximum": 1000000000000
+          },
+          "occurred_on": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 500
+          }
+        }
+      },
+      "AccountV2Candidate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "client_mutation_id",
+          "base_revision",
+          "action",
+          "expected_entity_revisions",
+          "payload"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 2
+          },
+          "client_mutation_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "base_revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "account.create",
+              "account.update",
+              "account.archive",
+              "account.unarchive",
+              "transaction.record"
+            ]
+          },
+          "expected_entity_revisions": {
+            "type": "object",
+            "maxProperties": 100,
+            "patternProperties": {
+              "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            },
+            "additionalProperties": false,
+            "description": "Exactly one matching account revision for account modifications and transaction.record; empty for create. Relational binding enforced by the backend validator."
+          },
+          "payload": {
+            "type": "object"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "account.create"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/AccountCreateV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "account.update"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/AccountUpdateV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "account.archive"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/AccountArchiveV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "account.unarchive"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/AccountUnarchiveV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "transaction.record"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/TransactionRecordV2"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "CommandReceipt": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "schema_version",
+          "client_mutation_id",
+          "revision",
+          "replayed",
+          "changes"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 2
+          },
+          "client_mutation_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "FinanceError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "unauthenticated",
+              "forbidden",
+              "invalid_command",
+              "idempotency_key_reuse",
+              "semantic_conflict",
+              "stale_revision",
+              "precondition_required",
+              "rate_limited",
+              "service_unavailable"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "server_revision": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  }
+}
