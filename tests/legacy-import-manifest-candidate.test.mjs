@@ -154,3 +154,36 @@ test('rejected previews do not cause network requests or browser storage writes'
     globalThis.indexedDB = originalIndexedDB;
   }
 });
+
+test('untrusted source getters cannot execute during an import preview', async () => {
+  const source = createSampleState();
+  let reads = 0;
+  Object.defineProperty(source.entries[0], 'title', {
+    enumerable: true,
+    get() {
+      reads += 1;
+      return 'Must not execute financial source getter';
+    },
+  });
+  await expectHold(plan({verified: verified(source)}));
+  assert.equal(reads, 0, 'preview must inspect descriptors before structuredClone');
+});
+
+test('sparse arrays and poisoned nested properties never enter import hashing', async () => {
+  const sparse = createSampleState();
+  delete sparse.categories[1];
+  await expectHold(plan({verified: verified(sparse)}));
+
+  const accessor = createSampleState();
+  Object.defineProperty(accessor.settings, 'currency', {
+    enumerable: true,
+    get() { throw new Error('secret-in-accessor-must-not-run'); },
+  });
+  await expectHold(plan({verified: verified(accessor)}));
+
+  const polluted = createSampleState();
+  Object.defineProperty(polluted.entries[0], '__proto__', {
+    enumerable: true, configurable: true, value: {isAdmin: true},
+  });
+  await expectHold(plan({verified: verified(polluted)}));
+});
