@@ -3,8 +3,9 @@
 **Status: PROPOSAL / NOT APPROVED / NOT PUBLIC / NOT DEPLOYED.**
 This document and `backend/finance_api/contracts_v2_candidate.py` describe a
 strictly validated candidate, not a replacement for
-`docs/architecture/finance-sync-v1.openapi.json`. No v2 route is mounted,
-and the existing `/api/finance/v1/commands` whitelist stays unchanged.
+`docs/architecture/finance-sync-v1.openapi.json`. A candidate v2 route exists
+only behind explicit test-host opt-in; no v2 route is mounted by default.
+The existing `/api/finance/v1/commands` whitelist stays unchanged.
 
 ## Scope and server authority
 
@@ -42,15 +43,20 @@ alter real balances. Planned obligations and reserves are distinct.
 
 ## Non-goals and publication blockers
 
-- This candidate validator does **not** perform a financial transaction,
-  start sync, import old records, create an HTTP route, enable a feature flag,
-  or approve a wire protocol. Never expose `allow_internal=True` to HTTP.
+- This candidate validator by itself does **not** perform a transaction,
+  start sync, import old records, enable a feature flag, or approve the protocol.
+  The opt-in `/api/finance/v2/commands` route executes only the five validated
+  actions using a distinct path-scoped HttpOnly session cookie and rechecks
+  the revocable FH SQLite session after reading the entire bounded request.
+  The application factory defaults to `enable_account_v2_candidate=False`.
+  The production configuration never enables it; only synthetic tests opt in.
+  Never expose `allow_internal=True` to HTTP.
 - Linked obligation/loan payments, funding accounts, and atomic
   `void + compensated reversal` need a separately approved v2 DTO and
   the required #66 database grants/deferred invariants. Generic v1 reversal
   deliberately refuses linked payments.
-- A new public versioned route and reviewed HTTP OpenAPI document require
-  explicit agreement in #67 before implementation or exposure.
+- An approved, reviewed HTTP OpenAPI contract and explicit #67 agreement are
+  required **before deployment or runtime enablement** of the candidate.
 - Required readiness: #66 encrypted PostgreSQL/offsite backup/restore/PITR,
   #34/#68 isolated encrypted outbox, #69 consent-based legacy migration,
   #70 real two-user/two-device E2E, independent human approval, exact-SHA CI,
@@ -65,7 +71,11 @@ allowlist to the existing authoritative RLS/CAS/receipt PostgreSQL core.
 `backend/finance_api/tests/test_account_v2_service.py` exercises that private
 adapter on disposable PostgreSQL with real FH SQLite session bootstrapping,
 including stale/replayed commands, actual expense, archive and cross-profile
-denials. No production finance entrypoint imports this service.
+denials. `backend/finance_api/tests/test_http_v2_candidate.py` runs the
+explicitly enabled test-only FastAPI route against the same disposable SQL
+engine, including CSRF/Origin, malformed JSON, session revocation, profile
+separation and retry/ETag behavior. No public or production deployment of
+the v2 route has been approved or performed.
 
 The SQL command core refuses version 2 by default. The v2 allowlist cannot be
 combined with its trusted v1 internal-payment mode. These safeguards are
