@@ -33,6 +33,12 @@ _INTERNAL_ACTIONS = frozenset((
     "settlement.payment.record", "loan.payment.record", "reserve.allocate",
 ))
 _PUBLIC_V1_ACTIONS = frozenset(("obligation.create", "account.transfer", "reserve.allocate", "transaction.reverse"))
+# The proposed v2 transport has a deliberately narrower whitelist than internal
+# commands. No v2 HTTP route is mounted, and the default callable remains v1.
+_PUBLIC_V2_ACCOUNT_ACTIONS = frozenset((
+    "account.create", "account.update", "account.archive", "account.unarchive",
+    "transaction.record",
+))
 
 
 class FinanceCommandError(ValueError):
@@ -169,7 +175,8 @@ def ensure_verified_profile(
 
 
 def _validated(command: object, if_match: str, idem_key: str,
-               *, allow_internal: bool) -> tuple[Mapping[str, Any], UUID, int, dict[str, int], bytes]:
+               *, allow_internal: bool, allow_account_v2: bool = False,
+               ) -> tuple[Mapping[str, Any], UUID, int, dict[str, int], bytes]:
     body = _shape(command, {
         "schema_version", "client_mutation_id", "base_revision", "action",
         "expected_entity_revisions", "payload",
@@ -177,12 +184,17 @@ def _validated(command: object, if_match: str, idem_key: str,
         "schema_version", "client_mutation_id", "base_revision", "action",
         "expected_entity_revisions", "payload",
     })
-    if type(body["schema_version"]) is not int or body["schema_version"] != 1:
+    if type(body["schema_version"]) is not int:
+        raise _reject("Неподдерживаемая версия схемы")
+    version = body["schema_version"]
+    if version == 1 and not allow_account_v2:
+        actions = _INTERNAL_ACTIONS if allow_internal else _PUBLIC_V1_ACTIONS
+    elif version == 2 and allow_account_v2 and not allow_internal:
+        actions = _PUBLIC_V2_ACCOUNT_ACTIONS
+    else:
         raise _reject("Неподдерживаемая версия схемы")
     action = body["action"]
-    if not isinstance(action, str) or action not in (
-        _INTERNAL_ACTIONS if allow_internal else _PUBLIC_V1_ACTIONS
-    ):
+    if not isinstance(action, str) or action not in actions:
         raise _reject("Команда недоступна в этой версии API")
     mutation_id = _uuid(body["client_mutation_id"])
     if _uuid(idem_key) != mutation_id:
@@ -829,14 +841,20 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
 def submit_account_command(
     engine: Engine, *, scope: VerifiedFinanceScope, command: object,
     if_match: str, idempotency_key: str, allow_internal: bool = False,
+    allow_account_v2: bool = False,
 ) -> FinanceResult:
     """One RLS-protected SQL COMMIT for a validated finance command and its receipt.
 
-    'allow_internal' is for the not-yet-published v2 account-command layer.
-    Do not set from a client parameter or expose this through OpenAPI v1.
+    'allow_internal' is only for trusted existing v1 internal consumers.
+    'allow_account_v2' is only for the validated, unmounted v2 account
+    proposal, and never accepts other internal actions.
+    Neither option may be set from an untrusted client request.
     """
+    if allow_internal and allow_account_v2:
+        raise ValueError("Internal and proposed public v2 modes are mutually exclusive")
     body, mutation_id, base_revision, versions, request_hash = _validated(
-        command, if_match, idempotency_key, allow_internal=allow_internal
+        command, if_match, idempotency_key, allow_internal=allow_internal,
+        allow_account_v2=allow_account_v2,
     )
     with finance_transaction(engine, verified_user_id=scope.user_id,
                              profile_id=scope.profile_id) as session:
@@ -862,7 +880,7 @@ def submit_account_command(
                                       "Профиль изменился на другом устройстве", 409, revision)
         new_revision = revision + 1
         changes = _apply(session, scope, body, versions, new_revision)
-        ack = {"schema_version": 1, "client_mutation_id": str(mutation_id),
+        ack = {"schema_version": body["schema_version"], "client_mutation_id": str(mutation_id),
                "revision": new_revision, "replayed": False, "changes": changes}
         session.execute(text("""
             INSERT INTO command_receipts
