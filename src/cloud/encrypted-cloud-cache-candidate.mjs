@@ -38,7 +38,7 @@ function assertBundle(bundle, expectedEpoch) {
     hold('Зашифрованный локальный бюджет изменился');
   }
 }
-function cloudImage(verified) {
+function cloudImage(verified, appliedReceipts = []) {
   return {
     schemaVersion: 1, scope: verified.scope,
     profileId: verified.profileId,
@@ -46,6 +46,10 @@ function cloudImage(verified) {
     epoch: verified.epoch,
     revision: verified.revision,
     entities: verified.entities,
+    // A delta may arrive after an earlier durable ACK was reconciled.
+    // Never erase those encrypted idempotency proofs by overwriting the
+    // cloud sidecar with only the latest server image.
+    appliedReceipts,
   };
 }
 /**
@@ -120,7 +124,15 @@ export async function persistEncryptedCloudDeltaCandidate({
     });
   }
   const snapshot = structuredClone(bundle.snapshot);
-  snapshot.cloudFinance = cloudImage(checked);
+  const proofs = before.appliedReceipts || [];
+  if (!Array.isArray(proofs) || proofs.length > 2000 ||
+      proofs.some(x => !x || typeof x !== 'object' ||
+        !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/.test(x.mutationId) ||
+        !/^[a-f0-9]{64}$/.test(x.fingerprint) ||
+        !Number.isSafeInteger(x.revision) || x.revision < 1)) {
+    hold('История подтверждённых операций повреждена');
+  }
+  snapshot.cloudFinance = cloudImage(checked, structuredClone(proofs));
   const nextEpoch = await compareAndSwapAtomicEncryptedCandidate(
     scope, session, expectedEpoch, 2,
     {snapshot, outbox: bundle.outbox, conflicts: bundle.conflicts},
