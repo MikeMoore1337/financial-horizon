@@ -278,3 +278,57 @@ def test_v2_candidate_email_logout_invalidates_both_finance_cookie_paths(v2_env)
     assert denied.status_code == 401
     assert denied.json()["code"] == "unauthenticated"
     assert v2_env["scope"](uid).user_id == uid
+
+def test_v2_candidate_revoked_during_stream_never_commits(env, v2_env):
+    """Live AuthStore revocation after first chunk blocks even a valid SQL command."""
+    import asyncio
+    import httpx
+
+    uid, token = v2_env["first"]
+    client = v2_env["v2_client"](token)
+    before = snapshot(client)
+    command = request(before, "account.create", {
+        "id": str(uuid4()), "name": "Never posted after logout",
+        "kind": "cash", "currency": "RUB", "opening_minor": 2_000,
+    })
+    encoded = json.dumps(command).encode("utf-8")
+    midpoint = len(encoded) // 2
+
+    async def revoked_request():
+        consumed = asyncio.Event()
+        release = asyncio.Event()
+
+        async def stream():
+            yield encoded[:midpoint]
+            consumed.set()
+            await release.wait()
+            yield encoded[midpoint:]
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=v2_env["v2_app"]), base_url=ORIGIN,
+        ) as remote:
+            pending = asyncio.create_task(remote.post(
+                "/api/finance/v2/commands", content=stream(),
+                headers={
+                    "Origin": ORIGIN,
+                    "Content-Type": "application/json",
+                    "Cookie": f"fh_finance_session={token}",
+                    "Idempotency-Key": command["client_mutation_id"],
+                    "If-Match": before.headers["etag"],
+                    "Transfer-Encoding": "chunked",
+                },
+            ))
+            try:
+                await asyncio.wait_for(consumed.wait(), timeout=4)
+                await asyncio.to_thread(v2_env["store"].logout, token)
+            finally:
+                release.set()
+            return await asyncio.wait_for(pending, timeout=6)
+
+    result = asyncio.run(revoked_request())
+    assert result.status_code == 401, result.text
+    assert result.json()["code"] == "unauthenticated"
+    from backend.finance_db.ledger_service import get_account_snapshot
+    state = get_account_snapshot(v2_env["engine"], scope=v2_env["scope"](uid))
+    assert state.body["revision"] == before.json()["revision"]
+    assert state.body["entities"] == before.json()["entities"]
