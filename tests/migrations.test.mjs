@@ -175,7 +175,9 @@ test('open CRUD forms preserve their opening revision through cross-tab UI updat
   assert.ok(app.includes("const form=$('#"+id+"');form.reset();stampFormRevision(form)"),id);
  }
  assert.ok(app.includes("expectedRevision=state?.revision"));
- assert.equal(app.split('revisionForForm(form)').length-1,5);
+ assert.ok(app.includes("resetPaymentMethodForm();stampFormRevision(form);"),
+  'payment method editor must preserve the initial IndexedDB revision');
+ assert.equal(app.split('revisionForForm(form)').length-1,8);
  assert.ok(app.includes("const originalRevision=state?.revision;"));
 });
 
