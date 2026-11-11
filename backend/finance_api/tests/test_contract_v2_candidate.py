@@ -164,3 +164,59 @@ def test_candidate_rejects_identity_and_precondition_spoofing(change):
 def test_candidate_rejects_weak_etag_and_mismatched_idempotency(kwargs):
     with pytest.raises(ValueError):
         validate(cmd("account.archive", {"account_id": ACCOUNT}, {ACCOUNT: 1}), **kwargs)
+
+
+@pytest.mark.parametrize("action,payload,related_id", [
+    ("settlement.payment.record", {
+        "obligation_id": TRANSACTION, "account_id": ACCOUNT,
+        "amount_minor": 100, "paid_on": "2026-11-11", "occurrence_on": "2026-11-11",
+    }, TRANSACTION),
+    ("loan.payment.record", {
+        "loan_id": TRANSACTION, "account_id": ACCOUNT,
+        "amount_minor": 100, "paid_on": "2026-11-11", "strategy": "term",
+    }, TRANSACTION),
+])
+def test_candidate_funded_payment_requires_account_and_source_revision(action, payload, related_id):
+    clean = cmd(action, payload, {ACCOUNT: 2, related_id: 1})
+    accepted = validate(clean)
+    assert accepted["action"] == action
+    assert accepted["payload"]["amount_minor"] == 100
+    assert "fact_id" not in accepted["payload"]
+    assert "transaction_id" not in accepted["payload"]
+    for changes in ({ACCOUNT: 2}, {related_id: 1}, {}):
+        with pytest.raises((ValidationError, ValueError)):
+            validate(cmd(action, payload, changes))
+    for extra in ({"fact_id": ACCOUNT}, {"transaction_id": TRANSACTION},
+                  {"paid": True}, {"actor_user_id": "f" * 32}):
+        with pytest.raises((ValidationError, ValueError)):
+            validate(cmd(action, {**payload, **extra}, {ACCOUNT: 2, related_id: 1}))
+
+
+@pytest.mark.parametrize("invalid", [
+    {"amount_minor": 0}, {"amount_minor": -1}, {"amount_minor": 1.1},
+    {"amount_minor": True}, {"paid_on": "2026-02-30"},
+])
+def test_candidate_funded_payment_rejects_bad_money_and_dates(invalid):
+    payload = {"loan_id": TRANSACTION, "account_id": ACCOUNT,
+               "amount_minor": 100, "paid_on": "2026-11-11", "strategy": "term"}
+    with pytest.raises((ValidationError, ValueError)):
+        validate(cmd("loan.payment.record", {**payload, **invalid},
+                     {TRANSACTION: 1, ACCOUNT: 1}))
+
+
+@pytest.mark.parametrize("action", ["loan.payment.void", "settlement.payment.void"])
+def test_candidate_void_requires_exact_fact_account_and_original_revision(action):
+    payload = {"transaction_id": TRANSACTION, "fact_id": MUTATION,
+               "account_id": ACCOUNT, "reason": "Ошибочная оплата"}
+    validated = validate(cmd(action, payload, {TRANSACTION: 1, MUTATION: 2, ACCOUNT: 3}))
+    assert validated["payload"]["reason"] == "Ошибочная оплата"
+    for missing in (TRANSACTION, MUTATION, ACCOUNT):
+        without = {TRANSACTION: 1, MUTATION: 2, ACCOUNT: 3}
+        del without[missing]
+        with pytest.raises((ValidationError, ValueError)):
+            validate(cmd(action, payload, without))
+    with pytest.raises((ValidationError, ValueError)):
+        validate(cmd(action, {**payload, "reason": "  "}, {TRANSACTION: 1, MUTATION: 2, ACCOUNT: 3}))
+    with pytest.raises((ValidationError, ValueError)):
+        validate(cmd(action, {**payload, "voided_at": "2026-11-11T00:00:00Z"},
+                     {TRANSACTION: 1, MUTATION: 2, ACCOUNT: 3}))
