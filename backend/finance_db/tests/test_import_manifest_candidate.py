@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from backend.finance_db.db import finance_transaction
 from backend.finance_db.import_manifest_candidate import (
@@ -215,3 +216,65 @@ def test_same_manifest_concurrent_requests_map_every_source_only_once(context):
     assert len(batches) == 1
     assert len(rows) == 2
     assert revision == 0 and financial == 0
+
+
+def test_manifest_sql_conflict_rolls_back_batch_without_partial_source_map(context):
+    engine, scope = context
+    manifest = request(scope)
+    # Synthetic competing record inventory, not a user financial transaction.
+    with finance_transaction(
+        engine, verified_user_id=scope.user_id, profile_id=scope.profile_id,
+    ) as s:
+        s.execute(text("""
+            INSERT INTO import_record_map
+              (profile_id,source_sha256,record_type,source_record_id,target_id)
+            VALUES (:p,:sha,'entries','legacy-entry-1',:target)
+        """), {"p": scope.profile_id,
+               "sha": bytes.fromhex(manifest["source_sha256"]),
+               "target": uuid4()})
+    original = batch_rows(engine, scope)
+    assert len(original[0]) == 0 and len(original[1]) == 1
+    with pytest.raises(IntegrityError):
+        stage_import_manifest_candidate(
+            engine, scope=scope, manifest=manifest,
+        )
+    after = batch_rows(engine, scope)
+    assert after == original, "failed SQL insertion must not leave partial batch rows"
+
+
+def test_two_real_postgres_scopes_never_share_staged_legacy_source_ids(context):
+    from backend.finance_db.ledger_service import VerifiedFinanceScope
+    engine, scope_a = context
+    scope_b = VerifiedFinanceScope(user_id=uuid4().hex, profile_id=uuid4())
+    with finance_transaction(
+        engine, verified_user_id=scope_b.user_id, profile_id=scope_b.profile_id,
+    ) as s:
+        s.execute(text("""
+            INSERT INTO finance_profiles(id,owner_user_id)
+            VALUES (:p,:u)
+        """), {"p": scope_b.profile_id, "u": scope_b.user_id})
+    manifest_a = request(scope_a)
+    manifest_b = request(scope_b)
+    a = stage_import_manifest_candidate(
+        engine, scope=scope_a, manifest=manifest_a,
+    )
+    b = stage_import_manifest_candidate(
+        engine, scope=scope_b, manifest=manifest_b,
+    )
+    assert a["status"] == b["status"] == "UNVERIFIED_MANIFEST_STAGED"
+    assert a["batch_id"] != b["batch_id"]
+    batches_a, records_a, revision_a, financial_a = batch_rows(engine, scope_a)
+    batches_b, records_b, revision_b, financial_b = batch_rows(engine, scope_b)
+    assert len(batches_a) == len(batches_b) == 1
+    assert len(records_a) == len(records_b) == 2
+    assert {r["target_id"] for r in records_a}.isdisjoint(
+        {r["target_id"] for r in records_b})
+    assert revision_a == revision_b == 0
+    assert financial_a == financial_b == 0
+    # The profile A runtime connection cannot even SELECT B's staged records.
+    with finance_transaction(
+        engine, verified_user_id=scope_a.user_id, profile_id=scope_a.profile_id,
+    ) as s:
+        assert s.execute(text("""
+            SELECT count(*) FROM import_batches WHERE profile_id=:other
+        """), {"other": scope_b.profile_id}).scalar_one() == 0
