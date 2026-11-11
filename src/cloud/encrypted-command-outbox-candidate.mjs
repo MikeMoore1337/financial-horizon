@@ -10,6 +10,7 @@ import {
   readAtomicEncryptedCandidate,
   compareAndSwapAtomicEncryptedCandidate,
 } from '../security/protected-atomic-candidate.ts';
+import {applyFinanceDeltaCandidate} from './verified-delta-candidate.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SCOPE = /^account:[a-f0-9]{32}$/;
@@ -251,6 +252,20 @@ export async function enqueueEncryptedFinanceCommandCandidate({
   // currently unlocked keyset are checked above; queue identity is fenced
   // by the persistent account scope, owner profile and cutover epoch.
   existingQueue(current.outbox, scope, identity);
+  const proven = current.snapshot.cloudFinance.appliedReceipts;
+  if (proven !== undefined && (!Array.isArray(proven) || proven.length > 2000 ||
+      proven.some(x => !plain(x) || !UUID.test(x.mutationId) ||
+        !/^[a-f0-9]{64}$/.test(x.fingerprint) || !integer(x.revision, 1)))) {
+    hold('Повреждена история подтверждённых операций');
+  }
+  const alreadyApplied = (proven || []).find(x => x.mutationId === pinned.client_mutation_id);
+  if (alreadyApplied) {
+    if (alreadyApplied.fingerprint !== digest) {
+      hold('Идентификатор принадлежит другой уже проведённой операции');
+    }
+    return Object.freeze({status: 'ALREADY_CONFIRMED', bundleEpoch: expectedEpoch,
+      pending: current.outbox.length, serverBalanceChanged: false, sent: false});
+  }
   const duplicate = current.outbox.find(x => x.mutationId === pinned.client_mutation_id);
   if (duplicate) {
     if (duplicate.fingerprint !== digest || duplicate.ifMatch !== ifMatch) {
@@ -302,4 +317,118 @@ export function classifyFinanceOutboxResponseCandidate(status, attempts = 0) {
       retryDelayMs: Math.min(60_000, 1000 * 2 ** Math.min(attempts, 6))};
   }
   return {decision: 'RECOVERY_HOLD', retryDelayMs: null};
+}
+
+
+/**
+ * #68 Inactive, bounded durable server-receipt reconciliation.
+ *
+ * Must be called ONLY with the outputs of two authenticated, uncached calls
+ * to the accepted FH finance service under the same live session:
+ *   POST /api/finance/v2/commands -> receipt
+ *   GET /api/finance/v1/changes -> delta, beginning at the stored cursor
+ *
+ * This method performs NO HTTP call and does not trust a 200/201 reply alone.
+ * It requires byte-equivalent canonical event images from the independent
+ * authoritative server delta, then persists the image, cursor, applied
+ * fingerprint proof and outbox removal in a SINGLE encrypted native IDB CAS.
+ */
+export async function persistAuthenticatedFinanceReceiptCandidate({
+  scope, session, identity, expectedEpoch, receipt, deltaPage,
+  commandHttpStatus, deltaHttpStatus,
+}) {
+  active(scope, session, identity);
+  if (!integer(expectedEpoch) ||
+      ![200, 201].includes(commandHttpStatus) ||
+      deltaHttpStatus !== 200) {
+    hold('Не подтверждены оба серверных финансовых ответа');
+  }
+  const ack = safeJson(receipt);
+  const delta = safeJson(deltaPage);
+  if (!plain(ack) || ack.schema_version !== 2 ||
+      !UUID.test(ack.client_mutation_id) ||
+      !integer(ack.revision, 1) ||
+      typeof ack.replayed !== 'boolean' ||
+      !Array.isArray(ack.changes) || ack.changes.length === 0 ||
+      ack.changes.length > 100 ||
+      !plain(delta) || delta.schema_version !== 1 ||
+      !Array.isArray(delta.changes) || delta.changes.length > 100) {
+    hold('Некорректное подтверждение финансовой операции');
+  }
+  const current = await readAtomicEncryptedCandidate(scope, session);
+  active(scope, session, identity);
+  if (!current || current.epoch !== expectedEpoch ||
+      current.schemaVersion !== 2 || current.snapshot?.version !== 2 ||
+      !Array.isArray(current.outbox) || !Array.isArray(current.conflicts)) {
+    hold('Зашифрованный финансовый снимок изменился');
+  }
+  const cloud = current.snapshot.cloudFinance;
+  if (!plain(cloud) || cloud.schemaVersion !== 1 ||
+      cloud.scope !== scope || cloud.profileId !== identity.profileId ||
+      cloud.epoch !== identity.epoch || !integer(cloud.revision) ||
+      !integer(cloud.generation, 1)) hold('Серверный профиль изменился');
+  existingQueue(current.outbox, scope, identity);
+  const first = current.outbox[0];
+  if (!first || first.mutationId !== ack.client_mutation_id ||
+      first.command.client_mutation_id !== ack.client_mutation_id ||
+      first.status !== 'pending') {
+    hold('Получено подтверждение не первой ожидающей команды');
+  }
+  const digest = await fingerprint(
+    scope, identity.profileId, first.ifMatch, first.command,
+  );
+  active(scope, session, identity);
+  if (first.fingerprint !== digest || first.command.schema_version !== 2) {
+    hold('Финансовая команда изменилась после записи');
+  }
+  // The accepted v1 API pages changes by whole PostgreSQL revisions.
+  // No partial page, missing fact, competing revision or client-supplied
+  // receipt can ever cause the outbox to be cleared.
+  if (ack.revision !== cloud.revision + 1 ||
+      delta.from_revision !== cloud.revision ||
+      delta.next_since_revision !== ack.revision ||
+      ack.changes.some((entry, index) =>
+        !plain(entry) || entry.revision !== ack.revision ||
+        !integer(entry.ordinal, 0) || entry.ordinal !== index) ||
+      canonical(ack.changes) !== canonical(delta.changes)) {
+    hold('Квитанция не совпадает с независимым серверным журналом');
+  }
+  const checked = applyFinanceDeltaCandidate(
+    {...cloud, generation: identity.generation,
+     pending: current.outbox, conflicts: current.conflicts},
+    delta, identity,
+  );
+  if (checked.revision !== ack.revision) {
+    hold('Подтверждённая ревизия не записана');
+  }
+  const storedProofs = cloud.appliedReceipts || [];
+  if (!Array.isArray(storedProofs) || storedProofs.length >= 2000 ||
+      storedProofs.some(x => !plain(x) || !UUID.test(x.mutationId) ||
+        !/^[a-f0-9]{64}$/.test(x.fingerprint) || !integer(x.revision, 1) ||
+        x.mutationId === first.mutationId)) {
+    hold('Некорректная история подтверждённых операций');
+  }
+  const sealedSnapshot = structuredClone(current.snapshot);
+  sealedSnapshot.cloudFinance = {
+    schemaVersion: 1, scope, profileId: identity.profileId,
+    epoch: identity.epoch, generation: identity.generation,
+    revision: checked.revision, entities: checked.entities,
+    appliedReceipts: [...storedProofs, {
+      mutationId: first.mutationId, fingerprint: digest, revision: ack.revision,
+    }],
+  };
+  const nextEpoch = await compareAndSwapAtomicEncryptedCandidate(
+    scope, session, expectedEpoch, 2, {
+      snapshot: sealedSnapshot, outbox: current.outbox.slice(1),
+      conflicts: current.conflicts,
+    },
+  );
+  active(scope, session, identity);
+  return Object.freeze({
+    status: 'DURABLY_CONFIRMED',
+    bundleEpoch: nextEpoch, serverRevision: ack.revision,
+    pending: current.outbox.length - 1, serverBalanceChanged: true,
+    // The server already committed it; this method only reconciles locally.
+    sentByThisFunction: false,
+  });
 }
