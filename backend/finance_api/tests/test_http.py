@@ -26,7 +26,8 @@ from backend.fh_email_auth.security import token_hash
 from backend.fh_email_auth.store import AuthStore
 from backend.finance_db.db import create_finance_engine, finance_transaction
 from backend.finance_db.ledger_service import (
-    ensure_verified_profile, get_account_snapshot, submit_account_command,
+    FinanceCommandError, ensure_verified_profile, get_account_snapshot,
+    submit_account_command,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -1198,3 +1199,58 @@ def test_snapshot_recovers_exact_reserve_allocation_pairs_after_delta_compaction
     assert final[reserve_a]["data"]["allocations_by_account"] == [
         {"account_id": account_a, "allocated_minor": 300}
     ]
+
+
+def test_internal_account_archival_blocks_edits_until_restored(env):
+    """Account archive is immutable for edits until restored; no partial receipts."""
+    uid, token = env["first"]
+    account_id = env["account"](uid, opening=10_500)
+    scoped = env["scope"](uid)
+
+    def revision(state):
+        return next(
+            e["entity_revision"] for e in state.json()["entities"]
+            if e["id"] == account_id
+        )
+
+    def apply(state, action, payload):
+        cmd = command(state, action, payload, {account_id: revision(state)})
+        return submit_account_command(
+            env["engine"], scope=scoped, command=cmd,
+            if_match=state.headers["etag"],
+            idempotency_key=cmd["client_mutation_id"], allow_internal=True,
+        )
+
+    before = snapshot(env, token)
+    assert apply(before, "account.archive", {"account_id": account_id}).status == 201
+    archived = snapshot(env, token)
+    account = next(e for e in archived.json()["entities"] if e["id"] == account_id)
+    assert account["data"]["archived_at"] is not None
+
+    with pytest.raises(FinanceCommandError) as rejected:
+        apply(archived, "account.update", {
+            "account_id": account_id, "name": "Unapproved archived edit", "kind": "cash",
+        })
+    assert rejected.value.code == "semantic_conflict"
+    unchanged = snapshot(env, token)
+    assert unchanged.headers["etag"] == archived.headers["etag"]
+    assert unchanged.json() == archived.json() or (
+        # server_at is expected to change even when the journal is unchanged
+        unchanged.json()["revision"] == archived.json()["revision"]
+    )
+    current = next(e for e in unchanged.json()["entities"] if e["id"] == account_id)
+    assert current["data"]["name"] == "Synthetic account"
+    assert current["data"]["type"] == "bank"
+    assert current["data"]["balance_minor"] == 10_500
+
+    assert apply(unchanged, "account.unarchive", {"account_id": account_id}).status == 201
+    restored = snapshot(env, token)
+    assert apply(restored, "account.update", {
+        "account_id": account_id, "name": "Restored account", "kind": "cash",
+    }).status == 201
+    final = snapshot(env, token)
+    account = next(e for e in final.json()["entities"] if e["id"] == account_id)
+    assert account["data"]["name"] == "Restored account"
+    assert account["data"]["type"] == "cash"
+    assert account["data"]["archived_at"] is None
+    assert account["data"]["balance_minor"] == 10_500
