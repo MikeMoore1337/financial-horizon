@@ -883,3 +883,60 @@ test('#68 encrypted queue survives logout, browser restart and a new unlock gene
   assert.equal((await readAtomicEncryptedCandidate(USER_A, restored)).outbox.length, 2);
   restored.logout();
 });
+
+
+test('#68 v2 offline queue refuses invalid dates, signs, account revisions and RUB changes', async () => {
+  const {session, identity} = await preparedOfflineQueue();
+  const args = {
+    scope: USER_A, session, identity, ifMatch: CLOUD_ETAG, expectedEpoch: 1,
+  };
+  const original = pendingCommand();
+  const bad = [
+    {...original, expected_entity_revisions: {[CLOUD_ACCOUNT]: 1}},
+    {...original, payload: {...original.payload, name: '  '}},
+    {...original, payload: {...original.payload, kind: 'crypto'}},
+    {...original, payload: {...original.payload, currency: 'EUR'}},
+    {...original, payload: {...original.payload, opening_minor: true}},
+  ];
+  const income = {
+    schema_version: 2,
+    client_mutation_id: 'c0000000-0000-4000-8000-000000000001',
+    base_revision: 0,
+    action: 'transaction.record',
+    expected_entity_revisions: {[CLOUD_ACCOUNT]: 1},
+    payload: {id: 'c0000000-0000-4000-8000-000000000002',
+      account_id: CLOUD_ACCOUNT, kind: 'income',
+      signed_minor: 500, occurred_on: '2026-11-11'},
+  };
+  bad.push(
+    {...income, payload: {...income.payload, signed_minor: -100}},
+    {...income, payload: {...income.payload, occurred_on: '2026-02-30'}},
+    {...income, expected_entity_revisions: {}},
+    {...income, expected_entity_revisions: {[CLOUD_ACCOUNT]: 1,
+      [NEW_ACCOUNT_ID]: 1}},
+  );
+  const pay = {
+    schema_version: 2,
+    client_mutation_id: 'c0000000-0000-4000-8000-000000000003',
+    base_revision: 0,
+    action: 'loan.payment.record',
+    expected_entity_revisions: {[CLOUD_ACCOUNT]: 1},
+    payload: {loan_id: 'c0000000-0000-4000-8000-000000000004',
+      account_id: CLOUD_ACCOUNT, amount_minor: 1_000,
+      paid_on: '2026-11-11', strategy: 'term'},
+  };
+  bad.push(pay, {...pay, expected_entity_revisions:
+    {[CLOUD_ACCOUNT]: 1, [pay.payload.loan_id]: 1},
+    payload: {...pay.payload, paid_on: '2026-13-01'}});
+  for (const command of bad) {
+    await assert.rejects(
+      () => enqueueEncryptedFinanceCommandCandidate({...args, command}),
+      /SYNC_HOLD/, 'invalid financial command must not be queued',
+    );
+  }
+  const after = await readAtomicEncryptedCandidate(USER_A, session);
+  assert.equal(after.epoch, 1);
+  assert.deepEqual(after.outbox, []);
+  assert.equal(after.snapshot.cloudFinance.entities[0].data.balance_minor, 10_000);
+  session.logout();
+});
