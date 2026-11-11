@@ -52,6 +52,55 @@ function canonical(value, seen = new Set(), depth = 0) {
   seen.delete(value);
   return output;
 }
+/**
+ * The verified source is an untrusted caller-owned object until pinned.
+ * structuredClone() INVOKES accessor getters; check the entire tree before
+ * cloning so an import preview never executes a financial-field getter.
+ */
+function assertSafeJSONBeforeClone(value, seen = new Set(), depth = 0) {
+  if (depth > 32) fail('Превышена глубина финансовых данных');
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) fail('Некорректное число');
+    return;
+  }
+  if (!value || typeof value !== 'object' || seen.has(value)) {
+    fail('Некорректная или циклическая финансовая структура');
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype ||
+        Object.getOwnPropertySymbols(value).length ||
+        Object.keys(value).length !== value.length ||
+        Object.getOwnPropertyNames(value).length !== value.length + 1) {
+      fail('Некорректный массив исходных финансов');
+    }
+    for (let i = 0; i < value.length; i++) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, i);
+      if (!descriptor || !Object.hasOwn(descriptor, 'value')) {
+        fail('Недопустимый элемент массива финансов');
+      }
+      assertSafeJSONBeforeClone(descriptor.value, seen, depth + 1);
+    }
+  } else {
+    if (!isObject(value) || Object.getOwnPropertySymbols(value).length ||
+        Object.keys(value).length !== Object.getOwnPropertyNames(value).length ||
+        Object.keys(value).length > 400) {
+      fail('Некорректный объект исходных финансов');
+    }
+    for (const [name, descriptor] of Object.entries(
+      Object.getOwnPropertyDescriptors(value)
+    )) {
+      if (name === '__proto__' || name === 'constructor' ||
+          name === 'prototype' || !Object.hasOwn(descriptor, 'value')) {
+        fail('Небезопасное поле финансовых данных');
+      }
+      assertSafeJSONBeforeClone(descriptor.value, seen, depth + 1);
+    }
+  }
+  seen.delete(value);
+}
+
 async function fingerprint(serialized) {
   const bytes = new TextEncoder().encode(serialized);
   if (bytes.byteLength > maxBytes) fail('Финансовая база превышает лимит переноса');
@@ -116,6 +165,7 @@ export async function planVerifiedLegacyImportCandidate({
   // change account scope, money or source IDs while awaiting SHA-256.
   let pinned;
   try {
+    assertSafeJSONBeforeClone(verified.snapshot);
     pinned = structuredClone(verified.snapshot);
     validateState(pinned);
   } catch {
