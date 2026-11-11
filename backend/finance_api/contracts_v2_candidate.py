@@ -24,6 +24,8 @@ ACCOUNT_KINDS = ("bank", "card", "cash", "savings", "other")
 ACTIONS = (
     "account.create", "account.update", "account.archive",
     "account.unarchive", "transaction.record",
+    "settlement.payment.record", "loan.payment.record",
+    "settlement.payment.void", "loan.payment.void",
 )
 
 
@@ -96,12 +98,56 @@ class TransactionRecordV2(Wire):
         return self
 
 
+class SettlementPaymentRecordV2(Wire):
+    obligation_id: str = Field(pattern=UUID_PATTERN)
+    account_id: str = Field(pattern=UUID_PATTERN)
+    amount_minor: StrictInt = Field(ge=1, le=MAX_MINOR)
+    paid_on: str
+    occurrence_on: str
+
+    @field_validator("paid_on", "occurrence_on")
+    @classmethod
+    def iso_date(cls, value: str) -> str:
+        return _date(value)
+
+
+class LoanPaymentRecordV2(Wire):
+    loan_id: str = Field(pattern=UUID_PATTERN)
+    account_id: str = Field(pattern=UUID_PATTERN)
+    amount_minor: StrictInt = Field(ge=1, le=MAX_MINOR)
+    paid_on: str
+    strategy: Literal["term", "amount"]
+
+    @field_validator("paid_on")
+    @classmethod
+    def iso_date(cls, value: str) -> str:
+        return _date(value)
+
+
+class PaymentVoidV2(Wire):
+    transaction_id: str = Field(pattern=UUID_PATTERN)
+    fact_id: str = Field(pattern=UUID_PATTERN)
+    account_id: str = Field(pattern=UUID_PATTERN)
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def nonblank_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Reason cannot be blank")
+        return value
+
+
 _PAYLOADS = {
     "account.create": AccountCreateV2,
     "account.update": AccountUpdateV2,
     "account.archive": AccountArchiveV2,
     "account.unarchive": AccountArchiveV2,
     "transaction.record": TransactionRecordV2,
+    "settlement.payment.record": SettlementPaymentRecordV2,
+    "loan.payment.record": LoanPaymentRecordV2,
+    "settlement.payment.void": PaymentVoidV2,
+    "loan.payment.void": PaymentVoidV2,
 }
 
 
@@ -112,6 +158,8 @@ class AccountV2Candidate(Wire):
     action: Literal[
         "account.create", "account.update", "account.archive",
         "account.unarchive", "transaction.record",
+        "settlement.payment.record", "loan.payment.record",
+        "settlement.payment.void", "loan.payment.void",
     ]
     expected_entity_revisions: dict[str, StrictInt]
     payload: dict[str, Any]
@@ -152,11 +200,16 @@ def validate_v2_account_candidate(
     ):
         raise ValueError("Missing or inconsistent strong preconditions")
     payload = _PAYLOADS[candidate.action].model_validate(candidate.payload)
-    required = (
-        set()
-        if candidate.action == "account.create"
-        else {payload.account_id}
-    )
+    if candidate.action == "account.create":
+        required = set()
+    elif candidate.action == "settlement.payment.record":
+        required = {payload.account_id, payload.obligation_id}
+    elif candidate.action == "loan.payment.record":
+        required = {payload.account_id, payload.loan_id}
+    elif candidate.action.endswith(".payment.void"):
+        required = {payload.account_id, payload.transaction_id, payload.fact_id}
+    else:
+        required = {payload.account_id}
     if set(candidate.expected_entity_revisions) != required:
         raise ValueError("Missing or extraneous account entity revisions")
     return {
