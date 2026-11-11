@@ -496,7 +496,10 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         expected = {"account_id"} | ({"name", "kind"} if action == "account.update" else set())
         _shape(payload, expected, expected)
         target = _uuid(payload["account_id"])
-        entity = _account(session, p, target, versions, archived=True)
+        # Archive is a read-only state for account metadata until explicitly restored.
+        # Keep archive/unarchive transitions revision-checked and accessible.
+        entity = _account(session, p, target, versions,
+                          archived=action != "account.update")
         if action == "account.update":
             name = payload["name"]
             if (not isinstance(name, str) or not name.strip() or len(name) > 160
