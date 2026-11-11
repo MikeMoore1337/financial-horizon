@@ -430,3 +430,98 @@ test('monthly cash flow remains exact on 6000 transfers and cross-month compensa
   assert.deepEqual(monthlyCashFlowMinor(s, '2026-12'), { incomeMinor: -450, expenseMinor: 0 });
   assert.equal(totalBalanceMinor(s), 99_875);
 });
+
+
+function snapshotWithAtomicLinkedVoid(source = 'loanPayment') {
+  let s;
+  if (source === 'loanPayment') {
+    s = fixture();
+  } else {
+    s = create(emptyLedger(uuid(1)), uuid(2), 10_000);
+    const settlementId = uuid(22);
+    s = run(s, 'payment.record', {
+      id: uuid(23), accountId: uuid(2), amountMinor: 200,
+      link: { settlementId }, occurredOn: '2026-11-07',
+    }, { ...revisions(s, uuid(2)), [settlementId]: 1 }, {
+      profileId: s.profileId, id: settlementId, source: 'settlement',
+      direction: 'income', amountMinor: 200, entityRevision: 1,
+      voidedAt: null,
+    });
+  }
+  const payment = s.transactions.find(tx => tx.kind === 'payment');
+  const link = s.paymentLinks.find(item => item.transactionId === payment.id);
+  const factId = source === 'loanPayment' ? link.loanPaymentId : link.settlementId;
+  const posting = s.postings.find(item => item.transactionId === payment.id);
+  const reversalId = uuid(31);
+  s.transactions.push({
+    id: reversalId, profileId: s.profileId, kind: 'reversal',
+    occurredOn: '2026-11-11', actorUserId: payment.actorUserId,
+    note: 'Подтверждённое аннулирование', entityRevision: 1,
+    reversedTransactionId: payment.id,
+  });
+  s.postings.push({
+    profileId: s.profileId, transactionId: reversalId,
+    accountId: posting.accountId, signedMinor: -posting.signedMinor,
+  });
+  s.accounts.find(x => x.id === posting.accountId).entityRevision++;
+  s.revision++;
+  s.linkedPaymentVoids = [{
+    profileId: s.profileId, transactionId: payment.id,
+    factId, source, entityRevision: 2, reversedByTransactionId: reversalId,
+    voidedAt: '2026-11-11T12:30:41.123456+00:00',
+  }];
+  return s;
+}
+
+test('authoritative settlement/loan fact void and matching reversal are accepted', () => {
+  for (const source of ['loanPayment', 'settlement']) {
+    const s = snapshotWithAtomicLinkedVoid(source);
+    assert.doesNotThrow(() => assertLedgerState(s));
+    const original = s.transactions.find(x => x.kind === 'payment');
+    const reversed = s.transactions.find(x => x.kind === 'reversal');
+    assert.equal(reversed.reversedTransactionId, original.id);
+    assert.equal(s.linkedPaymentVoids.length, 1);
+    assert.equal(s.linkedPaymentVoids[0].entityRevision, 2);
+    const originalPosting = s.postings.find(x => x.transactionId === original.id);
+    const reversalPosting = s.postings.find(x => x.transactionId === reversed.id);
+    assert.equal(originalPosting.signedMinor + reversalPosting.signedMinor, 0);
+    // Compensated movement cannot invent assets, change original payment or
+    // silently double-charge the financial profile.
+    assert.equal(totalBalanceMinor(s),
+      source === 'loanPayment' ? 101_000 : 10_000);
+    assert.doesNotThrow(() => assertLedgerState(JSON.parse(JSON.stringify(s))));
+  }
+});
+
+test('linked reversal proof must match original, fact, source and compensated transaction', () => {
+  const clean = snapshotWithAtomicLinkedVoid('loanPayment');
+  const mutations = [
+    [s => { delete s.linkedPaymentVoids; }, /Связанная оплата отменена/],
+    [s => { s.linkedPaymentVoids = []; }, /Связанная оплата отменена/],
+    [s => { s.linkedPaymentVoids[0].profileId = uuid(9); }, /Чужой/],
+    [s => { s.linkedPaymentVoids[0].transactionId = uuid(9); }, /Факт отмены/],
+    [s => { s.linkedPaymentVoids[0].factId = uuid(9); }, /Факт отмены/],
+    [s => { s.linkedPaymentVoids[0].source = 'settlement'; }, /Факт отмены/],
+    [s => { s.linkedPaymentVoids[0].reversedByTransactionId = uuid(9); }, /Факт отмены/],
+    [s => { s.linkedPaymentVoids[0].entityRevision = 1; }, /ревизия/],
+    [s => { s.linkedPaymentVoids[0].voidedAt = '2026-02-30T00:00:00Z'; }, /дата/],
+    [s => { s.linkedPaymentVoids.push(structuredClone(s.linkedPaymentVoids[0])); }, /Факт отмены|Повреждены факты/],
+    [s => { s.transactions.find(x => x.kind === 'reversal').reversedTransactionId = uuid(19); }, /Факт отмены/],
+    [s => { s.postings.find(x => x.transactionId === uuid(31)).signedMinor = -7; }, /компенсация/],
+  ];
+  for (const [modify, message] of mutations) {
+    const broken = structuredClone(clean);
+    modify(broken);
+    assert.throws(() => assertLedgerState(broken), message);
+    assert.throws(() => totalBalanceMinor(broken), message,
+      'Financial totals must not silently accept a corrupt void proof');
+  }
+});
+
+test('void metadata without its cash reversal is not a completed linked payment', () => {
+  const clean = snapshotWithAtomicLinkedVoid();
+  const missing = structuredClone(clean);
+  missing.transactions = missing.transactions.filter(x => x.id !== uuid(31));
+  missing.postings = missing.postings.filter(x => x.transactionId !== uuid(31));
+  assert.throws(() => assertLedgerState(missing), /Факт отмены/);
+});
