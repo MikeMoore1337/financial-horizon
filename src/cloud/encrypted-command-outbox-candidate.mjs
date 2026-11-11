@@ -435,3 +435,61 @@ export async function persistAuthenticatedFinanceReceiptCandidate({
     sentByThisFunction: false,
   });
 }
+
+
+/**
+ * Persist bounded retry count with the unchanged original mutation ID,
+ * If-Match and command in one encrypted IndexedDB CAS. This is not a server
+ * payment confirmation and never changes authoritative cash balances.
+ */
+export async function recordEncryptedFinanceRetryCandidate({
+  scope, session, identity, expectedEpoch, mutationId,
+}) {
+  active(scope, session, identity);
+  if (!integer(expectedEpoch) || !UUID.test(mutationId)) {
+    hold('Неверный идентификатор повторной отправки');
+  }
+  const current = await readAtomicEncryptedCandidate(scope, session);
+  active(scope, session, identity);
+  if (!current || current.epoch !== expectedEpoch ||
+      current.schemaVersion !== 2 || current.snapshot?.version !== 2 ||
+      !Array.isArray(current.outbox) || !Array.isArray(current.conflicts)) {
+    hold('Защищённая очередь изменилась');
+  }
+  const cloud = current.snapshot.cloudFinance;
+  if (!plain(cloud) || cloud.scope !== scope ||
+      cloud.profileId !== identity.profileId ||
+      cloud.epoch !== identity.epoch ||
+      !integer(cloud.revision)) {
+    hold('Профиль очереди изменился');
+  }
+  existingQueue(current.outbox, scope, identity);
+  const first = current.outbox[0];
+  if (!first || first.mutationId !== mutationId ||
+      !integer(first.attempts, 0, 32) ||
+      first.command.client_mutation_id !== mutationId) {
+    hold('Команда не подлежит повторной отправке');
+  }
+  const expectedFingerprint = await fingerprint(
+    scope, identity.profileId, first.ifMatch, first.command,
+  );
+  active(scope, session, identity);
+  if (expectedFingerprint !== first.fingerprint) {
+    hold('Изменилась исходная команда');
+  }
+  const attempts = Math.min(32, first.attempts + 1);
+  const outbox = [
+    {...first, attempts}, ...current.outbox.slice(1),
+  ];
+  const nextEpoch = await compareAndSwapAtomicEncryptedCandidate(
+    scope, session, expectedEpoch, 2, {
+      snapshot: current.snapshot, outbox, conflicts: current.conflicts,
+    },
+  );
+  active(scope, session, identity);
+  return Object.freeze({
+    status: 'RETRY_PERSISTED', attempts, bundleEpoch: nextEpoch,
+    mutationId, pending: outbox.length,
+    serverBalanceChanged: false, commandUnchanged: true,
+  });
+}
