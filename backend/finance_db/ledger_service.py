@@ -38,7 +38,8 @@ _PUBLIC_V1_ACTIONS = frozenset(("obligation.create", "account.transfer", "reserv
 # commands. No v2 HTTP route is mounted, and the default callable remains v1.
 _PUBLIC_V2_ACCOUNT_ACTIONS = frozenset((
     "account.create", "account.update", "account.archive", "account.unarchive",
-    "transaction.record",
+    "transaction.record", "settlement.payment.record", "loan.payment.record",
+    "settlement.payment.void", "loan.payment.void",
 ))
 
 
