@@ -134,7 +134,11 @@ def test_server_existing_account_blocks_import_without_overwriting(context):
     # These pre-existing rows remain untouched by the rejected import.
     assert revision == 1 and financial == 3
     after = get_account_snapshot(engine, scope=scope)
-    assert after.body == before.body
+    # server_at is a read timestamp, not part of the financial transaction.
+    # The actual server revision, ETag and account images must be unchanged.
+    assert after.etag == before.etag
+    assert after.body["revision"] == before.body["revision"]
+    assert after.body["entities"] == before.body["entities"]
     assert after.body["entities"][0]["id"] == account_id
     assert after.body["entities"][0]["data"]["balance_minor"] == 123456
 
