@@ -64,6 +64,13 @@ alter real balances. Planned obligations and reserves are distinct.
 
 ## Current verification
 
+The machine-readable but **not approved** candidate lives in
+`backend/finance_api/finance-v2-accounts-candidate.openapi.json`.
+`backend/finance_api/tests/test_contract_v2_openapi.py` checks the five
+Pydantic action/payload definitions against this draft, its session-cookie
+scope and the required HTTP errors. It does not publish or authorize the
+API; production and the accepted v1 OpenAPI remain unchanged.
+
 `backend/finance_api/tests/test_contract_v2_candidate.py` validates the strict
 unpublished transport without database access. The separately unmounted
 `backend/finance_api/accounts_v2_service.py` binds the validated five-action
