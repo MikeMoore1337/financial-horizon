@@ -182,11 +182,20 @@ export async function dispatchOneEncryptedFinanceCommandCandidate({
   try { receipt = await jsonResponse(posted); }
   catch { return control('RECOVERY_HOLD'); }
   active(scope, session, identity);
+  // A previous sync may have applied the committed server revision before
+  // the ACK was durably recorded. Ask the server for exactly that historical
+  // revision, not the already-advanced local cursor. The independent ACK
+  // reconciliation still validates the complete receipt and delta.
+  const committedRevision = Number.isSafeInteger(receipt?.revision) &&
+    receipt.revision >= 1 ? receipt.revision : null;
+  const sinceRevision = committedRevision !== null &&
+    committedRevision <= cloud.revision
+    ? committedRevision - 1 : cloud.revision;
   let deltaResponse;
   try {
     deltaResponse = await fetchImpl(
       server + '/api/finance/v1/changes?since_revision=' +
-      cloud.revision + '&limit_revisions=1',
+      sinceRevision + '&limit_revisions=1',
       {method: 'GET', credentials: 'same-origin', mode: 'same-origin',
        redirect: 'error', cache: 'no-store', referrerPolicy: 'no-referrer',
        headers: {'Accept': 'application/json'},
