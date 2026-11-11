@@ -39,6 +39,20 @@ export type PaymentLink = {
   profileId: string;
   transactionId: string;
 } & ({ settlementId: string; loanPaymentId?: never } | { loanPaymentId: string; settlementId?: never });
+/** Server-verified linked fact void paired with an immutable cash reversal.
+ * This is supplemental snapshot evidence, NOT client permission to cancel
+ * a payment: only PostgreSQL 0002 deferred constraints authorize the COMMIT.
+ */
+export interface LinkedPaymentVoidProof {
+  profileId: string;
+  transactionId: string;
+  factId: string;
+  source: 'settlement' | 'loanPayment';
+  reversedByTransactionId: string;
+  entityRevision: number;
+  voidedAt: string;
+}
+
 export interface CommandReceipt {
   clientMutationId: string;
   requestFingerprint: string;
@@ -54,6 +68,10 @@ export interface LedgerState {
   transactions: LedgerTransaction[];
   postings: LedgerPosting[];
   paymentLinks: PaymentLink[];
+  /** Optional on legacy in-memory ledgers; required to accept a linked
+   * payment reversal in a newer authoritative server snapshot.
+   */
+  linkedPaymentVoids?: LinkedPaymentVoidProof[];
   receipts: CommandReceipt[];
 }
 /**
