@@ -4,12 +4,16 @@ All fixtures are synthetic; there is no public v2 route or production write.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 import pytest
 
 from backend.finance_api.accounts_v2_service import submit_account_v2_candidate
-from backend.finance_api.tests.test_http import env, engine, snapshot, balance
+from backend.finance_api.tests.test_http import (
+    env, engine, snapshot, balance, reserve_command, seed_synthetic_reserve,
+    submit as submit_v1,
+)
 from backend.finance_db.ledger_service import (
     FinanceCommandError, get_account_snapshot, submit_account_command,
 )
@@ -187,3 +191,66 @@ def test_v2_collision_or_malformed_command_does_not_duplicate_cash(env):
     assert wrong_sign.value.code == "invalid_command"
     assert snapshot(env, token).json()["revision"] == state.json()["revision"]
     assert balance(env, uid, account_id) == -23
+
+
+def test_unmounted_v2_debit_respects_reserved_cash_and_rolls_back(env):
+    uid, token = env["first"]
+    account_id = env["account"](uid, opening=1_000)
+    reserve_id = seed_synthetic_reserve(env, uid, target=900)
+    before = snapshot(env, token)
+    allocated = submit_v1(
+        env["client"](token), before,
+        reserve_command(before, reserve_id, account_id, 900),
+    )
+    assert allocated.status_code == 201, allocated.text
+    protected = snapshot(env, token)
+    entity = next(e for e in protected.json()["entities"] if e["id"] == account_id)
+    assert entity["data"]["balance_minor"] == 1_000
+    assert entity["data"]["reserved_minor"] == 900
+    assert entity["data"]["available_minor"] == 100
+
+    denied = v2(protected, "transaction.record", {
+        "id": str(uuid4()), "account_id": account_id,
+        "kind": "expense", "signed_minor": -200,
+        "occurred_on": "2026-11-11",
+    }, {account_id: account_rev(protected, account_id)})
+    with pytest.raises(FinanceCommandError) as conflict:
+        submit(env, uid, protected, denied)
+    assert conflict.value.code == "semantic_conflict"
+    after = snapshot(env, token)
+    assert after.json()["revision"] == protected.json()["revision"]
+    assert balance(env, uid, account_id) == 1_000
+
+    allowed = v2(after, "transaction.record", {
+        "id": str(uuid4()), "account_id": account_id,
+        "kind": "expense", "signed_minor": -100,
+        "occurred_on": "2026-11-11",
+    }, {account_id: account_rev(after, account_id)})
+    assert submit(env, uid, after, allowed).status == 201
+    final = snapshot(env, token)
+    entity = next(e for e in final.json()["entities"] if e["id"] == account_id)
+    assert entity["data"]["balance_minor"] == 900
+    assert entity["data"]["reserved_minor"] == 900
+    assert entity["data"]["available_minor"] == 0
+
+
+def test_unmounted_v2_concurrent_identical_retries_commit_once(env):
+    uid, token = env["first"]
+    start = snapshot(env, token)
+    account_id = str(uuid4())
+    request = v2(start, "account.create", {
+        "id": account_id, "name": "Concurrent wallet", "kind": "bank",
+        "currency": "RUB", "opening_minor": 37_000,
+    })
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(
+            lambda _: submit(env, uid, start, request),
+            (0, 1),
+        ))
+    assert sorted(result.status for result in results) == [200, 201]
+    assert sorted(result.body["replayed"] for result in results) == [False, True]
+    assert results[0].body["revision"] == results[1].body["revision"]
+    final = snapshot(env, token)
+    assert final.json()["revision"] == start.json()["revision"] + 1
+    assert [e["id"] for e in final.json()["entities"] if e["kind"] == "account"] == [account_id]
+    assert balance(env, uid, account_id) == 37_000
