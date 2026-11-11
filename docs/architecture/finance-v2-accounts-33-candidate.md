@@ -58,7 +58,17 @@ alter real balances. Planned obligations and reserves are distinct.
 
 ## Current verification
 
-`backend/finance_api/tests/test_contract_v2_candidate.py` validates this
-proposal without database access. The separate real PostgreSQL regressions
-validate the **internal** account lifecycle. Neither substitutes for
-production acceptance; the current feature gate remains OFF.
+`backend/finance_api/tests/test_contract_v2_candidate.py` validates the strict
+unpublished transport without database access. The separately unmounted
+`backend/finance_api/accounts_v2_service.py` binds the validated five-action
+allowlist to the existing authoritative RLS/CAS/receipt PostgreSQL core.
+`backend/finance_api/tests/test_account_v2_service.py` exercises that private
+adapter on disposable PostgreSQL with real FH SQLite session bootstrapping,
+including stale/replayed commands, actual expense, archive and cross-profile
+denials. No production finance entrypoint imports this service.
+
+The SQL command core refuses version 2 by default. The v2 allowlist cannot be
+combined with its trusted v1 internal-payment mode. These safeguards are
+necessary but not a public protocol approval. A separate approved versioned
+HTTP contract, real app integration, migration/restore and #70 production
+security acceptance are still mandatory; the current feature gate remains OFF.
