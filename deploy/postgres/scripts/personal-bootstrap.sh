@@ -56,7 +56,7 @@ script_dir="$root/deploy/postgres/scripts"
 bash "$script_dir/personal-storage-preflight.sh" || deny "PRIVATE_STORAGE_FAILED"
 [[ "${FH_FINANCE_SECRETS_DIR:-/etc/financial-horizon/finance/secrets}" = /etc/financial-horizon/finance/secrets ]] ||
   deny "FINANCE_SECRETS_MUST_BE_ISOLATED"
-secrets="$FH_FINANCE_SECRETS_DIR"
+secrets="${FH_FINANCE_SECRETS_DIR:-/etc/financial-horizon/finance/secrets}"
 [[ -d "$secrets" && ! -L "$secrets" &&
    "$(stat -c '%a' "$secrets")" = 700 &&
    "$(stat -c '%u' "$secrets")" = 0 ]] || deny "PRIVATE_SECRETS_DIRECTORY_REQUIRED"
