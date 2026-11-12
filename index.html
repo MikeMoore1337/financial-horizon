@@ -11,6 +11,7 @@
 <meta name="color-scheme" content="light dark">
 <meta name="fh-email-auth" content="disabled">
 <meta name="fh-finance-accounts" content="disabled">
+<meta name="fh-finance-import" content="disabled">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" sizes="180x180" href="./assets/brand/apple-touch-icon-180.png">
 <link rel="icon" type="image/svg+xml" href="./assets/brand/favicon.svg">
@@ -154,7 +155,18 @@
  </div>
 </dialog>
 <input type="file" id="excel-file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
+<dialog class="dialog" id="cloud-import-dialog" aria-labelledby="cloud-import-heading">
+  <div class="dialog-body">
+    <div class="dialog-head"><div><span class="eyebrow">Личный финансовый аккаунт</span><h2 id="cloud-import-heading">Подтвердить перенос</h2></div><button type="button" class="tool-icon" data-action="cancel-cloud-import" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ico-close"/></svg></button></div>
+    <p class="form-note">Шифрованная копия сверена с текущей бухгалтерией. На сервере пока ничего не изменено. Локальные данные останутся на устройстве даже после импорта.</p>
+    <p id="cloud-import-summary" class="form-note" role="status" aria-live="polite"></p>
+    <label class="field"><span><input type="checkbox" id="cloud-import-final-consent"> Я сохранил зашифрованную копию вне браузера, проверил данные и разрешаю однократный перенос в свой аккаунт.</span></label>
+    <p class="form-note">Если импорт прервётся после подтверждения, не запускайте его повторно, пока не проверите результат на сервере. Автоматического удаления локальной базы нет.</p>
+    <div class="dialog-actions"><button type="button" class="button-secondary" data-action="cancel-cloud-import">Отмена</button><button type="button" class="button-primary" data-action="confirm-cloud-import">Перенести на сервер</button></div>
+  </div>
+</dialog>
 <input type="file" id="restore-file" accept=".json,application/json" hidden>
+<input type="file" id="cloud-import-file" accept=".json,application/json" hidden>
 <input type="file" id="schedule-file" accept=".csv,text/csv" hidden>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script type="module" src="./app.js?rev=auth-theme-v26"></script>
