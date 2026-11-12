@@ -12,8 +12,11 @@ backend/finance_db/ledger_service.py accepts an internally supplied
 VerifiedFinanceScope (user id verified from an actual FH email session;
 profile UUID resolved/created **server side**) and uses the
 finance_transaction from #66. PostgreSQL FORCE RLS verifies user and profile
-for every statement. Public-call mode only accepts existing OpenAPI v1 actions
-account.transfer and transaction.reverse. Internal opt-in mode also exercises
+for every statement. Public-call mode now accepts four implemented OpenAPI v1 actions:
+obligation.create (planned obligation, no debit), account.transfer,
+reserve.allocate (reservation/release, no debit) and transaction.reverse.
+Loan-payment recording remains internal until its public request contract
+provides an explicit funding account and linked-transaction invariants. Internal opt-in mode also exercises
 account creation/update/archive/unarchive and income/expense/adjustment recording,
 but **must not** be exposed as v1.
 
@@ -35,7 +38,7 @@ get_account_snapshot reads a transaction-consistent, profile-scoped account subs
 snapshot.py also implements full (account/obligation/loan/reserve/posted transaction,
 settlement/loan payment) snapshots and revision-aligned delta pagination. The HTTP
 router provides GET /api/finance/v1/state, GET /api/finance/v1/changes, and POST
-/api/finance/v1/commands, but only the two approved v1 commands are allowed.
+/api/finance/v1/commands, but only the four implemented v1 commands above are allowed.
 
 **Safe opt-in auth bridge:** The legacy `fh_email_session` cookie is scoped to
 `/api/auth`. Authenticated, Origin-checked POST `/api/auth/email/finance/session`
@@ -125,3 +128,23 @@ page intentionally stops old clients from silently treating an incomplete
 financial state as complete. A cursor is a position marker, not an
 authorization token; every request still requires a verified FH session
 and PostgreSQL FORCE RLS.
+
+
+### #67 Public command coverage (feature OFF)
+
+- `obligation.create`: PostgreSQL creates a server-generated UUID, stores one
+  planned recurring obligation (no posted cash), commits profile revision,
+  returns a full obligation entity image in receipt and delta. Requires real
+  IANA time zone; no cross-tenant identity supplied by client.
+- `reserve.allocate`: checks expected reserve and account revisions, target,
+  available account balance and per-account release floor while serializing
+  on the profile row lock. Two full entity changes (reserve and account) are
+  recorded in **one** profile revision, with one idempotency receipt. This
+  changes earmarked cash, not total ledger cash.
+- `loan.payment.record`: still unpublished in v1. Accepted OpenAPI lacks
+  `account_id`/`transaction_id`/`fact_id`; linking a cash debit without those
+  would invent a funding source. Internal-only candidate already covers atomic
+  linked fact and debit and must not be enabled via HTTP until approved.
+- `206/next_cursor` and snapshot `allocated_minor` totals are protocol
+  candidates that require client contract acceptance under #65/#68.
+- All code remains unmounted in production, pending #66/#70 go/no-go.

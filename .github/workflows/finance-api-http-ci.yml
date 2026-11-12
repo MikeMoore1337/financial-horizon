@@ -1,0 +1,113 @@
+name: finance-api-http-postgres-ci
+on:
+  push:
+    branches: [feat/67-finance-http-boundary]
+  pull_request:
+    branches: [feat/67-finance-account-command-service]
+permissions:
+  contents: read
+concurrency:
+  group: finance-api-http-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  finance-http-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      pg:
+        image: postgres:17@sha256:5b96f1a16bd9768b060dd2ffe55cb6225c4d9ef4d214a8b21eb08134869a97e4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_admin_password_only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Resolve existing top-level fh_auth and fh_email_auth under backend/.
+      PYTHONPATH: ${{ github.workspace }}/backend:${{ github.workspace }}
+      FH_FINANCE_CI_ALLOW_BOOTSTRAP: "yes"
+      FH_FINANCE_MIGRATION_URL: postgresql+psycopg://fh_finance_migrator:ci_migration_password_only@127.0.0.1:5432/fh_finance_ci
+      FH_FINANCE_DATABASE_URL: postgresql+psycopg://fh_finance_runtime:ci_runtime_password_only@127.0.0.1:5432/fh_finance_ci
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements-finance.txt
+      - name: Install tested dependencies for finance and auth
+        run: python -m pip install -r backend/requirements-finance.txt -r backend/requirements-test.txt 'bandit>=1.8,<2'
+      - name: Provision disposable finance roles and database
+        run: python backend/finance_db/tests/bootstrap_ci.py
+      - name: Apply accepted candidate #66 schema (isolated only)
+        run: alembic -c backend/finance_db/alembic.ini upgrade head
+      - name: Real PostgreSQL / auth SQLite full backend regression
+        run: |
+          python -m pytest -q backend/finance_db/tests/
+          python -m pytest -q backend/finance_api/tests/
+          python -m pytest -q backend/tests/
+      - name: Compile and scan every changed backend trust boundary
+        run: |
+          python -m compileall -q backend/finance_api backend/finance_db backend/fh_email_auth
+          python -m bandit -q -r backend/finance_api backend/finance_db backend/fh_email_auth -x backend/finance_api/tests,backend/finance_db/tests,backend/tests
+
+  # Verify that the stacked backend cannot regress the existing local PWA.
+  app-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run format:check
+      - run: npm run build
+      - run: npm run test:build
+      - run: npm test
+      - run: npm run test:component
+      - run: node --check app.js && node --check account.js && node --check sw.js && node --check tests/e2e/production-smoke.mjs
+      - run: npm run audit:deps
+
+  e2e-real-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements-test.txt
+      - run: npm ci
+      - run: python -m pip install -r backend/requirements-test.txt
+      - run: npx playwright install --with-deps chromium webkit
+      - run: npm run test:e2e
+        env:
+          FH_E2E_PYTHON: python3
+      - name: Upload synthetic-only failing browser artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-browser-failures
+          path: test-results/e2e/
+          if-no-files-found: ignore
+          retention-days: 7
+

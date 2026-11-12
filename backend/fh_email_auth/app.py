@@ -63,6 +63,7 @@ def create_app(
     oauth_exchanger=None,
     finance_engine=None,
     finance_profile_namespace=None,
+    enable_account_v2_candidate: bool=False,
 ) -> FastAPI:
     config=config or Settings.from_env()
     app=FastAPI(title="Financial Horizon Email Auth", docs_url=None, redoc_url=None,
@@ -143,6 +144,8 @@ def create_app(
             raise HTTPException(status_code=400,detail="Не удалось подтвердить защитную проверку")
 
     def cookie(response:Response,session:str):
+        # Finance-cookie invalidation is enforced by the opted-in finance
+        # adapter for EVERY session issuer, including OAuth callbacks.
         response.set_cookie(
             key=SESSION_COOKIE,value=session,path="/api/auth",max_age=7*86400,
             secure=not config.test_mode,httponly=True,samesite="lax"
@@ -361,6 +364,7 @@ def create_app(
             auth_resolver=store.current,
             secure_cookie=not config.test_mode,
             rate_limiter=lambda request, action: throttle(request, action),
+            enable_account_v2_candidate=enable_account_v2_candidate,
         )
     return app
 

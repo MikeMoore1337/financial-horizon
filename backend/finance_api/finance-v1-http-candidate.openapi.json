@@ -1,0 +1,1141 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Financial Horizon finance HTTP v1 - feature-off candidate contract",
+    "version": "1.0.0-rc.1",
+    "description": "Candidate for #67 and client agreement #65/#68; DOES NOT replace the accepted design-only OpenAPI. Authenticated PostgreSQL finance endpoints remain unmounted in production. Approved v1 loan.payment.record is intentionally NOT exposed until a safe funding-account and linked-fact contract is accepted."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Same-origin only; no cross-project dependency"
+    }
+  ],
+  "security": [
+    {
+      "cookieAuth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "sync"
+    },
+    {
+      "name": "import",
+      "description": "Future milestone #69, not live"
+    }
+  ],
+  "paths": {
+    "/api/auth/email/finance/session": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Same-origin bootstrap: validate existing fh_email_session and issue path-scoped finance cookie",
+        "description": "Verify current independent FH SQLite AuthStore session, apply Origin and quota checks, provision server-owned profile in PostgreSQL, and create HttpOnly Secure SameSite=Strict fh_finance_session at Path=/api/finance/v1. This does not copy financial data or establish cross-device synchronization.",
+        "security": [
+          {
+            "authBootstrap": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Verified, finance profile provisioned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "ok",
+                    "profile_id"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true,
+                      "type": "boolean"
+                    },
+                    "profile_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or revoked FH authentication"
+          },
+          "403": {
+            "description": "Invalid Origin or Fetch Metadata"
+          },
+          "429": {
+            "description": "Rate limit exceeded"
+          },
+          "503": {
+            "description": "Auth/quota/finance storage unavailable"
+          }
+        }
+      }
+    },
+    "/api/finance/v1/state": {
+      "get": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "Consistent server snapshot of the authenticated profile",
+        "responses": {
+          "200": {
+            "description": "Complete revision-pinned snapshot; only 200 without next_cursor may be consumed as complete.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Snapshot"
+                },
+                "example": {
+                  "schema_version": 1,
+                  "profile_id": "00000000-0000-4000-8000-000000000001",
+                  "revision": 7,
+                  "currency": "RUB",
+                  "entities": [],
+                  "server_at": "2026-11-07T07:00:00Z"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Strong entity tag; treat as opaque, never synthesize on client",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "\"fh.1.7.0ce5\""
+              },
+              "Cache-Control": {
+                "description": "Ответы не должны попадать в публичный кеш",
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "Partial snapshot - MUST follow next_cursor before treating state as complete",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Snapshot"
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "next_cursor"
+                      ],
+                      "properties": {
+                        "next_cursor": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Strong snapshot revision ETag",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Сеанс отсутствует/истёк",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Snapshot cursor revision no longer equals server revision; restart snapshot download",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid, duplicate or unsupported query parameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Read quota exceeded"
+          },
+          "503": {
+            "description": "База временно недоступна",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "financeCookie": []
+          }
+        ],
+        "x-feature-off": true,
+        "parameters": [
+          {
+            "name": "limit_entities",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5000,
+              "default": 1000
+            },
+            "description": "Maximum number of entities on one revision-pinned snapshot page."
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 150
+            },
+            "description": "Opaque next_cursor from previous 206 page; stale revision returns 412. Unknown or duplicate query parameters yield 422."
+          }
+        ]
+      }
+    },
+    "/api/finance/v1/changes": {
+      "get": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "Committed revision-ordered deltas; never split a revision across pages",
+        "parameters": [
+          {
+            "name": "since_revision",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Revision"
+            }
+          },
+          {
+            "name": "limit_revisions",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Целые ревизии без разрывов",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Delta"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "description": "Ответы не должны попадать в публичный кеш",
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Сеанс истёк",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Курсор устарел: snapshot_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "code": "snapshot_required",
+                  "message": "Перезагрузите снимок"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid or duplicated since_revision, limit_revisions, or unknown query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Read quota exceeded"
+          },
+          "503": {
+            "description": "Временная недоступность",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "financeCookie": []
+          }
+        ],
+        "x-feature-off": true
+      }
+    },
+    "/api/finance/v1/commands": {
+      "post": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "Exactly-once effect per profile/client_mutation_id, not exactly-once delivery",
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "description": "Strong ETag from last snapshot/ack. If false => 412 per RFC 9110.",
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "pattern": "^\"[^\"]+\"$"
+            },
+            "example": "\"fh.1.7.0ce5\""
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "description": "Must equal request client_mutation_id UUID; no TTL dedupe while profile exists",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "example": "11111111-1111-4111-8111-111111111111"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Command"
+              },
+              "example": {
+                "schema_version": 1,
+                "client_mutation_id": "11111111-1111-4111-8111-111111111111",
+                "base_revision": 7,
+                "action": "account.transfer",
+                "expected_entity_revisions": {
+                  "00000000-0000-4000-8000-000000000101": 3,
+                  "00000000-0000-4000-8000-000000000102": 4
+                },
+                "payload": {
+                  "from_account_id": "00000000-0000-4000-8000-000000000101",
+                  "to_account_id": "00000000-0000-4000-8000-000000000102",
+                  "amount_minor": 25000,
+                  "occurred_on": "2026-11-07"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "ACK также при безопасном повторе того же запроса",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAck"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Strong entity tag; treat as opaque, never synthesize on client",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "\"fh.1.7.0ce5\""
+              },
+              "Cache-Control": {
+                "description": "Ответы не должны попадать в публичный кеш",
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Первое выполнение",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandAck"
+                }
+              }
+            },
+            "headers": {
+              "ETag": {
+                "description": "Strong entity tag; treat as opaque, never synthesize on client",
+                "schema": {
+                  "type": "string"
+                },
+                "example": "\"fh.1.7.0ce5\""
+              },
+              "Cache-Control": {
+                "description": "Ответы не должны попадать в публичный кеш",
+                "schema": {
+                  "type": "string",
+                  "const": "private, no-store"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Сеанс отсутствует/истёк",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Нет прав на профиль",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Содержательный конфликт или повторное использование ключа",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "semantic_conflict": {
+                    "value": {
+                      "code": "semantic_conflict",
+                      "message": "Запись изменена на другом устройстве",
+                      "server_revision": 8,
+                      "conflicting_entity_ids": [
+                        "00000000-0000-4000-8000-000000000101"
+                      ]
+                    }
+                  },
+                  "key_reuse": {
+                    "value": {
+                      "code": "idempotency_key_reuse",
+                      "message": "Другая команда с этим идентификатором уже существует"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "If-Match устарел",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "code": "stale_revision",
+                  "message": "Снимок устарел",
+                  "server_revision": 8
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request exceeds 32KiB, including chunked transfer encoding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Некорректная финансовая команда",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Обязателен If-Match",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Сервис недоступен; retry exact same command only",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "financeCookie": []
+          }
+        ],
+        "x-feature-off": true,
+        "x-http-body-max-bytes": 32768,
+        "x-no-duplicate-json-keys": true,
+        "description": "One streamed JSON object, maximum 32768 bytes. Reject repeated object keys at every level, boolean/float money and schema_version, unknown fields, NaN/Infinity, invalid UUIDs, dangerous nesting. Verify FH session both before and after request stream, before PostgreSQL write; no user/profile identity accepted from the wire. Exactly one PostgreSQL transaction with revision, complete delta and SHA-256 receipt. Any SQL failure rolls back and returns no success."
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "authBootstrap": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "fh_email_session",
+        "description": "Existing trusted FH session; path-scoped /api/auth, checked only by same-origin bootstrap."
+      },
+      "financeCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "fh_finance_session",
+        "description": "Server-minted HttpOnly Secure SameSite=Strict cookie Path=/api/finance/v1; same FH SQLite AuthStore session and revocation source, never a client-provided user ID."
+      }
+    },
+    "schemas": {
+      "Money": {
+        "type": "integer",
+        "format": "int64",
+        "minimum": -1000000000000,
+        "maximum": 1000000000000,
+        "description": "Точное целое число минимальных единиц RUB (копейки); JS Number.isSafeInteger, без float"
+      },
+      "Revision": {
+        "type": "integer",
+        "format": "int64",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "Entity": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "entity_revision",
+          "kind",
+          "data"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "account",
+              "obligation",
+              "loan",
+              "reserve",
+              "transaction",
+              "settlement",
+              "loan_payment"
+            ]
+          },
+          "data": {
+            "type": "object",
+            "description": "Версионированный DTO, поля и ограничения по kind; неизвестную будущую schema_version отвергать"
+          }
+        },
+        "x-reserve-addendum": {
+          "allocated_minor": "Integer sum of reserve allocations across all accounts; never an actual ledger cash movement.",
+          "allocations_by_account": "Sorted, nonzero [{account_id: UUID, allocated_minor: positive integer}] per reserve, including each account's releasable amount. Required in all reserve snapshot images and reserve delta images; totals alone are ambiguous after 410 compacted delta."
+        },
+        "x-account-addendum": {
+          "balance_minor": "Integer actual balance including opening and posted ledger movements.",
+          "reserved_minor": "Total reservation on this account from allocations.",
+          "available_minor": "balance_minor minus reserved_minor; may be negative for legacy/opening overdraft when no reserves are allocated."
+        }
+      },
+      "Snapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "profile_id",
+          "revision",
+          "currency",
+          "entities",
+          "server_at"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "profile_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "currency": {
+            "type": "string",
+            "const": "RUB"
+          },
+          "entities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Entity"
+            }
+          },
+          "server_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "next_cursor": {
+            "type": "string",
+            "description": "Present ONLY on HTTP 206 partial pages. Revision-pinned; do not interpret as identity or authorization."
+          }
+        }
+      },
+      "Change": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revision",
+          "ordinal",
+          "kind",
+          "entity_id",
+          "entity_revision",
+          "payload"
+        ],
+        "properties": {
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "ordinal": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "upsert",
+              "tombstone",
+              "ledger_posted"
+            ]
+          },
+          "entity_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "entity_revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "payload": {
+            "type": "object"
+          }
+        }
+      },
+      "Delta": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "from_revision",
+          "to_revision",
+          "next_since_revision",
+          "has_more",
+          "changes"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "from_revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "to_revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "next_since_revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Change"
+            }
+          }
+        }
+      },
+      "Command": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "client_mutation_id",
+          "base_revision",
+          "action",
+          "expected_entity_revisions",
+          "payload"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "client_mutation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "base_revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "obligation.create",
+              "account.transfer",
+              "reserve.allocate",
+              "transaction.reverse"
+            ]
+          },
+          "expected_entity_revisions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "Map entity UUID -> expected version; must include each dependent existing entity",
+            "maxProperties": 100
+          },
+          "payload": {
+            "type": "object",
+            "description": "Discriminated by action; validated by allOf conditionals, not arbitrary payload"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "obligation.create"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/ObligationCreatePayload"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "account.transfer"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/AccountTransferPayload"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "reserve.allocate"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/ReserveAllocatePayload"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "transaction.reverse"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/TransactionReversePayload"
+                }
+              }
+            }
+          }
+        ],
+        "x-schema-version-raw-type": "JSON integer exactly 1; true and 1.0 are rejected before Pydantic Literal normalization.",
+        "x-client-mutation-id-format": "Canonical lowercase versioned UUID, exact match with Idempotency-Key header."
+      },
+      "CommandAck": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "client_mutation_id",
+          "revision",
+          "replayed",
+          "changes"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 1
+          },
+          "client_mutation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Change"
+            }
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "unauthenticated",
+              "forbidden",
+              "precondition_required",
+              "stale_revision",
+              "semantic_conflict",
+              "idempotency_key_reuse",
+              "snapshot_required",
+              "invalid_command",
+              "rate_limited",
+              "service_unavailable"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "server_revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "conflicting_entity_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "min_available_revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        }
+      },
+      "ObligationCreatePayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "direction",
+          "amount_minor",
+          "starts_on",
+          "timezone",
+          "recurrence_unit",
+          "recurrence_every"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "direction": {
+            "enum": [
+              "income",
+              "expense"
+            ]
+          },
+          "amount_minor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000000000
+          },
+          "starts_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "recurrence_unit": {
+            "enum": [
+              "none",
+              "month",
+              "year"
+            ]
+          },
+          "recurrence_every": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 120
+          }
+        },
+        "description": "Create only the plan (server-generated obligation UUID); no money movement or payment fact. Timezone must be a valid IANA zone."
+      },
+      "AccountTransferPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "from_account_id",
+          "to_account_id",
+          "amount_minor",
+          "occurred_on"
+        ],
+        "properties": {
+          "from_account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "to_account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount_minor": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000000
+          },
+          "occurred_on": {
+            "type": "string",
+            "format": "date"
+          }
+        }
+      },
+      "LoanPaymentPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "loan_id",
+          "amount_minor",
+          "paid_on",
+          "strategy"
+        ],
+        "properties": {
+          "loan_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount_minor": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000000
+          },
+          "paid_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "strategy": {
+            "enum": [
+              "term",
+              "amount"
+            ]
+          }
+        }
+      },
+      "ReserveAllocatePayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reserve_id",
+          "account_id",
+          "delta_minor"
+        ],
+        "properties": {
+          "reserve_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "delta_minor": {
+            "type": "integer",
+            "minimum": -1000000000000,
+            "maximum": 1000000000000,
+            "not": {
+              "const": 0
+            }
+          }
+        },
+        "description": "Earmark/unearmark cash; delta_minor > 0 reserves and negative releases existing pair allocation. Reject over-target, over-available, negative pair balances and zero. Both account and reserve images must advance in one revision."
+      },
+      "TransactionReversePayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "transaction_id",
+          "reason"
+        ],
+        "properties": {
+          "transaction_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "description": "Compensating ledger transaction, never delete history. Payment-linked original transactions must not be separately reversed; requires versioned atomic fact-void operation."
+      }
+    }
+  },
+  "x-go-live": "NO_GO",
+  "x-required-acceptance": [
+    "#65/#68 pagination & reserve sync agreement",
+    "#66 PostgreSQL encrypted backup/restore and independent APPROVED",
+    "#70 full stack security release gate"
+  ],
+  "x-deferred-actions": {
+    "loan.payment.record": "The original accepted v1 payload contains no funding-account ID or transaction link. Do not infer account or silently claim a debit; future accepted versioned linked-payment DTO is required."
+  },
+  "x-reserve-pair-page-max": 10000
+}

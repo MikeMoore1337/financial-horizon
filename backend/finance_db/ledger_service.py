@@ -2,7 +2,7 @@
 
 Do NOT mount directly on production or accept scope IDs from HTTP.
 A trusted auth adapter must resolve the FH email session before invoking this.
-Only the approved v1 transfer/reverse commands may be exposed as v1 routes;
+Only the approved v1 planning/transfer/reverse commands may be exposed as v1 routes;
 the other actions below are internal v2 candidates for review.
 """
 from __future__ import annotations
@@ -14,6 +14,7 @@ import json
 import re
 from typing import Any, Mapping
 from uuid import UUID, uuid4, uuid5
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -27,11 +28,19 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]
 _STRONG_ETAG_RE = re.compile(r'^"[^"\r\n]{1,254}"$')
 _TYPES = frozenset(("bank", "card", "cash", "savings", "other"))
 _INTERNAL_ACTIONS = frozenset((
-    "account.create", "account.update", "account.archive", "account.unarchive",
+    "obligation.create", "account.create", "account.update", "account.archive", "account.unarchive",
     "transaction.record", "account.transfer", "transaction.reverse",
     "settlement.payment.record", "loan.payment.record",
+    "settlement.payment.void", "loan.payment.void", "reserve.allocate",
 ))
-_PUBLIC_V1_ACTIONS = frozenset(("account.transfer", "transaction.reverse"))
+_PUBLIC_V1_ACTIONS = frozenset(("obligation.create", "account.transfer", "reserve.allocate", "transaction.reverse"))
+# The proposed v2 transport has a deliberately narrower whitelist than internal
+# commands. The v2 HTTP route is disabled by default; v1 remains the default.
+_PUBLIC_V2_ACCOUNT_ACTIONS = frozenset((
+    "account.create", "account.update", "account.archive", "account.unarchive",
+    "transaction.record", "settlement.payment.record", "loan.payment.record",
+    "settlement.payment.void", "loan.payment.void",
+))
 
 
 class FinanceCommandError(ValueError):
@@ -168,7 +177,8 @@ def ensure_verified_profile(
 
 
 def _validated(command: object, if_match: str, idem_key: str,
-               *, allow_internal: bool) -> tuple[Mapping[str, Any], UUID, int, dict[str, int], bytes]:
+               *, allow_internal: bool, allow_account_v2: bool = False,
+               ) -> tuple[Mapping[str, Any], UUID, int, dict[str, int], bytes]:
     body = _shape(command, {
         "schema_version", "client_mutation_id", "base_revision", "action",
         "expected_entity_revisions", "payload",
@@ -176,12 +186,17 @@ def _validated(command: object, if_match: str, idem_key: str,
         "schema_version", "client_mutation_id", "base_revision", "action",
         "expected_entity_revisions", "payload",
     })
-    if type(body["schema_version"]) is not int or body["schema_version"] != 1:
+    if type(body["schema_version"]) is not int:
+        raise _reject("Неподдерживаемая версия схемы")
+    version = body["schema_version"]
+    if version == 1 and not allow_account_v2:
+        actions = _INTERNAL_ACTIONS if allow_internal else _PUBLIC_V1_ACTIONS
+    elif version == 2 and allow_account_v2 and not allow_internal:
+        actions = _PUBLIC_V2_ACCOUNT_ACTIONS
+    else:
         raise _reject("Неподдерживаемая версия схемы")
     action = body["action"]
-    if not isinstance(action, str) or action not in (
-        _INTERNAL_ACTIONS if allow_internal else _PUBLIC_V1_ACTIONS
-    ):
+    if not isinstance(action, str) or action not in actions:
         raise _reject("Команда недоступна в этой версии API")
     mutation_id = _uuid(body["client_mutation_id"])
     if _uuid(idem_key) != mutation_id:
@@ -249,6 +264,34 @@ def _post(session: Session, p: UUID, txid: UUID, kind: str, actor: str,
             UPDATE accounts SET entity_revision=entity_revision+1, updated_at=now()
             WHERE profile_id=:p AND id=:a
         """), {"p": p, "a": acc})
+        if amount < 0:
+            # Earmarked cash is not available for an ordinary debit. Check
+            # after inserting the actual posting, but BEFORE COMMIT. The
+            # caller's profile FOR UPDATE lock serializes all competing
+            # reserve allocations/transfers. A rejection rolls back both
+            # ledger rows and the idempotency receipt.
+            result = session.execute(text("""
+                SELECT a.opening_minor + COALESCE((
+                    SELECT SUM(t.signed_minor) FROM ledger_postings t
+                    WHERE t.profile_id=a.profile_id AND t.account_id=a.id
+                ),0) AS balance_minor,
+                COALESCE((
+                    SELECT SUM(r.delta_minor) FROM reserve_allocations r
+                    WHERE r.profile_id=a.profile_id AND r.account_id=a.id
+                ),0) AS reserved_minor
+                FROM accounts a WHERE a.profile_id=:p AND a.id=:a
+            """), {"p": p, "a": acc}).mappings().one()
+            reserved = _safe_balance(result["reserved_minor"])
+            if reserved < 0:
+                raise FinanceCommandError(
+                    "service_unavailable", "Повреждён остаток резерва", 503
+                )
+            # Preserve existing permitted-overdraft behavior for accounts
+            # without reservations; only protect funds explicitly earmarked.
+            if reserved > 0 and _safe_balance(result["balance_minor"]) < reserved:
+                raise FinanceCommandError(
+                    "semantic_conflict", "Средства уже зарезервированы", 409
+                )
 
 
 def _account_sync_entity(session: Session, profile_id: UUID, account_id: UUID) -> dict[str, Any]:
@@ -278,6 +321,71 @@ def _account_sync_entity(session: Session, profile_id: UUID, account_id: UUID) -
             "balance_minor": balance, "reserved_minor": reserved,
             "available_minor": available,
             "archived_at": row["archived_at"].isoformat() if row["archived_at"] else None,
+        },
+    }
+
+
+_MAX_RESERVE_PAIRS_PER_PAGE = 10_000
+
+
+def _reserve_pairs(
+    session: Session, profile_id: UUID, reserve_ids: list[UUID],
+) -> dict[UUID, list[dict[str, Any]]]:
+    """Full nonzero allocation by (reserve, account), sorted and RLS-scoped.
+
+    Never silently truncate: a profile requiring more than this bound needs an
+    explicitly paged protocol extension before production activation.
+    """
+    breakdown: dict[UUID, list[dict[str, Any]]] = {key: [] for key in reserve_ids}
+    if not reserve_ids:
+        return breakdown
+    rows = session.execute(text("""
+        SELECT reserve_id,account_id,SUM(delta_minor) AS amount
+        FROM reserve_allocations
+        WHERE profile_id=:p AND reserve_id=ANY(:ids)
+        GROUP BY reserve_id,account_id
+        HAVING SUM(delta_minor)<>0
+        ORDER BY reserve_id,account_id
+        LIMIT :limit
+    """), {
+        "p": profile_id, "ids": reserve_ids,
+        "limit": _MAX_RESERVE_PAIRS_PER_PAGE + 1,
+    }).mappings().all()
+    if len(rows) > _MAX_RESERVE_PAIRS_PER_PAGE:
+        raise FinanceCommandError(
+            "service_unavailable", "Требуется постраничная загрузка резервов", 503
+        )
+    for row in rows:
+        amount = _safe_balance(row["amount"])
+        if amount <= 0 or row["reserve_id"] not in breakdown:
+            raise FinanceCommandError(
+                "service_unavailable", "Неполное распределение резерва", 503
+            )
+        breakdown[row["reserve_id"]].append({
+            "account_id": str(row["account_id"]), "allocated_minor": amount,
+        })
+    return breakdown
+
+
+def _reserve_sync_entity(session: Session, profile_id: UUID, reserve_id: UUID) -> dict[str, Any]:
+    """Full server-owned reserve image including the committed allocation total."""
+    row = session.execute(text("""
+        SELECT r.id,r.entity_revision,r.title,r.target_minor,r.target_on,r.archived_at,
+          COALESCE((SELECT SUM(a.delta_minor) FROM reserve_allocations a
+            WHERE a.profile_id=r.profile_id AND a.reserve_id=r.id),0) AS allocated_minor
+        FROM reserves r WHERE r.profile_id=:p AND r.id=:id
+    """), {"p": profile_id, "id": reserve_id}).mappings().one()
+    return {
+        "id": str(row["id"]), "entity_revision": int(row["entity_revision"]),
+        "kind": "reserve",
+        "data": {
+            "title": row["title"], "target_minor": int(row["target_minor"]),
+            "target_on": row["target_on"].isoformat() if row["target_on"] else None,
+            "archived_at": row["archived_at"].isoformat() if row["archived_at"] else None,
+            "allocated_minor": _safe_balance(row["allocated_minor"]),
+            "allocations_by_account": _reserve_pairs(
+                session, profile_id, [reserve_id]
+            )[reserve_id],
         },
     }
 
@@ -318,6 +426,44 @@ def _transaction_sync_entity(session: Session, profile_id: UUID, txid: UUID) -> 
     }
 
 
+def _payment_fact_sync_entity(
+    session: Session, profile_id: UUID, fact_id: UUID, *, settlement: bool,
+) -> dict[str, Any]:
+    """Complete fact image matching the authoritative /state and /changes schema."""
+    if settlement:
+        row = session.execute(text("""
+            SELECT id,entity_revision,obligation_id,occurrence_on,paid_on,
+                   amount_minor,voided_at FROM settlements
+            WHERE profile_id=:p AND id=:fact
+        """), {"p": profile_id, "fact": fact_id}).mappings().one()
+        data = {
+            "obligation_id": str(row["obligation_id"]),
+            "occurrence_on": row["occurrence_on"].isoformat(),
+            "paid_on": row["paid_on"].isoformat(),
+            "amount_minor": int(row["amount_minor"]),
+            "voided_at": row["voided_at"].isoformat() if row["voided_at"] else None,
+        }
+        kind = "settlement"
+    else:
+        row = session.execute(text("""
+            SELECT id,entity_revision,loan_id,paid_on,amount_minor,
+                   strategy,voided_at FROM loan_payments
+            WHERE profile_id=:p AND id=:fact
+        """), {"p": profile_id, "fact": fact_id}).mappings().one()
+        data = {
+            "loan_id": str(row["loan_id"]),
+            "paid_on": row["paid_on"].isoformat(),
+            "amount_minor": int(row["amount_minor"]),
+            "strategy": row["strategy"],
+            "voided_at": row["voided_at"].isoformat() if row["voided_at"] else None,
+        }
+        kind = "loan_payment"
+    return {
+        "id": str(row["id"]), "entity_revision": int(row["entity_revision"]),
+        "kind": kind, "data": data,
+    }
+
+
 def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any],
            versions: Mapping[str, int], new_revision: int) -> dict[str, Any]:
     p = scope.profile_id
@@ -329,7 +475,58 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
     change_payload: dict[str, Any] = {}
     extra_changes: list[tuple[str, UUID, int, dict[str, Any]]] = []
 
-    if action == "account.create":
+    if action == "obligation.create":
+        required = {
+            "title", "direction", "amount_minor", "starts_on",
+            "timezone", "recurrence_unit", "recurrence_every",
+        }
+        _shape(payload, required, required)
+        if versions:
+            raise _reject("Создание обязательства не имеет предыдущих ревизий сущностей")
+        title = payload["title"]
+        if not isinstance(title, str) or not title.strip() or len(title) > 160:
+            raise _reject("Некорректное название обязательства")
+        direction = payload["direction"]
+        if not isinstance(direction, str) or direction not in ("income", "expense"):
+            raise _reject("Недопустимое направление обязательства")
+        amount = _integer(payload["amount_minor"], 0, MAX_MINOR)
+        starts = _date(payload["starts_on"])
+        tz = payload["timezone"]
+        if not isinstance(tz, str) or not 1 <= len(tz) <= 64:
+            raise _reject("Недопустимый часовой пояс")
+        try:
+            ZoneInfo(tz)
+        except (ValueError, KeyError, ZoneInfoNotFoundError):
+            raise _reject("Недопустимый часовой пояс") from None
+        recurrence = payload["recurrence_unit"]
+        if not isinstance(recurrence, str) or recurrence not in ("none", "month", "year"):
+            raise _reject("Недопустимая периодичность")
+        every = _integer(payload["recurrence_every"], 1, 120)
+        target = uuid4()  # Server-generated entity ID retained in the stored receipt.
+        session.execute(text("""
+            INSERT INTO obligations
+              (profile_id,id,title,direction,amount_minor,starts_on,
+               timezone,recurrence_unit,recurrence_every)
+            VALUES (:p,:id,:title,:direction,:amount,:starts,:tz,:recurrence,:every)
+        """), {
+            "p": p, "id": target, "title": title.strip(),
+            "direction": direction, "amount": amount, "starts": starts,
+            "tz": tz, "recurrence": recurrence, "every": every,
+        })
+        affected_revision = 1
+        change_payload = {
+            "entity": {
+                "id": str(target), "kind": "obligation", "entity_revision": 1,
+                "data": {
+                    "title": title.strip(), "direction": direction,
+                    "amount_minor": amount, "starts_on": starts.isoformat(),
+                    "timezone": tz, "recurrence_unit": recurrence,
+                    "recurrence_every": every, "category": None,
+                    "deleted_at": None,
+                },
+            },
+        }
+    elif action == "account.create":
         _shape(payload, {"id", "name", "kind", "currency", "opening_minor"},
                {"id", "name", "kind", "currency", "opening_minor"})
         target = _uuid(payload["id"])
@@ -351,7 +548,10 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         expected = {"account_id"} | ({"name", "kind"} if action == "account.update" else set())
         _shape(payload, expected, expected)
         target = _uuid(payload["account_id"])
-        entity = _account(session, p, target, versions, archived=True)
+        # Archive is a read-only state for account metadata until explicitly restored.
+        # Keep archive/unarchive transitions revision-checked and accessible.
+        entity = _account(session, p, target, versions,
+                          archived=action != "account.update")
         if action == "account.update":
             name = payload["name"]
             if (not isinstance(name, str) or not name.strip() or len(name) > 160
@@ -508,6 +708,169 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             link_field: str(fact_id),
         }
         extra_changes.append(("upsert", fact_id, 1, fact_payload))
+    elif action in ("settlement.payment.void", "loan.payment.void"):
+        # A payment fact and its cash movement cannot be cancelled in separate
+        # commits. The new Alembic 0002 deferred SQL triggers reject either
+        # half of a compensation, even if a trusted caller bypasses this code.
+        is_settlement = action == "settlement.payment.void"
+        _shape(payload, {"transaction_id", "fact_id", "account_id", "reason"},
+               {"transaction_id", "fact_id", "account_id", "reason"})
+        original_id = _uuid(payload["transaction_id"])
+        fact_id = _uuid(payload["fact_id"])
+        acc_id = _uuid(payload["account_id"])
+        reason = payload["reason"]
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 500:
+            raise _reject("Укажите причину отмены оплаты")
+
+        # Profile row FOR UPDATE in submit_account_command serializes all
+        # competing commands. Every ID below is additionally profile-scoped.
+        link = session.execute(text("""
+            SELECT link.settlement_id,link.loan_payment_id,
+                   tx.kind,tx.entity_revision
+            FROM ledger_payment_links link
+            JOIN ledger_transactions tx
+              ON tx.profile_id=link.profile_id AND tx.id=link.transaction_id
+            WHERE link.profile_id=:p AND link.transaction_id=:tx
+        """), {"p": p, "tx": original_id}).mappings().one_or_none()
+        if (link is None or link["kind"] != "payment"
+            or (link["settlement_id"] if is_settlement else link["loan_payment_id"]) != fact_id
+            or (link["loan_payment_id"] if is_settlement else link["settlement_id"]) is not None):
+            raise FinanceCommandError("semantic_conflict", "Связанная оплата недоступна", 409)
+        _require_revision(versions, original_id, link["entity_revision"])
+        already = session.execute(text("""
+            SELECT 1 FROM ledger_transactions
+            WHERE profile_id=:p AND reversed_transaction_id=:tx
+        """), {"p": p, "tx": original_id}).first()
+        if already:
+            raise FinanceCommandError("semantic_conflict", "Оплата уже отменена", 409)
+
+        # Use two static SQL statements. Never build table names even from an
+        # internal enum: this boundary must remain auditable by AppSec tools.
+        if is_settlement:
+            fact = session.execute(text("""
+                SELECT entity_revision,voided_at FROM settlements
+                WHERE profile_id=:p AND id=:fact FOR UPDATE
+            """), {"p": p, "fact": fact_id}).mappings().one_or_none()
+        else:
+            fact = session.execute(text("""
+                SELECT entity_revision,voided_at FROM loan_payments
+                WHERE profile_id=:p AND id=:fact FOR UPDATE
+            """), {"p": p, "fact": fact_id}).mappings().one_or_none()
+        if fact is None or fact["voided_at"] is not None:
+            raise FinanceCommandError("semantic_conflict", "Факт оплаты уже аннулирован", 409)
+        _require_revision(versions, fact_id, fact["entity_revision"])
+        account = _account(session, p, acc_id, versions, archived=True)
+        original_posting = session.execute(text("""
+            SELECT account_id,signed_minor FROM ledger_postings
+            WHERE profile_id=:p AND transaction_id=:tx
+        """), {"p": p, "tx": original_id}).mappings().all()
+        if (len(original_posting) != 1
+            or original_posting[0]["account_id"] != account["id"]):
+            raise FinanceCommandError("semantic_conflict",
+                                      "Счёт исходной оплаты не совпадает", 409)
+        original_minor = _safe_balance(original_posting[0]["signed_minor"])
+        if original_minor == 0 or abs(original_minor) > MAX_MINOR:
+            raise FinanceCommandError("semantic_conflict", "Повреждённая оплата", 409)
+
+        target = uuid4()
+        # Guarded SQL columns allow only a one-time void of this fact.
+        if is_settlement:
+            session.execute(text("""
+                UPDATE settlements SET voided_at=now(),
+                  entity_revision=entity_revision+1
+                WHERE profile_id=:p AND id=:fact
+            """), {"p": p, "fact": fact_id})
+        else:
+            session.execute(text("""
+                UPDATE loan_payments SET voided_at=now(),
+                  entity_revision=entity_revision+1
+                WHERE profile_id=:p AND id=:fact
+            """), {"p": p, "fact": fact_id})
+        _post(session, p, target, "reversal", scope.user_id,
+              datetime.now(timezone.utc).date(), [(acc_id, -original_minor)],
+              reversed_id=original_id, note=reason.strip())
+        affected_revision = 1
+        change_kind = "ledger_posted"
+        change_payload = {
+            "transaction_kind": "reversal", "reversed_transaction_id": str(original_id),
+            "account_id": str(acc_id),
+        }
+        next_fact_revision = int(fact["entity_revision"]) + 1
+        extra_changes.append((
+            "upsert", fact_id, next_fact_revision,
+            {"entity": _payment_fact_sync_entity(
+                session, p, fact_id, settlement=is_settlement,
+            )},
+        ))
+    elif action == "reserve.allocate":
+        required = {"reserve_id", "account_id", "delta_minor"}
+        _shape(payload, required, required)
+        target = _uuid(payload["reserve_id"])
+        account_id = _uuid(payload["account_id"])
+        delta = _integer(payload["delta_minor"], -MAX_MINOR, MAX_MINOR)
+        if delta == 0:
+            raise _reject("Нулевое изменение резерва запрещено")
+        account = _account(session, p, account_id, versions)
+        reserve = session.execute(text("""
+            SELECT entity_revision,target_minor,archived_at FROM reserves
+            WHERE profile_id=:p AND id=:id FOR UPDATE
+        """), {"p": p, "id": target}).mappings().one_or_none()
+        if reserve is None or reserve["archived_at"] is not None:
+            raise FinanceCommandError("semantic_conflict", "Резерв недоступен", 409)
+        _require_revision(versions, target, reserve["entity_revision"])
+        pair = _safe_balance(session.execute(text("""
+            SELECT COALESCE(SUM(delta_minor),0) FROM reserve_allocations
+            WHERE profile_id=:p AND reserve_id=:reserve AND account_id=:account
+        """), {"p": p, "reserve": target, "account": account_id}).scalar_one())
+        reserve_total = _safe_balance(session.execute(text("""
+            SELECT COALESCE(SUM(delta_minor),0) FROM reserve_allocations
+            WHERE profile_id=:p AND reserve_id=:reserve
+        """), {"p": p, "reserve": target}).scalar_one())
+        account_reserved = _safe_balance(session.execute(text("""
+            SELECT COALESCE(SUM(delta_minor),0) FROM reserve_allocations
+            WHERE profile_id=:p AND account_id=:account
+        """), {"p": p, "account": account_id}).scalar_one())
+        account_balance = _safe_balance(session.execute(text("""
+            SELECT a.opening_minor + COALESCE((
+                SELECT SUM(t.signed_minor) FROM ledger_postings t
+                WHERE t.profile_id=a.profile_id AND t.account_id=a.id
+            ),0) FROM accounts a WHERE a.profile_id=:p AND a.id=:account
+        """), {"p": p, "account": account_id}).scalar_one())
+        if pair < 0 or reserve_total < 0 or account_reserved < 0:
+            raise FinanceCommandError("service_unavailable", "Некорректный остаток резерва", 503)
+        if pair + delta < 0:
+            raise FinanceCommandError("semantic_conflict", "Недостаточно средств в указанном резерве", 409)
+        if delta > 0 and (
+            reserve_total + delta > int(reserve["target_minor"])
+            or account_reserved + delta > account_balance
+        ):
+            raise FinanceCommandError("semantic_conflict", "Недостаточно доступных средств или превышена цель", 409)
+        allocation_id = uuid4()
+        session.execute(text("""
+            INSERT INTO reserve_allocations(profile_id,id,reserve_id,account_id,delta_minor)
+            VALUES (:p,:id,:reserve,:account,:delta)
+        """), {
+            "p": p, "id": allocation_id, "reserve": target,
+            "account": account_id, "delta": delta,
+        })
+        session.execute(text("""
+            UPDATE reserves SET entity_revision=entity_revision+1, updated_at=now()
+            WHERE profile_id=:p AND id=:id
+        """), {"p": p, "id": target})
+        session.execute(text("""
+            UPDATE accounts SET entity_revision=entity_revision+1, updated_at=now()
+            WHERE profile_id=:p AND id=:id
+        """), {"p": p, "id": account_id})
+        affected_revision = int(reserve["entity_revision"]) + 1
+        change_payload = {
+            "allocation_id": str(allocation_id),
+            "account_id": str(account_id), "delta_minor": delta,
+            "entity": _reserve_sync_entity(session, p, target),
+        }
+        extra_changes.append((
+            "upsert", account_id, int(account["entity_revision"]) + 1,
+            {"entity": _account_sync_entity(session, p, account_id)},
+        ))
     elif action == "account.transfer":
         _shape(payload, {"from_account_id", "to_account_id", "amount_minor", "occurred_on"},
                {"from_account_id", "to_account_id", "amount_minor", "occurred_on"})
@@ -612,14 +975,20 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
 def submit_account_command(
     engine: Engine, *, scope: VerifiedFinanceScope, command: object,
     if_match: str, idempotency_key: str, allow_internal: bool = False,
+    allow_account_v2: bool = False,
 ) -> FinanceResult:
     """One RLS-protected SQL COMMIT for a validated finance command and its receipt.
 
-    'allow_internal' is for the not-yet-published v2 account-command layer.
-    Do not set from a client parameter or expose this through OpenAPI v1.
+    'allow_internal' is only for trusted existing v1 internal consumers.
+    'allow_account_v2' is only for the validated, unmounted v2 account
+    proposal, and never accepts other internal actions.
+    Neither option may be set from an untrusted client request.
     """
+    if allow_internal and allow_account_v2:
+        raise ValueError("Internal and proposed public v2 modes are mutually exclusive")
     body, mutation_id, base_revision, versions, request_hash = _validated(
-        command, if_match, idempotency_key, allow_internal=allow_internal
+        command, if_match, idempotency_key, allow_internal=allow_internal,
+        allow_account_v2=allow_account_v2,
     )
     with finance_transaction(engine, verified_user_id=scope.user_id,
                              profile_id=scope.profile_id) as session:
@@ -645,7 +1014,7 @@ def submit_account_command(
                                       "Профиль изменился на другом устройстве", 409, revision)
         new_revision = revision + 1
         changes = _apply(session, scope, body, versions, new_revision)
-        ack = {"schema_version": 1, "client_mutation_id": str(mutation_id),
+        ack = {"schema_version": body["schema_version"], "client_mutation_id": str(mutation_id),
                "revision": new_revision, "replayed": False, "changes": changes}
         session.execute(text("""
             INSERT INTO command_receipts
