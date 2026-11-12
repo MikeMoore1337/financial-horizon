@@ -67,8 +67,3 @@ jobs:
           npm run audit:deps
           python -m compileall -q backend/finance_api
           python -m bandit -q -r backend/finance_api backend/finance_db -x backend/finance_api/tests,backend/finance_db/tests
-      - name: Show Prettier differences for account UI sources on failure
-        if: failure()
-        run: |
-          ./node_modules/.bin/prettier --write src/react/ConnectedAccounts.tsx src/react/ScreenRoot.tsx tests/react/accounts-connected.test.tsx
-          git --no-pager diff -- src/react/ConnectedAccounts.tsx src/react/ScreenRoot.tsx tests/react/accounts-connected.test.tsx
