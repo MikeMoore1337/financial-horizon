@@ -1,0 +1,59 @@
+name: account-ledger-service-ci
+on:
+  push:
+    branches:
+      - feat/67-finance-account-command-service
+  pull_request:
+    branches:
+      - feat/issue-66-postgres-foundation
+permissions:
+  contents: read
+concurrency:
+  group: account-ledger-service-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  ledger-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      pg:
+        image: postgres:17@sha256:5b96f1a16bd9768b060dd2ffe55cb6225c4d9ef4d214a8b21eb08134869a97e4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_admin_password_only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Main OAuth imports fh_auth from backend/ as a top-level Python package.
+      # Include both repository root and backend when collecting finance tests.
+      PYTHONPATH: ${{ github.workspace }}/backend:${{ github.workspace }}
+      FH_FINANCE_CI_ALLOW_BOOTSTRAP: "yes"
+      FH_FINANCE_MIGRATION_URL: postgresql+psycopg://fh_finance_migrator:ci_migration_password_only@127.0.0.1:5432/fh_finance_ci
+      FH_FINANCE_DATABASE_URL: postgresql+psycopg://fh_finance_runtime:ci_runtime_password_only@127.0.0.1:5432/fh_finance_ci
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements-finance.txt
+      - name: Install pinned PostgreSQL test dependencies
+        run: python -m pip install -r backend/requirements-finance.txt -r backend/requirements-test.txt 'bandit>=1.8,<2'
+      - name: Provision synthetic roles and isolated database
+        run: python backend/finance_db/tests/bootstrap_ci.py
+      - name: Apply reviewed schema
+        run: alembic -c backend/finance_db/alembic.ini upgrade head
+      - name: Run real PostgreSQL ledger and tenant-isolation integration
+        run: python -m pytest -q backend/finance_db/tests/ backend/tests/
+      - name: Compile and security-scan the new finance service
+        run: |
+          python -m compileall -q backend/finance_db
+          python -m bandit -q -r backend/finance_db -x backend/finance_db/tests
