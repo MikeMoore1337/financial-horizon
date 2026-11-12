@@ -236,11 +236,7 @@ describe('#33 candidate v2 boundary is never treated as an approved production A
       ),
       reply(created, 200, '"fh.1.2.example"'),
     );
-    const gateway = new AccountsFinanceGateway(
-      fetcher,
-      'https://fh.example',
-      () => ids.shift()!,
-    );
+    const gateway = new AccountsFinanceGateway(fetcher, 'https://fh.example', () => ids.shift()!);
     await gateway.open(ACTOR);
     const verified = await gateway.create({
       baseRevision: 1,
@@ -276,11 +272,7 @@ describe('#33 candidate v2 boundary is never treated as an approved production A
       reply(state()),
       reply({ detail: 'Not Found' }, 404),
     );
-    const gateway = new AccountsFinanceGateway(
-      fetcher,
-      'https://fh.example',
-      () => ids.shift()!,
-    );
+    const gateway = new AccountsFinanceGateway(fetcher, 'https://fh.example', () => ids.shift()!);
     await gateway.open(ACTOR);
     await expect(
       gateway.create({ baseRevision: 1, name: 'Наличные', kind: 'cash', openingMinor: 0 }),
