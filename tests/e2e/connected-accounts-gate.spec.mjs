@@ -2,10 +2,9 @@ import { test, expect } from '@playwright/test';
 import { ORIGIN, observe, visitGuest, view } from './helpers.mjs';
 
 const PROFILE = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-const ACTOR = 'a'.repeat(32);
-// Real FH session/SQLite integration is exercised separately by PostgreSQL CI.
-// These tests intercept auth and finance only to exercise the browser/PWA routing
-// without consuming the shared E2E registration abuse quota.
+// The isolated localhost E2E server issues a genuine FH AuthStore session
+// without making extra public registration requests. The PostgreSQL/finance
+// HTTP response below is still synthetic and never treated as live money.
 
 test('#33 server-backed accounts are absent for guest and unapproved production shell', async ({page, context}) => {
   const watch = await observe(context, page);
@@ -27,11 +26,10 @@ test('#33 server-backed accounts are absent for guest and unapproved production 
     button.remove();
   });
   await expect(page.locator('#toolbar-title')).toHaveText('Настройки');
-  // A synthetic verified actor must still see the default-disabled shell.
-  await page.route('**/api/auth/email/me', async (route) => route.fulfill({
-    status: 200, contentType: 'application/json',
-    body: JSON.stringify({authenticated: true, user: {id: ACTOR, email: 'qa@example.invalid'}}),
-  }));
+  // Use an actual HttpOnly FH session shared with this browser context,
+  // never route or mock /api/auth/email/me (which differs under WebKit SW).
+  const session = await context.request.post('/__e2e__/personal-session');
+  expect(session.status()).toBe(200);
   await page.evaluate(() => sessionStorage.removeItem('fh-guest-session-v2'));
   await page.goto('/');
   await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
@@ -74,10 +72,9 @@ test('#33 owner-approved opt-in shows a real PWA entry and reads only authoritat
       }),
     });
   });
-  await page.route('**/api/auth/email/me', async (route) => route.fulfill({
-    status: 200, contentType: 'application/json',
-    body: JSON.stringify({authenticated: true, user: {id: ACTOR, email: 'qa@example.invalid'}}),
-  }));
+  // The same isolated backend exercises the real FH cookie behavior.
+  const session = await context.request.post('/__e2e__/personal-session');
+  expect(session.status()).toBe(200);
   await page.goto('/');
   await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
   await view(page, 'settings');
