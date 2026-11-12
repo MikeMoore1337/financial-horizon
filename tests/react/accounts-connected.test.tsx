@@ -281,3 +281,72 @@ describe('#33 candidate v2 boundary is never treated as an approved production A
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 });
+
+
+describe('#33 authoritative refresh concurrency fences', () => {
+  it('rejects the older of two GET responses instead of rolling balances backwards', async () => {
+    let delayed: ((reply: Response) => void) | undefined;
+    let calls = 0;
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit): Promise<Response> => {
+      const index = calls++;
+      if (index === 0) return reply({ ok: true, profile_id: PROFILE });
+      if (index === 1) return reply(state());
+      if (index === 2) {
+        return await new Promise<Response>((resolve) => {
+          delayed = resolve;
+        });
+      }
+      if (index === 3) return reply(state(2, true), 200, '"fh.1.2.example"');
+      throw new Error('Unexpected GET');
+    });
+    const gateway = new AccountsFinanceGateway(fetcher, 'https://fh.example');
+    await gateway.open(ACTOR);
+    const earlier = gateway.refresh(ACTOR);
+    const later = await gateway.refresh(ACTOR);
+    expect(later.ledger.revision).toBe(2);
+    expect(gateway.writeBlocked).toBe(false);
+    expect(delayed).toBeTypeOf('function');
+    delayed!(reply(state()));
+    await expect(earlier).rejects.toMatchObject({ kind: 'conflict' });
+    expect(gateway.writeBlocked).toBe(false);
+    expect(calls).toBe(4);
+  });
+
+  it('a pre-POST server GET cannot overwrite a verified transfer after its late response', async () => {
+    let delayed: ((reply: Response) => void) | undefined;
+    let calls = 0;
+    const ack = {
+      schema_version: 1, client_mutation_id: MUTATION, revision: 2,
+      replayed: false, changes: [{ revision: 2, ordinal: 0 }],
+    };
+    const fetcher = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit): Promise<Response> => {
+      const index = calls++;
+      if (index === 0) return reply({ ok: true, profile_id: PROFILE });
+      if (index === 1) return reply(state());
+      if (index === 2) {
+        return await new Promise<Response>((resolve) => {
+          delayed = resolve;
+        });
+      }
+      if (index === 3) return reply(ack, 201, '"fh.1.2.example"');
+      if (index === 4) return reply(state(2, true), 200, '"fh.1.2.example"');
+      throw new Error('Unexpected finance request');
+    });
+    const gateway = new AccountsFinanceGateway(fetcher, 'https://fh.example', () => MUTATION);
+    await gateway.open(ACTOR);
+    const stale = gateway.refresh(ACTOR);
+    const operation = {
+      fromAccountId: A, toAccountId: B,
+      amountMinor: 100000, occurredOn: '2026-11-12',
+      baseRevision: 1, expectedEntityRevisions: { [A]: 1, [B]: 1 },
+    };
+    const after = await gateway.transfer(operation);
+    expect(after.ledger.revision).toBe(2);
+    expect(after.totalMinor).toBe(600000);
+    delayed!(reply(state()));
+    await expect(stale).rejects.toMatchObject({ kind: 'conflict' });
+    expect(gateway.writeBlocked).toBe(false);
+    await expect(gateway.transfer(operation)).rejects.toMatchObject({ kind: 'conflict' });
+    expect(calls).toBe(5);
+  });
+});
