@@ -181,3 +181,67 @@ SHA-256 idempotency receipt.
 **No release claim:** The current PR contains only an opt-in candidate. The
 existing PWA continues to use IndexedDB, and existing browser E2E validates
 that unchanged mode, **not** production finance sync.
+
+
+## Reserved-cash integrity in all money-posting commands
+
+A reserve allocation earmarks existing cash without changing the actual
+balance. Each outgoing ledger posting (transfer, correction reversal, and
+internal linked-payment debit) now checks **after the new posting but before
+commit** that any positive account reservation remains covered by its
+resulting balance. Otherwise the entire PostgreSQL transaction and receipt
+are rolled back with `409 semantic_conflict`. This also prevents a later
+reversal from silently taking funds reserved after the original transfer.
+The pre-existing overdraft semantics of accounts with **no** reservations
+are unchanged. Two real PostgreSQL HTTP regressions cover the denied
+transfer/reversal and safe operation after an explicit reserve release.
+
+This rule still needs agreement with the #68 sync client before public cloud
+activation. The server remains feature OFF until #66/#70 release gates.
+
+## Machine-checkable API candidate for #68
+
+The current implementation's precise JSON, session bootstrap, snapshot 206
+paging, status codes and 4 exposed actions are described in
+[`finance-v1-http-candidate.openapi.json`](finance-v1-http-candidate.openapi.json).
+This file is a **feature-off candidate**. It does NOT amend the accepted
+`docs/architecture/finance-sync-v1.openapi.json` until #65/#68 client
+agreement, and it intentionally does not invent a funding account for the
+unimplemented fifth action `loan.payment.record`. The independent contract
+regression verifies action/payload declarations match Pydantic and ensures
+unsafe actions cannot silently become publicly exposed.
+
+
+## Exact reserve recovery and finance-only error envelope
+
+A reserve entity now contains sorted, nonzero
+`allocations_by_account: [{account_id, allocated_minor}]`, in both full
+snapshot pages and all reserve upsert delta/receipt images. Its sum is checked
+against `allocated_minor`; after 410 delta compaction a client can still
+determine **exactly which account can release which reservation**. More than
+10,000 pair balances in one requested page fail closed with 503 rather than
+silently truncate a financial snapshot. A separate pair-pagination contract
+is required before activating such profiles in production.
+
+Ordinary financial HTTPException statuses (401 expired/revoked session,
+403 unsafe Origin, 429 throttling, 503 failed AuthStore/rate store) return the
+machine-readable `{code,message}` envelope with `no-store` and
+`nosniff`. The existing non-finance FH email-auth routes retain their
+original FastAPI error shapes; this avoids a breaking login change. Real
+SQLite/PostgreSQL HTTP regressions cover these responses and two-account,
+two-reserve state recovery after a 410 journal compaction.
+
+## Auth provider compatibility (feature-off)
+
+A new verified FH session can be issued by both the email-auth routes and
+OAuth provider callbacks. The email cookie and finance cookie use different
+Paths. To prevent a stale finance cookie from surviving a user switch, the
+opted-in finance middleware **clears the finance cookie whenever any route
+sets or deletes the primary `fh_email_session` cookie**, irrespective of
+which identity provider issued it. This allows the current-main OAuth router
+to retain its login-cookie `SameSite=Lax` policy while the separate finance
+cookie remains `SameSite=Strict`. The finance layer never forces changes to
+OAuth login or to default (finance-disabled) FH auth. One synthetic provider
+Set-Cookie integration regression tests the boundary; it is not a real OAuth
+exchange E2E. Actual OAuth/Main integration remains a mandatory gate before
+merging the stacked branch.

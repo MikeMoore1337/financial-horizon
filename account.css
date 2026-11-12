@@ -1,4 +1,4 @@
-/* Account views reuse approved design A; no external fonts or UI framework. */
+/* Account authentication layout: approved design C (email before OAuth). */
 .auth-layout{min-height:100dvh;display:grid;grid-template-columns:minmax(0,1.05fr) minmax(340px,.95fr);gap:clamp(20px,4vw,80px);align-items:center;width:min(1150px,100%);margin:auto;padding:clamp(20px,6vw,70px)}
 .auth-intro{display:flex;flex-direction:column;align-items:flex-start;gap:22px;max-width:520px}
 .auth-lockup{display:flex;align-items:center;gap:16px}
@@ -39,3 +39,37 @@
 #turnstile-container{margin:15px 0;min-height:65px}
 #turnstile-container[hidden]{display:none}
 @media(max-width:770px){.auth-layout{grid-template-columns:1fr;gap:20px;padding:20px 16px 60px;align-content:start}.auth-intro{gap:12px}.auth-intro h1{font-size:28px;margin:0}.auth-intro p{display:none}.auth-card{max-width:none;padding:22px;border-radius:20px}.auth-intro>a{display:none}.auth-lockup img{width:42px;height:42px}.auth-lockup strong{font-size:17px}}
+
+
+/* Approved #9 design C: primary email form, followed by optional OAuth. */
+.auth-layout{grid-template-columns:minmax(0,.9fr) minmax(370px,1.1fr);width:min(1160px,100%)}
+.auth-intro{max-width:490px;gap:19px}
+.auth-intro h1{font-size:clamp(32px,3.8vw,50px)}
+.auth-card{max-width:520px;padding:clamp(23px,3vw,32px);box-shadow:var(--shadow)}
+.auth-card #auth-submit{min-height:48px;margin-top:8px}
+.auth-actions{margin:12px 0 0;align-items:center}
+.auth-actions button,.auth-actions a{min-height:40px;display:inline-flex;align-items:center}
+.auth-actions button[hidden],.auth-actions a[hidden],#oauth-login[hidden]{display:none}
+#oauth-login{margin-top:4px}
+.oauth-divider{display:flex;align-items:center;gap:12px;color:var(--sub);font-size:12px;margin:14px 0 12px;text-align:center}
+.oauth-divider:before,.oauth-divider:after{content:"";height:1px;background:var(--line);flex:1}
+.oauth-provider-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+/* Preserve a balanced layout when exactly three providers are enabled. */
+.oauth-provider-grid>.oauth-provider-link:last-child:nth-child(odd){grid-column:1/-1}
+.oauth-provider-link{display:flex;align-items:center;gap:9px;min-width:0;min-height:48px;border:1px solid var(--line);border-radius:13px;background:var(--surface);color:var(--ink);padding:0 10px;text-align:left;text-decoration:none;font-size:12px;line-height:1.35;font-weight:690}
+.oauth-provider-link:hover{background:var(--soft);border-color:var(--accent)}
+.oauth-provider-link:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.oauth-provider-icon{width:24px;height:24px;flex-shrink:0;object-fit:contain}
+.oauth-provider-icon[src$="/google.svg"]{box-sizing:border-box;padding:2px;background:#fff;border-radius:50%}
+.oauth-provider-label{flex:1;min-width:0;overflow-wrap:break-word}
+.oauth-provider-chevron{display:none;color:var(--sub);font-size:18px;font-weight:400}
+.oauth-note{font-size:12px;line-height:1.55;margin:13px 0 0}
+@media(max-width:770px){
+ .auth-layout{grid-template-columns:1fr;gap:17px;padding:20px 14px 50px;align-content:start}
+ .auth-intro h1{font-size:27px}
+ .auth-card{max-width:none;padding:21px 19px}
+ .oauth-provider-grid{grid-template-columns:1fr;gap:8px}
+ .oauth-provider-grid>.oauth-provider-link:last-child:nth-child(odd){grid-column:auto}
+ .oauth-provider-link{min-height:47px;font-size:13px;padding:0 13px}
+ .oauth-provider-chevron{display:block}
+}

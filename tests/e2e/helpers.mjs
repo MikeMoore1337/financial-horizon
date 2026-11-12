@@ -13,10 +13,9 @@ export async function observe(context,page){
  page.on('console',m=>{if(m.type()==='error')consoleErrors.push(m.text());});
  context.on('request',req=>{
   const url=req.url();
-  if(!url.startsWith(ORIGIN+'/')){
-   const origin=new URL(url).origin;
-   if(!unplanned.includes(origin))unplanned.push(origin);
-  }
+  const origin=new URL(url).origin;
+  // A bare same-origin request during WebKit offline navigation is not an external leak.
+  if(origin!==ORIGIN && !unplanned.includes(origin))unplanned.push(origin);
  });
  // Do not proxy same-origin traffic through Playwright. It must reach the
  // real FastAPI service/Service Worker without interception or cache changes.

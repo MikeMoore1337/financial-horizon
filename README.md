@@ -130,7 +130,9 @@ src/react/Overview.tsx             React-обзор (этап #72)
 src/react/Obligations.tsx          React-обязательства
 src/react/Loans.tsx                React-кредиты
 src/react/Settings.tsx             React-настройки
-src/react/ScreenRoot.tsx           Единый React root для перенесённых экранов
+src/react/ScreenRoot.tsx           Единый React root для финансовых экранов
+src/react/AppShell.tsx             React-контейнеры боковой и мобильной навигации
+src/react/AuthBoundary.tsx         Граница отображения авторизованных данных
 legacy/app.js                      Совместимость со старыми установленными PWA
 finance.js / ledger-operations.js  Финансовые расчёты и операции
 storage.js / state-migrations.js   IndexedDB и миграции

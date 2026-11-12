@@ -4,6 +4,23 @@
 Контракт: docs/architecture/ADR-0065-cloud-finance-sync.md.
 Auth SQLite и существующая IndexedDB не изменяются.
 
+## Личный режим: без LUKS2 и отдельного сервера копий (решение владельца от 12.11.2026)
+
+**Это действующий облегчённый контракт #66.** Разделы про LUKS2, SSH offsite, непрерывный WAL/PITR и RPO/RTO ниже относятся только к старому расширенному плану и **не являются условиями личного релиза**. Вместо них обязательно подтверждаем PostgreSQL, права, шифрованную копию и её фактическое восстановление. При потере VPS вместе с единственной локальной копией данные могут быть потеряны - риск принят владельцем.
+
+Отдельный безопасный путь первой установки: `deploy/postgres/scripts/personal-bootstrap.sh`. Он не редактирует auth SQLite, другие БД, фронтенд, IndexedDB или OAuth. Функции финансового API по умолчанию выключены. Исходный `production-deploy.sh` остаётся строгим вариантом и **не используется для личного режима**.
+
+На авторизованной VPS:
+
+1. Подготовить свободный каталог `/srv/financial-horizon-finance/pgdata`, принадлежность PostgreSQL UID 999 и права 0700. Ничего не форматировать, не перезаписывать существующий DB volume. Допускается обычный диск VPS.
+2. Сохранить **три разных** случайных пароля (минимум 32 байта) в `/etc/financial-horizon/finance/secrets/{admin_password,migrator_password,runtime_password}`, владелец UID 999, режим 0400; каталог root:root 0700. Значения не передавать в GitHub/CI/логи.
+3. Подготовить `/etc/financial-horizon/finance/gnupg` (root:root 0700) с доступным локальным приватным GPG-ключом восстановления и `/var/backups/financial-horizon-finance` (root:root 0700). В root-only `/etc/financial-horizon/finance/backup.env` (0600) задать `FH_FINANCE_GPG_RECIPIENT` (40-символьный fingerprint), `FH_FINANCE_GPG_HOME` и `FH_FINANCE_BACKUP_DIR`. Приватный GPG-ключ на VPS является сознательным компромиссом простого режима; для защиты от потери VPS можно дополнительно хранить экспорт копии и ключа на доверенном устройстве.
+4. В чистом checkout **последнего слитого main SHA с успешными точными CI** задать `FH_FINANCE_PERSONAL_MODE=YES`, `FH_FINANCE_DATA_DIR=/srv/financial-horizon-finance/pgdata`, `FH_FINANCE_APPROVED_SHA=<40-hex main SHA>`. Запустить от root `bash deploy/postgres/scripts/personal-bootstrap.sh`. Скрипт откажется стартовать при ошибке прав, доступного места, CI, секрета, ключа, сети Docker, миграций, RLS, шифрования или **реального изолированного restore**. При ошибке после запуска останавливает контейнер, не уничтожая данные.
+5. Только после вывода `FINANCE_PERSONAL_BOOTSTRAP=PASS` создать root-only `/etc/financial-horizon/finance/start.env` (0600), содержащий указанные SHA, mode, data dir и `FH_FINANCE_CHECKOUT_DIR` с абсолютным путём checkout. Установить `fh-finance-personal.service`, `fh-finance-personal-backup.service` и `fh-finance-personal-backup.timer` из `deploy/postgres/systemd/` в `/etc/systemd/system/`, сделать `systemctl daemon-reload`, включить `fh-finance-personal.service` и таймер бэкапов. Старые strict units LUKS/offsite не включать.
+6. Проверять ежедневно статус резервирования (`systemctl status fh-finance-personal-backup.service`) и наличие копий `*.pgdump.gpg`. При новом релизе нужна отдельная проверка миграций и восстановление **до** включения версии API. `personal-bootstrap.sh` сознательно блокирует попытку перезаписать уже существующий контейнер, это не скрипт обновления.
+
+**Что ещё требуется для закрытия #66:** реальный авторизованный production-исполнитель, успешный запуск этой процедуры на VPS, новый зашифрованный архив, PASS изолированного восстановления, запись exact SHA/health и rollback. Зелёный CI и наличие скриптов не заменяют выполнение на VPS.
+
 ## Границы инфраструктуры
 
 - PostgreSQL 17 с закреплённым digest официального образа; отдельный кластер,
@@ -89,6 +106,28 @@ scripts/restore-drill.sh принимает зашифрованный архи�
 таблиц и pg_amcheck. Рекомендовано запускать его на независимом доверенном
 узле, на котором хранится приватный GPG-ключ; не копировать этот ключ на
 VPS ради удобства.
+
+**Read-only WAL/PITR preflight (#66).** После отдельного разрешённого
+развёртывания PostgreSQL можно выполнить от root
+`deploy/postgres/scripts/pitr-preflight.sh` при настроенных
+`FH_FINANCE_DATA_DIR=/srv/financial-horizon-finance/pgdata` и
+`FH_FINANCE_MAPPER_NAME=fh-finance-pg`. Он проверяет состояние выделенного
+LUKS2-тома, включённый `archive_mode`, безопасный `wal_level`,
+настроенный архиватор, подтверждение успешного архивирования WAL за
+последние 30 минут и отсутствие последнего неустранённого сбоя.
+Скрипт ничего не записывает и не переключает WAL. Если хотя бы одна проверка
+не выполнена, он сообщает `FINANCE_PITR_LOCAL_NO_GO` и заканчивается
+ошибкой. Даже при успешной локальной проверке он явно выводит
+`FINANCE_PITR_ENCRYPTED_OFFSITE=NOT_VERIFIED`,
+`FINANCE_PITR_REAL_RESTORE=NOT_VERIFIED` и
+`FINANCE_PITR_RPO_RTO=NOT_VERIFIED`.
+
+Этот preflight не настраивает архивирование: в текущем Docker Compose
+`archive_mode=on` и защищённое offsite WAL/PITR ещё не включены. Не
+выдавать успешный `pg_dump` или синтетический CI за RPO 15 минут.
+Для завершения #66 нужны отдельно настроенный реальный защищённый канал
+WAL на независимый узел, проверка целостности, восстановление до точки
+во времени и измеренный RPO/RTO на доверенной инфраструктуре.
 
 **RPO/RTO пока не доказаны.** Цели ADR: RPO 15 минут и RTO 4 часа.
 Без защищённого непрерывного WAL/PITR заявлять RPO 15 минут нельзя:

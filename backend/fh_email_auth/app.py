@@ -13,6 +13,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from urllib.parse import urlsplit
 from pydantic import BaseModel, Field
 
+from . import SESSION_COOKIE
 from .config import Settings
 from .security import normalize_email, valid_password, limit_key
 from .store import AuthStore, Throttled, AuthFailure
@@ -20,7 +21,6 @@ from .turnstile import validate_token
 from .mailer import Mailer
 
 logger=logging.getLogger("fh.email_auth")
-SESSION_COOKIE="fh_email_session"
 GENERIC_MESSAGE="Если адрес допускает действие, письмо с инструкцией будет отправлено."
 
 
@@ -58,8 +58,12 @@ def create_app(
     store: AuthStore|None=None,
     captcha: Callable[[str,str,str,str],bool]|None=None,
     mailer: Mailer|None=None,
+    oauth_config=None,
+    oauth_store=None,
+    oauth_exchanger=None,
     finance_engine=None,
     finance_profile_namespace=None,
+    enable_account_v2_candidate: bool=False,
 ) -> FastAPI:
     config=config or Settings.from_env()
     app=FastAPI(title="Financial Horizon Email Auth", docs_url=None, redoc_url=None,
@@ -79,7 +83,6 @@ def create_app(
             if len(await request.body())>4096:
                 return JSONResponse({"detail":"Слишком большой запрос"},status_code=413)
         response=await call_next(request)
-        # Finance v1 responses need private,no-store; keep old auth contract.
         response.headers["Cache-Control"]=(
             "private, no-store" if request.url.path.startswith("/api/finance/")
             else "no-store"
@@ -141,9 +144,11 @@ def create_app(
             raise HTTPException(status_code=400,detail="Не удалось подтвердить защитную проверку")
 
     def cookie(response:Response,session:str):
+        # Finance-cookie invalidation is enforced by the opted-in finance
+        # adapter for EVERY session issuer, including OAuth callbacks.
         response.set_cookie(
             key=SESSION_COOKIE,value=session,path="/api/auth",max_age=7*86400,
-            secure=not config.test_mode,httponly=True,samesite="strict"
+            secure=not config.test_mode,httponly=True,samesite="lax"
         )
 
     def deliver(email:str,purpose:str,raw:str):
@@ -262,6 +267,10 @@ def create_app(
         current=store.current(request.cookies.get(SESSION_COOKIE))
         if not current:
             raise HTTPException(status_code=401,detail="Войдите в аккаунт")
+        # OAuth-only accounts have no verified mailbox or password to confirm.
+        # Reject explicitly before the email quota uses current["email"].
+        if not isinstance(current["email"],str) or not current["email"]:
+            raise HTTPException(status_code=403,detail="Смена email недоступна для этого аккаунта")
         try:
             email=normalize_email(payload.email)
         except ValueError:
@@ -322,19 +331,31 @@ def create_app(
         if store is None:raise RuntimeError("Email AuthStore was not initialized")
         store.logout(request.cookies.get(SESSION_COOKIE))
         response.delete_cookie(SESSION_COOKIE,path="/api/auth",
-                               secure=not config.test_mode,httponly=True,samesite="strict")
+                               secure=not config.test_mode,httponly=True,samesite="lax")
         if finance_engine is not None:
-            # Deleting the cookie removes stale browser tokens; AuthStore.logout
-            # revocation above is the authoritative invalidation.
             response.delete_cookie("fh_finance_session",path="/api/finance/v1",
                                    secure=not config.test_mode,httponly=True,samesite="strict")
         return {"ok":True}
 
+    # The email application remains the only session and user authority.
+    # No OAuth database migration occurs during normal startup.
+    from fh_auth.config import Config as OAuthConfig
+    from fh_auth.app import make_oauth_router
+    from fh_auth.store import OAuthStore
+    oauth_config = oauth_config or OAuthConfig.from_env()
+    if oauth_config.enabled:
+        if not config.enabled:
+            raise ValueError("OAuth requires the existing email auth service")
+        if (oauth_config.database_path.resolve(strict=False) !=
+                config.database_path.resolve(strict=False) or
+                oauth_config.public_url != config.public_origin):
+            raise ValueError("OAuth and email auth must use one origin and SQLite database")
+        oauth_store = oauth_store or OAuthStore(config.database_path)
+    app.include_router(make_oauth_router(oauth_config, oauth_store, oauth_exchanger))
     if finance_engine is not None:
         if not config.enabled or store is None or finance_profile_namespace is None:
             raise ValueError("Finance API requires active auth and server profile namespace")
-        # Imported only for explicitly enabled deployments. Existing auth
-        # installs do not need SQLAlchemy/PostgreSQL and remain unchanged.
+        # Finance routes are available only under explicit opt-in, never by default.
         from backend.finance_db.finance_router import mount_finance_routes
 
         mount_finance_routes(
@@ -343,8 +364,8 @@ def create_app(
             auth_resolver=store.current,
             secure_cookie=not config.test_mode,
             rate_limiter=lambda request, action: throttle(request, action),
+            enable_account_v2_candidate=enable_account_v2_candidate,
         )
-
     return app
 
 

@@ -30,6 +30,9 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
+      # Main OAuth imports fh_auth from backend/ as a top-level Python package.
+      # Include both repository root and backend when collecting finance tests.
+      PYTHONPATH: ${{ github.workspace }}/backend:${{ github.workspace }}
       FH_FINANCE_CI_ALLOW_BOOTSTRAP: "yes"
       FH_FINANCE_MIGRATION_URL: postgresql+psycopg://fh_finance_migrator:ci_migration_password_only@127.0.0.1:5432/fh_finance_ci
       FH_FINANCE_DATABASE_URL: postgresql+psycopg://fh_finance_runtime:ci_runtime_password_only@127.0.0.1:5432/fh_finance_ci

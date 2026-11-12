@@ -16,12 +16,12 @@ function element(name){
  };
 }
 
-async function boot({initialSignedIn=false,sessionReadable=true,hash="",supportsChange=false,supportsOthers=false}={}){
+async function boot({initialSignedIn=false,sessionReadable=true,hash="",search="",supportsChange=false,supportsOthers=false,emailConfigAvailable=true,oauthOnly=false}={}){
  const selectors=[
   "#auth-feedback","#auth-submit","#form-heading","#form-description",
-  "#email-label","#email","#password-label","#password",
+  "#email-label","#email","#password-label","#password","#oauth-login",
   "#turnstile-container","#session-panel","#auth-form",
-  ".auth-modes",".auth-actions",".auth-actions [data-mode=\"resend\"]",
+  ".auth-modes",".auth-actions",".auth-actions [data-mode=\"resend\"]",".auth-actions [data-mode=\"reset\"]",
   "#session-email","#auth-logout","#auth-logout-others","#change-email-panel","#change-email-form",
   "#change-email","#change-email-password","#change-email-challenge","#change-email-submit"
  ];
@@ -35,10 +35,10 @@ async function boot({initialSignedIn=false,sessionReadable=true,hash="",supports
  let signedIn=initialSignedIn,email="user@example.com";
  const fetch=async (url,options={})=>{
   calls.push({url,options});
-  if(url.endsWith("/config"))return {ok:true,json:async()=>({enabled:true,sitekey:"test-site-key",capabilities:{email_change:supportsChange,revoke_other_sessions:supportsOthers}})};
+  if(url.endsWith("/config"))return {ok:emailConfigAvailable,json:async()=>({enabled:true,sitekey:"test-site-key",capabilities:{email_change:supportsChange,revoke_other_sessions:supportsOthers}})};
   if(url.endsWith("/me"))return {
    ok:true,json:async()=>sessionReadable&&signedIn
-    ?{authenticated:true,user:{email,id:"a".repeat(32)}}
+    ?{authenticated:true,user:{email:oauthOnly?null:email,id:"a".repeat(32)}}
     :{authenticated:false,user:null}
   };
   if(url.endsWith("/login")||url.endsWith("/verify")) {
@@ -69,7 +69,7 @@ async function boot({initialSignedIn=false,sessionReadable=true,hash="",supports
   head:{append(){}}
  };
  const location={
-  hash,pathname:"/account.html",search:"",
+  hash,pathname:"/account.html",search,
   assign(url){navigation.push(url);}
  };
  const window={
@@ -210,4 +210,70 @@ test("email-change controls are hidden until the backend advertises support",asy
  const page=await boot({initialSignedIn:true,supportsChange:false});
  assert.equal(page.elements["#change-email-panel"].hidden,true);
  assert.ok(!page.calls.some(call=>call.url.endsWith("/change/request")));
+});
+
+test("OAuth callback failures show Russian-only actionable feedback and clear query",async()=>{
+ for(const [status,expected] of [
+  ["failed",/Не удалось войти через выбранный сервис/],
+  ["denied",/Вход отменён/],
+ ]){
+  const page=await boot({search:"?oauth="+status+"&other=keep"});
+  assert.equal(page.elements["#auth-feedback"].dataset.status,"error");
+  assert.match(page.elements["#auth-feedback"].textContent,expected);
+  assert.ok(page.historyCalls.some(args=>args[2]==="/account.html?other=keep"));
+  assert.deepEqual(page.navigation,[]);
+ }
+});
+
+test("successful OAuth linking confirms status without exposing provider tokens",async()=>{
+ const page=await boot({initialSignedIn:true,search:"?oauth=linked"});
+ assert.equal(page.elements["#auth-feedback"].dataset.status,"success");
+ assert.match(page.elements["#auth-feedback"].textContent,/Новый способ входа привязан/);
+ assert.ok(page.historyCalls.some(args=>args[2]==="/account.html"));
+ assert.equal(page.elements["#session-panel"].hidden,false);
+});
+
+test('OAuth choices are only visible during the initial login mode',async()=>{
+ const page=await boot();
+ const oauth=page.elements['#oauth-login'];
+ oauth.dataset.ready='true';
+ oauth.hidden=false;
+ await page.changeMode('register');
+ assert.equal(oauth.hidden,true);
+ await page.changeMode('reset');
+ assert.equal(oauth.hidden,true);
+ await page.changeMode('login');
+ assert.equal(oauth.hidden,false);
+ assert.equal(page.elements['.auth-actions [data-mode="resend"]'].hidden,true);
+ assert.equal(page.elements['.auth-actions [data-mode="reset"]'].hidden,false);
+});
+
+
+test('OAuth-only session stays usable when public email registration is canary-disabled',async()=>{
+ const page=await boot({
+  initialSignedIn:true,emailConfigAvailable:false,oauthOnly:true
+ });
+ assert.equal(page.elements['#session-panel'].hidden,false);
+ assert.equal(page.elements['#auth-form'].hidden,true);
+ assert.equal(page.elements['#change-email-panel'].hidden,true);
+ assert.equal(page.elements['#auth-logout-others'].hidden,false);
+ assert.equal(page.elements['#auth-submit'].disabled,true);
+ assert.match(page.elements['#session-email'].textContent,/через внешний сервис/);
+ assert.doesNotMatch(page.elements['#auth-feedback'].textContent,/Регистрация пока не включена/);
+ assert.ok(page.calls.some(call=>call.url.endsWith('/config')));
+ assert.ok(page.calls.some(call=>call.url.endsWith('/me')));
+ await page.elements['#auth-logout'].events.click();
+ assert.equal(page.elements['#session-panel'].hidden,true);
+ assert.equal(page.elements['#auth-form'].hidden,false);
+ assert.match(page.elements['#auth-feedback'].textContent,/Сеанс завершён/);
+});
+
+test('a signed-out visitor cannot access email actions when its canary config is hidden',async()=>{
+ const page=await boot({emailConfigAvailable:false});
+ assert.equal(page.elements['#auth-form'].hidden,false);
+ assert.equal(page.elements['#auth-submit'].disabled,true);
+ assert.equal(page.elements['#session-panel'].hidden,true);
+ assert.match(page.elements['#auth-feedback'].textContent,/Регистрация пока не включена/);
+ assert.ok(page.calls.some(call=>call.url.endsWith('/me')));
+ assert.equal(page.calls.filter(call=>call.url.endsWith('/register')).length,0);
 });

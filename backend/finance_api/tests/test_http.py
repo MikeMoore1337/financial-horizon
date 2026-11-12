@@ -14,6 +14,7 @@ import json
 import time
 from uuid import UUID, uuid4
 
+from fastapi import Response
 from fastapi.testclient import TestClient
 import pytest
 from sqlalchemy import text
@@ -25,7 +26,8 @@ from backend.fh_email_auth.security import token_hash
 from backend.fh_email_auth.store import AuthStore
 from backend.finance_db.db import create_finance_engine, finance_transaction
 from backend.finance_db.ledger_service import (
-    ensure_verified_profile, get_account_snapshot, submit_account_command,
+    FinanceCommandError, ensure_verified_profile, get_account_snapshot,
+    submit_account_command,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -359,6 +361,41 @@ def test_missing_delta_revision_is_not_silently_skipped(env):
     res = client.get("/api/finance/v1/changes", params={"since_revision": 0})
     assert res.status_code == 503
     assert res.json()["code"] == "service_unavailable"
+
+
+@pytest.mark.parametrize("page_limit", [1, 50])
+def test_trailing_delta_gap_never_reports_false_end_of_journal(env, page_limit):
+    """A nonempty last page still must reach the actual profile revision.
+
+    Regression: journal=[1], profile revision=3, since=0 previously returned
+    200 has_more=false, to_revision=3, next_since_revision=1. A client could
+    silently treat that as a complete sync while missing committed changes.
+    """
+    uid, token = env["first"]
+    env["account"](uid, opening=1234)  # Real receipt + journal revision 1.
+    state = snapshot(env, token)
+    assert state.json()["revision"] == 1
+    scoped = env["scope"](uid)
+    with finance_transaction(env["engine"], verified_user_id=uid,
+                             profile_id=scoped.profile_id) as db:
+        db.execute(text("""
+            UPDATE finance_profiles SET revision=revision+2 WHERE id=:p
+        """), {"p": scoped.profile_id})
+    client = env["client"](token)
+    missing_tail = client.get("/api/finance/v1/changes", params={
+        "since_revision": 0, "limit_revisions": page_limit,
+    })
+    assert missing_tail.status_code == 503, missing_tail.text
+    assert missing_tail.json()["code"] == "service_unavailable"
+    assert "has_more" not in missing_tail.json()
+    assert "next_since_revision" not in missing_tail.json()
+    assert snapshot(env, token).json()["revision"] == 3
+    # Existing 410 behaviour for legitimately compacted history is separate.
+    missing_from_latest = client.get("/api/finance/v1/changes", params={
+        "since_revision": 1,
+    })
+    assert missing_from_latest.status_code == 503
+    assert missing_from_latest.json()["code"] == "service_unavailable"
 
 
 def test_compacted_delta_requires_snapshot_410(env):
@@ -890,3 +927,328 @@ def test_v1_reserve_allocate_rejects_exceeding_available_account_balance(env):
         assert db.execute(text("""
             SELECT count(*) FROM command_receipts WHERE client_mutation_id=:id
         """), {"id": cmd["client_mutation_id"]}).scalar_one() == 0
+
+
+def test_reserved_cash_is_not_silently_spent_by_transfers(env):
+    """A transfer may spend only unreserved cash; failed writes leave no receipt."""
+    uid, token = env["first"]
+    source = env["account"](uid, opening=1_000)
+    dest = env["account"](uid, opening=50)
+    reserve_id = seed_synthetic_reserve(env, uid, target=900)
+    client = env["client"](token)
+    initial = snapshot(env, token)
+    allocated = submit(client, initial, reserve_command(
+        initial, reserve_id, source, 700))
+    assert allocated.status_code == 201, allocated.text
+    before = snapshot(env, token)
+    denied_cmd = transfer(before, source, dest, 301)
+    denied = submit(client, before, denied_cmd)
+    assert denied.status_code == 409, denied.text
+    assert denied.json()["code"] == "semantic_conflict"
+    after = snapshot(env, token)
+    assert after.json()["revision"] == before.json()["revision"]
+    assert after.json()["entities"] == before.json()["entities"]
+    with finance_transaction(env["engine"], verified_user_id=uid,
+                             profile_id=env["scope"](uid).profile_id) as db:
+        assert db.execute(text("SELECT count(*) FROM ledger_postings")).scalar_one() == 0
+        assert db.execute(text("""
+            SELECT count(*) FROM command_receipts WHERE client_mutation_id=:id
+        """), {"id": denied_cmd["client_mutation_id"]}).scalar_one() == 0
+    accepted = submit(client, before, transfer(before, source, dest, 300))
+    assert accepted.status_code == 201, accepted.text
+    available = snapshot(env, token)
+    by_id = {e["id"]: e for e in available.json()["entities"]}
+    assert by_id[source]["data"]["balance_minor"] == 700
+    assert by_id[source]["data"]["reserved_minor"] == 700
+    assert by_id[source]["data"]["available_minor"] == 0
+    assert balance(env, uid, dest) == 350
+    release = submit(client, available, reserve_command(
+        available, reserve_id, source, -200))
+    assert release.status_code == 201, release.text
+    free = snapshot(env, token)
+    completed = submit(client, free, transfer(free, source, dest, 200))
+    assert completed.status_code == 201, completed.text
+    final = snapshot(env, token)
+    by_id = {e["id"]: e for e in final.json()["entities"]}
+    assert by_id[source]["data"]["balance_minor"] == 500
+    assert by_id[source]["data"]["reserved_minor"] == 500
+    assert by_id[source]["data"]["available_minor"] == 0
+    assert balance(env, uid, dest) == 550
+
+
+def test_transfer_reversal_cannot_take_money_earmarked_after_original_post(env):
+    """Reversal is also a debit and cannot invalidate a later reserve."""
+    uid, token = env["first"]
+    source = env["account"](uid, opening=1_200)
+    dest = env["account"](uid, opening=300)
+    reserve_id = seed_synthetic_reserve(env, uid, target=1_000)
+    client = env["client"](token)
+    before = snapshot(env, token)
+    sent = submit(client, before, transfer(before, source, dest, 500))
+    assert sent.status_code == 201, sent.text
+    original_id = sent.json()["changes"][0]["entity_id"]
+    arrived = snapshot(env, token)
+    funded = submit(client, arrived, reserve_command(
+        arrived, reserve_id, dest, 700))
+    assert funded.status_code == 201, funded.text
+    reserved = snapshot(env, token)
+    revisions = {e["id"]: e["entity_revision"] for e in reserved.json()["entities"]}
+    reverse_cmd = command(
+        reserved, "transaction.reverse",
+        {"transaction_id": original_id, "reason": "Synthetic correction"},
+        {source: revisions[source], dest: revisions[dest], original_id: revisions[original_id]},
+    )
+    rejected = submit(client, reserved, reverse_cmd)
+    assert rejected.status_code == 409, rejected.text
+    assert rejected.json()["code"] == "semantic_conflict"
+    assert snapshot(env, token).json()["entities"] == reserved.json()["entities"]
+    assert balance(env, uid, source) == 700
+    assert balance(env, uid, dest) == 800
+    with finance_transaction(env["engine"], verified_user_id=uid,
+                             profile_id=env["scope"](uid).profile_id) as db:
+        assert db.execute(text("""
+            SELECT count(*) FROM ledger_transactions
+            WHERE reversed_transaction_id=:id
+        """), {"id": original_id}).scalar_one() == 0
+        assert db.execute(text("""
+            SELECT count(*) FROM command_receipts WHERE client_mutation_id=:id
+        """), {"id": reverse_cmd["client_mutation_id"]}).scalar_one() == 0
+    released = submit(client, reserved, reserve_command(
+        reserved, reserve_id, dest, -500))
+    assert released.status_code == 201, released.text
+    newest = snapshot(env, token)
+    revs = {e["id"]: e["entity_revision"] for e in newest.json()["entities"]}
+    allowed = submit(client, newest, command(
+        newest, "transaction.reverse",
+        {"transaction_id": original_id, "reason": "Correct after reserve release"},
+        {source: revs[source], dest: revs[dest], original_id: revs[original_id]},
+    ))
+    assert allowed.status_code == 201, allowed.text
+    assert balance(env, uid, source) == 1_200
+    assert balance(env, uid, dest) == 300
+    final = snapshot(env, token)
+    dest_entity = next(e for e in final.json()["entities"] if e["id"] == dest)
+    assert dest_entity["data"]["reserved_minor"] == 200
+    assert dest_entity["data"]["available_minor"] == 100
+
+
+def test_finance_cookie_is_invalidated_for_any_identity_cookie_issuer(env):
+    """OAuth-shaped callback must not retain a previous email user's finance scope.
+
+    This tests the generic Set-Cookie integration contract, not OAuth token
+    exchange itself. The new OAuth router in main directly issues the
+    fh_email_session cookie instead of calling the email app's cookie() helper.
+    """
+    alice, token_a = env["first"]
+    bob, token_b = env["new_user"]()
+    alice_account = env["account"](alice, opening=98_765)
+
+    def synthetic_provider_callback(response: Response):
+        response.set_cookie(
+            "fh_email_session", token_b, path="/api/auth",
+            secure=False, httponly=True, samesite="lax",
+        )
+        return {"authenticated": True}
+
+    env["app"].add_api_route(
+        "/__synthetic_provider_callback", synthetic_provider_callback,
+        methods=["GET"], include_in_schema=False,
+    )
+    client = env["client"](token_a)
+    before = client.get("/api/finance/v1/state")
+    assert before.status_code == 200
+    assert alice_account in before.text
+    assert any(c.name == "fh_finance_session" for c in client.cookies.jar)
+
+    swapped = client.get("/__synthetic_provider_callback")
+    assert swapped.status_code == 200, swapped.text
+    cookies = swapped.headers.get_list("set-cookie")
+    assert any(c.startswith("fh_email_session=") for c in cookies)
+    assert any(c.startswith("fh_finance_session=") and "Max-Age=0" in c
+               for c in cookies)
+    assert not any(c.name == "fh_finance_session" for c in client.cookies.jar)
+
+    denied = client.get("/api/finance/v1/state")
+    assert denied.status_code == 401, denied.text
+    assert denied.json()["code"] == "unauthenticated"
+    assert client.post("/api/auth/email/finance/session",
+                       headers={"Origin": ORIGIN}, json={}).status_code == 200
+    new_state = client.get("/api/finance/v1/state")
+    assert new_state.status_code == 200
+    assert new_state.json()["entities"] == []
+    assert alice_account not in new_state.text
+
+
+def test_finance_http_auth_origin_rate_and_outage_use_stable_error_envelope(env, monkeypatch):
+    """AuthStore errors must use Error(code,message), not FastAPI's detail."""
+    from backend.fh_email_auth.store import Throttled
+
+    app = env["app"]
+    with TestClient(app, base_url=ORIGIN, raise_server_exceptions=False) as anonymous:
+        for path in ["/api/finance/v1/state", "/api/finance/v1/changes?since_revision=0"]:
+            denied = anonymous.get(path)
+            assert denied.status_code == 401, denied.text
+            assert set(denied.json()) == {"code", "message"}
+            assert denied.json()["code"] == "unauthenticated"
+            assert denied.headers["cache-control"] == "private, no-store"
+            assert denied.headers["x-content-type-options"] == "nosniff"
+        unsafe = anonymous.post("/api/auth/email/finance/session",
+                                headers={"Origin": "https://invalid.example"}, json={})
+        assert unsafe.status_code == 403
+        assert unsafe.json()["code"] == "forbidden"
+        assert "detail" not in unsafe.json()
+
+    uid, token = env["first"]
+    client = env["client"](token)
+    original_limit = env["store"].limit
+
+    def blocked(*args, **kwargs):
+        raise Throttled()
+
+    monkeypatch.setattr(env["store"], "limit", blocked)
+    throttled = client.get("/api/finance/v1/state")
+    assert throttled.status_code == 429, throttled.text
+    assert set(throttled.json()) == {"code", "message"}
+    assert throttled.json()["code"] == "rate_limited"
+    assert throttled.headers["cache-control"] == "private, no-store"
+
+    def failed(*args, **kwargs):
+        raise RuntimeError("PRIVATE_SQLITE_FAILURE_SHOULD_NOT_LEAK")
+
+    monkeypatch.setattr(env["store"], "limit", failed)
+    outage = client.get("/api/finance/v1/state")
+    assert outage.status_code == 503
+    assert outage.json()["code"] == "service_unavailable"
+    assert "PRIVATE_SQLITE_FAILURE_SHOULD_NOT_LEAK" not in outage.text
+    monkeypatch.setattr(env["store"], "limit", original_limit)
+
+
+def test_snapshot_recovers_exact_reserve_allocation_pairs_after_delta_compaction(env):
+    """2 reserves x 2 accounts: aggregates alone cannot identify releasable pairs."""
+    uid, token = env["first"]
+    account_a = env["account"](uid, opening=1_000)
+    account_b = env["account"](uid, opening=600)
+    reserve_a = seed_synthetic_reserve(env, uid, target=800)
+    reserve_b = seed_synthetic_reserve(env, uid, target=600)
+    client = env["client"](token)
+    for reserve_id, account_id, amount in [
+        (reserve_a, account_a, 300),
+        (reserve_a, account_b, 200),
+        (reserve_b, account_a, 150),
+        (reserve_b, account_b, 100),
+    ]:
+        old = snapshot(env, token)
+        result = submit(client, old, reserve_command(old, reserve_id, account_id, amount))
+        assert result.status_code == 201, result.text
+        after = snapshot(env, token)
+        updated = {item["id"]: item for item in after.json()["entities"]}
+        assert result.json()["changes"][0]["payload"]["entity"] == updated[reserve_id]
+        assert result.json()["changes"][1]["payload"]["entity"] == updated[account_id]
+
+    current = snapshot(env, token)
+    entities = {item["id"]: item for item in current.json()["entities"]}
+    assert entities[reserve_a]["data"]["allocations_by_account"] == [
+        {"account_id": id, "allocated_minor": amount}
+        for id, amount in sorted([(account_a, 300), (account_b, 200)])
+    ]
+    assert entities[reserve_b]["data"]["allocations_by_account"] == [
+        {"account_id": id, "allocated_minor": amount}
+        for id, amount in sorted([(account_a, 150), (account_b, 100)])
+    ]
+    assert entities[reserve_a]["data"]["allocated_minor"] == 500
+    assert entities[reserve_b]["data"]["allocated_minor"] == 250
+    assert entities[account_a]["data"]["reserved_minor"] == 450
+    assert entities[account_b]["data"]["reserved_minor"] == 300
+
+    with finance_transaction(env["engine"], verified_user_id=uid,
+                             profile_id=env["scope"](uid).profile_id) as db:
+        db.execute(text("""
+            UPDATE finance_profiles SET min_available_revision=:min WHERE id=:p
+        """), {"min": current.json()["revision"],
+               "p": env["scope"](uid).profile_id})
+    unavailable_delta = client.get("/api/finance/v1/changes", params={"since_revision": 0})
+    assert unavailable_delta.status_code == 410
+    assert unavailable_delta.json()["code"] == "snapshot_required"
+
+    recovered = snapshot(env, token)
+    assert recovered.json()["entities"] == current.json()["entities"]
+    page_entities = {}
+    cursor = None
+    for _ in range(10):
+        params = {"limit_entities": 1}
+        if cursor:
+            params["cursor"] = cursor
+        part = client.get("/api/finance/v1/state", params=params)
+        assert part.status_code in (200, 206), part.text
+        for e in part.json()["entities"]:
+            page_entities[e["id"]] = e
+        cursor = part.json().get("next_cursor")
+        if not cursor:
+            break
+    else:
+        pytest.fail("Bounded snapshot cursor did not terminate")
+    assert page_entities == entities
+
+    rejected = submit(client, recovered, reserve_command(recovered, reserve_a, account_b, -201))
+    assert rejected.status_code == 409
+    assert rejected.json()["code"] == "semantic_conflict"
+    assert snapshot(env, token).json()["revision"] == current.json()["revision"]
+    allowed = submit(client, recovered, reserve_command(recovered, reserve_a, account_b, -200))
+    assert allowed.status_code == 201, allowed.text
+    final = {item["id"]: item for item in snapshot(env, token).json()["entities"]}
+    assert final[reserve_a]["data"]["allocations_by_account"] == [
+        {"account_id": account_a, "allocated_minor": 300}
+    ]
+
+
+def test_internal_account_archival_blocks_edits_until_restored(env):
+    """Account archive is immutable for edits until restored; no partial receipts."""
+    uid, token = env["first"]
+    account_id = env["account"](uid, opening=10_500)
+    scoped = env["scope"](uid)
+
+    def revision(state):
+        return next(
+            e["entity_revision"] for e in state.json()["entities"]
+            if e["id"] == account_id
+        )
+
+    def apply(state, action, payload):
+        cmd = command(state, action, payload, {account_id: revision(state)})
+        return submit_account_command(
+            env["engine"], scope=scoped, command=cmd,
+            if_match=state.headers["etag"],
+            idempotency_key=cmd["client_mutation_id"], allow_internal=True,
+        )
+
+    before = snapshot(env, token)
+    assert apply(before, "account.archive", {"account_id": account_id}).status == 201
+    archived = snapshot(env, token)
+    account = next(e for e in archived.json()["entities"] if e["id"] == account_id)
+    assert account["data"]["archived_at"] is not None
+
+    with pytest.raises(FinanceCommandError) as rejected:
+        apply(archived, "account.update", {
+            "account_id": account_id, "name": "Unapproved archived edit", "kind": "cash",
+        })
+    assert rejected.value.code == "semantic_conflict"
+    unchanged = snapshot(env, token)
+    assert unchanged.headers["etag"] == archived.headers["etag"]
+    # Server timestamp can change between reads; the revision must not.
+    assert unchanged.json()["revision"] == archived.json()["revision"]
+    current = next(e for e in unchanged.json()["entities"] if e["id"] == account_id)
+    assert current["data"]["name"] == "Synthetic account"
+    assert current["data"]["type"] == "bank"
+    assert current["data"]["balance_minor"] == 10_500
+
+    assert apply(unchanged, "account.unarchive", {"account_id": account_id}).status == 201
+    restored = snapshot(env, token)
+    assert apply(restored, "account.update", {
+        "account_id": account_id, "name": "Restored account", "kind": "cash",
+    }).status == 201
+    final = snapshot(env, token)
+    account = next(e for e in final.json()["entities"] if e["id"] == account_id)
+    assert account["data"]["name"] == "Restored account"
+    assert account["data"]["type"] == "cash"
+    assert account["data"]["archived_at"] is None
+    assert account["data"]["balance_minor"] == 10_500

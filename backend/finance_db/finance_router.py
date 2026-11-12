@@ -14,10 +14,13 @@ from uuid import UUID
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from fastapi.exception_handlers import http_exception_handler
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from backend.finance_api.contracts import parse_v1_command
+from backend.finance_api.contracts_v2_candidate import parse_v2_account_command
+from backend.finance_api.accounts_v2_service import submit_account_v2_candidate
 
 from .ledger_service import (
     FinanceCommandError, VerifiedFinanceScope, derive_verified_scope,
@@ -29,6 +32,8 @@ log = logging.getLogger("fh.finance_api")
 AUTH_COOKIE = "fh_email_session"
 FINANCE_COOKIE = "fh_finance_session"
 FINANCE_COOKIE_PATH = "/api/finance/v1"
+# Distinct cookie paths allow opt-in v2 testing without broadening the v1 cookie.
+FINANCE_V2_COOKIE_PATH = "/api/finance/v2"
 
 
 def _guard_origin(request: Request, origin: str) -> None:
@@ -56,7 +61,8 @@ def _finance_error(error: FinanceCommandError) -> JSONResponse:
     if error.server_revision is not None:
         body["server_revision"] = error.server_revision
     return JSONResponse(body, status_code=error.status,
-                        headers={"Cache-Control": "private, no-store", "Vary": "Cookie"})
+                        headers={"Cache-Control": "private, no-store", "Vary": "Cookie",
+                                 "X-Content-Type-Options": "nosniff"})
 
 
 def _query_integer(request: Request, key: str, default: int | None,
@@ -79,6 +85,7 @@ def mount_finance_routes(
     app: FastAPI, *, engine: Engine, namespace: UUID, public_origin: str,
     auth_resolver: Callable[[str | None], dict | None],
     secure_cookie: bool, rate_limiter: Callable[[Request, str], None] | None = None,
+    enable_account_v2_candidate: bool = False,
 ) -> None:
     """Explicit application wiring only; create_app() default does not call it.
 
@@ -88,6 +95,58 @@ def mount_finance_routes(
     if (engine is None or engine.dialect.name != "postgresql"
         or not isinstance(namespace, UUID) or not public_origin):
         raise ValueError("Finance routes require validated PostgreSQL and server namespace")
+    if type(enable_account_v2_candidate) is not bool:
+        raise ValueError("Candidate route opt-in must be explicit boolean")
+
+    # The existing FH auth app has its own HTTPException wire shape.
+    # Only finance endpoints use code/message so #68 can decode 401/403/429/503
+    # consistently; leave every other auth endpoint byte-for-byte compatible.
+    async def finance_http_errors(request: Request, error: HTTPException):
+        path = request.url.path
+        if (path.startswith("/api/finance/v1/")
+            or path.startswith("/api/finance/v2/")
+            or path == "/api/auth/email/finance/session"):
+            code, message = {
+                401: ("unauthenticated", "Войдите в аккаунт"),
+                403: ("forbidden", "Доступ запрещён"),
+                429: ("rate_limited", "Превышен лимит запросов"),
+                503: ("service_unavailable", "Финансовый сервис недоступен"),
+            }.get(
+                error.status_code,
+                ("service_unavailable", "Финансовый сервис недоступен")
+                if error.status_code >= 500 else ("invalid_command", "Запрос отклонён"),
+            )
+            return _finance_error(FinanceCommandError(code, message, error.status_code))
+        return await http_exception_handler(request, error)
+
+    app.add_exception_handler(HTTPException, finance_http_errors)
+
+    # The primary FH session may be replaced by email verify/login/rotation OR
+    # by a separately mounted OAuth provider callback. Its cookie lives at
+    # /api/auth, while the finance session lives at /api/finance/v1. Browsers
+    # do not automatically discard the second cookie when the first changes.
+    # Install this only on explicit finance opt-in and on *every* response
+    # that rotates or removes the primary cookie, regardless of auth provider.
+    @app.middleware("http")
+    async def invalidate_finance_cookie_on_primary_session_change(
+        request: Request, call_next,
+    ):
+        response = await call_next(request)
+        if any(
+            name.lower() == b"set-cookie"
+            and raw.strip().lower().startswith(b"fh_email_session=")
+            for name, raw in response.raw_headers
+        ):
+            response.delete_cookie(
+                FINANCE_COOKIE, path=FINANCE_COOKIE_PATH,
+                secure=secure_cookie, httponly=True, samesite="strict",
+            )
+            if enable_account_v2_candidate:
+                response.delete_cookie(
+                    FINANCE_COOKIE, path=FINANCE_V2_COOKIE_PATH,
+                    secure=secure_cookie, httponly=True, samesite="strict",
+                )
+        return response
 
     def require_user(request: Request, *, finance_cookie: bool) -> str:
         cookie = request.cookies.get(FINANCE_COOKIE if finance_cookie else AUTH_COOKIE)
@@ -136,6 +195,14 @@ def mount_finance_routes(
             path=FINANCE_COOKIE_PATH, max_age=7 * 86400,
             secure=secure_cookie, httponly=True, samesite="strict",
         )
+        if enable_account_v2_candidate:
+            # Only the isolated opt-in candidate can issue this second path cookie.
+            # It remains backed by the SAME revocable FH SQLite AuthStore session.
+            response.set_cookie(
+                FINANCE_COOKIE, raw_token,
+                path=FINANCE_V2_COOKIE_PATH, max_age=7 * 86400,
+                secure=secure_cookie, httponly=True, samesite="strict",
+            )
         response.headers["Cache-Control"] = "private, no-store"
         return {"ok": True, "profile_id": str(verified.profile_id)}
 
@@ -224,3 +291,45 @@ def mount_finance_routes(
             ))
 
     app.include_router(router)
+
+    # Unpublished v2 contract candidate. No environment variable enables this:
+    # the host MUST explicitly provide both a finance engine and this opt-in.
+    # Accepted v1 routing, cookies and command whitelist remain unchanged.
+    if enable_account_v2_candidate:
+        v2 = APIRouter(prefix="/api/finance/v2", include_in_schema=False)
+
+        @v2.post("/commands")
+        async def account_v2_commands(request: Request):
+            _guard_origin(request, public_origin)
+            await run_in_threadpool(rate, request, "finance-write")
+            verified = await run_in_threadpool(scope, request)
+            try:
+                body = await parse_v2_account_command(request)
+            except FinanceCommandError as exc:
+                return _finance_error(exc)
+
+            # Recheck the actual SQLite FH session AFTER streamed request input.
+            # A login/logout/revocation between the first check and commit
+            # cannot post a transaction under a stale principal.
+            def submit_with_fresh_session():
+                current = scope(request)
+                if current != verified:
+                    raise HTTPException(status_code=401, detail="Сеанс изменился")
+                return submit_account_v2_candidate(
+                    engine, scope=current, command=body,
+                    if_match=request.headers.get("if-match", ""),
+                    idempotency_key=request.headers.get("idempotency-key", ""),
+                )
+
+            try:
+                result = await run_in_threadpool(submit_with_fresh_session)
+                return _finance_response(result)
+            except FinanceCommandError as exc:
+                return _finance_error(exc)
+            except SQLAlchemyError:
+                log.error("finance_v2_candidate_db_failed")
+                return _finance_error(FinanceCommandError(
+                    "service_unavailable", "Операция не подтверждена сервером", 503,
+                ))
+
+        app.include_router(v2)

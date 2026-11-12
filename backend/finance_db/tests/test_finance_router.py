@@ -149,6 +149,62 @@ def test_session_bridge_is_scoped_cookie_and_logout_revokes_entire_finance_acces
     assert client.get("/api/finance/v1/state").status_code == 401
 
 
+def test_fresh_login_cannot_inherit_stale_finance_cookie_from_another_user(auth_finance):
+    """The finance and primary FH cookies have different Path attributes.
+
+    A browser can have a still-valid finance session A while the original
+    /api/auth cookie has been separately deleted. Logging in as B must clear
+    the finance cookie even when there is no prior auth cookie to revoke.
+    Otherwise GET /state after login B would silently show A's financial data.
+    """
+    client, _, mail, store, engine, namespace = auth_finance
+    alice = authenticate(client, mail, "alice@example.invalid")
+    assert bootstrap(client).status_code == 200
+    account_a = seed(engine, derive_verified_scope(alice, namespace), 90210)
+    before = client.get("/api/finance/v1/state")
+    assert before.status_code == 200
+    assert account_a in before.text
+
+    def remove_only_primary_cookie():
+        old = next(c for c in client.cookies.jar if c.name == "fh_email_session")
+        client.cookies.jar.clear(domain=old.domain, path=old.path, name=old.name)
+        assert any(c.name == "fh_finance_session" for c in client.cookies.jar)
+        assert not any(c.name == "fh_email_session" for c in client.cookies.jar)
+
+    remove_only_primary_cookie()
+    # Alice's finance token is still valid at this point; it is NOT
+    # automatically invalidated when the browser only drops its other cookie.
+    stale = next(c for c in client.cookies.jar if c.name == "fh_finance_session")
+    assert store.current(stale.value)["id"] == alice
+
+    bob = authenticate(client, mail, "bob@example.invalid")
+    assert bob != alice
+    assert not any(c.name == "fh_finance_session" for c in client.cookies.jar)
+    denied = client.get("/api/finance/v1/state")
+    assert denied.status_code == 401, denied.text
+    assert denied.json()["code"] == "unauthenticated"
+    assert bootstrap(client).status_code == 200
+    bob_view = client.get("/api/finance/v1/state")
+    assert bob_view.status_code == 200
+    assert bob_view.json()["entities"] == []
+    assert account_a not in bob_view.text
+
+    # Check the ordinary login route too, not just the registration/verify
+    # flow; no automatic re-use of Bob's old finance cookie is permitted.
+    remove_only_primary_cookie()
+    login = client.post("/api/auth/email/login", headers={"Origin": ORIGIN},
+                        json={"email": "alice@example.invalid", "password": PASS})
+    assert login.status_code == 200, login.text
+    assert not any(c.name == "fh_finance_session" for c in client.cookies.jar)
+    denied_again = client.get("/api/finance/v1/state")
+    assert denied_again.status_code == 401, denied_again.text
+    assert bootstrap(client).status_code == 200
+    alice_view = client.get("/api/finance/v1/state")
+    assert alice_view.status_code == 200
+    assert account_a in alice_view.text
+    assert alice_view.json()["profile_id"] == before.json()["profile_id"]
+
+
 def test_v1_transfer_idempotency_and_revision_conflict_from_real_authenticated_browser(auth_finance):
     client, _, mail, _, engine, namespace = auth_finance
     uid = authenticate(client, mail)
