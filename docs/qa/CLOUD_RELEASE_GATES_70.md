@@ -3,6 +3,29 @@
 **Current decision: NO_GO.** This is an evidence inventory, not a production
 receipt, independent reviewer approval or authority to change an installation.
 
+## Owner decision 12 Nov 2026 - private single-user mode
+
+The owner explicitly rejected mandatory LUKS2, an external backup VPS,
+continuous WAL archiving, PITR and fixed RPO/RTO targets for this personal
+Excel-replacement app. The strict historical public-cloud gate remains
+available only for any future public multi-user launch.
+
+The opt-in `mode='private-single-user'` inventory requires a **confirmed
+disabled public registration** flag, working existing-owner FH session,
+PostgreSQL tenant isolation, **encrypted backup and an actual isolated local
+restore**, approved owner v2 contract, linked payment invariants, encrypted
+offline outbox, explicit conflict decisions, transactionally verified import,
+and exact-SHA CI/health/rollback. A root-disk failure can destroy local-only
+backups; this is a documented owner-accepted residual risk, not a claim of
+disaster recovery.
+
+No test helper can change a public registration flag or enable finance sync.
+The source inventory always returns NO_GO or NEEDS_EXTERNAL_ATTESTATION;
+a real single-user deployment still requires actual production runtime and
+backup restore receipts. Two independent real inboxes, separate offsite
+infrastructure and human AppSec audit remain **NOT_VERIFIED** rather than
+fictitiously PASS.
+
 ## Required release dependencies
 
 1. **#51 real email auth acceptance**: independent human APPROVED on exact SHA,
