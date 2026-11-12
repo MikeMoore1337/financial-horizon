@@ -17,10 +17,14 @@ test('React Settings avoids duplicated account/theme controls and retains header
  assert.doesNotMatch(settings,/dangerouslySetInnerHTML|innerHTML/);
 });
 
-test('approved seven-card Settings layout remains with responsive CSS',()=>{
+test('seven default Settings cards remain; optional finance card requires reviewed opt-in',()=>{
  for(const id of ['security','backup','import','categories','archive','history','install'])
   assert.ok(settings.includes('<SettingsCard id="'+id+'"'),id);
- assert.equal((settings.match(/<SettingsCard id="/g)||[]).length,7);
+ const cards=[...settings.matchAll(/<SettingsCard id="([^"]+)"/g)].map(x=>x[1]);
+ assert.equal(cards.filter(id=>id!=='finance-accounts').length,7);
+ assert.equal(cards.filter(id=>id==='finance-accounts').length,1);
+ assert.match(settings,/\{showFinanceAccounts && \(/);
+ assert.match(html,/<meta name="fh-finance-accounts" content="disabled">/);
  assert.ok(settings.includes('settings-install'));
  assert.ok(css.includes('.settings-grid{display:grid;'));
  assert.ok(css.includes('grid-template-columns:repeat(2,minmax(0,1fr))'));

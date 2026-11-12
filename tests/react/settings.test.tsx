@@ -91,3 +91,14 @@ describe('React Settings - local data controls', () => {
     }
   });
 });
+
+it('optional server accounts entry is hidden by default and only routes on explicit opt-in', () => {
+  render(<Settings {...empty} showFinanceAccounts />);
+  const cards = document.querySelectorAll('[data-settings-card]');
+  expect(cards).toHaveLength(8);
+  const accountCard = document.querySelector('[data-settings-card="finance-accounts"]');
+  expect(accountCard).not.toBeNull();
+  expect(accountCard?.querySelector('[data-view="accounts-connected"]')).not.toBeNull();
+  expect(screen.getByText('Счета и кошельки')).toBeTruthy();
+  expect(document.querySelector('[data-action="account-logout"]')).toBeNull();
+});
