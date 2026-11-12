@@ -4,8 +4,9 @@ import {
   decodeCompleteFinanceState,
 } from '../src/domain/accounts/server-snapshot.ts';
 import {
-  assertLedgerState, accountBalanceMinor, totalBalanceMinor, monthlyCashFlowMinor,
+  accountBalanceMinor, totalBalanceMinor, monthlyCashFlowMinor,
 } from '../src/domain/accounts/ledger.ts';
+import { assertLedgerState } from '../src/domain/accounts/invariants.ts';
 
 const P = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const OTHER_P = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
@@ -140,7 +141,7 @@ test('#33 corrupt payment fact, missing cash reversal or wrong payment source ca
     const changed = structuredClone(source);
     mutate(changed);
     assert.throws(()=>decodeCompleteFinanceState(changed,P,USER),
-      /INVALID_FINANCE_SNAPSHOT|Факт|оплата|проводок|компенсация|Связанная|сбалансирован|Остаток|Квитанция|Неверное/,
+      /INVALID_FINANCE_SNAPSHOT|Факт|оплата|проводок|компенсация|Связанная|сбалансирован|Остаток|Квитанция|Неверное|Не подтверждена ревизия/,
       'tampered fact/transaction may not become a displayed confirmed balance');
   }
 });
