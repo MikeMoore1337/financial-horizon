@@ -6,16 +6,22 @@ import { Overview, type OverviewProps } from './Overview';
 import { Obligations, type ObligationsProps } from './Obligations';
 import { Loans, type LoansProps } from './Loans';
 import { Settings, type SettingsProps } from './Settings';
+import { AuthBoundary, type AuthAccess } from './AuthBoundary';
+import { Accounts, type AccountsProps } from './Accounts';
 
 export type ScreenView =
   | { view: 'calendar'; props: CalendarProps }
   | { view: 'overview'; props: OverviewProps }
   | { view: 'obligations'; props: ObligationsProps }
   | { view: 'loans'; props: LoansProps }
-  | { view: 'settings'; props: SettingsProps };
+  | { view: 'settings'; props: SettingsProps }
+  | { view: 'accounts'; props: AccountsProps };
 
 /** One React owner for any migrated screen, never shared with legacy innerHTML. */
-export function createScreenRoot(host: HTMLElement) {
+export function createScreenRoot(
+  host: HTMLElement,
+  getAccess: () => AuthAccess = () => ({ kind: 'guest' }),
+) {
   const root = createRoot(host);
   return {
     render(screen: ScreenView) {
@@ -23,17 +29,21 @@ export function createScreenRoot(host: HTMLElement) {
       flushSync(() =>
         root.render(
           <StrictMode>
-            {screen.view === 'calendar' ? (
-              <Calendar {...screen.props} />
-            ) : screen.view === 'overview' ? (
-              <Overview {...screen.props} />
-            ) : screen.view === 'obligations' ? (
-              <Obligations {...screen.props} />
-            ) : screen.view === 'loans' ? (
-              <Loans {...screen.props} />
-            ) : (
-              <Settings {...screen.props} />
-            )}
+            <AuthBoundary access={getAccess()}>
+              {screen.view === 'calendar' ? (
+                <Calendar {...screen.props} />
+              ) : screen.view === 'overview' ? (
+                <Overview {...screen.props} />
+              ) : screen.view === 'obligations' ? (
+                <Obligations {...screen.props} />
+              ) : screen.view === 'loans' ? (
+                <Loans {...screen.props} />
+              ) : screen.view === 'accounts' ? (
+                <Accounts key={screen.props.activeProfileId ?? 'locked'} {...screen.props} />
+              ) : (
+                <Settings {...screen.props} />
+              )}
+            </AuthBoundary>
           </StrictMode>,
         ),
       );
