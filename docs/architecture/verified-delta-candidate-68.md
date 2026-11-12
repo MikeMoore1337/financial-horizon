@@ -72,6 +72,15 @@ absence of the browser Web Locks API (including hardened browser settings)
 causes a fail-closed refusal, **not** an unsafe localStorage fallback.
 Server-side idempotency remains mandatory across devices and process crashes.
 
+Confirmed server 409/412 and 410 responses now produce an encrypted,
+profile-scoped `finance_sync_hold` record in the same native IDB CAS as
+the untouched pending outbox. A restart or another tab sees that hold and
+cannot silently resend/rebase the original amount, UUID or If-Match.
+A 410 returned by `/changes` after a successful POST also preserves the
+unreconciled operation and marks `SNAPSHOT_REQUIRED_HOLD`.
+A failed IDB write fails closed; it never claims the conflict was persisted.
+No background or user-facing resolution flow is enabled yet.
+
 A synthetic browser-native 2-tab Web Lock test in
 `tests/e2e/finance-cloud-candidate.spec.mjs` exercises the actual
 Chromium/WebKit native lock and encrypted IDB candidate on an intercepted
