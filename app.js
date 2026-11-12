@@ -14,7 +14,10 @@ const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<
 const formatDate=date=>new Intl.DateTimeFormat('ru-RU',{day:'numeric',month:'short',year:'numeric'}).format(new Date(`${date}T12:00:00`));
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
 const uuid=()=>crypto.randomUUID();
-const titles={overview:'Обзор',calendar:'Календарь',obligations:'Обязательства',loans:'Кредиты',settings:'Настройки'};
+const titles={overview:'Обзор',calendar:'Календарь',obligations:'Обязательства',loans:'Кредиты',settings:'Настройки','accounts-connected':'Счета и кошельки'};
+// Only an explicit reviewed release can present the optional server-backed accounts view.
+// FastAPI authentication and profile scoping remain the sole authorization boundary.
+const financeAccountsEnabled=document.querySelector('meta[name="fh-finance-accounts"]')?.content==='enabled';
 let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null},passwordMode='export',restoreFile=null,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
 const emailSession=createEmailSession();
 let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
@@ -53,16 +56,20 @@ async function mutate(change,msg='Сохранено на устройстве',
 function stampFormRevision(form){form.dataset.stateRevision=String(state.revision);}
 function revisionForForm(form){const revision=Number(form.dataset.stateRevision);if(!Number.isSafeInteger(revision)||revision<0)throw Error('Не удалось определить версию записи. Откройте форму повторно.');return revision;}
 function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#172336':'#ffffff';$('#theme-toggle').innerHTML=svg(mode==='dark'?'sun':'moon');$('#theme-toggle').setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}
-function navigation(view){ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings'){void renderStorageStatus();if(!guestMode)void refreshEmailSession();}}
+function navigation(view){
+ if(view==='accounts-connected'&&(!financeAccountsEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId))return;
+ ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings'){void renderStorageStatus();if(!guestMode)void refreshEmailSession();}}
 function render(){
  if(!state)return;
  $('#toolbar-title').textContent=titles[ui.view];
  if(!navRoots)navRoots=createAppShellRoots($('.sidebar-nav'),$('.bottom-nav'));
- navRoots.render(ui.view);
+ navRoots.render(ui.view==='accounts-connected'?'settings':ui.view);
  const main=$('#main');
- if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'||ui.view==='settings'){
+ if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'||ui.view==='settings'||ui.view==='accounts-connected'){
   if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main,getAuthAccess);}
-  if(ui.view==='calendar'){
+  if(ui.view==='accounts-connected'){
+   screenRoot.render({view:'accounts-connected',props:{verifiedActorUserId:emailSession.userId||null,onBack:()=>navigation('settings')}});
+  }else if(ui.view==='calendar'){
    const events=monthEvents(),totals=monthTotals(events);
    screenRoot.render({view:'calendar',props:{events,month:ui.month,selectedDate:ui.selectedDate,currentDate:today(),monthTitle:monthLabel(ui.month),netPlanCents:totals.netPlanCents,netFactCents:totals.netFactCents,formatDate,rubles}});
   }else if(ui.view==='overview'){
@@ -133,7 +140,7 @@ function render(){
    }));
    screenRoot.render({view:'settings',props:{
     currentDate:today(),categories:state.categories,archived,audit,storageMessage:storageStatusMessage,
-    formatDate,
+    formatDate,showFinanceAccounts:financeAccountsEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId,
    }});
   }
  }else{
