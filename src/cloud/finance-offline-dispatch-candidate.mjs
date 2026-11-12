@@ -11,6 +11,7 @@ import {
   persistAuthenticatedFinanceReceiptCandidate,
   classifyFinanceOutboxResponseCandidate,
   recordEncryptedFinanceRetryCandidate,
+  persistEncryptedFinanceHoldCandidate,
 } from './encrypted-command-outbox-candidate.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -88,6 +89,15 @@ async function retryAfterTransientFailure({
   const policy = classifyFinanceOutboxResponseCandidate(
     httpStatus, item.attempts,
   );
+  if (policy.decision === 'CONFLICT_HOLD' ||
+      policy.decision === 'SNAPSHOT_REQUIRED_HOLD') {
+    const stopped = await persistEncryptedFinanceHoldCandidate({
+      scope, session, identity, expectedEpoch,
+      mutationId: item.mutationId, httpStatus,
+      decision: policy.decision, source: 'command',
+    });
+    return control(stopped.status, null, stopped.bundleEpoch);
+  }
   if (policy.decision !== 'RETRY_SAME_UUID') {
     return control(policy.decision, policy.retryDelayMs);
   }
@@ -146,6 +156,19 @@ async function dispatchWithoutNetworkLease({
       item.command.client_mutation_id !== item.mutationId ||
       !safeRevision(item.command.base_revision)) {
     hold('Повреждена ожидающая финансовая операция');
+  }
+  const stop = bundle.conflicts?.find(value =>
+    value?.kind === 'finance_sync_hold' && value.mutationId === item.mutationId);
+  if (stop) {
+    if (stop.scope !== scope || stop.profileId !== identity.profileId ||
+        !['CONFLICT_HOLD','SNAPSHOT_REQUIRED_HOLD'].includes(stop.decision)) {
+      hold('Повреждена финансовая остановка');
+    }
+    return Object.freeze({
+      status: stop.decision, sentByThisCall: false,
+      bundleEpoch: expectedEpoch, queuePreserved: true,
+      serverCommitNotYetReconciled: true,
+    });
   }
   // A committed operation may be replayed safely even if the server has
   // since advanced; do not rewrite its persisted ETag/baseRevision.
@@ -206,8 +229,15 @@ async function dispatchWithoutNetworkLease({
     return control(session.lifecycleSignal.aborted ? 'AUTH_HOLD' : 'RECOVERY_HOLD');
   }
   if (deltaResponse.status !== 200) {
-    return control(deltaResponse.status === 410
-      ? 'SNAPSHOT_REQUIRED_HOLD' : 'RECOVERY_HOLD');
+    if (deltaResponse.status === 410) {
+      const stopped = await persistEncryptedFinanceHoldCandidate({
+        scope, session, identity, expectedEpoch,
+        mutationId: item.mutationId, httpStatus: 410,
+        decision: 'SNAPSHOT_REQUIRED_HOLD', source: 'delta',
+      });
+      return control(stopped.status, null, stopped.bundleEpoch);
+    }
+    return control('RECOVERY_HOLD');
   }
   let deltaPage;
   try { deltaPage = await jsonResponse(deltaResponse); }
