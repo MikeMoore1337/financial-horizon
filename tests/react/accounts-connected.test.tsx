@@ -282,6 +282,37 @@ describe('#33 candidate v2 boundary is never treated as an approved production A
   });
 });
 
+describe('#33 bounded authenticated response parsing', () => {
+  it('aborts a deceptive, oversized server stream before buffering or displaying balances', async () => {
+    let chunksSent = 0;
+    let cancelled = false;
+    const untrustedBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        chunksSent++;
+        controller.enqueue(new Uint8Array(510_000));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const untrusted = new Response(untrustedBody, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': '1',
+        etag: '"fh.1.1.example"',
+      },
+    });
+    const fetcher = sequence(reply({ ok: true, profile_id: PROFILE }), untrusted);
+    const gateway = new AccountsFinanceGateway(fetcher, 'https://fh.example');
+    await expect(gateway.open(ACTOR)).rejects.toMatchObject({ kind: 'error' });
+    expect(gateway.writeBlocked).toBe(true);
+    expect(cancelled).toBe(true);
+    expect(chunksSent).toBeLessThan(8);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('#33 authoritative refresh concurrency fences', () => {
   it('rejects the older of two GET responses instead of rolling balances backwards', async () => {
     let delayed: ((reply: Response) => void) | undefined;
