@@ -1,0 +1,91 @@
+# Independent PostgreSQL cluster. Do not join any other project's network/volume.
+name: fh-finance
+services:
+  db:
+    image: postgres:17@sha256:5b96f1a16bd9768b060dd2ffe55cb6225c4d9ef4d214a8b21eb08134869a97e4
+    container_name: fh-finance-postgres
+    # Never let Docker daemon reboot bypass the host LUKS2 storage-preflight.
+    # The reviewed deployment/start wrapper is the only supported startup path.
+    # A missing encrypted mount must leave the DB OFF, not reinitialize plaintext.
+    restart: "no"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/admin_password
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --data-checksums"
+      FH_FINANCE_MIGRATION_PASSWORD_FILE: /run/secrets/migrator_password
+      FH_FINANCE_RUNTIME_PASSWORD_FILE: /run/secrets/runtime_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command:
+      - postgres
+      - -c
+      - max_connections=30
+      - -c
+      - shared_buffers=96MB
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - log_connections=off
+      - -c
+      - log_disconnections=off
+      - -c
+      - log_statement=none
+      - -c
+      - log_min_duration_statement=-1
+    volumes:
+      # A bind mount is mandatory. Deploy preflight verifies its backing block
+      # device is a dedicated unlocked LUKS2 mapper, never plain host ext4.
+      - type: bind
+        source: ${FH_FINANCE_DATA_DIR:?FH_FINANCE_DATA_DIR must be set to a mounted encrypted volume}
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
+      - ./init/10-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
+    secrets: [admin_password, migrator_password, runtime_password]
+    networks: [finance_private]
+    # No ports and an internal network: neither VPS public port nor adjacent apps.
+    mem_limit: 384m
+    cpus: 0.75
+    pids_limit: 128
+    shm_size: 64mb
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "psql -U postgres -d postgres -Atqc \"SELECT 1 FROM pg_database WHERE datname='fh_finance'\" | grep -qx 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    logging:
+      driver: json-file
+      options: {max-size: "2m", max-file: "3"}
+  migrator:
+    profiles: [ops]
+    build:
+      context: ../..
+      dockerfile: backend/finance_db/Dockerfile
+    image: fh-finance-migrator:issue66
+    depends_on:
+      db: {condition: service_healthy}
+    environment:
+      FH_FINANCE_MIGRATION_URL: postgresql+psycopg://fh_finance_migrator@db:5432/fh_finance
+      FH_FINANCE_PASSWORD_FILE: /run/secrets/migrator_password
+    entrypoint: ["python", "/srv/financial-horizon/backend/finance_db/migrate.py"]
+    secrets: [migrator_password]
+    networks: [finance_private]
+    mem_limit: 192m
+    cpus: 0.5
+    pids_limit: 64
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=8m"]
+networks:
+  finance_private:
+    internal: true
+secrets:
+  admin_password:
+    file: ${FH_FINANCE_SECRETS_DIR:-/etc/financial-horizon/finance/secrets}/admin_password
+  migrator_password:
+    file: ${FH_FINANCE_SECRETS_DIR:-/etc/financial-horizon/finance/secrets}/migrator_password
+  runtime_password:
+    file: ${FH_FINANCE_SECRETS_DIR:-/etc/financial-horizon/finance/secrets}/runtime_password
