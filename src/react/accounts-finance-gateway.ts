@@ -51,7 +51,10 @@ export class AccountsFinanceGateway {
     origin: string = window.location.origin,
     makeId: () => string = () => crypto.randomUUID(),
   ) {
-    this.transport = transport;
+    // A native Window.fetch is a WebIDL method and can reject a foreign
+    // receiver when invoked as this.transport(...). Preserve the Window
+    // receiver for both real browsers and injected E2E/QA transports.
+    this.transport = transport.bind(window);
     this.origin = origin;
     this.makeId = makeId;
     const source = new URL(origin);
