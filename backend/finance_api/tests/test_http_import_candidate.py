@@ -6,6 +6,7 @@ upload, no financial identifier or value logged to external artifacts.
 from __future__ import annotations
 
 from hashlib import sha256
+import os
 import json
 from uuid import uuid4
 
@@ -16,7 +17,13 @@ from sqlalchemy import text
 from backend.fh_email_auth.app import create_app
 from backend.fh_email_auth.config import Settings
 from backend.finance_db.db import finance_transaction
-from backend.finance_api.tests.test_http import env, ORIGIN, NAMESPACE, COOKIE
+from backend.finance_api.tests.test_http import engine, env, ORIGIN, NAMESPACE, COOKIE
+
+
+pytestmark = pytest.mark.skipif(
+    os.getenv('FH_FINANCE_CI_ALLOW_BOOTSTRAP') != 'yes',
+    reason='Requires dedicated disposable PostgreSQL and real FH SQLite AuthStore',
+)
 
 
 @pytest.fixture
