@@ -64,6 +64,7 @@ def create_app(
     finance_engine=None,
     finance_profile_namespace=None,
     enable_account_v2_candidate: bool=False,
+    enable_import_candidate: bool=False,
 ) -> FastAPI:
     config=config or Settings.from_env()
     app=FastAPI(title="Financial Horizon Email Auth", docs_url=None, redoc_url=None,
@@ -365,6 +366,7 @@ def create_app(
             secure_cookie=not config.test_mode,
             rate_limiter=lambda request, action: throttle(request, action),
             enable_account_v2_candidate=enable_account_v2_candidate,
+            enable_import_candidate=enable_import_candidate,
         )
     return app
 
@@ -381,13 +383,16 @@ def _personal_finance_runtime_options() -> dict:
 
     mode = os.environ.get("FH_FINANCE_RUNTIME_MODE", "off")
     v2_mode = os.environ.get("FH_FINANCE_V2_RUNTIME", "off")
-    if mode not in ("off", "personal") or v2_mode not in ("off", "on"):
+    import_mode = os.environ.get("FH_FINANCE_IMPORT_RUNTIME", "off")
+    if mode not in ("off", "personal") or v2_mode not in ("off", "on") or import_mode not in ("off", "on"):
         raise ValueError("Invalid finance feature configuration")
     if mode == "off":
-        if v2_mode != "off":
-            raise ValueError("Finance v2 requires enabled private finance runtime")
+        if v2_mode != "off" or import_mode != "off":
+            raise ValueError("Finance v2/import requires enabled private finance runtime")
         return {}
 
+    if import_mode == "on" and v2_mode != "on":
+        raise ValueError("Import requires explicitly enabled private finance v2")
     raw_namespace = os.environ.get("FH_FINANCE_PROFILE_NAMESPACE", "")
     try:
         namespace = UUID(raw_namespace)
@@ -407,6 +412,7 @@ def _personal_finance_runtime_options() -> dict:
         "finance_engine": create_finance_engine(url),
         "finance_profile_namespace": namespace,
         "enable_account_v2_candidate": v2_mode == "on",
+        "enable_import_candidate": import_mode == "on",
     }
 
 
