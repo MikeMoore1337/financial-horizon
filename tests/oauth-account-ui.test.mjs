@@ -51,7 +51,7 @@ test('approved design C renders email before the initially hidden OAuth section'
  const section=html.indexOf('<section id="oauth-login"');
  assert.ok(form>=0 && section>form);
  assert.match(html,/<section id="oauth-login"[^>]*hidden>/);
- assert.match(html,/<script type="module" src="\.\/account-oauth\.js\?rev=oauth-auth-v1"><\/script>/);
+ assert.match(html,/<script type="module" src="\.\/account-oauth\.js\?rev=oauth-brand-originals-v1"><\/script>/);
  const css=readFileSync(new URL('../account.css',import.meta.url),'utf8');
  assert.match(css,/#oauth-login\[hidden\]\{display:none\}/);
  assert.match(css,/\.oauth-provider-grid\{display:grid;grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/);
@@ -69,16 +69,19 @@ test('only authorized, signed-out providers appear in fixed approved visual orde
  assert.deepEqual(anchors.map(a=>a.href),[
   './api/auth/oauth/google/start',
   './api/auth/oauth/yandex/start',
-  './api/auth/oauth/vk/start'
+  './api/auth/oauth/vk/start',
+  './api/auth/oauth/telegram/start'
  ]);
  assert.deepEqual(anchors.map(a=>a.children[1].textContent),[
-  'Войти через Google','Войти через Яндекс ID','Войти через VK ID'
+  'Войти через Google','Войти через Яндекс ID',
+  'Войти через VK ID','Войти через Telegram'
  ]);
  assert.deepEqual(anchors.map(a=>a.children[0].src),[
   './assets/providers/google.svg',
-  './assets/providers/yandex.svg','./assets/providers/vk.svg'
+  './assets/providers/yandex.webp','./assets/providers/vk.svg',
+  './assets/providers/telegram.svg'
  ]);
- assert.equal(anchors.some(a=>a.href.includes('/telegram/')),false);
+ assert.equal(anchors.some(a=>a.href.includes('/telegram/')),true);
  for(const a of anchors){
   assert.equal(a.tag,'a');
   assert.equal(a.children[0].alt,'');
@@ -89,6 +92,19 @@ test('only authorized, signed-out providers appear in fixed approved visual orde
   assert.equal(call.options.credentials,'same-origin');
   assert.equal(call.options.cache,'no-store');
  }
+});
+
+test('Telegram is hidden unless server explicitly advertises and enables it',async()=>{
+ const screen=fakeScreen();
+ const mock=responses({providers:['google','yandex','vk']});
+ assert.equal(await mountAccountOAuth(screen.root,{fetcher:mock.fetcher,documentRef:screen.documentRef}),true);
+ const links=screen.buttons.children[0].children.map(a=>a.href);
+ assert.deepEqual(links,[
+  './api/auth/oauth/google/start',
+  './api/auth/oauth/yandex/start',
+  './api/auth/oauth/vk/start'
+ ]);
+ assert.ok(!links.some(link=>link.includes('/telegram/')));
 });
 
 test('disabled OAuth cannot expose login links or call current-session API',async()=>{
