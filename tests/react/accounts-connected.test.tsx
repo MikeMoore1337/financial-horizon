@@ -88,6 +88,7 @@ describe('#33 verified account UI -> finance HTTP gateway, feature off', () => {
         redirect: 'error',
         cache: 'no-store',
         mode: 'same-origin',
+        referrerPolicy: 'same-origin',
       });
     }
   });
