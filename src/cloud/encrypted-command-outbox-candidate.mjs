@@ -512,3 +512,79 @@ export async function recordEncryptedFinanceRetryCandidate({
     serverBalanceChanged: false, commandUnchanged: true,
   });
 }
+
+
+/**
+ * Persist a server 409/412 or 410 reconciliation hold in the SAME protected
+ * account bundle. Never discard the pending operation, change confirmed
+ * balances, or silently rebase its immutable original If-Match/UUID.
+ * Explicit UI conflict resolution is a separate, not-yet-enabled workflow.
+ */
+export async function persistEncryptedFinanceHoldCandidate({
+  scope, session, identity, expectedEpoch, mutationId,
+  httpStatus, decision, source,
+}) {
+  active(scope, session, identity);
+  if (!integer(expectedEpoch) || !UUID.test(mutationId) ||
+      ![409, 412, 410].includes(httpStatus) ||
+      !['CONFLICT_HOLD', 'SNAPSHOT_REQUIRED_HOLD'].includes(decision) ||
+      (decision === 'CONFLICT_HOLD' && ![409, 412].includes(httpStatus)) ||
+      (decision === 'SNAPSHOT_REQUIRED_HOLD' && httpStatus !== 410) ||
+      !['command', 'delta'].includes(source)) {
+    hold('Некорректная причина остановки синхронизации');
+  }
+  const current = await readAtomicEncryptedCandidate(scope, session);
+  active(scope, session, identity);
+  if (!current || current.epoch !== expectedEpoch ||
+      current.schemaVersion !== 2 || current.snapshot?.version !== 2 ||
+      !Array.isArray(current.outbox) || !Array.isArray(current.conflicts)) {
+    hold('Зашифрованная очередь изменилась');
+  }
+  const cloud = current.snapshot.cloudFinance;
+  if (!plain(cloud) || cloud.scope !== scope ||
+      cloud.profileId !== identity.profileId ||
+      cloud.epoch !== identity.epoch ||
+      !integer(cloud.revision)) {
+    hold('Подтверждённый финансовый профиль изменился');
+  }
+  existingQueue(current.outbox, scope, identity);
+  const head = current.outbox[0];
+  if (!head || head.mutationId !== mutationId ||
+      head.command.client_mutation_id !== mutationId) {
+    hold('Остановлена неизвестная финансовая команда');
+  }
+  const already = current.conflicts.find(item =>
+    plain(item) && item.kind === 'finance_sync_hold' &&
+    item.mutationId === mutationId
+  );
+  if (already) {
+    if (already.scope !== scope || already.profileId !== identity.profileId ||
+        !['CONFLICT_HOLD', 'SNAPSHOT_REQUIRED_HOLD'].includes(already.decision)) {
+      hold('Повреждена ранее сохранённая остановка');
+    }
+    return Object.freeze({
+      status: already.decision, bundleEpoch: expectedEpoch,
+      queuePreserved: true, previouslyRecorded: true,
+    });
+  }
+  if (current.conflicts.length >= 1000) {
+    hold('Заполнен журнал конфликтов финансов');
+  }
+  const entry = {
+    kind: 'finance_sync_hold', scope, profileId: identity.profileId,
+    mutationId, httpStatus, decision, source,
+    baseRevision: head.command.base_revision,
+  };
+  const nextEpoch = await compareAndSwapAtomicEncryptedCandidate(
+    scope, session, expectedEpoch, 2, {
+      snapshot: current.snapshot,
+      outbox: current.outbox,
+      conflicts: [...current.conflicts, entry],
+    },
+  );
+  active(scope, session, identity);
+  return Object.freeze({
+    status: decision, bundleEpoch: nextEpoch,
+    queuePreserved: true, previouslyRecorded: false,
+  });
+}
