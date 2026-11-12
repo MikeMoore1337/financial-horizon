@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {createSampleState} from '../finance.js';
 import {encryptBackup} from '../backup.js';
 import {verifyLiveLegacyBackup} from '../src/security/live-legacy-preflight.ts';
+import {planLiveLegacyImportPreviewCandidate} from '../src/cloud/live-legacy-import-preview-candidate.mjs';
 
 const accountA = 'a'.repeat(32);
 const accountB = 'b'.repeat(32);
@@ -56,6 +57,12 @@ function mount(rows, options={}) {
     assert.equal(version,undefined,'never trigger DB version upgrade');
     if (openCount===2 && typeof options.beforeSecondRead==='function') {
       options.beforeSecondRead(values);
+    }
+    if (openCount===3 && typeof options.beforeThirdRead==='function') {
+      options.beforeThirdRead(values);
+    }
+    if (openCount===4 && typeof options.beforeFourthRead==='function') {
+      options.beforeFourthRead(values);
     }
     const req={onsuccess:null,onerror:null,onupgradeneeded:null,onblocked:null,result:db,error:null,transaction:null};
     queueMicrotask(()=>req.onsuccess?.());
@@ -201,4 +208,87 @@ test('offline verification needs no network services',async()=>{
   globalThis.fetch=async()=>{throw Error('No network available')};
   try{assert.equal((await verify(guest(),backupText)).snapshot.version,2)}
   finally{globalThis.fetch=original}
+});
+
+
+const livePreviewTarget = (fields={}) => ({
+  accountScope: 'account:' + accountA,
+  profileId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  serverRevision: 0, hasRemoteRecords: false, ...fields,
+});
+const livePreviewConsent = (guestTransfer=false) => ({
+  ...consent,
+  externalEncryptedBackupVerified: true,
+  confirmedTargetAccount: true,
+  previewRequested: true,
+  explicitGuestTransfer: guestTransfer,
+});
+const previewFromBrowser = (selection, backupText, extra={}) =>
+  planLiveLegacyImportPreviewCandidate({
+    selection, backupText, backupPassword,
+    target: livePreviewTarget(), consent: livePreviewConsent(selection.kind==='guest'),
+    signal: new AbortController().signal, ...extra,
+  });
+
+test('#69 real IndexedDB read-only backup check is repeated after import hashing', async()=>{
+  const state=legacy(),old=clone(state);
+  const encrypted=await encryptBackup(state,backupPassword);
+  const db=mount({state});
+  const previousFetch=globalThis.fetch;
+  let calls=0;
+  globalThis.fetch=()=>{calls++;throw Error('Import preview must never send financial data')};
+  try{
+    const result=await previewFromBrowser(guest(),encrypted);
+    assert.equal(result.status,'PREVIEW_ONLY');
+    assert.equal(result.sourceScope,'guest:guest-qa-local');
+    assert.equal(result.targetScope,'account:'+accountA);
+    assert.equal(result.recordCount,state.entries.length+state.loans.length);
+    assert.equal(result.sendAllowed,false);
+    assert.deepEqual(result.plannedLedgerPostings,[]);
+    assert.equal(db.openCount,4, 'two full read-only encrypted-backup comparisons');
+    assert.equal(db.writeCount,0);
+    assert.equal(calls,0);
+    assert.deepEqual(db.values.get('state'),old);
+  }finally{globalThis.fetch=previousFetch}
+});
+
+test('#69 revalidation catches changed legacy amounts between preview and final read',async()=>{
+  const state=legacy(),backup=await encryptBackup(state,backupPassword);
+  const db=mount({state},{beforeFourthRead(values){
+    const edited=clone(values.get('state'));
+    edited.entries[0].amountCents+=123;
+    values.set('state',edited);
+  }});
+  await assert.rejects(()=>previewFromBrowser(guest(),backup),/не совпадает|изменились/);
+  assert.equal(db.openCount,4);
+  assert.equal(db.writeCount,0);
+});
+
+test('#69 revalidation rejects guest-claim source switch with identical money',async()=>{
+  const state=legacy(),backup=await encryptBackup(state,backupPassword);
+  // Change the claim BETWEEN the first completed full backup comparison
+  // and the second one. Each individual preflight sees a stable snapshot:
+  // only the wrapper's cross-check can catch this scope-switch.
+  const db=mount({state,'guest-state-v2':state},{beforeThirdRead(values){
+    values.set('legacy-account-claim-v2',accountA);
+  }});
+  await assert.rejects(()=>previewFromBrowser(guest(),backup),/IMPORT_HOLD/);
+  assert.equal(db.openCount,4);
+  assert.equal(db.writeCount,0);
+});
+
+test('#69 account selection needs exact owner and all import consents',async()=>{
+  const state=legacy(),backup=await encryptBackup(state,backupPassword);
+  const db=mount({['account-state-v2:'+accountA]:state});
+  const result=await previewFromBrowser(account(accountA),backup);
+  assert.equal(result.sourceScope,'account:'+accountA);
+  assert.equal(result.targetScope,'account:'+accountA);
+  assert.equal(result.sendAllowed,false);
+  await assert.rejects(()=>previewFromBrowser(account(accountA),backup,{
+    target:livePreviewTarget({accountScope:'account:'+accountB}),
+  }),/IMPORT_HOLD/);
+  await assert.rejects(()=>previewFromBrowser(account(accountA),backup,{
+    consent: {...livePreviewConsent(), previewRequested:false},
+  }),/IMPORT_HOLD/);
+  assert.equal(db.writeCount,0);
 });
