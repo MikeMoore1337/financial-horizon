@@ -10,37 +10,55 @@ const MUTATION = '00000000-0000-4000-8000-0000000000ae';
 
 function state(revision = 1, transfer = false) {
   return {
-    schema_version: 1, profile_id: PROFILE, currency: 'RUB', revision,
+    schema_version: 1,
+    profile_id: PROFILE,
+    currency: 'RUB',
+    revision,
     entities: [
       ...[
         { id: A, name: 'Основной', opening: 400000, delta: transfer ? -100000 : 0 },
         { id: B, name: 'Сбережения', opening: 200000, delta: transfer ? 100000 : 0 },
-      ].map(account => ({
-        id: account.id, kind: 'account', entity_revision: transfer ? 2 : 1,
+      ].map((account) => ({
+        id: account.id,
+        kind: 'account',
+        entity_revision: transfer ? 2 : 1,
         data: {
-          name: account.name, type: 'bank', currency: 'RUB',
-          opening_minor: account.opening, balance_minor: account.opening + account.delta,
-          reserved_minor: 0, available_minor: account.opening + account.delta,
+          name: account.name,
+          type: 'bank',
+          currency: 'RUB',
+          opening_minor: account.opening,
+          balance_minor: account.opening + account.delta,
+          reserved_minor: 0,
+          available_minor: account.opening + account.delta,
           archived_at: null,
         },
       })),
-      ...(transfer ? [{
-        id: TX, kind: 'transaction', entity_revision: 1,
-        data: {
-          kind: 'transfer', occurred_on: '2026-11-12', note: null,
-          reversed_transaction_id: null,
-          postings: [
-            { account_id: A, signed_minor: -100000 },
-            { account_id: B, signed_minor: 100000 },
-          ],
-        },
-      }] : []),
+      ...(transfer
+        ? [
+            {
+              id: TX,
+              kind: 'transaction',
+              entity_revision: 1,
+              data: {
+                kind: 'transfer',
+                occurred_on: '2026-11-12',
+                note: null,
+                reversed_transaction_id: null,
+                postings: [
+                  { account_id: A, signed_minor: -100000 },
+                  { account_id: B, signed_minor: 100000 },
+                ],
+              },
+            },
+          ]
+        : []),
     ],
   };
 }
 function reply(body: unknown, status = 200, etag = '"fh.1.1.example"') {
   return new Response(JSON.stringify(body), {
-    status, headers: { 'content-type': 'application/json', etag },
+    status,
+    headers: { 'content-type': 'application/json', etag },
   });
 }
 function sequence(...responses: Array<Response | Error>) {
@@ -65,69 +83,98 @@ describe('#33 verified account UI -> finance HTTP gateway, feature off', () => {
     expect(fetcher.mock.calls[0]![0]).toContain('/api/auth/email/finance/session');
     expect(fetcher.mock.calls[1]![0]).toContain('/api/finance/v1/state?limit_entities=5000');
     for (const call of fetcher.mock.calls) {
-      expect(call[1]).toMatchObject({ credentials: 'same-origin', redirect: 'error',
-        cache: 'no-store', mode: 'same-origin' });
+      expect(call[1]).toMatchObject({
+        credentials: 'same-origin',
+        redirect: 'error',
+        cache: 'no-store',
+        mode: 'same-origin',
+      });
     }
   });
 
   it('encodes a real v1 1000 RUB transfer, reloads committed balances and forbids optimistic edits', async () => {
     const ack = {
-      schema_version: 1, client_mutation_id: MUTATION, revision: 2,
-      replayed: false, changes: [{ revision: 2, ordinal: 0 }],
+      schema_version: 1,
+      client_mutation_id: MUTATION,
+      revision: 2,
+      replayed: false,
+      changes: [{ revision: 2, ordinal: 0 }],
     };
     const fetcher = sequence(
-      reply({ ok: true, profile_id: PROFILE }), reply(state()),
+      reply({ ok: true, profile_id: PROFILE }),
+      reply(state()),
       reply(ack, 201, '"fh.1.2.example"'),
       reply(state(2, true), 200, '"fh.1.2.example"'),
     );
     const gateway = new AccountsFinanceGateway(fetcher, 'https://fh.example', () => MUTATION);
     const old = await gateway.open(ACTOR);
     const updated = await gateway.transfer({
-      fromAccountId: A, toAccountId: B, amountMinor: 100000,
-      occurredOn: '2026-11-12', baseRevision: 1,
+      fromAccountId: A,
+      toAccountId: B,
+      amountMinor: 100000,
+      occurredOn: '2026-11-12',
+      baseRevision: 1,
       expectedEntityRevisions: { [A]: 1, [B]: 1 },
     });
     expect(old.ledger.revision).toBe(1);
     expect(updated.ledger.revision).toBe(2);
     expect(updated.totalMinor).toBe(old.totalMinor);
-    expect(updated.ledger.postings.map(p => p.signedMinor)).toEqual([-100000, 100000]);
+    expect(updated.ledger.postings.map((p) => p.signedMinor)).toEqual([-100000, 100000]);
     expect(gateway.writeBlocked).toBe(false);
     expect(fetcher.mock.calls[2]![0]).toContain('/api/finance/v1/commands');
     const options = fetcher.mock.calls[2]![1] as RequestInit;
-    expect(options.headers).toMatchObject({ 'If-Match': '"fh.1.1.example"',
-      'Idempotency-Key': MUTATION });
+    expect(options.headers).toMatchObject({
+      'If-Match': '"fh.1.1.example"',
+      'Idempotency-Key': MUTATION,
+    });
     const body = JSON.parse(String(options.body));
-    expect(body).toMatchObject({ schema_version: 1, action: 'account.transfer',
-      client_mutation_id: MUTATION, base_revision: 1,
+    expect(body).toMatchObject({
+      schema_version: 1,
+      action: 'account.transfer',
+      client_mutation_id: MUTATION,
+      base_revision: 1,
       expected_entity_revisions: { [A]: 1, [B]: 1 },
-      payload: { amount_minor: 100000, from_account_id: A, to_account_id: B } });
+      payload: { amount_minor: 100000, from_account_id: A, to_account_id: B },
+    });
     expect(body.profile_id).toBeUndefined();
     expect(body.actor_user_id).toBeUndefined();
   });
 
   it('refuses a partial page or a cross-profile snapshot rather than showing a fake balance', async () => {
-    const partial = sequence(reply({ ok: true, profile_id: PROFILE }),
-      reply({ ...state(), next_cursor: 'incomplete' }, 206));
-    await expect(new AccountsFinanceGateway(partial, 'https://fh.example').open(ACTOR))
-      .rejects.toMatchObject({ kind: 'error' });
-    const foreign = sequence(reply({ ok: true, profile_id: PROFILE }),
-      reply({ ...state(), profile_id: B }));
-    await expect(new AccountsFinanceGateway(foreign, 'https://fh.example').open(ACTOR))
-      .rejects.toMatchObject({ kind: 'error' });
+    const partial = sequence(
+      reply({ ok: true, profile_id: PROFILE }),
+      reply({ ...state(), next_cursor: 'incomplete' }, 206),
+    );
+    await expect(
+      new AccountsFinanceGateway(partial, 'https://fh.example').open(ACTOR),
+    ).rejects.toMatchObject({ kind: 'error' });
+    const foreign = sequence(
+      reply({ ok: true, profile_id: PROFILE }),
+      reply({ ...state(), profile_id: B }),
+    );
+    await expect(
+      new AccountsFinanceGateway(foreign, 'https://fh.example').open(ACTOR),
+    ).rejects.toMatchObject({ kind: 'error' });
   });
 
   it('locks further mutations after an ambiguous timeout, even after reading current state', async () => {
     const fetcher = sequence(
-      reply({ ok: true, profile_id: PROFILE }), reply(state()),
-      new Error('network disappeared after request body'), reply(state()),
+      reply({ ok: true, profile_id: PROFILE }),
+      reply(state()),
+      new Error('network disappeared after request body'),
+      reply(state()),
     );
     const gateway = new AccountsFinanceGateway(fetcher, 'https://fh.example', () => MUTATION);
     await gateway.open(ACTOR);
-    const transfer = () => gateway.transfer({
-      fromAccountId: A, toAccountId: B, amountMinor: 100000,
-      occurredOn: '2026-11-12', baseRevision: 1,
-      expectedEntityRevisions: { [A]: 1, [B]: 1 },
-    });
+    const transfer = () =>
+      gateway.transfer({
+        fromAccountId: A,
+        toAccountId: B,
+        amountMinor: 100000,
+        occurredOn: '2026-11-12',
+        baseRevision: 1,
+        expectedEntityRevisions: { [A]: 1, [B]: 1 },
+      });
     await expect(transfer()).rejects.toMatchObject({ kind: 'offline' });
     await gateway.refresh(ACTOR);
     expect(gateway.writeBlocked).toBe(true);
@@ -137,11 +184,13 @@ describe('#33 verified account UI -> finance HTTP gateway, feature off', () => {
 
   it('refuses auth loss and cannot bootstrap with arbitrary client actor identity', async () => {
     const denied = sequence(reply({ code: 'unauthenticated' }, 401));
-    await expect(new AccountsFinanceGateway(denied, 'https://fh.example').open(ACTOR))
-      .rejects.toMatchObject({ kind: 'locked' });
+    await expect(
+      new AccountsFinanceGateway(denied, 'https://fh.example').open(ACTOR),
+    ).rejects.toMatchObject({ kind: 'locked' });
     const untouched = sequence();
-    await expect(new AccountsFinanceGateway(untouched, 'https://fh.example').open('arbitrary'))
-      .rejects.toMatchObject({ kind: 'locked' });
+    await expect(
+      new AccountsFinanceGateway(untouched, 'https://fh.example').open('arbitrary'),
+    ).rejects.toMatchObject({ kind: 'locked' });
     expect(untouched).not.toHaveBeenCalled();
   });
 });
