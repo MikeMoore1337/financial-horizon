@@ -43,7 +43,10 @@ export function createScreenRoot(
               ) : screen.view === 'accounts' ? (
                 <Accounts key={screen.props.activeProfileId ?? 'locked'} {...screen.props} />
               ) : screen.view === 'accounts-connected' ? (
-                <ConnectedAccounts key={screen.props.verifiedActorUserId ?? 'locked'} {...screen.props} />
+                <ConnectedAccounts
+                  key={screen.props.verifiedActorUserId ?? 'locked'}
+                  {...screen.props}
+                />
               ) : (
                 <Settings {...screen.props} />
               )}
