@@ -20,8 +20,10 @@ const MAX_RESPONSE_BYTES = 2_000_000;
 
 type Failure = 'locked' | 'conflict' | 'offline' | 'error';
 export class FinanceBridgeError extends Error {
-  constructor(readonly kind: Failure) {
+  readonly kind: Failure;
+  constructor(kind: Failure) {
     super('Финансовая операция не подтверждена');
+    this.kind = kind;
     this.name = 'FinanceBridgeError';
   }
 }
@@ -39,11 +41,18 @@ export class AccountsFinanceGateway {
   private writing = false;
   private uncertain = false;
 
+  private readonly transport: typeof fetch;
+  private readonly origin: string;
+  private readonly makeId: () => string;
+
   constructor(
-    private readonly transport: typeof fetch = fetch,
-    private readonly origin: string = window.location.origin,
-    private readonly makeId: () => string = () => crypto.randomUUID(),
+    transport: typeof fetch = fetch,
+    origin: string = window.location.origin,
+    makeId: () => string = () => crypto.randomUUID(),
   ) {
+    this.transport = transport;
+    this.origin = origin;
+    this.makeId = makeId;
     const source = new URL(origin);
     if (source.origin !== origin || (source.protocol !== 'https:' &&
       !['localhost', '127.0.0.1'].includes(source.hostname))) {
