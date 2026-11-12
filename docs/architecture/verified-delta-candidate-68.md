@@ -107,3 +107,29 @@ A real integration must additionally implement:
 Until then the full sync candidate remains unmounted in the PWA.
 All tests use only synthetic data; no real financial information is stored
 in GitHub or CI. The unapproved public v2 route is OFF by default.
+
+
+## Explicit manual conflict choice (candidate)
+
+The inactive `recordManualFinanceConflictChoiceCandidate` API now records
+one explicit account-scoped choice inside the **same encrypted native IndexedDB
+CAS** that contains the original pending mutation and server snapshot.
+It only accepts `KEEP_ORIGINAL_FOR_REVIEW` or
+`PREFER_SERVER_FOR_REVIEW` with explicit caller consent and the exact cached
+server revision. A conflicting replay, obsolete CAS generation, mismatched FH
+session, invalid original fingerprint, or interrupted encrypted write fails
+closed. A duplicate identical choice returns an idempotent acknowledgement.
+
+**Recording a preference does not resolve a conflict.** The original
+`finance_sync_hold` remains in place, the full original command, ETag,
+fingerprint and UUID remain queued unchanged, and a restart cannot retry it
+automatically. The same safeguard applies to a 410 received *after* a
+possibly committed POST: "prefer server" must not erase a financial command
+until an independently authenticated receipt and contiguous server deltas
+prove its actual result. No funds move; no network request occurs.
+
+The active FH-session host, owner-facing comparison/approval interface,
+independent fresh-server snapshot and receipt proof, explicit final
+resolution, real two-device tests and production approval remain **NOT
+IMPLEMENTED**. Do not display a staged choice as "resolved" or enable
+the inactive candidate in production.
