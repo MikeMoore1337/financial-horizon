@@ -86,6 +86,7 @@ def mount_finance_routes(
     auth_resolver: Callable[[str | None], dict | None],
     secure_cookie: bool, rate_limiter: Callable[[Request, str], None] | None = None,
     enable_account_v2_candidate: bool = False,
+    enable_import_candidate: bool = False,
 ) -> None:
     """Explicit application wiring only; create_app() default does not call it.
 
@@ -95,8 +96,10 @@ def mount_finance_routes(
     if (engine is None or engine.dialect.name != "postgresql"
         or not isinstance(namespace, UUID) or not public_origin):
         raise ValueError("Finance routes require validated PostgreSQL and server namespace")
-    if type(enable_account_v2_candidate) is not bool:
+    if type(enable_account_v2_candidate) is not bool or type(enable_import_candidate) is not bool:
         raise ValueError("Candidate route opt-in must be explicit boolean")
+    if enable_import_candidate and not enable_account_v2_candidate:
+        raise ValueError("Import requires approved private finance v2 runtime")
 
     # The existing FH auth app has its own HTTPException wire shape.
     # Only finance endpoints use code/message so #68 can decode 401/403/429/503
@@ -289,6 +292,115 @@ def mount_finance_routes(
             return _finance_error(FinanceCommandError(
                 "service_unavailable", "Операция не подтверждена сервером", 503
             ))
+
+    # Inactive default: owner-confirmed, source-preserving personal import.
+    # Actual authenticated FH session and idempotent SQL commit are mandatory.
+    if enable_import_candidate:
+        from backend.finance_api.import_http_candidate import (
+            parse_personal_import_envelope, require_manifest_if_match,
+        )
+        from .import_manifest_candidate import stage_import_manifest_candidate
+        from .import_commit_candidate import (
+            commit_verified_legacy_import_candidate,
+            restore_original_legacy_source_candidate,
+        )
+
+        async def _import_payload(request: Request, action: str):
+            _guard_origin(request, public_origin)
+            await run_in_threadpool(rate, request, "finance-write")
+            verified = await run_in_threadpool(scope, request)
+            try:
+                payload = await parse_personal_import_envelope(request, action=action)
+            except FinanceCommandError as error:
+                return verified, None, _finance_error(error)
+            return verified, payload, None
+
+        def _fresh_import_scope(request: Request, prior: VerifiedFinanceScope):
+            current = scope(request)
+            if current != prior:
+                raise HTTPException(status_code=401, detail="Сеанс изменился")
+            return current
+
+        def _import_metadata(data: dict, status: int) -> JSONResponse:
+            return JSONResponse(
+                data, status_code=status,
+                headers={"Cache-Control":"private, no-store", "Vary":"Cookie",
+                         "X-Content-Type-Options":"nosniff"},
+            )
+
+        @router.post("/import/manifest")
+        async def stage_import_http(request: Request):
+            prior, payload, error = await _import_payload(request, "manifest")
+            if error is not None:
+                return error
+            def operation():
+                current = _fresh_import_scope(request, prior)
+                require_manifest_if_match(request, scope=current, manifest=payload["manifest"])
+                return stage_import_manifest_candidate(
+                    engine, scope=current, manifest=payload["manifest"],
+                )
+            try:
+                data = await run_in_threadpool(operation)
+                return _import_metadata(data, 200 if data["replayed"] else 202)
+            except FinanceCommandError as exc:
+                return _finance_error(exc)
+            except SQLAlchemyError:
+                log.error("finance_import_stage_db_failed")
+                return _finance_error(FinanceCommandError(
+                    "service_unavailable", "Серверный импорт недоступен", 503,
+                ))
+
+        @router.post("/import/commit")
+        async def commit_import_http(request: Request):
+            prior, payload, error = await _import_payload(request, "commit")
+            if error is not None:
+                return error
+            def operation():
+                current = _fresh_import_scope(request, prior)
+                require_manifest_if_match(request, scope=current, manifest=payload["manifest"])
+                return commit_verified_legacy_import_candidate(
+                    engine, scope=current, manifest=payload["manifest"],
+                    source_canonical_json=payload["source_canonical_json"],
+                )
+            try:
+                data = await run_in_threadpool(operation)
+                return _import_metadata(data, 200 if data["replayed"] else 201)
+            except FinanceCommandError as exc:
+                return _finance_error(exc)
+            except SQLAlchemyError:
+                log.error("finance_import_commit_db_failed")
+                return _finance_error(FinanceCommandError(
+                    "service_unavailable", "Результат импорта не подтверждён", 503,
+                ))
+
+        @router.post("/import/restore")
+        async def restore_import_http(request: Request):
+            prior, payload, error = await _import_payload(request, "restore")
+            if error is not None:
+                return error
+            def operation():
+                current = _fresh_import_scope(request, prior)
+                return restore_original_legacy_source_candidate(
+                    engine, scope=current,
+                    batch_id=payload["batch_id"], source_sha256=payload["source_sha256"],
+                )
+            try:
+                original = await run_in_threadpool(operation)
+                # No IndexedDB write or automatic replacement. Only an explicit
+                # owner action returns the verified original source over HTTPS.
+                return Response(
+                    content=original, media_type="application/json",
+                    headers={"Cache-Control":"private, no-store", "Vary":"Cookie",
+                             "X-Content-Type-Options":"nosniff",
+                             "Content-Disposition":'attachment; filename="fh-original-import.json"'},
+                )
+            except FinanceCommandError as exc:
+                return _finance_error(exc)
+            except SQLAlchemyError:
+                log.error("finance_import_restore_db_failed")
+                return _finance_error(FinanceCommandError(
+                    "service_unavailable", "Исходная копия недоступна", 503,
+                ))
 
     app.include_router(router)
 
