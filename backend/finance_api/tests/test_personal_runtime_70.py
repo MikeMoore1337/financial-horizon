@@ -17,7 +17,7 @@ FAKE_POSTGRES = "postgresql+psycopg://fh_finance_runtime:synthetic@127.0.0.1:543
 
 def test_default_auth_service_has_no_finance_routes_or_postgres_dependency(monkeypatch):
     for name in ("FH_FINANCE_RUNTIME_MODE", "FH_FINANCE_V2_RUNTIME",
-                 "FH_FINANCE_PROFILE_NAMESPACE"):
+                 "FH_FINANCE_PROFILE_NAMESPACE", "FH_FINANCE_IMPORT_RUNTIME"):
         monkeypatch.delenv(name, raising=False)
     assert _personal_finance_runtime_options() == {}
 
@@ -31,6 +31,7 @@ def test_personal_finance_runtime_requires_explicit_stable_scoped_settings(monke
     try:
         assert options["finance_profile_namespace"] == UUID(NAMESPACE)
         assert options["enable_account_v2_candidate"] is True
+        assert options["enable_import_candidate"] is False
         assert options["finance_engine"].dialect.name == "postgresql"
         # SQLAlchemy engine construction is lazy; this test does not connect
         # or provision a database. DB+FH-session contract lives in #67 CI.
@@ -40,6 +41,7 @@ def test_personal_finance_runtime_requires_explicit_stable_scoped_settings(monke
     disabled = _personal_finance_runtime_options()
     try:
         assert disabled["enable_account_v2_candidate"] is False
+        assert disabled["enable_import_candidate"] is False
     finally:
         disabled["finance_engine"].dispose()
 
@@ -61,5 +63,30 @@ def test_personal_feature_never_falls_back_to_unsafe_configuration(
     monkeypatch.setenv("FH_FINANCE_V2_RUNTIME", v2)
     monkeypatch.setenv("FH_FINANCE_PROFILE_NAMESPACE", namespace)
     monkeypatch.setenv("FH_FINANCE_DATABASE_URL", url)
+    with pytest.raises(ValueError):
+        _personal_finance_runtime_options()
+
+
+def test_personal_import_requires_explicit_v2_and_refuses_default(monkeypatch):
+    monkeypatch.setenv("FH_FINANCE_RUNTIME_MODE", "personal")
+    monkeypatch.setenv("FH_FINANCE_V2_RUNTIME", "on")
+    monkeypatch.setenv("FH_FINANCE_IMPORT_RUNTIME", "on")
+    monkeypatch.setenv("FH_FINANCE_PROFILE_NAMESPACE", NAMESPACE)
+    monkeypatch.setenv("FH_FINANCE_DATABASE_URL", FAKE_POSTGRES)
+    enabled = _personal_finance_runtime_options()
+    try:
+        assert enabled["enable_account_v2_candidate"] is True
+        assert enabled["enable_import_candidate"] is True
+    finally:
+        enabled["finance_engine"].dispose()
+    monkeypatch.setenv("FH_FINANCE_V2_RUNTIME", "off")
+    with pytest.raises(ValueError):
+        _personal_finance_runtime_options()
+    monkeypatch.setenv("FH_FINANCE_RUNTIME_MODE", "off")
+    monkeypatch.setenv("FH_FINANCE_V2_RUNTIME", "on")
+    with pytest.raises(ValueError):
+        _personal_finance_runtime_options()
+    monkeypatch.setenv("FH_FINANCE_RUNTIME_MODE", "personal")
+    monkeypatch.setenv("FH_FINANCE_IMPORT_RUNTIME", "invalid")
     with pytest.raises(ValueError):
         _personal_finance_runtime_options()
