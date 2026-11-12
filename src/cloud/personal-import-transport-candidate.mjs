@@ -107,9 +107,23 @@ export async function prepareLivePersonalImportCandidate({
   active(signal); safeOrigin(origin);
   if (!USER.test(verifiedActorUserId) ||
       explicitConsent !== true ||
-      typeof backupText !== 'string' || typeof backupPassword !== 'string' ||
+      typeof backupText !== 'string' || backupText.length < 100 ||
+      backupText.length > 8_000_000 || typeof backupPassword !== 'string' ||
       backupPassword.length < 12 || typeof fetchImpl !== 'function') {
     hold('Нужны подтверждённый FH-аккаунт и внешняя шифрованная копия');
+  }
+  // Reject obviously unprotected or malformed files BEFORE creating a
+  // server finance session. Actual AES-GCM authentication follows below.
+  let archive;
+  try { archive = JSON.parse(backupText); } catch {
+    hold('Выбран не зашифрованный файл Financial Horizon');
+  }
+  if (!archive || typeof archive !== 'object' || Array.isArray(archive) ||
+      archive.format !== 'financial-horizon-backup' || archive.version !== 1 ||
+      archive.kdf !== 'PBKDF2-SHA256' || archive.iterations !== 310000 ||
+      typeof archive.salt !== 'string' || typeof archive.iv !== 'string' ||
+      typeof archive.ciphertext !== 'string') {
+    hold('Выбран не зашифрованный файл Financial Horizon');
   }
   const bootstrap = await request(fetchImpl, origin, '/api/auth/email/finance/session',
     'POST', {}, signal);
