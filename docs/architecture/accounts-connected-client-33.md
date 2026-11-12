@@ -1,61 +1,59 @@
-# Financial Horizon #33 - connected accounts UI review candidate
+# Financial Horizon #33 - connected accounts in the existing PWA
 
-**Status: FEATURE OFF / NOT DEPLOYED / NOT ACCEPTED FOR PRODUCTION.**
+**Status: CODE CANDIDATE / DEFAULT OFF / NOT DEPLOYED TO PRODUCTION.**
 
-This isolated PR combines the owner-approved `Accounts` React screen (#120)
-with the #111 TypeScript-to-FastAPI/PostgreSQL snapshot adapter. The current
-public `app.js` and five-item navigation are not changed. Merely adding the
-`accounts-connected` screen variant does not make the UI accessible.
+The owner-approved React `Accounts` screen is linked to the existing PWA
+navigation without adding a sixth mobile dock item. When a reviewed production
+release explicitly sets `<meta name="fh-finance-accounts" content="enabled">`,
+an authenticated user sees a **Счета и кошельки** card in Settings, leading
+to the server-backed screen. The default `disabled` value hides it for
+guests, installed old builds and unaudited releases. The `data-view`
+handler also refuses manually forged navigation attempts while locked.
 
-## Exact browser-to-server path
+The PWA host supplies only the FH AuthStore verified user ID, never a
+client-chosen `profile_id`. The existing `AuthBoundary` verifies that
+identity matches the selected IndexedDB owner scope. The actual finance
+profile UUID is minted by the server at session bootstrap.
 
-1. A trusted FH authenticated host supplies its **verified** actor ID. Guest
-   mode does not provide a server identity. The browser POSTs to
-   `/api/auth/email/finance/session`, using same-origin cookies and requiring
-   a server-minted profile UUID. The host must not invent IDs.
-2. GET `/api/finance/v1/state?limit_entities=5000` must return HTTP 200,
-   a strong ETag and a complete matching profile. A 206/next_cursor page,
-   stale/foreign record, missing reserve or any accounting mismatch is
-   rejected instead of displaying an undercounted bank balance.
-3. `account.transfer` uses the existing **v1** request encoder and two
-   expected account revisions. The draft account CRUD actions use the
-   *unapproved, explicitly gated v2 candidate* from #100. No client user or
-   profile IDs are accepted in command bodies. The PostgreSQL server must
-   enforce authentication, RLS, idempotency, CAS and one SQL transaction.
-4. The client supplies one per-command UUID and the **original** server ETag.
-   It never performs optimistic balance changes. After HTTP 201 the client
-   requires a complete authoritative snapshot with the same committed revision
-   and ETag before reporting success.
-5. Network ambiguity, 401/403, 409/412, 206, unexpected receipt or a missing
-   v2 route blocks writes. A generic refresh does not resolve an ambiguous
-   debit; durable receipt reconciliation and reload protection belong to #68.
-6. There is no offline dispatch, auto-retry, IndexedDB mutation, legacy import,
-   automatic account migration or background syncing in this module.
+## Read and write contract
 
-## Important stack limitation
+1. POST `/api/auth/email/finance/session` with same-origin credentials
+   and the verified FH session. A missing or revoked session denies access.
+2. GET `/api/finance/v1/state?limit_entities=5000` must be an HTTP 200
+   *complete*, matching-profile response with a strong ETag. A partial 206,
+   invalid balance, stale account revision, illegal currency or foreign
+   record never becomes an apparently authoritative bank balance.
+3. Server-approved account creation/rename/archive uses the opt-in v2
+   `/api/finance/v2/commands` contract; internal transfers use approved
+   v1 commands. Every mutating request has one stable UUID, original
+   `If-Match`, required entity revisions and integer RUB minor units.
+   Client bodies cannot claim another user's identity.
+4. After a 201 the UI requires a matching authoritative GET and revision
+   before displaying success. A network timeout, server conflict or malformed
+   receipt locks writes; a generic refresh does not retry ambiguous money.
+   Cross-request GET ordering is fenced, and responses exceeding 2 MB are
+   stopped before full buffering.
+5. Leaving the screen, account switching or logout invalidates pending
+   UI requests and clears the retained server snapshot. No IndexedDB
+   import, cross-device sync, blind auto-retry or local ledger replacement
+   is triggered by opening this view.
 
-The parent #111 branch is based on an **older** #100 server stack. The
-account CRUD v2 HTTP proposal was added to #100 subsequently and is **not**
-implicitly published or installed by importing this React component. The v2
-client-facing contract is a candidate, not an approved public API; the
-integration must be reconciled with the final reviewed #100 branch and its
-versioned contract before activation. Mocked fetch tests do not establish that
-v2 is running in production.
+## Owner-approved simplified release criteria
 
-## Acceptance and release gates
+The finance API v2 owner approval for PR #100 is recorded. PostgreSQL
+source and its strict test suite are in main. Separate LUKS2, offsite VPS,
+continuous WAL/PITR, and fixed RPO/RTO **are not required** by the owner
+for this personal Excel-replacement app.
 
-- [ ] #67 final reviewed/approved public v2 contract, linked payment void
-      and exact React-client parity on a current integrated stack.
-- [ ] #66 physically encrypted PostgreSQL with backed-up keys, isolated
-      secrets, offsite encrypted backup, WAL/PITR and independent restore.
-- [ ] #68 authenticated, encrypted persistent outbox/receipt reconciliation,
-      safe logout/reload/offline and cross-tab/profile behavior.
-- [ ] #69 explicit, previewed, backed-up v1/v2 data migration with rollback.
-- [ ] #51/#70 two real users, two devices and tabs, session revoke, negative
-      security tests, physical browser validation and human independent review.
-- [ ] Exact release SHA with CI, release verification and a demonstrated
-      production rollback from the authorized production execution host.
+The following are still mandatory before enabling the Settings entry:
+a running **private** finance PostgreSQL on the authorized production VPS,
+real encrypted backup and isolated restore on that runtime, the current
+FH-session API and v2 write route verified over HTTPS, consistent account
+balances and linked payment reversals, CI on exact deployed SHA, revoked
+session/foreign account negative tests, and a tested app rollback. Complete
+local encrypted source migration and two-device conflict resolution remain
+under #68/#69/#70; do not claim them from mocked React component tests.
 
-Until all gates are independently verified: **NO_MERGE / NO_DEPLOY /
-NO_PRODUCTION_ACCEPTANCE**. No real financial records or access tokens should
-be copied into issues or CI. 
+**A merge of this source while `disabled` is safe but does NOT satisfy
+production acceptance or close Issue #33.** Do not edit an installed PWA,
+force a feature flag on or publish real user finance values in CI/issues.
