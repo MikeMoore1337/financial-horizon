@@ -61,6 +61,8 @@ if grep -E 'psql.*-v[[:space:]]+(migration_password|runtime_password)' \
 fi
 echo "CI_NO_PSQL_PASSWORD_ARGV_PASS"
 docker compose -f deploy/postgres/compose.yml config --quiet
+# The private personal override is opt-in and exposes PostgreSQL only to 127.0.0.1.
+docker compose -f deploy/postgres/compose.yml -f deploy/postgres/personal-loopback.override.yml config --quiet
 docker compose -f deploy/postgres/compose.yml up -d --wait --wait-timeout 35 db
 # Actual container restart policy is part of the security boundary. A daemon
 # restart while LUKS2 is locked MUST leave PostgreSQL stopped, never let
