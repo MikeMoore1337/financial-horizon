@@ -18,6 +18,10 @@ test('release scope requires physical, independent and financial recovery gates'
   assert.equal(all.length, new Set(all).size);
   for (const gate of [
     'human_independent_review',
+    'accounts_real_fh_session_api_parity_33',
+    'api_v2_public_contract_reviewed_67',
+    'sync_explicit_conflict_resolution_68',
+    'import_server_atomic_commit_and_replay_69',
     'email_real_two_mailboxes_51',
     'postgres_luks2_encryption_66',
     'postgres_wal_pitr_rpo_66',
@@ -62,6 +66,28 @@ test('even all self-reported green evidence CANNOT establish real GO', () => {
   assert.equal(result.independentVerificationPerformed, false);
   assert.equal(result.deploymentAuthorized, false);
   assert.equal(result.publicCloudEnabled, false);
+});
+
+test('green generic checks cannot hide unverified public v2 and atomic import', () => {
+  const supplied = gates();
+  for (const name of [
+    'accounts_real_fh_session_api_parity_33',
+    'api_v2_public_contract_reviewed_67',
+    'sync_explicit_conflict_resolution_68',
+    'import_server_atomic_commit_and_replay_69',
+  ]) {
+    delete supplied[name];
+  }
+  const result = check(supplied);
+  assert.equal(result.status, 'NO_GO');
+  assert.equal(result.deploymentAuthorized, false);
+  assert.equal(result.publicCloudEnabled, false);
+  for (const required of [
+    'accounts_real_fh_session_api_parity_33',
+    'api_v2_public_contract_reviewed_67',
+    'sync_explicit_conflict_resolution_68',
+    'import_server_atomic_commit_and_replay_69',
+  ]) assert.ok(result.missing.includes(required), required);
 });
 
 test('invalid evidence and non-HTTPS links fail closed', () => {
