@@ -28,51 +28,67 @@ export function ConnectedAccounts({ verifiedActorUserId, onBack }: ConnectedAcco
     setBlocked(true);
     setStatus(verifiedActorUserId ? 'loading' : 'locked');
     if (verifiedActorUserId) {
-      void gateway.open(verifiedActorUserId, abort.signal).then(view => {
-        if (abort.signal.aborted) return;
-        setServerView(view);
-        setBlocked(false);
-        setStatus('ready');
-      }).catch(error => { if (!abort.signal.aborted) fail(error); });
+      void gateway
+        .open(verifiedActorUserId, abort.signal)
+        .then((view) => {
+          if (abort.signal.aborted) return;
+          setServerView(view);
+          setBlocked(false);
+          setStatus('ready');
+        })
+        .catch((error) => {
+          if (!abort.signal.aborted) fail(error);
+        });
     }
-    return () => { abort.abort(); gateway.invalidate(); };
+    return () => {
+      abort.abort();
+      gateway.invalidate();
+    };
   }, [gateway, verifiedActorUserId, fail]);
 
   const refresh = useCallback(() => {
     if (!verifiedActorUserId) return;
     setStatus('loading');
-    void gateway.refresh(verifiedActorUserId).then(view => {
-      setServerView(view);
-      // A refresh does NOT release a prior ambiguous write.
-      setBlocked(gateway.writeBlocked);
-      setStatus('ready');
-    }).catch(fail);
+    void gateway
+      .refresh(verifiedActorUserId)
+      .then((view) => {
+        setServerView(view);
+        // A refresh does NOT release a prior ambiguous write.
+        setBlocked(gateway.writeBlocked);
+        setStatus('ready');
+      })
+      .catch(fail);
   }, [gateway, verifiedActorUserId, fail]);
 
-  const commit = useCallback(async (run: () => Promise<AccountServerView>) => {
-    try {
-      const view = await run();
-      setServerView(view);
-      setBlocked(gateway.writeBlocked);
-      setStatus('ready');
-    } catch (error) {
-      fail(error);
-      throw error;
-    }
-  }, [gateway, fail]);
+  const commit = useCallback(
+    async (run: () => Promise<AccountServerView>) => {
+      try {
+        const view = await run();
+        setServerView(view);
+        setBlocked(gateway.writeBlocked);
+        setStatus('ready');
+      } catch (error) {
+        fail(error);
+        throw error;
+      }
+    },
+    [gateway, fail],
+  );
 
-  return <Accounts
-    snapshot={serverView?.ledger ?? null}
-    activeProfileId={gateway.profileId}
-    reservedMinorByAccount={serverView?.reservedMinorByAccount ?? null}
-    status={status}
-    writable={status === 'ready' && !blocked && !gateway.writeBlocked}
-    onBack={onBack}
-    onRefresh={refresh}
-    onCreate={input => commit(() => gateway.create(input))}
-    onUpdate={input => commit(() => gateway.update(input))}
-    onTransfer={input => commit(() => gateway.transfer(input))}
-    onArchive={input => commit(() => gateway.archive(input))}
-    onUnarchive={input => commit(() => gateway.archive(input, true))}
-  />;
+  return (
+    <Accounts
+      snapshot={serverView?.ledger ?? null}
+      activeProfileId={gateway.profileId}
+      reservedMinorByAccount={serverView?.reservedMinorByAccount ?? null}
+      status={status}
+      writable={status === 'ready' && !blocked && !gateway.writeBlocked}
+      onBack={onBack}
+      onRefresh={refresh}
+      onCreate={(input) => commit(() => gateway.create(input))}
+      onUpdate={(input) => commit(() => gateway.update(input))}
+      onTransfer={(input) => commit(() => gateway.transfer(input))}
+      onArchive={(input) => commit(() => gateway.archive(input))}
+      onUnarchive={(input) => commit(() => gateway.archive(input, true))}
+    />
+  );
 }
