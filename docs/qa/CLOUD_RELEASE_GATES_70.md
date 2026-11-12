@@ -31,6 +31,29 @@ receipt, independent reviewer approval or authority to change an installation.
    verified production receipt from a restricted *backend* executor. Existing
    static-asset SSH deploy cannot attest PostgreSQL release.
 
+## Explicit protocol and data-integrity subgates
+
+The required evidence inventory also denies release when any of these
+independent claims is missing, stale or unverified:
+
+- `accounts_real_fh_session_api_parity_33`: the approved Accounts React
+  screen is actually mounted with a revocable FH identity, and real v1/v2
+  HTTP/PostgreSQL commands match the currently published contract.
+- `api_v2_public_contract_reviewed_67`: exact versioned OpenAPI v2 plus
+  an independent human approval of all exposed routes and linked payment
+  cancellation invariants. Candidate DTOs and disposable CI alone are not
+  equivalent to public approval.
+- `sync_explicit_conflict_resolution_68`: a user-facing manual comparison
+  and safe resolution are exercised on real authenticated clients, not just
+  encrypted recording of a proposed preference.
+- `import_server_atomic_commit_and_replay_69`: accepted source data,
+  approved preview, one server-side SQL commit (facts, revisions, receipts),
+  restart/replay consistency, collision rejection and measured rollback.
+  A staged source manifest with no monetary writes does not satisfy it.
+
+These checks remain **NOT_VERIFIED**. The gate's output cannot become GO
+from self-reported links or simulated HTTP/DB receipts.
+
 ## Evidence recording
 
 The source-only inventory
