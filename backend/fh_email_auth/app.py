@@ -369,4 +369,45 @@ def create_app(
     return app
 
 
-app=create_app()
+def _personal_finance_runtime_options() -> dict:
+    """Explicit personal-only finance route opt-in; default startup unchanged.
+
+    This does not run migrations, unlock production secrets, enable public
+    registration or claim recovery checks. The production operator must
+    separately verify PostgreSQL, protected credentials and restore.
+    """
+    import os
+    from uuid import UUID
+
+    mode = os.environ.get("FH_FINANCE_RUNTIME_MODE", "off")
+    v2_mode = os.environ.get("FH_FINANCE_V2_RUNTIME", "off")
+    if mode not in ("off", "personal") or v2_mode not in ("off", "on"):
+        raise ValueError("Invalid finance feature configuration")
+    if mode == "off":
+        if v2_mode != "off":
+            raise ValueError("Finance v2 requires enabled private finance runtime")
+        return {}
+
+    raw_namespace = os.environ.get("FH_FINANCE_PROFILE_NAMESPACE", "")
+    try:
+        namespace = UUID(raw_namespace)
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError("Stable finance profile namespace is required") from None
+    if str(namespace) != raw_namespace or namespace.int == 0:
+        raise ValueError("Canonical non-zero finance namespace is required")
+    url = os.environ.get("FH_FINANCE_DATABASE_URL", "")
+    if not url.startswith("postgresql+psycopg://"):
+        raise ValueError("Private PostgreSQL runtime connection is required")
+
+    # Do not import the SQL runtime or require finance dependencies for the
+    # existing email/OAuth service unless this private release flag is set.
+    from backend.finance_db.db import create_finance_engine
+
+    return {
+        "finance_engine": create_finance_engine(url),
+        "finance_profile_namespace": namespace,
+        "enable_account_v2_candidate": v2_mode == "on",
+    }
+
+
+app=create_app(**_personal_finance_runtime_options())
