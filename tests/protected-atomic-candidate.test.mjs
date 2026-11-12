@@ -1239,6 +1239,18 @@ test('#68 failures, server conflicts and ambiguous POST response retain queued m
       assert.deepEqual(current.outbox[0].command, prior.outbox[0].command);
       assert.deepEqual(current.snapshot, prior.snapshot);
       assert.equal(result.bundleEpoch, current.epoch);
+    } else if (stage === 412 || stage === 410) {
+      assert.equal(current.epoch, prior.epoch + 1);
+      assert.deepEqual(current.snapshot, prior.snapshot);
+      assert.deepEqual(current.outbox, prior.outbox);
+      assert.equal(current.conflicts.length, prior.conflicts.length + 1);
+      const stop = current.conflicts.at(-1);
+      assert.equal(stop.kind, 'finance_sync_hold');
+      assert.equal(stop.mutationId, PENDING_ID);
+      assert.equal(stop.httpStatus, stage);
+      assert.equal(stop.source, 'command');
+      assert.equal(stop.decision, expected);
+      assert.equal(result.bundleEpoch, current.epoch);
     } else {
       assert.deepEqual(current, prior);
     }
@@ -1523,5 +1535,98 @@ test('#68 missing browser Web Locks refuses network rather than sending without 
   );
   assert.equal(networkCalls, 0);
   assert.equal((await readAtomicEncryptedCandidate(USER_A, session)).outbox.length, 1);
+  session.logout();
+});
+
+
+test('#68 persisted financial 409/412 holds survive browser restart and block automatic resends', async () => {
+  for (const status of [409, 412]) {
+    const {session, identity} = await pendingAccountCreate();
+    let requests = 0;
+    const first = await dispatchOneEncryptedFinanceCommandCandidate({
+      lockManager: TEST_LOCKS, scope: USER_A, session, identity,
+      origin: TEST_ORIGIN, expectedEpoch: 2,
+      explicitNetworkCandidateConsent: true,
+      fetchImpl: async () => {requests++; return mockFinanceJson({code:'stale_revision'},status);},
+    });
+    assert.equal(first.status, 'CONFLICT_HOLD');
+    assert.equal(requests, 1);
+    const current = await readAtomicEncryptedCandidate(USER_A, session);
+    assert.equal(current.epoch, 3);
+    assert.equal(current.conflicts.length, 1);
+    assert.equal(current.conflicts[0].mutationId, PENDING_ID);
+    assert.equal(current.conflicts[0].httpStatus, status);
+    assert.equal(current.outbox[0].status, 'pending');
+    session.logout();
+
+    const restored = new LocalBudgetSession();
+    restored.selectScope(USER_A);
+    await restored.unlock(await getAtomicEncryptedKeyset(USER_A), {passphrase: PASS});
+    const fresh = cloudAuth(restored);
+    const second = await dispatchOneEncryptedFinanceCommandCandidate({
+      lockManager: TEST_LOCKS, scope: USER_A, session: restored,
+      identity: fresh, origin: TEST_ORIGIN, expectedEpoch: 3,
+      explicitNetworkCandidateConsent: true,
+      fetchImpl: async () => {requests++; throw Error('Never retry a held payment');},
+    });
+    assert.equal(second.status, 'CONFLICT_HOLD');
+    assert.equal(second.sentByThisCall, false);
+    assert.equal(requests, 1);
+    const unchanged = await readAtomicEncryptedCandidate(USER_A, restored);
+    assert.deepEqual(unchanged.outbox, current.outbox);
+    assert.deepEqual(unchanged.conflicts, current.conflicts);
+    assert.deepEqual(unchanged.snapshot, current.snapshot);
+    restored.logout();
+  }
+});
+
+test('#68 HTTP 410 after successful POST preserves encrypted queue as snapshot-required', async () => {
+  const {session, identity} = await pendingAccountCreate();
+  const before = await readAtomicEncryptedCandidate(USER_A, session);
+  let requested = 0;
+  const outcome = await dispatchOneEncryptedFinanceCommandCandidate({
+    lockManager: TEST_LOCKS, scope: USER_A, session, identity,
+    origin: TEST_ORIGIN, expectedEpoch: 2,
+    explicitNetworkCandidateConsent: true,
+    fetchImpl: async () => {
+      requested++;
+      return requested === 1
+        ? mockFinanceJson(confirmedReceiptData().receipt, 201)
+        : mockFinanceJson({code:'snapshot_required'}, 410);
+    },
+  });
+  assert.equal(outcome.status, 'SNAPSHOT_REQUIRED_HOLD');
+  assert.equal(outcome.bundleEpoch, 3);
+  assert.equal(requested, 2);
+  const after = await readAtomicEncryptedCandidate(USER_A, session);
+  assert.deepEqual(after.snapshot, before.snapshot);
+  assert.deepEqual(after.outbox, before.outbox);
+  assert.equal(after.conflicts.length, 1);
+  assert.equal(after.conflicts[0].source, 'delta');
+  assert.equal(after.conflicts[0].decision, 'SNAPSHOT_REQUIRED_HOLD');
+  assert.equal(after.conflicts[0].httpStatus, 410);
+  assert.equal(after.conflicts[0].mutationId, PENDING_ID);
+  assert.equal(after.snapshot.cloudFinance.revision, 0);
+  session.logout();
+});
+
+test('#68 conflict-persistence failure cannot lose a queued financial command', async () => {
+  const {db, session, identity} = await pendingAccountCreate();
+  const old = await readAtomicEncryptedCandidate(USER_A, session);
+  db.failBundlePut = true;
+  await assert.rejects(
+    () => dispatchOneEncryptedFinanceCommandCandidate({
+      lockManager: TEST_LOCKS, scope: USER_A, session, identity,
+      origin: TEST_ORIGIN, expectedEpoch: 2,
+      explicitNetworkCandidateConsent: true,
+      fetchImpl: async () => mockFinanceJson({code:'stale_revision'}, 412),
+    }),
+    /injected bundle write failure/,
+  );
+  db.failBundlePut = false;
+  const after = await readAtomicEncryptedCandidate(USER_A, session);
+  assert.deepEqual(after, old);
+  assert.equal(after.outbox.length, 1);
+  assert.equal(after.snapshot.cloudFinance.revision, 0);
   session.logout();
 });
