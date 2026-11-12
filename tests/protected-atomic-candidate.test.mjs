@@ -1124,6 +1124,20 @@ test('#68 fresh encrypted account unlock retains original verified receipt', asy
 
 
 const TEST_ORIGIN = 'https://synthetic-finance.invalid';
+function syntheticWebLocks() {
+  let held = false;
+  return {
+    async request(name, options, callback) {
+      assert.equal(name, 'financial-horizon-finance-v2-network-dispatch');
+      assert.deepEqual(options, {mode: 'exclusive', ifAvailable: true});
+      if (held) return callback(null);
+      held = true;
+      try { return await callback({name, mode: 'exclusive'}); }
+      finally { held = false; }
+    },
+  };
+}
+const TEST_LOCKS = syntheticWebLocks();
 function mockFinanceJson(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status, headers: {'Content-Type': 'application/json; charset=utf-8',
@@ -1158,6 +1172,7 @@ test('#68 explicit same-origin one-shot sends pinned UUID and reconciles indepen
     throw Error('Multiple unexpected financial sends');
   };
   const outcome = await dispatchOneEncryptedFinanceCommandCandidate({
+    lockManager: TEST_LOCKS,
     scope: USER_A, session, identity, expectedEpoch: 2,
     origin: TEST_ORIGIN, explicitNetworkCandidateConsent: true,
     fetchImpl,
@@ -1210,6 +1225,7 @@ test('#68 failures, server conflicts and ambiguous POST response retain queued m
       throw Error('Unexpected network request');
     };
     const result = await dispatchOneEncryptedFinanceCommandCandidate({
+    lockManager: TEST_LOCKS,
       scope: USER_A, session, identity, expectedEpoch: 2,
       origin: TEST_ORIGIN, explicitNetworkCandidateConsent: true, fetchImpl,
     });
@@ -1241,6 +1257,7 @@ test('#68 never uploads plaintext to a different-origin endpoint or on revoked s
     'https://synthetic-finance.invalid/path?source=private']) {
     await assert.rejects(
       () => dispatchOneEncryptedFinanceCommandCandidate({
+    lockManager: TEST_LOCKS,
         scope: USER_A, session, identity, expectedEpoch: 2, origin,
         explicitNetworkCandidateConsent: true, fetchImpl,
       }), /SYNC_HOLD/,
@@ -1250,6 +1267,7 @@ test('#68 never uploads plaintext to a different-origin endpoint or on revoked s
   session.logout();
   await assert.rejects(
     () => dispatchOneEncryptedFinanceCommandCandidate({
+    lockManager: TEST_LOCKS,
       scope: USER_A, session, identity, expectedEpoch: 2, origin: TEST_ORIGIN,
       explicitNetworkCandidateConsent: true, fetchImpl,
     }), /SYNC_HOLD/,
@@ -1266,6 +1284,7 @@ test('#68 transient retries retain encrypted identity and exponential backoff ac
     throw Error('Synthetic transport interruption');
   };
   const first = await dispatchOneEncryptedFinanceCommandCandidate({
+    lockManager: TEST_LOCKS,
     scope: USER_A, session, identity, expectedEpoch: 2,
     origin: TEST_ORIGIN, explicitNetworkCandidateConsent: true,
     fetchImpl: offline,
@@ -1282,6 +1301,7 @@ test('#68 transient retries retain encrypted identity and exponential backoff ac
   await recovered.unlock(await getAtomicEncryptedKeyset(USER_A), {passphrase: PASS});
   const fresh = cloudAuth(recovered);
   const next = await dispatchOneEncryptedFinanceCommandCandidate({
+    lockManager: TEST_LOCKS,
     scope: USER_A, session: recovered, identity: fresh,
     expectedEpoch: 3, origin: TEST_ORIGIN,
     explicitNetworkCandidateConsent: true, fetchImpl: offline,
@@ -1416,6 +1436,7 @@ test('#68 historical server receipt recovery re-fetches the original committed r
     throw Error('Unexpected third financial request');
   };
   const confirmed = await dispatchOneEncryptedFinanceCommandCandidate({
+    lockManager: TEST_LOCKS,
     scope: USER_A, session, identity, expectedEpoch: 3,
     origin: TEST_ORIGIN, explicitNetworkCandidateConsent: true, fetchImpl,
   });
@@ -1443,5 +1464,64 @@ test('#68 historical ACK fails closed when original server event cannot be recov
     commandHttpStatus: 201, deltaHttpStatus: 200,
   }), /SYNC_HOLD/);
   assert.deepEqual(await readAtomicEncryptedCandidate(USER_A, session), before);
+  session.logout();
+});
+
+
+test('#68 one-shot finance dispatcher holds exclusive Web Lock throughout POST and durable ACK', async () => {
+  const {session, identity} = await pendingAccountCreate();
+  const locks = syntheticWebLocks();
+  let begin, release;
+  const sent = new Promise(resolve => {begin = resolve;});
+  const unblock = new Promise(resolve => {release = resolve;});
+  let sends = 0;
+  const valid = confirmedReceiptData();
+  const fetchImpl = async () => {
+    sends += 1;
+    if (sends === 1) {
+      begin();
+      await unblock;
+      return mockFinanceJson(valid.receipt, 201);
+    }
+    if (sends === 2) return mockFinanceJson(valid.deltaPage, 200);
+    throw Error('duplicate financial request');
+  };
+  const args = {scope: USER_A, session, identity, expectedEpoch: 2,
+    origin: TEST_ORIGIN, explicitNetworkCandidateConsent: true,
+    lockManager: locks, fetchImpl};
+  const first = dispatchOneEncryptedFinanceCommandCandidate(args);
+  try {
+    await sent;
+    // The losing tab must fail closed before issuing another POST.
+    const denied = await dispatchOneEncryptedFinanceCommandCandidate(args);
+    assert.equal(denied.status, 'LEASE_BUSY');
+    assert.equal(denied.sentByThisCall, false);
+    assert.equal(denied.queuePreserved, true);
+    assert.equal(sends, 1);
+    const before = await readAtomicEncryptedCandidate(USER_A, session);
+    assert.equal(before.epoch, 2);
+    assert.equal(before.outbox.length, 1);
+  } finally {release();}
+  const accepted = await first;
+  assert.equal(accepted.status, 'DURABLY_CONFIRMED');
+  assert.equal(accepted.sentByThisCall, true);
+  assert.equal(sends, 2);
+  assert.equal((await readAtomicEncryptedCandidate(USER_A, session)).outbox.length, 0);
+  session.logout();
+});
+
+test('#68 missing browser Web Locks refuses network rather than sending without leader', async () => {
+  const {session, identity} = await pendingAccountCreate();
+  let networkCalls = 0;
+  await assert.rejects(
+    () => dispatchOneEncryptedFinanceCommandCandidate({
+      scope: USER_A, session, identity, expectedEpoch: 2,
+      origin: TEST_ORIGIN, explicitNetworkCandidateConsent: true,
+      lockManager: null,
+      fetchImpl: async () => {networkCalls++; throw Error('Never send');},
+    }), /SYNC_HOLD/,
+  );
+  assert.equal(networkCalls, 0);
+  assert.equal((await readAtomicEncryptedCandidate(USER_A, session)).outbox.length, 1);
   session.logout();
 });
