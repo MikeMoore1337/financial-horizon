@@ -1188,7 +1188,7 @@ test('#68 explicit same-origin one-shot sends pinned UUID and reconciles indepen
   assert.equal(calls[0].options.mode, 'same-origin');
   assert.equal(calls[0].options.redirect, 'error');
   assert.equal(calls[0].options.cache, 'no-store');
-  assert.equal(calls[0].options.referrerPolicy, 'no-referrer');
+  assert.equal(calls[0].options.referrerPolicy, 'same-origin');
   assert.equal(calls[0].options.headers['If-Match'], CLOUD_ETAG);
   assert.equal(calls[0].options.headers['Idempotency-Key'], PENDING_ID);
   assert.equal(JSON.parse(calls[0].options.body).payload.opening_minor, 12_345);

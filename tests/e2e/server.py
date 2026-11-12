@@ -1,7 +1,8 @@
 """Synthetic localhost E2E origin: built Vite frontend and real FastAPI/SQLite."""
+import os
 import re
 import sys
-from uuid import uuid4
+from uuid import UUID, uuid4
 import tempfile
 import threading
 from pathlib import Path
@@ -67,10 +68,20 @@ def local_app(directory):
     )
     inbox = SyntheticInbox()
     store = AuthStore(config.database_path)
+    real_finance = os.environ.get("FH_E2E_REAL_FINANCE") == "yes"
+    finance_args = {}
+    if real_finance:
+        from backend.finance_db.db import create_finance_engine
+        finance_args = dict(
+            finance_engine=create_finance_engine(),
+            finance_profile_namespace=UUID("e15ea001-d512-4fb7-a0ee-e05b4df1d45e"),
+            enable_account_v2_candidate=True,
+        )
     app = create_app(
         config=config,
         store=store,
         mailer=inbox,
+        **finance_args,
         captcha=lambda secret, token, origin, action: (
             secret == config.turnstile_secret
             and token == "e2e-" + action
@@ -209,6 +220,17 @@ def local_app(directory):
         target = (base / resource).resolve()
         if not target.is_relative_to(base.resolve()) or not target.is_file():
             raise HTTPException(404)
+        if real_finance and resource == "index.html":
+            # E2E-only explicit accounts UI, with actual FH cookies/SQL.
+            contents = target.read_text(encoding="utf-8")
+            previous = '<meta name="fh-finance-accounts" content="disabled">'
+            if contents.count(previous) != 1:
+                raise HTTPException(503)
+            return Response(
+                contents.replace(previous,
+                                 '<meta name="fh-finance-accounts" content="enabled">'),
+                media_type="text/html", headers={"Cache-Control": "no-store"},
+            )
         return FileResponse(target)
 
     return app
