@@ -104,3 +104,43 @@ test('invalid evidence and non-HTTPS links fail closed', () => {
   }), TypeError);
   assert.throws(() => check({...gates(), surprise: {status:'PASS'}}), TypeError);
 });
+
+
+test('private owner release omits costly disk/PITR/inbox gates but never authorizes self reported claims', () => {
+  const personal = requiredCloudReleaseGates('private-single-user');
+  assert.ok(personal.includes('postgres_encrypted_backup_and_local_restore_66'));
+  assert.ok(personal.includes('email_existing_owner_session_security_51'));
+  assert.ok(personal.includes('import_server_atomic_commit_and_replay_69'));
+  assert.ok(!personal.includes('postgres_luks2_encryption_66'));
+  assert.ok(!personal.includes('postgres_wal_pitr_rpo_66'));
+  assert.ok(!personal.includes('email_real_two_mailboxes_51'));
+  assert.equal(personal.length, new Set(personal).size);
+
+  const personalEvidence = Object.fromEntries(personal.map(name => [name, {
+    status: 'PASS', sourceSha: HEAD, evidence: ['https://example.invalid/claim'],
+  }]));
+  const claimed = assessCloudReleaseEvidenceCandidate({
+    mode: 'private-single-user', publicRegistrationEnabled: false,
+    releaseSha: HEAD, gates: personalEvidence,
+  });
+  assert.equal(claimed.mode, 'private-single-user');
+  assert.equal(claimed.status, 'NEEDS_EXTERNAL_ATTESTATION');
+  assert.equal(claimed.deploymentAuthorized, false);
+  assert.equal(claimed.publicCloudEnabled, false);
+
+  for (const registration of [undefined, true]) {
+    assert.throws(() => assessCloudReleaseEvidenceCandidate({
+      mode: 'private-single-user', publicRegistrationEnabled: registration,
+      releaseSha: HEAD, gates: personalEvidence,
+    }), TypeError);
+  }
+  const missing = {...personalEvidence};
+  delete missing.import_real_encrypted_restore_69;
+  const denied = assessCloudReleaseEvidenceCandidate({
+    mode: 'private-single-user', publicRegistrationEnabled: false,
+    releaseSha: HEAD, gates: missing,
+  });
+  assert.equal(denied.status, 'NO_GO');
+  assert.ok(denied.missing.includes('import_real_encrypted_restore_69'));
+  assert.throws(() => requiredCloudReleaseGates('untrusted'), TypeError);
+});
