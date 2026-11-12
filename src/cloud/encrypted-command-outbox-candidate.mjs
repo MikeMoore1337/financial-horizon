@@ -588,3 +588,100 @@ export async function persistEncryptedFinanceHoldCandidate({
     queuePreserved: true, previouslyRecorded: false,
   });
 }
+
+
+/**
+ * #68 - INACTIVE user-initiated conflict choice, persisted in the same
+ * encrypted IndexedDB CAS as the original pending command. This records a
+ * decision for a later independently verified resolution flow; it does NOT
+ * resolve a conflict, release a hold, rebase a command, send an HTTP request,
+ * discard pending money, or claim that an external backup exists.
+ *
+ * A 410 after a successful POST can mean the server already committed. Even
+ * "prefer server" must NOT discard the queued UUID before an authenticated
+ * receipt/delta or other independently audited recovery proves its outcome.
+ */
+export async function recordManualFinanceConflictChoiceCandidate({
+  scope, session, identity, expectedEpoch, mutationId,
+  choice, observedCachedRevision, explicitUserChoice = false,
+}) {
+  active(scope, session, identity);
+  if (!integer(expectedEpoch) || !UUID.test(mutationId) ||
+      !integer(observedCachedRevision) || explicitUserChoice !== true ||
+      !['KEEP_ORIGINAL_FOR_REVIEW', 'PREFER_SERVER_FOR_REVIEW'].includes(choice)) {
+    hold('Не подтверждён ручной выбор для конфликта');
+  }
+  const current = await readAtomicEncryptedCandidate(scope, session);
+  active(scope, session, identity);
+  if (!current || current.epoch !== expectedEpoch ||
+      current.schemaVersion !== 2 || current.snapshot?.version !== 2 ||
+      !Array.isArray(current.outbox) || !Array.isArray(current.conflicts)) {
+    hold('Зашифрованное состояние конфликта изменилось');
+  }
+  const cloud = current.snapshot.cloudFinance;
+  if (!plain(cloud) || cloud.scope !== scope ||
+      cloud.profileId !== identity.profileId ||
+      cloud.epoch !== identity.epoch ||
+      !integer(cloud.revision) || cloud.revision !== observedCachedRevision) {
+    hold('Изменился видимый снимок финансового профиля');
+  }
+  existingQueue(current.outbox, scope, identity);
+  const head = current.outbox[0];
+  if (!head || head.mutationId !== mutationId ||
+      head.command.client_mutation_id !== mutationId ||
+      !STRONG_ETAG.test(head.ifMatch) ||
+      !integer(head.command.base_revision) ||
+      !/^[a-f0-9]{64}$/.test(head.fingerprint)) {
+    hold('Не найдена неизменённая исходная команда');
+  }
+  const matches = current.conflicts.filter(entry =>
+    plain(entry) && entry.kind === 'finance_sync_hold' &&
+    entry.mutationId === mutationId);
+  if (matches.length !== 1) hold('Не найден однозначный защищённый конфликт');
+  const prior = matches[0];
+  if (prior.scope !== scope || prior.profileId !== identity.profileId ||
+      prior.baseRevision !== head.command.base_revision ||
+      ![409, 412, 410].includes(prior.httpStatus) ||
+      !['CONFLICT_HOLD', 'SNAPSHOT_REQUIRED_HOLD'].includes(prior.decision) ||
+      (prior.decision === 'CONFLICT_HOLD' &&
+        ![409, 412].includes(prior.httpStatus)) ||
+      (prior.decision === 'SNAPSHOT_REQUIRED_HOLD' &&
+        prior.httpStatus !== 410)) {
+    hold('Повреждена запись финансового конфликта');
+  }
+  const actualFingerprint = await fingerprint(
+    scope, identity.profileId, head.ifMatch, head.command,
+  );
+  active(scope, session, identity);
+  if (actualFingerprint !== head.fingerprint) {
+    hold('Изменилась исходная ожидающая операция');
+  }
+  if (prior.manualChoice !== undefined) {
+    const stored = prior.manualChoice;
+    if (!plain(stored) || stored.choice !== choice ||
+        stored.observedCachedRevision !== observedCachedRevision ||
+        stored.originalFingerprint !== actualFingerprint) {
+      hold('Ручное решение уже записано с другими условиями');
+    }
+    return Object.freeze({
+      status: 'MANUAL_CHOICE_ALREADY_STAGED', bundleEpoch: expectedEpoch,
+      queuePreserved: true, conflictStillHeld: true, sent: false,
+    });
+  }
+  const manualChoice = {
+    choice, observedCachedRevision, originalFingerprint: actualFingerprint,
+  };
+  const nextConflicts = current.conflicts.map(entry =>
+    entry === prior ? {...prior, manualChoice} : entry);
+  const nextEpoch = await compareAndSwapAtomicEncryptedCandidate(
+    scope, session, expectedEpoch, 2, {
+      snapshot: current.snapshot, outbox: current.outbox,
+      conflicts: nextConflicts,
+    },
+  );
+  active(scope, session, identity);
+  return Object.freeze({
+    status: 'MANUAL_CHOICE_STAGED', bundleEpoch: nextEpoch,
+    queuePreserved: true, conflictStillHeld: true, sent: false,
+  });
+}
