@@ -390,3 +390,20 @@ describe('#33 authoritative refresh concurrency fences', () => {
     expect(calls).toBe(5);
   });
 });
+
+describe('#33 native browser fetch receiver', () => {
+  it('calls a browser-bound fetch with Window rather than the gateway instance', async () => {
+    const replies = [reply({ ok: true, profile_id: PROFILE }), reply(state())];
+    const nativeLike = vi.fn(function (this: Window, _input: RequestInfo | URL) {
+      if (this !== window) throw new TypeError('Illegal invocation');
+      const response = replies.shift();
+      if (!response) throw new Error('Unexpected HTTP call');
+      return Promise.resolve(response);
+    });
+    const gateway = new AccountsFinanceGateway(nativeLike, 'https://fh.example');
+    const result = await gateway.open(ACTOR);
+    expect(result.totalMinor).toBe(600000);
+    expect(gateway.writeBlocked).toBe(false);
+    expect(nativeLike).toHaveBeenCalledTimes(2);
+  });
+});
