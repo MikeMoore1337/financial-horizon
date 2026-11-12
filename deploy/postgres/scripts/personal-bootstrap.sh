@@ -94,6 +94,8 @@ gpg --homedir "$FH_FINANCE_GPG_HOME" --batch --with-colons --list-secret-keys "$
 if docker ps -a --format '{{.Names}}' | grep -Fxq fh-finance-postgres; then
   deny "EXISTING_FINANCE_DATABASE_REQUIRES_SEPARATE_UPGRADE"
 fi
+[[ -z "$(find "$FH_FINANCE_DATA_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
+  deny "FINANCE_DATA_DIR_NOT_EMPTY_DO_NOT_REINITIALIZE"
 docker compose -f deploy/postgres/compose.yml config --quiet || deny "INVALID_PRIVATE_COMPOSE"
 started=0
 cleanup() {
