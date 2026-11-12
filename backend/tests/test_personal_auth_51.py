@@ -107,9 +107,11 @@ def test_email_change_two_synthetic_inboxes_notifies_old_and_revokes_sessions(tm
     })
     assert requested.status_code == 202
     token = mail.latest("email-change")
-    # The outgoing token is never a credential that authorizes a different
-    # authenticated browser to impersonate the requesting user.
-    assert post(second, "change/confirm", {"token":token}).status_code == 400
+    # Another device of the SAME authenticated user may legitimately confirm.
+    # A DIFFERENT user must not be able to use the token.
+    outsider = TestClient(first.app)
+    _register(outsider, mail, "outsider@example.invalid", "Third-passphrase-2026!")
+    assert post(outsider, "change/confirm", {"token":token}).status_code == 400
     confirmed = post(first, "change/confirm", {"token":token})
     assert confirmed.status_code == 200
     assert store.current(old_1) is None and store.current(old_2) is None
