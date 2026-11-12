@@ -194,3 +194,98 @@ describe('#33 verified account UI -> finance HTTP gateway, feature off', () => {
     expect(untouched).not.toHaveBeenCalled();
   });
 });
+
+describe('#33 candidate v2 boundary is never treated as an approved production API', () => {
+  it('serializes an explicit-zero account creation with no client profile or actor claims', async () => {
+    const newAccount = '00000000-0000-4000-8000-0000000000af';
+    const created = {
+      ...state(2),
+      entities: [
+        ...state(2).entities,
+        {
+          id: newAccount,
+          kind: 'account',
+          entity_revision: 1,
+          data: {
+            name: 'Наличные',
+            type: 'cash',
+            currency: 'RUB',
+            opening_minor: 0,
+            balance_minor: 0,
+            reserved_minor: 0,
+            available_minor: 0,
+            archived_at: null,
+          },
+        },
+      ],
+    };
+    const ids = [newAccount, MUTATION];
+    const fetcher = sequence(
+      reply({ ok: true, profile_id: PROFILE }),
+      reply(state()),
+      reply(
+        {
+          schema_version: 2,
+          client_mutation_id: MUTATION,
+          revision: 2,
+          replayed: false,
+          changes: [{ revision: 2, ordinal: 0 }],
+        },
+        201,
+        '"fh.1.2.example"',
+      ),
+      reply(created, 200, '"fh.1.2.example"'),
+    );
+    const gateway = new AccountsFinanceGateway(
+      fetcher,
+      'https://fh.example',
+      () => ids.shift()!,
+    );
+    await gateway.open(ACTOR);
+    const verified = await gateway.create({
+      baseRevision: 1,
+      name: 'Наличные',
+      kind: 'cash',
+      openingMinor: 0,
+    });
+    expect(verified.totalMinor).toBe(600000);
+    expect(verified.ledger.accounts).toHaveLength(3);
+    expect(gateway.writeBlocked).toBe(false);
+    expect(fetcher.mock.calls[2]![0]).toContain('/api/finance/v2/commands');
+    const command = JSON.parse(String((fetcher.mock.calls[2]![1] as RequestInit).body));
+    expect(command).toEqual({
+      schema_version: 2,
+      client_mutation_id: MUTATION,
+      base_revision: 1,
+      action: 'account.create',
+      expected_entity_revisions: {},
+      payload: {
+        id: newAccount,
+        name: 'Наличные',
+        kind: 'cash',
+        currency: 'RUB',
+        opening_minor: 0,
+      },
+    });
+  });
+
+  it('fails closed and does not enable writes when the candidate v2 route is disabled', async () => {
+    const ids = ['00000000-0000-4000-8000-0000000000af', MUTATION];
+    const fetcher = sequence(
+      reply({ ok: true, profile_id: PROFILE }),
+      reply(state()),
+      reply({ detail: 'Not Found' }, 404),
+    );
+    const gateway = new AccountsFinanceGateway(
+      fetcher,
+      'https://fh.example',
+      () => ids.shift()!,
+    );
+    await gateway.open(ACTOR);
+    await expect(
+      gateway.create({ baseRevision: 1, name: 'Наличные', kind: 'cash', openingMinor: 0 }),
+    ).rejects.toMatchObject({ kind: 'error' });
+    expect(gateway.writeBlocked).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+});
