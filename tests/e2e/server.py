@@ -7,8 +7,8 @@ import threading
 from pathlib import Path
 
 import uvicorn
-from fastapi import HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi import HTTPException, Request
+from fastapi.responses import FileResponse, Response, JSONResponse
 
 ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / "dist"
@@ -79,9 +79,13 @@ def local_app(directory):
     )
     sw_revision = {"value": 0}
     legacy_sw = {"enabled": False}
+    # Only E2E-created, explicitly opted-in FH identities may receive the
+    # synthetic finance stub. The ordinary local auth/test suite remains OFF.
+    finance_stub_users = set()
+    finance_requests = {}
 
     @app.post("/__e2e__/personal-session")
-    def synthetic_personal_session(response: Response):
+    def synthetic_personal_session(response: Response, enable_finance_stub: bool = False):
         # This route exists only in the isolated localhost E2E ASGI app.
         # Create a genuine revocable FH session without consuming the shared
         # public registration rate quota or exposing a raw token in JSON.
@@ -94,7 +98,52 @@ def local_app(directory):
             SESSION_COOKIE, session, path="/api/auth", httponly=True,
             samesite="lax", secure=False,
         )
-        return {"authenticated": True, "user": store.current(session)}
+        user = store.current(session)
+        if enable_finance_stub:
+            finance_stub_users.add(user["id"])
+            finance_requests[user["id"]] = {"session": 0, "state": 0}
+        return {"authenticated": True, "user": user}
+
+
+    @app.post("/api/auth/email/finance/session")
+    def synthetic_finance_session(request: Request, response: Response):
+        # Do not return finance data for unrelated E2E users, guests or
+        # forged CSRF. This route exists ONLY in the localhost test server.
+        user = store.current(request.cookies.get(SESSION_COOKIE))
+        if (not user or user["id"] not in finance_stub_users or
+                request.headers.get("origin") != ORIGIN):
+            raise HTTPException(404)
+        response.set_cookie(
+            "fh_finance_session", request.cookies.get(SESSION_COOKIE),
+            path="/api/finance/v1", httponly=True, secure=False, samesite="strict",
+        )
+        response.headers["Cache-Control"] = "private, no-store"
+        finance_requests[user["id"]]["session"] += 1
+        return {"ok": True, "profile_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}
+
+    @app.get("/api/finance/v1/state")
+    def synthetic_finance_state(request: Request):
+        token = request.cookies.get("fh_finance_session")
+        user = store.current(token)
+        if (not user or user["id"] not in finance_stub_users or
+                request.query_params.get("limit_entities") != "5000"):
+            raise HTTPException(404)
+        finance_requests[user["id"]]["state"] += 1
+        return JSONResponse({
+            "schema_version": 1,
+            "profile_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "revision": 0, "currency": "RUB", "entities": [],
+            "server_at": "2026-11-12T12:00:00+00:00",
+        }, headers={"ETag": '"fh.1.0.synthetic"',
+                    "Cache-Control": "private, no-store"})
+
+    @app.get("/__e2e__/finance-stub/receipt")
+    def finance_stub_receipt(user_id: str):
+        # Read-only test verification of server-received requests, never
+        # tokens or financial data. Exists solely in tests/e2e/server.py.
+        if user_id not in finance_requests:
+            raise HTTPException(404)
+        return finance_requests[user_id]
 
     @app.get("/__e2e__/ready")
     def ready():
