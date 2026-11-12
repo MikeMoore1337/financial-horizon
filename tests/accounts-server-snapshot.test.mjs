@@ -4,8 +4,9 @@ import {
   decodeCompleteFinanceState,
 } from '../src/domain/accounts/server-snapshot.ts';
 import {
-  assertLedgerState, accountBalanceMinor, totalBalanceMinor, monthlyCashFlowMinor,
+  accountBalanceMinor, totalBalanceMinor, monthlyCashFlowMinor,
 } from '../src/domain/accounts/ledger.ts';
+import { assertLedgerState } from '../src/domain/accounts/invariants.ts';
 
 const P = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const OTHER_P = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
