@@ -78,8 +78,36 @@
   <div class="form-two"><label class="field"><span>Тип</span><select name="kind"><option value="expense">Расход</option><option value="income">Доход</option></select></label><label class="field"><span>Сумма, ₽</span><input name="amount" inputmode="decimal" placeholder="0,00" required></label></div>
   <div class="form-two"><label class="field"><span>Дата первого платежа</span><input name="date" type="date" required></label><label class="field"><span>Повторять</span><select name="recurrence"><option value="monthly">Ежемесячно</option><option value="once">Однократно</option><option value="yearly">Ежегодно</option></select></label></div>
   <label class="field"><span>Категория</span><select name="category" id="entry-category"></select></label>
+  <div class="form-note" id="entry-methods-access" hidden>
+   <button type="button" class="button-secondary" data-action="open-payment-methods">Способы оплаты (<span id="entry-method-count">0</span>)</button>
+   <span>Ссылки, QR и реквизиты для этой записи</span>
+  </div>
   <div class="dialog-actions"><button class="button-secondary" value="cancel">Отмена</button><button type="submit" class="button-primary" value="save">Сохранить запись</button></div>
  </form></dialog>
+<dialog class="dialog" id="payment-methods-dialog" aria-labelledby="payment-methods-heading">
+ <div class="dialog-body">
+  <div class="dialog-head"><div><span class="eyebrow">Регулярный расход</span><h2 id="payment-methods-heading">Способы оплаты</h2></div><button type="button" class="tool-icon" data-action="close-payment-methods" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-close"/></svg></button></div>
+  <div id="payment-methods-list" aria-live="polite"></div>
+  <form id="payment-method-form" method="dialog" novalidate>
+   <input type="hidden" name="methodId">
+   <h3 id="payment-method-save-title">Новый способ оплаты</h3>
+   <label class="field"><span>Тип способа оплаты</span><select name="type" id="payment-method-type">
+    <option value="payment_url">Ссылка на оплату или личный кабинет</option>
+    <option value="qr_image">Изображение QR-кода</option>
+    <option value="sbp_link">Ссылка СБП (HTTPS)</option>
+    <option value="requisites">Реквизиты и назначение</option>
+    <option value="instructions">Инструкция по оплате</option>
+   </select></label>
+   <label class="field"><span>Название способа</span><input name="label" required maxlength="80" placeholder="Например, Личный кабинет"></label>
+   <div id="payment-method-text-field"><label class="field"><span id="payment-method-value-label">Адрес HTTPS</span><textarea name="value" rows="3" maxlength="2048" required></textarea></label></div>
+   <div id="payment-method-qr-field" hidden><label class="field"><span>Изображение PNG, JPEG или WebP (до 192 КБ)</span><input name="qrFile" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"></label><p class="form-note">Файл остаётся в вашей финансовой базе и зашифрованных резервных копиях. При изменении можно оставить старое изображение.</p></div>
+   <label class="field"><span><input type="checkbox" name="primary"> Сделать основным</span></label>
+   <p class="form-note">Не сохраняйте пароли, CVV, коды подтверждения и токены. Внешняя оплата не отмечает расход как оплаченный.</p>
+   <div class="dialog-actions"><button type="button" class="button-secondary" data-action="reset-payment-method">Отменить правку</button><button type="submit" class="button-primary">Сохранить способ</button></div>
+  </form>
+  <div class="dialog-actions"><button type="button" class="button-secondary" data-action="close-payment-methods">Готово</button></div>
+ </div>
+</dialog>
 <dialog class="dialog" id="loan-dialog" aria-labelledby="loan-heading"><form method="dialog" id="loan-form" class="dialog-body" novalidate>
   <div class="dialog-head"><div><span class="eyebrow">Кредитные обязательства</span><h2 id="loan-heading">Добавить кредит</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-close"/></svg></button></div>
   <input type="hidden" name="id"><label class="field"><span>Название</span><input name="title" required maxlength="100" placeholder="Например, ипотека"></label>
