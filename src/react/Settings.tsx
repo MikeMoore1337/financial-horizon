@@ -68,10 +68,7 @@ export function Settings({
         {showFinanceAccounts && (
           <SettingsCard id="finance-accounts" icon="credit">
             <h2>Счета и кошельки</h2>
-            <p>
-              Подтверждённые остатки и переводы из вашего финансового аккаунта.
-              Локальные записи не изменяются автоматически.
-            </p>
+            <p>Подтверждённые остатки с сервера. Локальные данные не меняются.</p>
             <div className="setting-actions">
               <button type="button" className="button-secondary" data-view="accounts-connected">
                 <Icon name="credit" /> Открыть счета
