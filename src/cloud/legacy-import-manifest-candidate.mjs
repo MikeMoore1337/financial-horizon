@@ -198,3 +198,75 @@ export async function planVerifiedLegacyImportCandidate({
     originalPreserved: true,
   });
 }
+
+
+/**
+ * Explicit account-only personal import payload. This DOES NOT send HTTP,
+ * change IndexedDB or authorize migration. The caller must have independently
+ * verified an externally saved AES-GCM backup and confirmed the owner account.
+ * It rechecks the canonical bytes against the read-only preview's SHA so no
+ * source records can be substituted between preflight and SQL staging.
+ *
+ * The plaintext is ephemeral and must never be logged or persisted locally.
+ */
+export async function prepareVerifiedLegacyImportTransportCandidate({
+  verified, preview, signal,
+}) {
+  if (!signal || signal.aborted || !verified || !isObject(verified) ||
+      verified.backupVersion !== 1 || !isObject(verified.snapshot) ||
+      !preview || !isObject(preview) || preview.status !== 'PREVIEW_ONLY' ||
+      preview.sendAllowed !== false || preview.originalPreserved !== true ||
+      !userScope.test(preview.sourceScope) ||
+      preview.sourceScope !== verified.scope ||
+      preview.targetScope !== verified.scope ||
+      !uuid.test(preview.targetProfileId) ||
+      !Number.isSafeInteger(preview.expectedServerRevision) ||
+      preview.expectedServerRevision < 0 ||
+      !/^[0-9a-f]{64}$/.test(preview.sourceSha256)) {
+    fail('Не подтверждён безопасный перенос в собственный пустой профиль');
+  }
+  let pinned;
+  try {
+    assertSafeJSONBeforeClone(verified.snapshot);
+    pinned = structuredClone(verified.snapshot);
+    validateState(pinned);
+  } catch {
+    fail('Финансовые данные изменились после подтверждения копии');
+  }
+  if (verified.sourceRevision !== preview.sourceRevision ||
+      pinned.version !== preview.sourceVersion ||
+      (pinned.version === 2 ? pinned.revision : 0) !== preview.sourceRevision) {
+    fail('Ревизия исходных данных изменилась');
+  }
+  const index = recordIndex(pinned);
+  if (index.recordCount !== preview.recordCount ||
+      !isObject(preview.counts) ||
+      JSON.stringify(index.counts) !== JSON.stringify(preview.counts)) {
+    fail('Список исходных записей изменился');
+  }
+  const canonicalSnapshot = canonical(pinned);
+  const hash = await fingerprint(canonicalSnapshot);
+  if (signal.aborted || hash !== preview.sourceSha256) {
+    fail('Суммы или исходные данные изменились перед отправкой');
+  }
+  const rows = [];
+  for (const kind of kinds) {
+    for (const record of pinned[kind]) {
+      rows.push({record_type: kind, source_record_id: record.id});
+    }
+  }
+  return Object.freeze({
+    manifest: Object.freeze({
+      schema_version: 1,
+      source_scope: preview.sourceScope,
+      source_revision: preview.sourceRevision,
+      source_sha256: hash,
+      expected_server_revision: preview.expectedServerRevision,
+      external_encrypted_backup_checked: true,
+      explicit_owner_consent: true,
+      explicit_guest_transfer: false,
+      rows,
+    }),
+    source_canonical_json: canonicalSnapshot,
+  });
+}
