@@ -108,7 +108,7 @@ async function retryAfterTransientFailure({
  * /changes event matching the complete receipt may trigger the encrypted CAS
  * in persistAuthenticatedFinanceReceiptCandidate.
  */
-export async function dispatchOneEncryptedFinanceCommandCandidate({
+async function dispatchWithoutNetworkLease({
   scope, session, identity, expectedEpoch, origin,
   explicitNetworkCandidateConsent = false,
   fetchImpl = globalThis.fetch,
@@ -220,4 +220,47 @@ export async function dispatchOneEncryptedFinanceCommandCandidate({
     commandHttpStatus: posted.status, deltaHttpStatus: deltaResponse.status,
   });
   return Object.freeze({...reconciled, sentByThisCall: true});
+}
+
+
+/**
+ * Single same-origin network leader across concurrent tabs. Browser Web
+ * Locks serialize the POST + independently fetched delta + encrypted ACK
+ * commit, so a second tab cannot send the same pending mutation while the
+ * first tab is mid-flight. Server-side idempotency remains mandatory across
+ * devices and after browser crashes.
+ *
+ * Missing Web Locks (including browsers with hardened/Lockdown settings)
+ * fail closed; no unprotected HTTP fallback or localStorage pseudo-lock.
+ * Feature OFF: no production PWA entrypoint imports this function.
+ */
+export async function dispatchOneEncryptedFinanceCommandCandidate({
+  lockManager = globalThis.navigator?.locks,
+  ...input
+}) {
+  const {scope, session, identity, explicitNetworkCandidateConsent} = input;
+  if (explicitNetworkCandidateConsent !== true) {
+    hold('Сетевые финансовые команды ещё выключены');
+  }
+  active(scope, session, identity);
+  if (!lockManager || typeof lockManager.request !== 'function') {
+    hold('Недоступна межвкладочная блокировка финансовых операций');
+  }
+  // One fixed origin-wide name intentionally contains NO user/profile IDs.
+  // It blocks only competing sends, never native encrypted cache reads.
+  return lockManager.request(
+    'financial-horizon-finance-v2-network-dispatch',
+    {mode: 'exclusive', ifAvailable: true},
+    async lock => {
+      if (!lock) {
+        return Object.freeze({
+          status: 'LEASE_BUSY', sentByThisCall: false,
+          queuePreserved: true, serverCommitNotYetReconciled: true,
+          retryDelayMs: null,
+        });
+      }
+      active(scope, session, identity);
+      return dispatchWithoutNetworkLease(input);
+    },
+  );
 }
