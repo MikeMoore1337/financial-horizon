@@ -18,6 +18,7 @@ export interface SettingsProps {
   audit: readonly SettingsAuditItem[];
   storageMessage: string;
   formatDate: CalendarProps['formatDate'];
+  showFinanceAccounts?: boolean;
 }
 
 function SettingsCard({
@@ -51,6 +52,7 @@ export function Settings({
   audit,
   storageMessage,
   formatDate,
+  showFinanceAccounts = false,
 }: SettingsProps) {
   return (
     <>
@@ -63,6 +65,20 @@ export function Settings({
         <div className="header-tools" />
       </header>
       <div className="settings-grid">
+        {showFinanceAccounts && (
+          <SettingsCard id="finance-accounts" icon="wallet">
+            <h2>Счета и кошельки</h2>
+            <p>
+              Подтверждённые остатки и переводы из вашего финансового аккаунта.
+              Локальные записи не изменяются автоматически.
+            </p>
+            <div className="setting-actions">
+              <button type="button" className="button-secondary" data-view="accounts-connected">
+                <Icon name="wallet" /> Открыть счета
+              </button>
+            </div>
+          </SettingsCard>
+        )}
         <SettingsCard id="security" icon="shield">
           <h2>Локальная безопасность</h2>
           <p>
