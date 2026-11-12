@@ -1,9 +1,13 @@
 import { test, expect } from '@playwright/test';
-import { ORIGIN, observe, visitGuest, view, registerViaUi } from './helpers.mjs';
+import { ORIGIN, observe, visitGuest, view } from './helpers.mjs';
 
 const PROFILE = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const ACTOR = 'a'.repeat(32);
+// Real FH session/SQLite integration is exercised separately by PostgreSQL CI.
+// These tests intercept auth and finance only to exercise the browser/PWA routing
+// without consuming the shared E2E registration abuse quota.
 
-test('#33 server-backed accounts are absent for guest and unapproved production shell', async ({page, context, request}) => {
+test('#33 server-backed accounts are absent for guest and unapproved production shell', async ({page, context}) => {
   const watch = await observe(context, page);
   const financeCalls = [];
   page.on('request', (req) => {
@@ -23,9 +27,14 @@ test('#33 server-backed accounts are absent for guest and unapproved production 
     button.remove();
   });
   await expect(page.locator('#toolbar-title')).toHaveText('Настройки');
-  const email = 'connected-disabled-' + test.info().project.name.replace(/[^a-z0-9]/gi, '') +
-    '-' + Date.now() + '@example.invalid';
-  await registerViaUi(page, request, email);
+  // A synthetic verified actor must still see the default-disabled shell.
+  await page.route('**/api/auth/email/me', async (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({authenticated: true, user: {id: ACTOR, email: 'qa@example.invalid'}}),
+  }));
+  await page.evaluate(() => sessionStorage.removeItem('fh-guest-session-v2'));
+  await page.goto('/');
+  await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
   await view(page, 'settings');
   await expect(page.locator('[data-settings-card="finance-accounts"]')).toHaveCount(0);
   expect(financeCalls).toEqual([]);
@@ -65,9 +74,12 @@ test('#33 owner-approved opt-in shows a real PWA entry and reads only authoritat
       }),
     });
   });
-  const email = 'connected-enabled-' + test.info().project.name.replace(/[^a-z0-9]/gi, '') +
-    '-' + Date.now() + '@example.invalid';
-  await registerViaUi(page, request, email);
+  await page.route('**/api/auth/email/me', async (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({authenticated: true, user: {id: ACTOR, email: 'qa@example.invalid'}}),
+  }));
+  await page.goto('/');
+  await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
   await view(page, 'settings');
   await expect(page.locator('[data-settings-card="finance-accounts"]')).toBeVisible();
   await page.locator('[data-settings-card="finance-accounts"] [data-view="accounts-connected"]').click();
