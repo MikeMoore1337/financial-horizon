@@ -102,3 +102,18 @@ it('optional server accounts entry is hidden by default and only routes on expli
   expect(screen.getByText('Счета и кошельки')).toBeTruthy();
   expect(document.querySelector('[data-action="account-logout"]')).toBeNull();
 });
+
+it('personal cloud import requires independent accounts and import opt-ins', () => {
+  render(<Settings {...empty} showFinanceImport />);
+  expect(document.querySelector('[data-action="cloud-import"]')).toBeNull();
+  cleanup();
+  render(<Settings {...empty} showFinanceAccounts />);
+  expect(document.querySelector('[data-action="cloud-import"]')).toBeNull();
+  cleanup();
+  render(<Settings {...empty} showFinanceAccounts showFinanceImport />);
+  expect(document.querySelectorAll('[data-settings-card]')).toHaveLength(8);
+  const action = document.querySelector<HTMLButtonElement>('[data-action="cloud-import"]');
+  expect(action).not.toBeNull();
+  expect(action?.textContent).toContain('Перенести данные');
+  expect(document.querySelector('[data-action="account-logout"]')).toBeNull();
+});
