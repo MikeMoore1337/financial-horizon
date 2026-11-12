@@ -138,8 +138,8 @@ jobs:
         run: alembic -c backend/finance_db/alembic.ini upgrade head
       - name: Alembic repeat migration (idempotent)
         run: alembic -c backend/finance_db/alembic.ini upgrade head
-      - name: Non-superuser RLS and financial invariant integration tests
-        run: python -m pytest -q backend/finance_db/tests/
+      - name: Non-superuser RLS, finance HTTP and session security integration
+        run: python -m pytest -q backend/finance_db/tests/ backend/finance_api/tests/
       - name: Encrypted dump and isolated restore verification
         run: bash deploy/postgres/scripts/ci-restore.sh
         env:
@@ -154,7 +154,9 @@ jobs:
             echo "ERROR: destructive downgrade must be refused"
             exit 1
           fi
-          alembic -c backend/finance_db/alembic.ini current | grep 0001_initial
+          current="$(alembic -c backend/finance_db/alembic.ini current | awk 'NR==1 {print $1}')"
+          expected="$(alembic -c backend/finance_db/alembic.ini heads | awk 'NR==1 {print $1}')"
+          test -n "$expected" && test "$current" = "$expected"
       - name: Compile finance Python and check shell scripts
         run: |
           python -m compileall -q backend/finance_db
