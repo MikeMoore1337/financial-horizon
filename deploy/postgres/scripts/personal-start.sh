@@ -16,6 +16,9 @@ root="$(git -C "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)" rev-p
 [[ -z "$(git -C "$root" status --porcelain)" ]] || deny "DIRTY_CHECKOUT"
 bash "$root/deploy/postgres/scripts/personal-storage-preflight.sh" ||
   deny "PRIVATE_DATA_PATH_NOT_READY"
+[[ -f "$FH_FINANCE_DATA_DIR/pgdata/PG_VERSION" &&
+   "$(cat "$FH_FINANCE_DATA_DIR/pgdata/PG_VERSION")" = 17 ]] ||
+  deny "EXISTING_PG17_DATA_REQUIRED_DO_NOT_REINITIALIZE"
 docker inspect -f '{{.State.Status}}' fh-finance-postgres >/dev/null 2>&1 ||
   deny "FINANCE_DB_NOT_BOOTSTRAPPED"
 cd "$root"
