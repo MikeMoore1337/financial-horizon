@@ -7,6 +7,8 @@ import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
 import {createScreenRoot} from './src/react/ScreenRoot.tsx';
 import {createAppShellRoots} from './src/react/AppShell.tsx';
+import {sameFinancialJSON} from './src/security/protected-staging.ts';
+import {prepareLivePersonalImportCandidate,executeConfirmedPersonalImportCandidate} from './src/cloud/personal-import-transport-candidate.mjs';
 
 const $=sel=>document.querySelector(sel);
 const svg=name=>`<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-${name}"></use></svg>`;
@@ -18,7 +20,8 @@ const titles={overview:'Обзор',calendar:'Календарь',obligations:'�
 // Only an explicit reviewed release can present the optional server-backed accounts view.
 // FastAPI authentication and profile scoping remain the sole authorization boundary.
 const financeAccountsEnabled=document.querySelector('meta[name="fh-finance-accounts"]')?.content==='enabled';
-let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null},passwordMode='export',restoreFile=null,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
+const financeImportEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-import"]')?.content==='enabled';
+let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null},passwordMode='export',restoreFile=null,cloudImportFile=null,pendingCloudImport=null,cloudImportController=null,cloudImportBusy=false,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
 const emailSession=createEmailSession();
 let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
 const GUEST_MODE_KEY='fh-guest-session-v2';
@@ -33,7 +36,7 @@ let storageStatusRequest=0;
 function revokeDisplayedLedger(){
  revokeStateScope(); // invalidate pending IDB reads/writes before clearing the UI
  state=null;
- restoreFile=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
+ restoreFile=null;cloudImportFile=null;pendingCloudImport=null;cloudImportController?.abort();cloudImportController=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
  if(navRoots){navRoots.unmount();navRoots=null;}
  $('#main').replaceChildren();
@@ -141,6 +144,7 @@ function render(){
    screenRoot.render({view:'settings',props:{
     currentDate:today(),categories:state.categories,archived,audit,storageMessage:storageStatusMessage,
     formatDate,showFinanceAccounts:financeAccountsEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId,
+    showFinanceImport:financeImportEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId,
    }});
   }
  }else{
@@ -443,6 +447,16 @@ async function handleAction(button){
  if(type==='persist'){const ok=await askPersistentStorage();toast(ok?'Браузер подтвердил постоянное хранение':'Браузер не предоставил постоянное хранение. Экспортируйте копии.',ok?'success':'error');renderStorageStatus();return;}
  if(type==='backup'){passwordMode='export';$('#password-heading').textContent='Создать резервную копию';$('#password-form').reset();openDialog('#password-dialog');return;}
  if(type==='restore'){$('#restore-file').value='';$('#restore-file').click();return;}
+ if(type==='cloud-import'){
+  if(!financeImportEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId)throw Error('Перенос доступен только своему FH-аккаунту');
+  pendingCloudImport=null;cloudImportFile=null;
+  $('#cloud-import-file').value='';$('#cloud-import-file').click();return;
+ }
+ if(type==='cancel-cloud-import'){
+  cloudImportController?.abort();pendingCloudImport=null;cloudImportFile=null;
+  $('#cloud-import-final-consent').checked=false;$('#cloud-import-dialog').close();return;
+ }
+ if(type==='confirm-cloud-import'){await confirmCloudImport();return;}
  if(type==='excel-import'){$('#excel-file').value='';$('#excel-file').click();return;}
  if(type==='cancel-excel-import'){pendingExcelImport=null;$('#excel-import-dialog').close();return;}
  if(type==='confirm-excel-import'){
@@ -637,6 +651,7 @@ function bindEvents(){
  $('#payment-form').addEventListener('change',updatePaymentPreview);
  $('#payment-loan').addEventListener('change',()=>{const l=state.loans.find(x=>x.id===$('#payment-loan').value);if(l){$('#payment-form').elements.amount.value=numberInput(loanLedger(l,state.loanPayments).monthlyCents);updatePaymentPreview();}});
  $('#restore-file').addEventListener('change',event=>{const file=event.target.files[0];if(!file)return;if(file.size>8_000_000){toast('Файл превышает предел 8 МБ','error');return;}restoreFile=file;passwordMode='import';$('#password-heading').textContent='Восстановить резервную копию';$('#password-form').reset();openDialog('#password-dialog');});
+ $('#cloud-import-file').addEventListener('change',event=>{const file=event.target.files[0];if(!file)return;if(file.size>8_000_000){toast('Зашифрованная копия превышает 8 МБ','error');return;}cloudImportFile=file;passwordMode='cloud';$('#password-heading').textContent='Проверить шифрованную копию для переноса';$('#password-form').reset();openDialog('#password-dialog');});
  $('#excel-file').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;try{await previewExcelImport(file);}catch(e){pendingExcelImport=null;fail(e);}finally{event.target.value='';}});
  $('#schedule-file').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;
   try{if(file.size>1_000_000)throw Error('График CSV превышает 1 МБ');const rows=parseSchedule(await file.text());const id=scheduleLoanId;
