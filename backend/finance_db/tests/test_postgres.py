@@ -59,7 +59,7 @@ def test_migration_head():
     engine = create_engine(dsn, connect_args={"options": "-csearch_path=finance,pg_catalog"})
     try:
         with engine.connect() as c:
-            assert c.execute(text("SELECT version_num FROM finance.alembic_version")).scalar_one() == "0001_initial"
+            assert c.execute(text("SELECT version_num FROM finance.alembic_version")).scalar_one() == "0002_linked_void"
             policies = c.execute(text("""
                 SELECT count(*) FROM pg_class c
                 JOIN pg_namespace n ON n.oid=c.relnamespace

@@ -14,8 +14,16 @@ test('ledger validates authenticated identity before reading any user records',(
  const read=init.indexOf('state=await readState()');
  assert.ok(begin>=0&&gate>=0&&reject>gate&&scope>reject&&read>scope);
  assert.match(init,/if\(!verified\|\|!emailSession\.userId\)/);
- assert.match(app,/function revokeDisplayedLedger\(\)\{\s*state=null;\s*if\(screenRoot\)\{screenRoot\.unmount\(\);screenRoot=null;\}\s*\$\('#main'\)\.replaceChildren\(\);/);
- assert.match(app,/if\(!verified\|\|emailSession\.userId!==activeUserId\|\|!emailSession\.email\)\{\s*revokeDisplayedLedger\(\);\s*window\.location\.replace\('\.\/account\.html'\);/);
+ const revoke=app.slice(app.indexOf('function revokeDisplayedLedger(){'),app.indexOf('\nconst hasData='));
+ assert.ok(revoke.includes('revokeStateScope()'),'logout must revoke storage access');
+ assert.ok(revoke.indexOf('revokeStateScope()')<revoke.indexOf('state=null'),'storage must revoke before UI cleanup');
+ assert.ok(revoke.includes('screenRoot.unmount()'));
+ assert.ok(revoke.includes('navRoots.unmount()'));
+ assert.ok(revoke.includes("$('#main').replaceChildren()"));
+ assert.ok(revoke.includes("document.querySelectorAll('dialog')"),'modal copies of old financial data must be cleared');
+ assert.match(app,/if\(!verified\|\|emailSession\.userId!==activeUserId\)\{\s*revokeDisplayedLedger\(\);\s*window\.location\.replace\('\.\/account\.html'\);/);
+ assert.doesNotMatch(app,/emailSession\.userId!==activeUserId\|\|!emailSession\.email/);
+ assert.match(app,/sessionValid:Boolean\(emailSession\.userId\)/);
  assert.match(app,/authBroadcast\.onmessage/);
 });
 
