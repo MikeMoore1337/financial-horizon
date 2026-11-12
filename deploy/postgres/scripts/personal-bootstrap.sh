@@ -96,7 +96,7 @@ if docker ps -a --format '{{.Names}}' | grep -Fxq fh-finance-postgres; then
 fi
 [[ -z "$(find "$FH_FINANCE_DATA_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
   deny "FINANCE_DATA_DIR_NOT_EMPTY_DO_NOT_REINITIALIZE"
-docker compose -f deploy/postgres/compose.yml config --quiet || deny "INVALID_PRIVATE_COMPOSE"
+docker compose -f deploy/postgres/compose.yml -f deploy/postgres/personal-loopback.override.yml config --quiet || deny "INVALID_PRIVATE_COMPOSE"
 started=0
 cleanup() {
   outcome=$?
@@ -106,16 +106,17 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-docker compose -f deploy/postgres/compose.yml up -d --wait db || deny "DB_START_FAILED"
+docker compose -f deploy/postgres/compose.yml -f deploy/postgres/personal-loopback.override.yml up -d --wait db || deny "DB_START_FAILED"
 started=1
-[[ -z "$(docker port fh-finance-postgres)" ]] || deny "PUBLIC_DB_PORT_FORBIDDEN"
+[[ "$(docker port fh-finance-postgres)" = "5432/tcp -> 127.0.0.1:54329" ]] ||
+  deny "ONLY_LOOPBACK_DATABASE_PORT_ALLOWED"
 [[ "$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' fh-finance-postgres)" = no ]] ||
   deny "DOCKER_AUTO_RESTART_FORBIDDEN"
-docker compose -f deploy/postgres/compose.yml --profile ops run --build --rm migrator ||
+docker compose -f deploy/postgres/compose.yml -f deploy/postgres/personal-loopback.override.yml --profile ops run --build --rm migrator ||
   deny "SCHEMA_MIGRATION_FAILED"
 
 # Migrations may evolve; accept ONLY the actual HEAD as reported by Alembic.
-docker compose -f deploy/postgres/compose.yml --profile ops run --rm migrator >/dev/null ||
+docker compose -f deploy/postgres/compose.yml -f deploy/postgres/personal-loopback.override.yml --profile ops run --rm migrator >/dev/null ||
   deny "MIGRATION_IDEMPOTENCE_FAILED"
 tables="$(docker exec -u postgres fh-finance-postgres psql -U postgres -d fh_finance -Atc "
  SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace

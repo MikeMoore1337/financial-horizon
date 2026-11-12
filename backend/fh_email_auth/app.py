@@ -64,6 +64,7 @@ def create_app(
     finance_engine=None,
     finance_profile_namespace=None,
     enable_account_v2_candidate: bool=False,
+    enable_import_candidate: bool=False,
 ) -> FastAPI:
     config=config or Settings.from_env()
     app=FastAPI(title="Financial Horizon Email Auth", docs_url=None, redoc_url=None,
@@ -365,8 +366,54 @@ def create_app(
             secure_cookie=not config.test_mode,
             rate_limiter=lambda request, action: throttle(request, action),
             enable_account_v2_candidate=enable_account_v2_candidate,
+            enable_import_candidate=enable_import_candidate,
         )
     return app
 
 
-app=create_app()
+def _personal_finance_runtime_options() -> dict:
+    """Explicit personal-only finance route opt-in; default startup unchanged.
+
+    This does not run migrations, unlock production secrets, enable public
+    registration or claim recovery checks. The production operator must
+    separately verify PostgreSQL, protected credentials and restore.
+    """
+    import os
+    from uuid import UUID
+
+    mode = os.environ.get("FH_FINANCE_RUNTIME_MODE", "off")
+    v2_mode = os.environ.get("FH_FINANCE_V2_RUNTIME", "off")
+    import_mode = os.environ.get("FH_FINANCE_IMPORT_RUNTIME", "off")
+    if mode not in ("off", "personal") or v2_mode not in ("off", "on") or import_mode not in ("off", "on"):
+        raise ValueError("Invalid finance feature configuration")
+    if mode == "off":
+        if v2_mode != "off" or import_mode != "off":
+            raise ValueError("Finance v2/import requires enabled private finance runtime")
+        return {}
+
+    if import_mode == "on" and v2_mode != "on":
+        raise ValueError("Import requires explicitly enabled private finance v2")
+    raw_namespace = os.environ.get("FH_FINANCE_PROFILE_NAMESPACE", "")
+    try:
+        namespace = UUID(raw_namespace)
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError("Stable finance profile namespace is required") from None
+    if str(namespace) != raw_namespace or namespace.int == 0:
+        raise ValueError("Canonical non-zero finance namespace is required")
+    url = os.environ.get("FH_FINANCE_DATABASE_URL", "")
+    if not url.startswith("postgresql+psycopg://"):
+        raise ValueError("Private PostgreSQL runtime connection is required")
+
+    # Do not import the SQL runtime or require finance dependencies for the
+    # existing email/OAuth service unless this private release flag is set.
+    from backend.finance_db.db import create_finance_engine
+
+    return {
+        "finance_engine": create_finance_engine(url),
+        "finance_profile_namespace": namespace,
+        "enable_account_v2_candidate": v2_mode == "on",
+        "enable_import_candidate": import_mode == "on",
+    }
+
+
+app=create_app(**_personal_finance_runtime_options())

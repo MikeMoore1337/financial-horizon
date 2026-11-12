@@ -10,6 +10,12 @@ Auth SQLite и существующая IndexedDB не изменяются.
 
 Отдельный безопасный путь первой установки: `deploy/postgres/scripts/personal-bootstrap.sh`. Он не редактирует auth SQLite, другие БД, фронтенд, IndexedDB или OAuth. Функции финансового API по умолчанию выключены. Исходный `production-deploy.sh` остаётся строгим вариантом и **не используется для личного режима**.
 
+В личном режиме дополнительно применяется `personal-loopback.override.yml`:
+PostgreSQL доступна процессу FH-авторизации **только по адресу
+`127.0.0.1:54329`**, с SCRAM и отдельной runtime-ролью. Публичный
+PostgreSQL-порт не открывается. Строгий базовый Compose без опубликованных
+портов не изменён.
+
 На авторизованной VPS:
 
 1. Подготовить свободный каталог `/srv/financial-horizon-finance/pgdata`, принадлежность PostgreSQL UID 999 и права 0700. Ничего не форматировать, не перезаписывать существующий DB volume. Допускается обычный диск VPS.
@@ -18,6 +24,35 @@ Auth SQLite и существующая IndexedDB не изменяются.
 4. В чистом checkout **последнего слитого main SHA с успешными точными CI** задать `FH_FINANCE_PERSONAL_MODE=YES`, `FH_FINANCE_DATA_DIR=/srv/financial-horizon-finance/pgdata`, `FH_FINANCE_APPROVED_SHA=<40-hex main SHA>`. Запустить от root `bash deploy/postgres/scripts/personal-bootstrap.sh`. Скрипт откажется стартовать при ошибке прав, доступного места, CI, секрета, ключа, сети Docker, миграций, RLS, шифрования или **реального изолированного restore**. При ошибке после запуска останавливает контейнер, не уничтожая данные.
 5. Только после вывода `FINANCE_PERSONAL_BOOTSTRAP=PASS` создать root-only `/etc/financial-horizon/finance/start.env` (0600), содержащий указанные SHA, mode, data dir и `FH_FINANCE_CHECKOUT_DIR` с абсолютным путём checkout. Установить `fh-finance-personal.service`, `fh-finance-personal-backup.service` и `fh-finance-personal-backup.timer` из `deploy/postgres/systemd/` в `/etc/systemd/system/`, сделать `systemctl daemon-reload`, включить `fh-finance-personal.service` и таймер бэкапов. Старые strict units LUKS/offsite не включать.
 6. Проверять ежедневно статус резервирования (`systemctl status fh-finance-personal-backup.service`) и наличие копий `*.pgdump.gpg`. При новом релизе нужна отдельная проверка миграций и восстановление **до** включения версии API. `personal-bootstrap.sh` сознательно блокирует попытку перезаписать уже существующий контейнер, это не скрипт обновления.
+
+### Подключение финансового API после настоящего восстановления
+
+После успешного запуска/restore на VPS существующий сервис
+`fh-email-auth.service` должен использовать проверенную установленную версию
+Python с `backend/requirements-finance.txt` и безопасно защищённые
+переменные окружения (не в GitHub):
+
+```text
+FH_FINANCE_RUNTIME_MODE=personal
+FH_FINANCE_V2_RUNTIME=on
+FH_FINANCE_PROFILE_NAMESPACE=<один постоянный UUID, сохранять при backup/restore>
+FH_FINANCE_DATABASE_URL=postgresql+psycopg://fh_finance_runtime:<URL-encoded password>@127.0.0.1:54329/fh_finance
+```
+
+`FH_FINANCE_PROFILE_NAMESPACE` создаётся **один раз** перед первым запуском и
+не меняется при обновлениях: именно он связывает проверенного FH-пользователя
+с постоянным финансовым профилем. Пароль берётся из отдельного runtime-secret
+PostgreSQL; файл systemd-конфигурации должен быть закрыт от посторонних
+пользователей. Не включать `FH_FINANCE_RUNTIME_MODE` и v2, пока не пройдены
+реальные backup, isolated restore, проверка FH-сессии, Origin/IDOR и rollback.
+
+По умолчанию обе опции `off`; приложение продолжает обслуживать существующий
+email/OAuth и локальный PWA без финансового PostgreSQL. После включения
+backend-оператор проверяет Caddy-маршруты `/api/finance/v1/*` и
+`/api/finance/v2/*` к тому же авторизованному FH-сервису, без второго
+публичного порта. Только после успешного smoke клиентский флаг
+`<meta name="fh-finance-accounts" content="enabled">` разрешается доставить
+проверенным релизом. Само слияние исходного кода флаги не переключает.
 
 **Что ещё требуется для закрытия #66:** реальный авторизованный production-исполнитель, успешный запуск этой процедуры на VPS, новый зашифрованный архив, PASS изолированного восстановления, запись exact SHA/health и rollback. Зелёный CI и наличие скриптов не заменяют выполнение на VPS.
 

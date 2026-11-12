@@ -65,3 +65,16 @@ def test_personal_services_are_distinct_from_hardened_offsite_units():
     assert "OnCalendar=" in timer
     assert "EnvironmentFile=/etc/financial-horizon/finance/start.env" in service
     assert "EnvironmentFile=/etc/financial-horizon/finance/backup.env" in backup
+
+
+def test_private_finance_postgres_is_reachable_only_on_host_loopback():
+    override = ROOT / "deploy/postgres/personal-loopback.override.yml"
+    content = override.read_text(encoding="utf-8")
+    assert '127.0.0.1:54329:5432' in content
+    assert '0.0.0.0:' not in content and '[::]:' not in content
+    for script in ("personal-bootstrap.sh", "personal-start.sh"):
+        text = (SCRIPTS / script).read_text(encoding="utf-8")
+        assert "personal-loopback.override.yml" in text
+        assert '"5432/tcp -> 127.0.0.1:54329"' in text
+        assert "ONLY_LOOPBACK_DATABASE_PORT_ALLOWED" in text
+        assert "docker port fh-finance-postgres" in text
