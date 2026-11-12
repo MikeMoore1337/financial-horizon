@@ -15,6 +15,7 @@ PERSONAL = (
     "personal-storage-preflight.sh",
     "personal-bootstrap.sh",
     "personal-start.sh",
+    "personal-prepare.sh",
 )
 
 
@@ -78,3 +79,25 @@ def test_private_finance_postgres_is_reachable_only_on_host_loopback():
         assert '"5432/tcp -> 127.0.0.1:54329"' in text
         assert "ONLY_LOOPBACK_DATABASE_PORT_ALLOWED" in text
         assert "docker port fh-finance-postgres" in text
+
+
+def test_personal_prepare_is_opt_in_idempotent_and_never_bootstraps_services():
+    source = (SCRIPTS / "personal-prepare.sh").read_text(encoding="utf-8")
+    for required in (
+        "FINANCE_PERSONAL_PREPARE=PASS",
+        "FINANCE_PERSONAL_MODE", "FH_FINANCE_APPROVED_SHA",
+        "EXISTING_FINANCE_DATABASE_DO_NOT_REINITIALIZE",
+        "PARTIAL_SECRETS_REQUIRE_MANUAL_REVIEW",
+        "O_EXCL", "O_NOFOLLOW", "secrets.token_hex(32)",
+        "GPG_RECOVERY_MISMATCH", "backup.env", "start.env",
+        "FINANCE_DATABASE_NOT_STARTED=YES",
+        "FINANCE_AUTH_AND_PWA_UNCHANGED=YES",
+        "personal-storage-preflight.sh",
+    ):
+        assert required in source or required.replace("GPG_", "") in source, required
+    assert "docker compose up" not in source
+    assert "systemctl start" not in source
+    assert "rm -rf" not in source
+    assert "mkfs" not in source
+    assert "curl | sh" not in source
+    assert "FH_FINANCE_GPG_RECIPIENT=" in source
