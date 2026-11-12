@@ -66,7 +66,7 @@ export function Settings({
       </header>
       <div className="settings-grid">
         {showFinanceAccounts && (
-          <SettingsCard id="finance-accounts" icon="wallet">
+          <SettingsCard id="finance-accounts" icon="credit">
             <h2>Счета и кошельки</h2>
             <p>
               Подтверждённые остатки и переводы из вашего финансового аккаунта.
@@ -74,7 +74,7 @@ export function Settings({
             </p>
             <div className="setting-actions">
               <button type="button" className="button-secondary" data-view="accounts-connected">
-                <Icon name="wallet" /> Открыть счета
+                <Icon name="credit" /> Открыть счета
               </button>
             </div>
           </SettingsCard>
