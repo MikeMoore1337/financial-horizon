@@ -141,7 +141,7 @@ test('#33 corrupt payment fact, missing cash reversal or wrong payment source ca
     const changed = structuredClone(source);
     mutate(changed);
     assert.throws(()=>decodeCompleteFinanceState(changed,P,USER),
-      /INVALID_FINANCE_SNAPSHOT|Факт|оплата|проводок|компенсация|Связанная|сбалансирован|Остаток|Квитанция|Неверное/,
+      /INVALID_FINANCE_SNAPSHOT|Факт|оплата|проводок|компенсация|Связанная|сбалансирован|Остаток|Квитанция|Неверное|Не подтверждена ревизия/,
       'tampered fact/transaction may not become a displayed confirmed balance');
   }
 });
