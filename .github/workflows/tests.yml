@@ -154,7 +154,9 @@ jobs:
             echo "ERROR: destructive downgrade must be refused"
             exit 1
           fi
-          alembic -c backend/finance_db/alembic.ini current | grep 0001_initial
+          current="$(alembic -c backend/finance_db/alembic.ini current | awk 'NR==1 {print $1}')"
+          expected="$(alembic -c backend/finance_db/alembic.ini heads | awk 'NR==1 {print $1}')"
+          test -n "$expected" && test "$current" = "$expected"
       - name: Compile finance Python and check shell scripts
         run: |
           python -m compileall -q backend/finance_db
