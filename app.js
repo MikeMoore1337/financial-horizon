@@ -606,6 +606,81 @@ async function performRestore(password){
  if(!await requireConfirm('Заменить локальные данные?', 'Импорт заменит всю текущую бухгалтерию данными из резервной копии. При необходимости сохраните текущую копию перед продолжением.'))return;
  await mutate(s=>{for(const key of Object.keys(s))delete s[key];Object.assign(s,structuredClone(decrypted));audit(s,'restore-backup','Восстановлена резервная копия');},'Данные восстановлены',originalRevision);
 }
+
+// Owner-only, dormant by default. Preview NEVER posts financial data.
+async function prepareCloudImport(password){
+ if(cloudImportBusy||busy||!financeImportEnabled||guestMode||!cloudImportFile)
+  throw Error('Перенос недоступен или уже выполняется');
+ const actor=activeUserId;
+ if(!actor||emailSession.userId!==actor||!await refreshEmailSession())
+  throw Error('Сессия финансового аккаунта не подтверждена');
+ cloudImportBusy=true;
+ cloudImportController?.abort();
+ const controller=new AbortController();
+ cloudImportController=controller;
+ pendingCloudImport=null;
+ try{
+  const text=await cloudImportFile.text();
+  if(text.length>8_000_000)throw Error('Зашифрованный файл превышает 8 МБ');
+  const prepared=await prepareLivePersonalImportCandidate({
+   verifiedActorUserId:actor,backupText:text,backupPassword:password,
+   fetchImpl:window.fetch.bind(window),origin:window.location.origin,
+   signal:controller.signal,explicitConsent:true,
+  });
+  if(controller.signal.aborted||guestMode||activeUserId!==actor||emailSession.userId!==actor)
+   throw Error('Сессия изменилась во время проверки импорта');
+  pendingCloudImport=prepared;
+  const count=prepared.preview.counts;
+  $('#cloud-import-summary').textContent=
+   'Готово к переносу: '+count.entries+' регулярных записей, '+count.loans+' кредитов, '+
+   count.settlements+' фактических оплат и '+count.loanPayments+' платежей по кредитам. '+
+   'Серверная ревизия: '+prepared.revision+'. Пока ничего не загружено.';
+  $('#cloud-import-final-consent').checked=false;
+  // Never retain the original encrypted file or password in global state.
+  cloudImportFile=null;
+ }catch(error){
+  pendingCloudImport=null;cloudImportFile=null;controller.abort();
+  throw error;
+ }finally{cloudImportBusy=false;}
+}
+async function confirmCloudImport(){
+ if(cloudImportBusy||busy||!financeImportEnabled||!pendingCloudImport)
+  throw Error('Нет подтверждённого переноса. Сначала проверьте резервную копию.');
+ if($('#cloud-import-final-consent').checked!==true)
+  throw Error('Требуется отдельное подтверждение сохранённой шифрованной копии');
+ const prepared=pendingCloudImport, actor=prepared.actor;
+ cloudImportBusy=true;
+ const button=$('#cloud-import-dialog [data-action="confirm-cloud-import"]');
+ button.disabled=true;
+ try{
+  if(guestMode||actor!==activeUserId||emailSession.userId!==actor||
+     !await refreshEmailSession())
+   throw Error('Сессия изменилась. Перенос отменён.');
+  const current=await readState();
+  const unchanged=sameFinancialJSON(current,prepared.snapshot);
+  if(!unchanged)throw Error('Локальные данные изменились. Создайте новую копию и предпросмотр.');
+  const result=await executeConfirmedPersonalImportCandidate({
+   prepared,verifiedActorUserId:actor,currentLocalSnapshotMatches:unchanged,
+   explicitFinalConsent:true,fetchImpl:window.fetch.bind(window),
+   signal:cloudImportController?.signal,
+  });
+  pendingCloudImport=null;cloudImportFile=null;
+  $('#cloud-import-final-consent').checked=false;
+  $('#cloud-import-summary').textContent=
+   'Перенесено '+result.recordCount+' записей. Сервер вернул точную копию исходных данных. '+
+   'Локальная бухгалтерия не удалена. Пока синхронизация не включена, '+
+   'не ведите параллельные изменения на разных устройствах.';
+  toast('Перенос подтверждён сервером, исходные данные сохранены');
+ }catch(error){
+  // A network failure AFTER commit is UNKNOWN. Do not retry automatically.
+  pendingCloudImport=null;cloudImportFile=null;cloudImportController?.abort();
+  $('#cloud-import-final-consent').checked=false;
+  $('#cloud-import-summary').textContent=
+   'Результат переноса неизвестен. Локальные данные сохранены. Не повторяйте импорт, '+
+   'пока не проверите серверную копию и квитанцию.';
+  throw error;
+ }finally{cloudImportBusy=false;button.disabled=true;}
+}
 async function onFormSubmit(event){
  const form=event.target;
  // A dialog cancel button must use the browser's native method="dialog" close path.
@@ -627,8 +702,14 @@ async function onFormSubmit(event){
   if(form.getAttribute('id')==='password-form'){
    const password=form.elements.password.value;
    if(password.length<12)throw Error('Пароль должен содержать не менее 12 символов');
-   if(passwordMode==='export')await performBackup(password);else await performRestore(password);
+   if(passwordMode==='export')await performBackup(password);
+   else if(passwordMode==='cloud')await prepareCloudImport(password);
+   else await performRestore(password);
    form.elements.password.value='';$('#password-dialog').close();
+   if(passwordMode==='cloud'&&pendingCloudImport){
+    $('#cloud-import-dialog [data-action="confirm-cloud-import"]').disabled=false;
+    openDialog('#cloud-import-dialog');
+   }
   }
  }catch(e){fail(e);}
 }
