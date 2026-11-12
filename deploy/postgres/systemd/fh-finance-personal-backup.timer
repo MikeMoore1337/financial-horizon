@@ -1,0 +1,11 @@
+[Unit]
+Description=Financial Horizon daily encrypted local database backups
+
+[Timer]
+OnCalendar=*-*-* 03:10:00 UTC
+Persistent=true
+RandomizedDelaySec=2m
+Unit=fh-finance-personal-backup.service
+
+[Install]
+WantedBy=timers.target
