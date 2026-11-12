@@ -120,7 +120,13 @@ export class AccountsFinanceGateway {
       for (;;) {
         const part = await reader.read();
         if (part.done) break;
-        if (!(part.value instanceof Uint8Array)) throw new Error('Invalid response chunk');
+        // Browser/jsdom fetch streams may yield byte views from another
+        // JavaScript realm; instanceof Uint8Array is not realm-independent.
+        if (!ArrayBuffer.isView(part.value) ||
+          !Number.isSafeInteger(part.value.length) ||
+          part.value.length !== part.value.byteLength) {
+          throw new Error('Invalid response chunk');
+        }
         total += part.value.byteLength;
         if (total > MAX_RESPONSE_BYTES || chunks.length >= 8192) {
           throw new Error('Oversized finance response');
