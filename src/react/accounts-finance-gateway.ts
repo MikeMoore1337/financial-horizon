@@ -105,16 +105,40 @@ export class AccountsFinanceGateway {
       throw new FinanceBridgeError('error');
     }
     const length = response.headers.get('content-length');
-    if (length && Number(length) > MAX_RESPONSE_BYTES) throw new FinanceBridgeError('error');
+    if (length !== null &&
+      (!/^[0-9]{1,10}$/.test(length) || Number(length) > MAX_RESPONSE_BYTES)) {
+      throw new FinanceBridgeError('error');
+    }
+    // Do not buffer an unbounded HTTP body with Response.text() before
+    // checking its size. An absent or forged Content-Length is not trusted.
+    if (!response.body) throw new FinanceBridgeError('error');
+    const reader = response.body.getReader();
     let body: unknown;
     try {
-      const text = await response.text();
-      if (new TextEncoder().encode(text).byteLength > MAX_RESPONSE_BYTES) {
-        throw new Error('Oversized finance response');
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      for (;;) {
+        const part = await reader.read();
+        if (part.done) break;
+        if (!(part.value instanceof Uint8Array)) throw new Error('Invalid response chunk');
+        total += part.value.byteLength;
+        if (total > MAX_RESPONSE_BYTES || chunks.length >= 8192) {
+          throw new Error('Oversized finance response');
+        }
+        chunks.push(part.value);
       }
-      body = JSON.parse(text);
+      const bytes = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      body = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(bytes));
     } catch {
+      try { await reader.cancel(); } catch { /* Failed stream is already unusable. */ }
       throw new FinanceBridgeError('error');
+    } finally {
+      reader.releaseLock();
     }
     return { status: response.status, body, etag: response.headers.get('etag') };
   }
