@@ -87,7 +87,8 @@ echo "CI_GUARDED_START_SYSTEMD_LUKS_GATE_PASS"
 docker compose -f deploy/postgres/compose.yml --profile ops run --rm --build migrator
 version="$(docker exec -u postgres fh-finance-postgres \
   psql -U postgres -d fh_finance -Atc 'SELECT version_num FROM finance.alembic_version')"
-test "$version" = "0001_initial"
+expected_version="$(alembic -c backend/finance_db/alembic.ini heads | awk 'NR==1 {print $1}')"
+test -n "$expected_version" && test "$version" = "$expected_version"
 tables="$(docker exec -u postgres fh-finance-postgres \
   psql -U postgres -d fh_finance -Atc \
   "SELECT count(*) FROM pg_tables WHERE schemaname='finance' AND tablename<>'alembic_version'")"
