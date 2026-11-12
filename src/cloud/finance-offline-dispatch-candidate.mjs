@@ -174,7 +174,7 @@ async function dispatchWithoutNetworkLease({
   // since advanced; do not rewrite its persisted ETag/baseRevision.
   const postOptions = {
     method: 'POST', credentials: 'same-origin', mode: 'same-origin',
-    redirect: 'error', cache: 'no-store', referrerPolicy: 'no-referrer',
+    redirect: 'error', cache: 'no-store', referrerPolicy: 'same-origin',
     headers: {
       'Content-Type': 'application/json',
       'If-Match': item.ifMatch,
@@ -220,7 +220,7 @@ async function dispatchWithoutNetworkLease({
       server + '/api/finance/v1/changes?since_revision=' +
       sinceRevision + '&limit_revisions=1',
       {method: 'GET', credentials: 'same-origin', mode: 'same-origin',
-       redirect: 'error', cache: 'no-store', referrerPolicy: 'no-referrer',
+       redirect: 'error', cache: 'no-store', referrerPolicy: 'same-origin',
        headers: {'Accept': 'application/json'},
        signal: session.lifecycleSignal},
     );
