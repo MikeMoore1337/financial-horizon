@@ -8,6 +8,8 @@ import {
   enqueueEncryptedFinanceCommandCandidate,
   classifyFinanceOutboxResponseCandidate,
   persistAuthenticatedFinanceReceiptCandidate,
+  persistEncryptedFinanceHoldCandidate,
+  recordManualFinanceConflictChoiceCandidate,
 } from '../src/cloud/encrypted-command-outbox-candidate.mjs';
 import {dispatchOneEncryptedFinanceCommandCandidate} from '../src/cloud/finance-offline-dispatch-candidate.mjs';
 import {LocalBudgetSession} from '../src/security/local-budget-session.ts';
@@ -1628,5 +1630,110 @@ test('#68 conflict-persistence failure cannot lose a queued financial command', 
   assert.deepEqual(after, old);
   assert.equal(after.outbox.length, 1);
   assert.equal(after.snapshot.cloudFinance.revision, 0);
+  session.logout();
+});
+
+
+test('#68 explicit manual conflict choice survives restart but cannot unblock held money', async () => {
+  for (const [status, decision, choice] of [
+    [409, 'CONFLICT_HOLD', 'KEEP_ORIGINAL_FOR_REVIEW'],
+    [410, 'SNAPSHOT_REQUIRED_HOLD', 'PREFER_SERVER_FOR_REVIEW'],
+  ]) {
+    const {db, session, identity} = await pendingAccountCreate();
+    const first = await persistEncryptedFinanceHoldCandidate({
+      scope: USER_A, session, identity, expectedEpoch: 2,
+      mutationId: PENDING_ID, httpStatus: status, decision,
+      source: status === 410 ? 'delta' : 'command',
+    });
+    assert.equal(first.bundleEpoch, 3);
+    const before = await readAtomicEncryptedCandidate(USER_A, session);
+    const saved = await recordManualFinanceConflictChoiceCandidate({
+      scope: USER_A, session, identity, expectedEpoch: 3,
+      mutationId: PENDING_ID, choice, observedCachedRevision: 0,
+      explicitUserChoice: true,
+    });
+    assert.equal(saved.status, 'MANUAL_CHOICE_STAGED');
+    assert.equal(saved.bundleEpoch, 4);
+    assert.equal(saved.queuePreserved, true);
+    assert.equal(saved.conflictStillHeld, true);
+    assert.equal(saved.sent, false);
+    const after = await readAtomicEncryptedCandidate(USER_A, session);
+    assert.deepEqual(after.outbox, before.outbox);
+    assert.deepEqual(after.snapshot, before.snapshot);
+    assert.equal(after.conflicts[0].decision, decision);
+    assert.equal(after.conflicts[0].manualChoice.choice, choice);
+    assert.equal(after.conflicts[0].manualChoice.observedCachedRevision, 0);
+    assert.equal(after.conflicts[0].manualChoice.originalFingerprint,
+      after.outbox[0].fingerprint);
+    const raw = JSON.stringify([...db.tables.get('bundles').values()]);
+    for (const privateValue of [PENDING_ID, NEW_ACCOUNT_ID, CLOUD_ETAG]) {
+      assert.equal(raw.includes(privateValue), false);
+    }
+    session.logout();
+    const freshSession = new LocalBudgetSession();
+    freshSession.selectScope(USER_A);
+    await freshSession.unlock(await getAtomicEncryptedKeyset(USER_A), {passphrase: PASS});
+    const fresh = cloudAuth(freshSession);
+    let requests = 0;
+    const result = await dispatchOneEncryptedFinanceCommandCandidate({
+      scope: USER_A, session: freshSession, identity: fresh, expectedEpoch: 4,
+      origin: TEST_ORIGIN, explicitNetworkCandidateConsent: true,
+      lockManager: TEST_LOCKS,
+      fetchImpl: async () => { requests++; throw Error('Must not send held money'); },
+    });
+    assert.equal(result.status, decision);
+    assert.equal(requests, 0);
+    const persisted = await readAtomicEncryptedCandidate(USER_A, freshSession);
+    assert.equal(persisted.outbox.length, 1);
+    assert.equal(persisted.conflicts[0].manualChoice.choice, choice);
+    freshSession.logout();
+  }
+});
+
+test('#68 manual choice is explicit, immutable and fenced by the encrypted CAS', async () => {
+  const {db, session, identity} = await pendingAccountCreate();
+  await persistEncryptedFinanceHoldCandidate({
+    scope: USER_A, session, identity, expectedEpoch: 2,
+    mutationId: PENDING_ID, httpStatus: 412, decision: 'CONFLICT_HOLD',
+    source: 'command',
+  });
+  const base = {
+    scope: USER_A, session, identity, expectedEpoch: 3,
+    mutationId: PENDING_ID, choice: 'KEEP_ORIGINAL_FOR_REVIEW',
+    observedCachedRevision: 0, explicitUserChoice: true,
+  };
+  for (const patch of [
+    {explicitUserChoice: false}, {choice: 'AUTO_MERGE'},
+    {observedCachedRevision: 1}, {expectedEpoch: 2},
+    {mutationId: NEW_ACCOUNT_ID},
+    {identity: {...identity, profileId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'}},
+  ]) {
+    await assert.rejects(
+      () => recordManualFinanceConflictChoiceCandidate({...base, ...patch}),
+      /SYNC_HOLD/,
+    );
+  }
+  const previous = await readAtomicEncryptedCandidate(USER_A, session);
+  assert.equal(previous.epoch, 3);
+  db.failBundlePut = true;
+  await assert.rejects(
+    () => recordManualFinanceConflictChoiceCandidate(base),
+    /injected bundle write failure/,
+  );
+  db.failBundlePut = false;
+  assert.deepEqual(await readAtomicEncryptedCandidate(USER_A, session), previous);
+  const recorded = await recordManualFinanceConflictChoiceCandidate(base);
+  assert.equal(recorded.bundleEpoch, 4);
+  const replay = await recordManualFinanceConflictChoiceCandidate({
+    ...base, expectedEpoch: 4,
+  });
+  assert.equal(replay.status, 'MANUAL_CHOICE_ALREADY_STAGED');
+  assert.equal(replay.bundleEpoch, 4);
+  await assert.rejects(
+    () => recordManualFinanceConflictChoiceCandidate({
+      ...base, expectedEpoch: 4, choice: 'PREFER_SERVER_FOR_REVIEW',
+    }), /SYNC_HOLD/,
+  );
+  assert.equal((await readAtomicEncryptedCandidate(USER_A, session)).epoch, 4);
   session.logout();
 });
