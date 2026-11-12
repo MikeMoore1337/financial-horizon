@@ -63,9 +63,24 @@ The original UUID cannot be reused for different money. Network timeout and
 retryable errors persist a bounded exponential retry counter in the same
 encrypted store, not in a timer or Service Worker background task.
 
+The one-shot sender now requires an **exclusive browser Web Lock**
+named `financial-horizon-finance-v2-network-dispatch` throughout the
+POST, independent /changes fetch and encrypted receipt COMMIT. A second
+concurrent tab receives `LEASE_BUSY` and never issues another POST.
+No user ID, financial amount or account name enters the lock name. The
+absence of the browser Web Locks API (including hardened browser settings)
+causes a fail-closed refusal, **not** an unsafe localStorage fallback.
+Server-side idempotency remains mandatory across devices and process crashes.
+
+A synthetic browser-native 2-tab Web Lock test in
+`tests/e2e/finance-cloud-candidate.spec.mjs` exercises the actual
+Chromium/WebKit native lock and encrypted IDB candidate on an intercepted
+HTTPS origin. It does not claim that a live FastAPI production service was
+accessed.
+
 **What remains OFF:** the active PWA does not import any of these modules,
-there is no authenticated host integration, no safe cross-tab network leader
-lease, no conflict-resolution UI and no full two-user/two-device live E2E.
+there is no authenticated host integration, no conflict-resolution UI and
+no full two-user/two-device live PostgreSQL E2E.
 Only synthetic disposable fixtures exercise the explicit opt-in transport.
 A live backend runtime remains separately guarded by #66/#67/#51/#70.
 
@@ -74,7 +89,7 @@ A real integration must additionally implement:
 1. FH session bootstrap and session-derived namespace (never trust cache IDs)
 2. 401/logout/revoke hard stop and cross-tab generation fencing
 3. Conflict/409/412/410 handling with explicit user resolution (no LWW)
-4. Mount the reviewed dispatcher into the actually authenticated FH session/UI, with safe cross-tab network leader lease and conflict resolution
+4. Mount the Web-Lock-guarded dispatcher into the actually authenticated FH session/UI, including conflict resolution and cross-device idempotency
 5. Validate durable receipt+delta recovery on a real backend and real two-tab encrypted IndexedDB, not just isolated candidate tests
 6. Import #69 only after verified external encrypted backup and explicit consent
 7. Actual two-account, two-device Chromium/WebKit and independent security QA #70
