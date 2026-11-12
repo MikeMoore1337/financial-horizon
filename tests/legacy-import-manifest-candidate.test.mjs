@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createSampleState} from '../finance.js';
-import {planVerifiedLegacyImportCandidate} from '../src/cloud/legacy-import-manifest-candidate.mjs';
+import {planVerifiedLegacyImportCandidate, prepareVerifiedLegacyImportTransportCandidate} from '../src/cloud/legacy-import-manifest-candidate.mjs';
 
 const USER = 'a'.repeat(32);
 const ACCOUNT = 'account:' + USER;
@@ -186,4 +186,70 @@ test('sparse arrays and poisoned nested properties never enter import hashing', 
     enumerable: true, configurable: true, value: {isAdmin: true},
   });
   await expectHold(plan({verified: verified(polluted)}));
+});
+
+
+test('explicit personal import request reproduces exact preview SHA without network or local writes', async () => {
+  const src = createSampleState();
+  const original = structuredClone(src);
+  const approved = verified(src);
+  const preview = await plan({verified: approved});
+  const controller = new AbortController();
+  let writes = 0, requests = 0;
+  const oldFetch = globalThis.fetch, oldIDB = globalThis.indexedDB;
+  globalThis.fetch = () => { requests++; throw Error('No automatic import HTTP'); };
+  globalThis.indexedDB = {open() { writes++; throw Error('No implicit IDB write'); }};
+  try {
+    const prepared = await prepareVerifiedLegacyImportTransportCandidate({
+      verified: approved, preview, signal: controller.signal,
+    });
+    const body = JSON.parse(prepared.source_canonical_json);
+    assert.deepEqual(body, original);
+    const expectedHash = [...new Uint8Array(await crypto.subtle.digest(
+      'SHA-256', new TextEncoder().encode(prepared.source_canonical_json),
+    ))].map(x => x.toString(16).padStart(2, '0')).join('');
+    assert.equal(expectedHash, preview.sourceSha256);
+    assert.deepEqual(prepared.manifest, {
+      schema_version: 1, source_scope: ACCOUNT, source_revision: preview.sourceRevision,
+      source_sha256: preview.sourceSha256, expected_server_revision: 0,
+      external_encrypted_backup_checked: true, explicit_owner_consent: true,
+      explicit_guest_transfer: false,
+      rows: [...['entries', 'loans', 'settlements', 'loanPayments'].flatMap(kind =>
+        src[kind].map(row => ({record_type: kind, source_record_id: row.id})))],
+    });
+    assert.equal(requests, 0); assert.equal(writes, 0);
+    assert.deepEqual(src, original);
+    assert(Object.isFrozen(prepared));
+  } finally {
+    globalThis.fetch = oldFetch;
+    globalThis.indexedDB = oldIDB;
+  }
+});
+
+test('never prepare a money upload after changed backup, different owner or remote conflict', async () => {
+  const source = createSampleState();
+  const original = verified(source);
+  const preview = await plan({verified: original});
+  const signal = new AbortController().signal;
+  const changed = verified(structuredClone(source));
+  changed.snapshot.entries[0].amountCents += 1;
+  const changes = [
+    {verified: changed, preview},
+    {verified: original, preview: {...preview, targetScope: 'account:' + 'b'.repeat(32)}},
+    {verified: original, preview: {...preview, status: 'NEEDS_CONFLICT_DECISION'}},
+    {verified: original, preview: {...preview, sourceSha256: 'b'.repeat(64)}},
+    {verified: original, preview: {...preview, sendAllowed: true}},
+    {verified: original, preview: {...preview, expectedServerRevision: -1}},
+    {verified: original, preview: {...preview, sourceScope: 'guest:synthetic-guest'}},
+  ];
+  for (const change of changes) {
+    await expectHold(prepareVerifiedLegacyImportTransportCandidate({
+      verified: change.verified, preview: change.preview, signal,
+    }));
+  }
+  const cancelled = new AbortController();
+  cancelled.abort();
+  await expectHold(prepareVerifiedLegacyImportTransportCandidate({
+    verified: original, preview, signal: cancelled.signal,
+  }));
 });

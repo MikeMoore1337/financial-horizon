@@ -16,6 +16,8 @@ function setup(refresh){
  const ctx={guestMode:false,activeUserId:user,sessionValidation:null,emailSession:session,
   state:{entries:[{title:'local'}]},
   restoreFile:{synthetic:'backup'},pendingExcelImport:{synthetic:'import'},
+  cloudImportFile:{synthetic:'backup'},pendingCloudImport:{synthetic:'plaintext'},
+  cloudImportController:null,
   scheduleLoanId:'synthetic-id',lastDialogActivator:{synthetic:'modal'},
   revokeStateScope:()=>events.push('scope-revoked'),
   document:{querySelectorAll(selector){
@@ -50,6 +52,8 @@ test('expired session hides the old account ledger and opens login',async()=>{
  assert.equal(s.ctx.state,null);
  assert.equal(s.ctx.screenRoot,null);
  assert.equal(s.ctx.navRoots,null);
+  assert.equal(s.ctx.cloudImportFile,null);
+  assert.equal(s.ctx.pendingCloudImport,null);
  assert.deepEqual(s.events,['scope-revoked','react-unmount','nav-unmount','ledger-cleared','dialog-closed','dialog-cleared','./account.html']);
 });
 test('a different account cannot re-use previous account data',async()=>{

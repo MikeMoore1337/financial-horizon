@@ -19,6 +19,7 @@ export interface SettingsProps {
   storageMessage: string;
   formatDate: CalendarProps['formatDate'];
   showFinanceAccounts?: boolean;
+  showFinanceImport?: boolean;
 }
 
 function SettingsCard({
@@ -53,6 +54,7 @@ export function Settings({
   storageMessage,
   formatDate,
   showFinanceAccounts = false,
+  showFinanceImport = false,
 }: SettingsProps) {
   return (
     <>
@@ -104,6 +106,11 @@ export function Settings({
             <button className="button-secondary" data-action="restore">
               <Icon name="upload" /> Восстановить
             </button>
+            {showFinanceAccounts && showFinanceImport && (
+              <button className="button-secondary" data-action="cloud-import">
+                <Icon name="upload" /> Перенести данные в аккаунт
+              </button>
+            )}
           </div>
         </SettingsCard>
         <SettingsCard id="import" icon="sheet">
