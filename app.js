@@ -702,10 +702,12 @@ async function onFormSubmit(event){
   if(form.getAttribute('id')==='password-form'){
    const password=form.elements.password.value;
    if(password.length<12)throw Error('Пароль должен содержать не менее 12 символов');
-   if(passwordMode==='export')await performBackup(password);
-   else if(passwordMode==='cloud')await prepareCloudImport(password);
-   else await performRestore(password);
-   form.elements.password.value='';$('#password-dialog').close();
+   try{
+    if(passwordMode==='export')await performBackup(password);
+    else if(passwordMode==='cloud')await prepareCloudImport(password);
+    else await performRestore(password);
+   }finally{form.elements.password.value='';}
+   $('#password-dialog').close();
    if(passwordMode==='cloud'&&pendingCloudImport){
     $('#cloud-import-dialog [data-action="confirm-cloud-import"]').disabled=false;
     openDialog('#cloud-import-dialog');
@@ -733,6 +735,11 @@ function bindEvents(){
  $('#payment-loan').addEventListener('change',()=>{const l=state.loans.find(x=>x.id===$('#payment-loan').value);if(l){$('#payment-form').elements.amount.value=numberInput(loanLedger(l,state.loanPayments).monthlyCents);updatePaymentPreview();}});
  $('#restore-file').addEventListener('change',event=>{const file=event.target.files[0];if(!file)return;if(file.size>8_000_000){toast('Файл превышает предел 8 МБ','error');return;}restoreFile=file;passwordMode='import';$('#password-heading').textContent='Восстановить резервную копию';$('#password-form').reset();openDialog('#password-dialog');});
  $('#cloud-import-file').addEventListener('change',event=>{const file=event.target.files[0];if(!file)return;if(file.size>8_000_000){toast('Зашифрованная копия превышает 8 МБ','error');return;}cloudImportFile=file;passwordMode='cloud';$('#password-heading').textContent='Проверить шифрованную копию для переноса';$('#password-form').reset();openDialog('#password-dialog');});
+ $('#cloud-import-dialog').addEventListener('close',()=>{
+  cloudImportController?.abort();cloudImportController=null;
+  pendingCloudImport=null;cloudImportFile=null;
+  $('#cloud-import-final-consent').checked=false;
+ });
  $('#excel-file').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;try{await previewExcelImport(file);}catch(e){pendingExcelImport=null;fail(e);}finally{event.target.value='';}});
  $('#schedule-file').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;
   try{if(file.size>1_000_000)throw Error('График CSV превышает 1 МБ');const rows=parseSchedule(await file.text());const id=scheduleLoanId;
