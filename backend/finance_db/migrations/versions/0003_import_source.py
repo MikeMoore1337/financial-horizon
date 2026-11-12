@@ -28,6 +28,7 @@ def upgrade() -> None:
             status <> 'committed' OR source_canonical_json IS NOT NULL
           )
     """)
+    op.execute("GRANT UPDATE (source_canonical_json) ON finance.import_batches TO fh_finance_runtime")
 
 
 def downgrade() -> None:
