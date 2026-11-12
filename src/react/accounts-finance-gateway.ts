@@ -90,7 +90,10 @@ export class AccountsFinanceGateway {
         credentials: 'same-origin',
         redirect: 'error',
         cache: 'no-store',
-        referrerPolicy: 'no-referrer',
+        // WebKit sends Origin: null for same-origin POST with no-referrer.
+        // Keep the referrer restricted to same-origin while preserving the
+        // exact Origin required by the server's CSRF guard.
+        referrerPolicy: 'same-origin',
         signal,
         headers: { Accept: 'application/json', ...(init.headers || {}) },
       });
