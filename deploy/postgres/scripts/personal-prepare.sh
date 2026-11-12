@@ -5,7 +5,7 @@
 set -Eeuo pipefail
 umask 077
 
-deny() { printf 'FINANCE_PERSONAL_PREPARE_NO_GO=%s\n' "$1" >&2; exit 1; }
+deny() { printf 'FINANCE_PERSONAL_PREPARE_NO_GO: %s\n' "$1" >&2; exit 1; }
 [[ "$(id -u)" -eq 0 ]] || deny ROOT_REQUIRED
 [[ "${GITHUB_ACTIONS:-}" != true ]] || deny NEVER_RUN_IN_CI
 [[ "${FH_FINANCE_PERSONAL_MODE:-}" = YES ]] || deny EXPLICIT_OWNER_PERSONAL_MODE_REQUIRED
