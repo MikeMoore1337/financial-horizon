@@ -38,6 +38,7 @@ export class AccountsFinanceGateway {
   private view: AccountServerView | null = null;
   private etag: string | null = null;
   private generation = 0;
+  private readSequence = 0;
   private writing = false;
   private uncertain = false;
 
@@ -65,6 +66,7 @@ export class AccountsFinanceGateway {
 
   invalidate(): void {
     this.generation += 1;
+    this.readSequence += 1;
     this.actorId = null;
     this.profile = null;
     this.view = null;
@@ -145,10 +147,15 @@ export class AccountsFinanceGateway {
     if (verifiedActorId !== this.actorId || !this.profile || (this.writing && !internal)) {
       throw new FinanceBridgeError('locked');
     }
+    // A concurrent refresh must never overwrite a newer committed balance.
+    const readSequence = ++this.readSequence;
     const response = await this.json('/api/finance/v1/state?limit_entities=5000', {
       method: 'GET',
     }, signal);
     if (epoch !== this.generation) throw new FinanceBridgeError('locked');
+    if (readSequence !== this.readSequence || (this.writing && !internal)) {
+      throw new FinanceBridgeError('conflict');
+    }
     if (response.status !== 200 || !response.etag || !ETAG.test(response.etag)) {
       // HTTP 206 MUST NOT become an undercounted bank balance.
       throw new FinanceBridgeError('error');
@@ -159,6 +166,8 @@ export class AccountsFinanceGateway {
     } catch {
       throw new FinanceBridgeError('error');
     }
+    if (epoch !== this.generation || readSequence !== this.readSequence ||
+      (this.writing && !internal)) throw new FinanceBridgeError('conflict');
     this.view = decoded;
     this.etag = response.etag;
     // A generic refresh MUST NOT unlock an ambiguous debit.
@@ -194,6 +203,9 @@ export class AccountsFinanceGateway {
             expected_entity_revisions: versions, payload,
           },
         };
+    // Fence GET /state started before this POST; an older GET cannot overwrite
+    // a server-confirmed revision even if its response arrives last.
+    this.readSequence += 1;
     this.writing = true;
     this.uncertain = true;
     try {
