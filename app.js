@@ -68,7 +68,7 @@ function render(){
  if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'||ui.view==='settings'||ui.view==='accounts-connected'){
   if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main,getAuthAccess);}
   if(ui.view==='accounts-connected'){
-   screenRoot.render({view:'accounts-connected',props:{verifiedActorUserId:emailSession.userId||null,onBack:()=>navigation('settings')}});
+   screenRoot.render({view:'accounts-connected',props:{verifiedActorUserId:emailSession.userId||null,onBack:()=>navigation('overview')}});
   }else if(ui.view==='calendar'){
    const events=monthEvents(),totals=monthTotals(events);
    screenRoot.render({view:'calendar',props:{events,month:ui.month,selectedDate:ui.selectedDate,currentDate:today(),monthTitle:monthLabel(ui.month),netPlanCents:totals.netPlanCents,netFactCents:totals.netFactCents,formatDate,rubles}});
