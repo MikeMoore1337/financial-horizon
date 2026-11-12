@@ -1,6 +1,7 @@
 """Synthetic localhost E2E origin: built Vite frontend and real FastAPI/SQLite."""
 import re
 import sys
+from uuid import uuid4
 import tempfile
 import threading
 from pathlib import Path
@@ -14,6 +15,8 @@ DIST = ROOT / "dist"
 sys.path.insert(0, str(ROOT / "backend"))
 from fh_email_auth.app import create_app
 from fh_email_auth.config import Settings
+from fh_email_auth.store import AuthStore
+from fh_email_auth import SESSION_COOKIE
 
 ORIGIN = "http://127.0.0.1:8791"
 PUBLIC_FILES = {
@@ -63,8 +66,10 @@ def local_app(directory):
         test_mode=True,
     )
     inbox = SyntheticInbox()
+    store = AuthStore(config.database_path)
     app = create_app(
         config=config,
+        store=store,
         mailer=inbox,
         captcha=lambda secret, token, origin, action: (
             secret == config.turnstile_secret
@@ -74,6 +79,22 @@ def local_app(directory):
     )
     sw_revision = {"value": 0}
     legacy_sw = {"enabled": False}
+
+    @app.post("/__e2e__/personal-session")
+    def synthetic_personal_session(response: Response):
+        # This route exists only in the isolated localhost E2E ASGI app.
+        # Create a genuine revocable FH session without consuming the shared
+        # public registration rate quota or exposing a raw token in JSON.
+        email = "personal-" + uuid4().hex + "@example.invalid"
+        token = store.create_account(email)
+        if not token:
+            raise HTTPException(503)
+        session = store.confirm_email(token, "Synthetic-test-passphrase-2026!")
+        response.set_cookie(
+            SESSION_COOKIE, session, path="/api/auth", httponly=True,
+            samesite="lax", secure=False,
+        )
+        return {"authenticated": True, "user": store.current(session)}
 
     @app.get("/__e2e__/ready")
     def ready():
