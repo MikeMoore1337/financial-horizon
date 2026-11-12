@@ -256,6 +256,7 @@ class ImportBatch(ProfileEntity, Base):
     base_revision: Mapped[int] = mapped_column(BigInteger)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     committed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_canonical_json: Mapped[bytes | None] = mapped_column(LargeBinary)
 
 
 class ImportRecordMap(Base):
