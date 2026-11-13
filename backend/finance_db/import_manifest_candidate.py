@@ -26,6 +26,7 @@ _HEX_SHA = re.compile(r"^[a-f0-9]{64}$")
 _KIND = ("entries", "loans", "settlements", "loanPayments")
 _MAX_RECORDS = 10000
 _MAX_SAFE_REVISION = 2**53 - 1
+_UUID = re.compile(r"^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$")
 
 
 class ImportRowCandidate(BaseModel):
@@ -58,6 +59,8 @@ class ImportSourceManifestCandidate(BaseModel):
     external_encrypted_backup_checked: StrictBool
     explicit_owner_consent: StrictBool
     explicit_guest_transfer: StrictBool = False
+    preserve_zero_account_id: str | None = Field(default=None, pattern=_UUID.pattern)
+    confirm_preserve_zero_account: StrictBool = False
     rows: list[ImportRowCandidate] = Field(max_length=_MAX_RECORDS)
 
     @field_validator("schema_version")
@@ -90,7 +93,9 @@ def _safe_manifest(value: object) -> ImportSourceManifestCandidate:
             or (request.source_scope.startswith("guest:")
                 and request.explicit_guest_transfer is not True)
             or (request.source_scope.startswith("account:")
-                and request.explicit_guest_transfer is True)):
+                and request.explicit_guest_transfer is True)
+            or request.confirm_preserve_zero_account !=
+                (request.preserve_zero_account_id is not None)):
             raise ValueError("missing explicit verified consent")
         unique = {(row.record_type, row.source_record_id) for row in request.rows}
         if len(unique) != len(request.rows):
@@ -102,6 +107,58 @@ def _safe_manifest(value: object) -> ImportSourceManifestCandidate:
         raise FinanceCommandError(
             "invalid_command", "Некорректный предварительный импорт", 422,
         ) from None
+
+
+def import_batch_id(scope: VerifiedFinanceScope,
+                    request: ImportSourceManifestCandidate) -> UUID:
+    """Bind the preservation decision to the immutable staged batch identity."""
+    identity = (
+        "financial-horizon:import-manifest:v1:" + request.source_scope + ":" +
+        request.source_sha256 + ":" + str(request.source_revision)
+    )
+    if request.preserve_zero_account_id is not None:
+        identity += ":preserve-zero:" + request.preserve_zero_account_id
+    return uuid5(scope.profile_id, identity)
+
+
+def require_safe_import_target(session, profile_id: UUID,
+                               request: ImportSourceManifestCandidate) -> None:
+    """Allow only an empty profile or explicit preservation of ONE unused 0-RUB account.
+
+    The original account is never deleted, renamed or reused; the imported
+    legacy facts produce no inferred bank balance or postings. Call under
+    the locked finance_profiles row in both staging and commit.
+    """
+    accounts = session.execute(text("""
+        SELECT id,opening_minor,entity_revision,currency,archived_at
+        FROM accounts WHERE profile_id=:p ORDER BY id LIMIT 2
+    """), {"p": profile_id}).mappings().all()
+    other_finance = session.execute(text("""
+        SELECT EXISTS(SELECT 1 FROM obligations WHERE profile_id=:p)
+            OR EXISTS(SELECT 1 FROM loans WHERE profile_id=:p)
+            OR EXISTS(SELECT 1 FROM reserves WHERE profile_id=:p)
+            OR EXISTS(SELECT 1 FROM settlements WHERE profile_id=:p)
+            OR EXISTS(SELECT 1 FROM loan_payments WHERE profile_id=:p)
+            OR EXISTS(SELECT 1 FROM ledger_transactions WHERE profile_id=:p)
+            OR EXISTS(SELECT 1 FROM ledger_postings WHERE profile_id=:p)
+            OR EXISTS(SELECT 1 FROM reserve_allocations WHERE profile_id=:p)
+    """), {"p": profile_id}).scalar_one()
+    if other_finance:
+        raise FinanceCommandError("semantic_conflict",
+                                  "Сервер содержит финансовые записи", 409)
+    if not accounts:
+        if request.preserve_zero_account_id is None:
+            return
+        raise FinanceCommandError("semantic_conflict",
+                                  "Указанный счёт на сервере отсутствует", 409)
+    if (len(accounts) != 1 or not request.confirm_preserve_zero_account or
+        str(accounts[0]["id"]) != request.preserve_zero_account_id or
+        int(accounts[0]["opening_minor"]) != 0 or
+        int(accounts[0]["entity_revision"]) != 1 or
+        accounts[0]["archived_at"] is not None or
+        accounts[0]["currency"].strip() != "RUB"):
+        raise FinanceCommandError("semantic_conflict",
+                                  "Нельзя объединить действующие серверные финансы", 409)
 
 
 def stage_import_manifest_candidate(
@@ -124,10 +181,7 @@ def stage_import_manifest_candidate(
     manifest_fingerprint = sha256(
         json.dumps(canonical_rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
-    batch_id = uuid5(scope.profile_id,
-                     "financial-horizon:import-manifest:v1:" +
-                     request.source_scope + ":" + request.source_sha256 +
-                     ":" + str(request.source_revision))
+    batch_id = import_batch_id(scope, request)
     with finance_transaction(
         engine, verified_user_id=scope.user_id, profile_id=scope.profile_id,
     ) as session:
@@ -182,19 +236,9 @@ def stage_import_manifest_candidate(
             raise FinanceCommandError(
                 "semantic_conflict", "Другой перенос уже ожидает решения", 409,
             )
-        # Do not silently merge local data into an already populated server.
-        remote_data = session.execute(text("""
-            SELECT
-              EXISTS(SELECT 1 FROM accounts WHERE profile_id=:p)
-              OR EXISTS(SELECT 1 FROM obligations WHERE profile_id=:p)
-              OR EXISTS(SELECT 1 FROM loans WHERE profile_id=:p)
-              OR EXISTS(SELECT 1 FROM reserves WHERE profile_id=:p)
-              OR EXISTS(SELECT 1 FROM ledger_transactions WHERE profile_id=:p)
-        """), {"p": scope.profile_id}).scalar_one()
-        if remote_data:
-            raise FinanceCommandError(
-                "semantic_conflict", "Сервер содержит финансовые записи", 409,
-            )
+        # Any existing account requires the exact UUID and a second owner
+        # confirmation; only one untouched zero-RUB account is compatible.
+        require_safe_import_target(session, scope.profile_id, request)
         session.execute(text("""
             INSERT INTO import_batches
              (profile_id,id,source_sha256,status,base_revision)
