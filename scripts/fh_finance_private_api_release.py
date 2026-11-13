@@ -121,7 +121,10 @@ def write_exclusive(path: Path, data: bytes, *, mode: int = 0o600) -> None:
         deny("PROTECTED_TARGET_ALREADY_EXISTS")
     fd = None
     try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, mode)
+        # Create with owner-only permissions irrespective of eventual caller
+        # mode. A selected service-readable source file is opened later, once
+        # it has been fully written, fsynced and assigned to its service group.
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
         os.fchmod(fd, mode)
         os.write(fd, data)
         os.fsync(fd)
@@ -415,11 +418,17 @@ def prepare_launcher() -> None:
             LAUNCHER_INSTALLED.parent.stat().st_uid != 0):
         deny("TRUSTED_LAUNCHER_DIRECTORY_REQUIRED")
     source = LAUNCHER_SOURCE.read_bytes()
+    account = pwd.getpwnam("fh-email-auth")
+    if account.pw_uid == 0 or account.pw_gid == 0:
+        deny("SERVICE_USER_PRIVILEGED")
     if LAUNCHER_INSTALLED.exists() or LAUNCHER_INSTALLED.is_symlink():
-        if secure_file(LAUNCHER_INSTALLED, 0, 0o644) != source:
+        if (secure_file(LAUNCHER_INSTALLED, 0, 0o640) != source or
+            LAUNCHER_INSTALLED.stat().st_gid != account.pw_gid):
             deny("INSTALLED_LAUNCHER_CHANGED")
     else:
-        write_exclusive(LAUNCHER_INSTALLED, source, mode=0o644)
+        write_exclusive(LAUNCHER_INSTALLED, source, mode=0o600)
+        os.chown(LAUNCHER_INSTALLED, 0, account.pw_gid)
+        os.chmod(LAUNCHER_INSTALLED, 0o640)
 
 
 def finance_systemd_dropin() -> bytes:
@@ -445,7 +454,7 @@ def enable_local(sha: str) -> None:
         deny("SYSTEMD_DROPIN_DIRECTORY_MISSING")
     prepare_launcher()
     content = finance_systemd_dropin()
-    write_exclusive(FINANCE_DROPIN, content, mode=0o644)
+    write_exclusive(FINANCE_DROPIN, content, mode=0o600)
     try:
         run(["systemctl", "daemon-reload"], error="SYSTEMD_RELOAD_FAILED")
         run(["systemctl", "restart", SERVICE], timeout=45, error="AUTH_RESTART_FAILED")
@@ -495,6 +504,7 @@ def public_probe(path: str, *, method: str = "GET", origin: str | None = None) -
         if hashlib.sha256(CA_CERT.read_bytes()).hexdigest() != CA_SHA:
             deny("ORIGIN_TLS_TRUST_ANCHOR_CHANGED")
         context = ssl.create_default_context(cafile=str(CA_CERT))
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         with socket.create_connection(("127.0.0.1", 8444), timeout=5) as raw:
             with context.wrap_socket(raw, server_hostname=HOST) as encrypted:
                 headers = [
