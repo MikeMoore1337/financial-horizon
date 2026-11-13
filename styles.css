@@ -127,3 +127,6 @@ body[data-theme=light] .bottom-nav button:not(.active){color:#41536c}
 #payment-method-form textarea{display:block;width:100%;min-width:0;padding:12px 13px;border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink);font:inherit;resize:vertical}
 #payment-method-form input[type=checkbox]{display:inline-block;width:auto;height:auto;min-width:0;padding:0;vertical-align:middle}
 #payment-methods-dialog .archive-row>div:first-child{overflow-wrap:anywhere}
+
+/* The server accounts view has its own New Account action, not the local planner Add. */
+#top-add[hidden]{display:none}
