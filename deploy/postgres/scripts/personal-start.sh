@@ -24,8 +24,28 @@ docker inspect -f '{{.State.Status}}' fh-finance-postgres >/dev/null 2>&1 ||
 python3 "$root/deploy/postgres/scripts/personal_port_check.py" --configured-only ||
   deny "UNSAFE_STOPPED_CONTAINER_CONFIG"
 cd "$root"
-docker compose -f deploy/postgres/compose.yml -f deploy/postgres/personal-loopback.override.yml up -d --wait db ||
-  deny "HEALTH_CHECK_FAILED"
+# The separately attached non-internal loopback bridge is owned by this
+# personal setup, not Compose. Recreating the container would silently drop it.
+# Start ONLY the existing PostgreSQL container and preserve its bind mount.
+python3 "$root/deploy/postgres/scripts/personal-host-bridge.py" --verify-configured ||
+  deny "PERSONAL_HOST_BRIDGE_NOT_ATTACHED"
+status="$(docker inspect -f '{{.State.Status}}' fh-finance-postgres)" ||
+  deny "FINANCE_DB_NOT_FOUND"
+if [[ "$status" = exited ]]; then
+  docker start fh-finance-postgres >/dev/null || deny "FINANCE_DB_START_FAILED"
+elif [[ "$status" != running ]]; then
+  deny "FINANCE_DB_UNEXPECTED_STATUS"
+fi
+ready=0
+for _ in $(seq 1 30); do
+  if [[ "$(docker inspect -f '{{.State.Health.Status}}' fh-finance-postgres 2>/dev/null)" = healthy ]]; then
+    ready=1; break
+  fi
+  sleep 1
+done
+[[ "$ready" = 1 ]] || deny "HEALTH_CHECK_FAILED"
+python3 "$root/deploy/postgres/scripts/personal-host-bridge.py" --verify ||
+  deny "PERSONAL_HOST_BRIDGE_NOT_REACHABLE"
 python3 "$root/deploy/postgres/scripts/personal_port_check.py" ||
   deny "ONLY_LOOPBACK_DATABASE_PORT_ALLOWED"
 [[ "$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' fh-finance-postgres)" = no ]] ||
