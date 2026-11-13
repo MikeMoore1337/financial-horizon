@@ -52,8 +52,10 @@ def test_stage_source_manifest_rejects_symlinks_and_cannot_hide_modified_code(tm
         d = tmp_path / package
         d.mkdir()
         (d / "module.py").write_text("value = 3\n", encoding="utf-8")
+    (tmp_path / "requirements.txt").write_text("fastapi==1.0\n", encoding="utf-8")
+    (tmp_path / "requirements-finance.txt").write_text("sqlalchemy==2.0\n", encoding="utf-8")
     original = m.source_files(tmp_path)
-    assert len(original) == len(m.PACKAGES)
+    assert len(original) == len(m.PACKAGES) + 2
     (tmp_path / "finance_db" / "module.py").write_text("value = 4\n", encoding="utf-8")
     assert original != m.source_files(tmp_path)
     (tmp_path / "finance_api" / "escape.py").symlink_to(
