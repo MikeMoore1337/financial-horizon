@@ -208,3 +208,88 @@ def test_personal_import_http_rechecks_revoked_fh_session_and_never_reveals_othe
              "batch_id":str(uuid4()), "source_sha256":manifest["source_sha256"],
              "confirm_restore":True,
          }).status_code == 401
+
+
+
+def test_http_import_keeps_preexisting_unused_zero_account_and_rejects_silent_merge(personal_import):
+    """Actual FH cookie -> HTTP manifest -> RLS Postgres commit -> restore."""
+    user_id, token = personal_import["first"]
+    client = personal_import["client_import"](token)
+    before = client.get("/api/finance/v1/state?limit_entities=5000")
+    assert before.status_code == 200 and before.json()["entities"] == []
+    account_id = str(uuid4())
+    mutation_id = str(uuid4())
+    create = {
+        "schema_version": 2, "client_mutation_id": mutation_id,
+        "base_revision": before.json()["revision"], "action": "account.create",
+        "expected_entity_revisions": {},
+        "payload": {
+            "id": account_id, "name": "Synthetic retained empty",
+            "kind": "cash", "currency": "RUB", "opening_minor": 0,
+        },
+    }
+    created = client.post("/api/finance/v2/commands", json=create, headers={
+        "Origin": ORIGIN, "If-Match": before.headers["etag"],
+        "Idempotency-Key": mutation_id,
+    })
+    assert created.status_code == 201, created.text
+    original_server = client.get("/api/finance/v1/state?limit_entities=5000")
+    assert original_server.status_code == 200
+    zero_account = next(row for row in original_server.json()["entities"]
+                        if row["kind"] == "account")
+    assert zero_account["id"] == account_id
+    assert zero_account["data"]["balance_minor"] == 0
+
+    manifest, raw = bundle(user_id)
+    manifest = {
+        **manifest,
+        "expected_server_revision": original_server.json()["revision"],
+        "preserve_zero_account_id": account_id,
+        "confirm_preserve_zero_account": True,
+    }
+    # A valid owner session alone cannot authorize a merge.
+    no_consent = {**manifest, "confirm_preserve_zero_account": False}
+    assert write(client, "manifest", original_server,
+                 {"manifest": no_consent}).status_code == 422
+    without_identity = {k: v for k, v in manifest.items()
+                        if k not in ("preserve_zero_account_id",
+                                     "confirm_preserve_zero_account")}
+    assert write(client, "manifest", original_server,
+                 {"manifest": without_identity}).status_code == 409
+    assert write(client, "manifest", original_server, {
+        "manifest": {**manifest, "preserve_zero_account_id": str(uuid4())},
+    }).status_code == 409
+
+    stage = write(client, "manifest", original_server, {"manifest": manifest})
+    assert stage.status_code == 202, stage.text
+    committed = write(client, "commit", original_server, {
+        "manifest": manifest, "source_canonical_json": raw,
+    })
+    assert committed.status_code == 201, committed.text
+    assert committed.json()["revision"] == original_server.json()["revision"] + 1
+    assert committed.json()["cash_postings_created"] == 0
+    replay = write(client, "commit", original_server, {
+        "manifest": manifest, "source_canonical_json": raw,
+    })
+    assert replay.status_code == 200 and replay.json()["replayed"] is True
+    after = client.get("/api/finance/v1/state?limit_entities=5000")
+    assert after.status_code == 200
+    retained = next(row for row in after.json()["entities"]
+                    if row["kind"] == "account")
+    assert retained == zero_account
+    assert sum(row["kind"] == "account" for row in after.json()["entities"]) == 1
+    assert sum(row["kind"] == "obligation" for row in after.json()["entities"]) == 1
+
+    recovered = client.post("/api/finance/v1/import/restore",
+                            headers={"Origin": ORIGIN}, json={
+        "batch_id": committed.json()["batch_id"],
+        "source_sha256": manifest["source_sha256"],
+        "confirm_restore": True,
+    })
+    assert recovered.status_code == 200
+    assert recovered.content == raw.encode("utf-8")
+    with finance_transaction(
+        personal_import["engine"], verified_user_id=user_id,
+        profile_id=personal_import["scope"](user_id).profile_id,
+    ) as session:
+        assert session.execute(text("SELECT count(*) FROM ledger_postings")).scalar_one() == 0
