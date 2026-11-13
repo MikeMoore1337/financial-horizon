@@ -254,7 +254,9 @@ def test_codeql_security_fixes_require_owner_only_create_and_tls_12_floor():
     )
     assert 'context.minimum_version = ssl.TLSVersion.TLSv1_2' in source
     assert 'write_exclusive(FINANCE_DROPIN, content, mode=0o600)' in source
-    assert 'os.chmod(LAUNCHER_INSTALLED, 0o640)' in source
+    assert 'os.fchown(fd, 0, account.pw_gid)' in source
+    assert 'os.fchmod(fd, 0o640)' in source
+    assert 'os.chmod(LAUNCHER_INSTALLED, 0o640)' not in source
     assert 'LAUNCHER_INSTALLED.stat().st_gid != account.pw_gid' in source
     assert "ssl.CERT_NONE" not in source
     assert "check_hostname = False" not in source
