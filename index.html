@@ -56,15 +56,15 @@
       <button class="nav-item" data-view="loans"><svg><use href="#ico-credit"/></svg><span>Кредиты</span></button>
       <button class="nav-item" data-view="settings"><svg><use href="#ico-settings"/></svg><span>Настройки</span></button>
     </nav>
-    <div class="side-bottom"><div class="privacy-dot"></div><div><strong>Хранится на устройстве</strong><span>Без банковских подключений</span></div></div>
+    <div class="side-bottom"><div class="privacy-dot"></div><div><strong id="storage-context-title">Хранится на устройстве</strong><span id="storage-context-detail">Без банковских подключений</span></div></div>
   </aside>
   <div class="work-area">
     <header class="toolbar">
       <div class="toolbar-leading"><button class="tool-icon hamburger" id="menu-toggle" aria-label="Открыть меню"><svg><use href="#ico-menu"/></svg></button><span class="crumb">Личные финансы</span><span class="crumb-slash">/</span><span id="toolbar-title">Обзор</span></div>
-      <div class="toolbar-actions"><span class="local-chip"><span class="privacy-dot"></span> Локально</span><button class="tool-icon" id="theme-toggle" aria-label="Переключить тему" title="Переключить тему"><svg><use href="#ico-moon"/></svg></button><a class="tool-icon toolbar-account" href="./account.html" id="account-entry-toolbar" aria-label="Управление аккаунтом" title="Управление аккаунтом" hidden><span class="lucide-user-icon" aria-hidden="true"></span></a><button type="button" class="button-secondary toolbar-logout" id="account-logout-toolbar" data-action="account-logout" aria-label="Выйти из аккаунта" title="Выйти из аккаунта" hidden><span class="lucide-logout-icon" aria-hidden="true"></span><span class="toolbar-logout-label">Выйти</span></button><button class="button-primary toolbar-add" id="top-add" aria-label="Добавить запись"><svg aria-hidden="true" focusable="false"><use href="#ico-plus"/></svg><span>Добавить</span></button></div>
+      <div class="toolbar-actions"><span class="local-chip"><span class="privacy-dot"></span><span id="storage-context-chip">Локально</span></span><button class="tool-icon" id="theme-toggle" aria-label="Переключить тему" title="Переключить тему"><svg><use href="#ico-moon"/></svg></button><a class="tool-icon toolbar-account" href="./account.html" id="account-entry-toolbar" aria-label="Управление аккаунтом" title="Управление аккаунтом" hidden><span class="lucide-user-icon" aria-hidden="true"></span></a><button type="button" class="button-secondary toolbar-logout" id="account-logout-toolbar" data-action="account-logout" aria-label="Выйти из аккаунта" title="Выйти из аккаунта" hidden><span class="lucide-logout-icon" aria-hidden="true"></span><span class="toolbar-logout-label">Выйти</span></button><button class="button-primary toolbar-add" id="top-add" aria-label="Добавить запись"><svg aria-hidden="true" focusable="false"><use href="#ico-plus"/></svg><span>Добавить</span></button></div>
     </header>
     <main class="page" id="main"><div class="loading">Проверяем доступ к бухгалтерии…</div></main>
-    <footer class="footer"><span>Данные остаются в этом браузере. Делайте резервные копии.</span><span id="save-indicator" role="status" aria-live="polite">Локальная база</span></footer>
+    <footer class="footer"><span id="storage-context-footnote">Данные остаются в этом браузере. Делайте резервные копии.</span><span id="save-indicator" role="status" aria-live="polite">Локальная база</span></footer>
   </div>
 </div>
 <nav class="bottom-nav" aria-label="Основные разделы">

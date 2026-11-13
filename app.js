@@ -33,6 +33,7 @@ function getAuthAccess(){
 }
 let storageStatusMessage='Браузер может удалить данные при очистке хранилища. Делайте резервные копии.';
 let storageStatusRequest=0;
+let lastStorageContext=null;
 function revokeDisplayedLedger(){
  revokeStateScope(); // invalidate pending IDB reads/writes before clearing the UI
  state=null;
@@ -59,11 +60,33 @@ async function mutate(change,msg='Сохранено на устройстве',
 function stampFormRevision(form){form.dataset.stateRevision=String(state.revision);}
 function revisionForForm(form){const revision=Number(form.dataset.stateRevision);if(!Number.isSafeInteger(revision)||revision<0)throw Error('Не удалось определить версию записи. Откройте форму повторно.');return revision;}
 function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#172336':'#ffffff';$('#theme-toggle').innerHTML=svg(mode==='dark'?'sun':'moon');$('#theme-toggle').setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}
+function syncStorageContext(){
+ const serverAccounts=ui.view==='accounts-connected'&&financeAccountsEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId;
+ const labels=[
+  ['storage-context-chip',serverAccounts?'На сервере':'Локально'],
+  ['storage-context-title',serverAccounts?'Счета в аккаунте':'Хранится на устройстве'],
+  ['storage-context-detail',serverAccounts?'Локальный бюджет отдельно':'Без банковских подключений'],
+  ['storage-context-footnote',serverAccounts?'Счета хранятся на сервере. Локальная бухгалтерия остаётся в этом браузере.':'Данные остаются в этом браузере. Делайте резервные копии.'],
+ ];
+ for(const [id,value] of labels){
+  const element=document.getElementById(id);
+  if(element)element.textContent=value;
+ }
+ // The global Add action edits the local planner, not a server account.
+ // Accounts has its own explicit "Новый счёт" button.
+ const globalAdd=$('#top-add');
+ if(globalAdd)globalAdd.hidden=serverAccounts;
+ if(lastStorageContext!==serverAccounts){
+  $('#save-indicator').textContent=serverAccounts?'Серверный раздел':'Локальная база готова';
+  lastStorageContext=serverAccounts;
+ }
+}
 function navigation(view){
  if(view==='accounts-connected'&&(!financeAccountsEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId))return;
  ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings'){void renderStorageStatus();if(!guestMode)void refreshEmailSession();}}
 function render(){
  if(!state)return;
+ syncStorageContext();
  $('#toolbar-title').textContent=titles[ui.view];
  if(!navRoots)navRoots=createAppShellRoots($('.sidebar-nav'),$('.bottom-nav'));
  navRoots.render(ui.view==='accounts-connected'?'settings':ui.view);
