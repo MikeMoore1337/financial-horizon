@@ -284,7 +284,14 @@ def test_release_ready_accepts_verified_standard_venv_python_symlink(
     shutil.copytree(source, stage / "backend")
     (stage / ".finance-venv" / "bin").mkdir(parents=True)
     interpreter = stage / ".finance-venv" / "bin" / "python"
-    interpreter.symlink_to(sys.executable)
+    # CI's managed Python installation can have non-production filesystem
+    # permissions. Pin a controlled, non-writable copy to exercise the same
+    # executable identity check deterministically without relaxing it.
+    operator_python = tmp_path / "operator-python"
+    shutil.copyfile(sys.executable, operator_python)
+    operator_python.chmod(0o750)
+    monkeypatch.setattr(m.sys, "executable", str(operator_python))
+    interpreter.symlink_to(operator_python)
     (stage / "__finance_source.json").write_text(
         json.dumps({"sha": sha, "source_hashes": m.source_files(source)}),
         encoding="utf-8",
