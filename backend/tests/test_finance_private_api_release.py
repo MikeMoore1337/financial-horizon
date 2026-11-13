@@ -29,7 +29,6 @@ def test_exact_private_runtime_and_stable_identity_reject_changes(monkeypatch):
         "FH_FINANCE_V2_RUNTIME": "on",
         "FH_FINANCE_IMPORT_RUNTIME": "off",
         "FH_FINANCE_PROFILE_NAMESPACE": "b2a81324-f19e-46ec-8851-c16e0c94462d",
-        "FH_FINANCE_DATABASE_URL": m.dsn(password),
     }
     body = "".join(k + "=" + v + "\n" for k, v in runtime.items())
     assert m.parse_runtime(body) == runtime
@@ -39,7 +38,7 @@ def test_exact_private_runtime_and_stable_identity_reject_changes(monkeypatch):
         body.replace("IMPORT_RUNTIME=off", "IMPORT_RUNTIME=on"),
         body.replace("PROFILE_NAMESPACE=b2a81324-f19e-46ec-8851-c16e0c94462d",
                      "PROFILE_NAMESPACE=00000000-0000-0000-0000-000000000000"),
-        body.replace("runtime:" + password, "runtime:" + "b" * 64),
+        body + "FH_FINANCE_DATABASE_URL=" + m.dsn(password) + "\n",
         body + "FH_FINANCE_PROFILE_NAMESPACE=extra\n",
         body + "FH_RUNTIME_UNKNOWN=1\n",
         body + "BASH='hello world'\n",
@@ -174,3 +173,72 @@ def test_least_privilege_postgres_probe_uses_service_identity_no_sql_data(monkey
     assert seen["options"]["user"] == "fh-email-auth"
     assert seen["options"]["env"]["FH_FINANCE_DATABASE_URL"] == url
     assert seen["options"]["error"] == "FH_RUNTIME_DATABASE_ROLE_UNUSABLE"
+
+
+
+def test_systemd_finance_credential_dropin_has_no_password_or_shell(monkeypatch):
+    m = module()
+    monkeypatch.setattr(
+        m, "python_binary",
+        lambda: Path("/opt/financial-horizon-auth/releases/abc/.finance-venv/bin/python"),
+    )
+    monkeypatch.setattr(
+        m, "approved_uvicorn_args",
+        lambda: [
+            "fh_email_auth.app:app", "--host", "127.0.0.1", "--port", "9138",
+            "--no-access-log",
+        ],
+    )
+    content = m.finance_systemd_dropin().decode("ascii")
+    assert content.startswith("[Service]\n")
+    assert "LoadCredential=fh_finance_runtime_password:" in content
+    assert "EnvironmentFile=/etc/financial-horizon/finance/runtime.env" in content
+    assert "ExecStart=\n" in content
+    assert "ExecStart=/opt/financial-horizon-auth/releases/abc/.finance-venv/bin/python" in content
+    assert "finance_api_launcher.py -- fh_email_auth.app:app" in content
+    assert "fh_email_auth.app:app --host 127.0.0.1 --port 9138" in content
+    assert "FH_FINANCE_DATABASE_URL" not in content
+    assert "fh_finance_runtime:" not in content
+    assert "sh -c" not in content and "/bin/bash" not in content
+
+
+def test_launcher_fails_closed_without_service_credentials():
+    file = SCRIPT.parent / "fh_finance_api_launcher.py"
+    assert file.is_file()
+    for args in ([], ["--", "not-the-auth-app"]):
+        result = subprocess.run(
+            [sys.executable, str(file), *args],
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+        assert result.returncode != 0
+        assert "FINANCE_LAUNCHER_NO_GO" in result.stderr
+        assert "postgresql" not in result.stderr
+    result = subprocess.run(
+        [sys.executable, str(file), "--", "fh_email_auth.app:app"],
+        env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+        capture_output=True, text=True, timeout=5, check=False,
+    )
+    assert result.returncode != 0
+    assert "SYSTEMD_CREDENTIALS_REQUIRED" in result.stderr
+    assert "postgresql" not in result.stderr
+
+
+def test_runtime_file_does_not_store_any_password(monkeypatch):
+    m = module()
+    password = "e" * 64
+    monkeypatch.setattr(m, "role_password", lambda: password)
+    saved = {
+        "FH_FINANCE_RUNTIME_MODE": "personal",
+        "FH_FINANCE_V2_RUNTIME": "on",
+        "FH_FINANCE_IMPORT_RUNTIME": "off",
+        "FH_FINANCE_PROFILE_NAMESPACE": "b2a81324-f19e-46ec-8851-c16e0c94462d",
+    }
+    data = "".join(k + "=" + v + "\n" for k, v in saved.items())
+    assert m.parse_runtime(data) == saved
+    assert password not in data
+    assert "DATABASE_URL" not in data
+    assert "LoadCredential" in SCRIPT.read_text(encoding="utf-8")
+    assert "CREDENTIALS_DIRECTORY" in (
+        SCRIPT.parent / "fh_finance_api_launcher.py"
+    ).read_text(encoding="utf-8")
