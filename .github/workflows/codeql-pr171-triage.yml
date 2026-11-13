@@ -1,0 +1,19 @@
+name: Temporary CodeQL PR171 verification
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  checks: read
+  contents: read
+jobs:
+  read-annotations:
+    if: github.event.pull_request.number == 171
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read CodeQL check annotations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/check-runs/131945447677/annotations?per_page=100" \
+            --jq '.[] | {path,start_line,end_line,title,message,annotation_level}'
