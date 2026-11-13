@@ -365,13 +365,26 @@ def stage(sha: str) -> None:
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         python = target / ".finance-venv" / "bin" / "python"
         interpreter = sys.executable
-        venv = checked([interpreter, "-m", "venv", str(target / ".finance-venv")],
-                       timeout=120, code="ISOLATED_VENV_CREATION_FAILED")
-        checked([str(python), "-m", "pip", "install",
-                 "--no-input", "--disable-pip-version-check",
-                 "--require-virtualenv", "-r", str(REPO / "backend/requirements.txt"),
-                 "-r", str(REPO / "backend/requirements-finance.txt")],
-                timeout=360, code="ISOLATED_DEPS_INSTALL_FAILED")
+        uv = shutil.which("uv")
+        if uv:
+            checked([uv, "venv", "--python", interpreter,
+                     str(target / ".finance-venv")],
+                    timeout=120, code="ISOLATED_VENV_CREATION_FAILED")
+            checked([uv, "pip", "install", "--python", str(python),
+                     "--link-mode", "copy", "--no-progress",
+                     "-r", str(REPO / "backend/requirements.txt"),
+                     "-r", str(REPO / "backend/requirements-finance.txt")],
+                    timeout=360, code="ISOLATED_DEPS_INSTALL_FAILED")
+        else:
+            checked([interpreter, "-m", "venv", "--copies",
+                     str(target / ".finance-venv")],
+                    timeout=120, code="ISOLATED_VENV_CREATION_FAILED")
+            checked([str(python), "-m", "pip", "install",
+                     "--no-input", "--disable-pip-version-check",
+                     "--require-virtualenv",
+                     "-r", str(REPO / "backend/requirements.txt"),
+                     "-r", str(REPO / "backend/requirements-finance.txt")],
+                    timeout=360, code="ISOLATED_DEPS_INSTALL_FAILED")
         if before != source_files(target / "backend"):
             deny("STAGED_SOURCE_COPY_MISMATCH")
         (target / "__finance_source.json").write_text(
@@ -460,17 +473,32 @@ def readiness(port: int, providers: tuple[str, ...]) -> None:
     active_services()
 
 
+def switch_current(expected: Path, destination: Path) -> None:
+    """Atomic release symlink move; never modify directories or other links."""
+    if (not CURRENT.is_symlink() or CURRENT.resolve(strict=True) != expected or
+        destination.parent != RELEASES or not destination.is_dir() or
+        destination.is_symlink()):
+        deny("AUTH_RELEASE_LINK_CHANGED")
+    temp = CURRENT.parent / ".finance-backend-current-tmp"
+    if temp.exists() or temp.is_symlink():
+        deny("AUTH_RELEASE_TEMP_LINK_EXISTS")
+    temp.symlink_to(destination)
+    os.replace(temp, CURRENT)
+
+
 def apply(sha: str) -> None:
     port, argv = preflight(sha, allow_existing_stage=True)
     target, python = release_ready(sha)
     check_staged_import(sha, target, python)
     baseline = auth_baseline(port)
+    old_release = CURRENT.resolve(strict=True)
     backup_live_auth_db()
     content = dropin_content(target, argv)
     switched = False
     try:
         atomic_dropin(FINANCE_SOURCE_DROPIN, content)
         switched = True
+        switch_current(old_release, target)
         checked(["systemctl", "daemon-reload"], timeout=25,
                 code="AUTH_DAEMON_RELOAD_FAILED")
         checked(["systemctl", "restart", SERVICE], timeout=40,
@@ -495,6 +523,8 @@ def apply(sha: str) -> None:
             print("FINANCE_BACKEND_ROLLBACK=STARTED")
             try:
                 FINANCE_SOURCE_DROPIN.unlink()
+                if CURRENT.resolve(strict=True) == target:
+                    switch_current(target, old_release)
                 checked(["systemctl", "daemon-reload"], timeout=25,
                         code="ROLLBACK_DAEMON_RELOAD_FAILED")
                 checked(["systemctl", "restart", SERVICE], timeout=40,
