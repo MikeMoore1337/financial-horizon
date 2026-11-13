@@ -52,6 +52,10 @@ test('#33 reviewed production entry uses existing FH session and reads only auth
   await expect(page.locator('[data-settings-card="finance-accounts"]')).toBeVisible();
   await page.locator('[data-settings-card="finance-accounts"] [data-view="accounts-connected"]').click();
   await expect(page.locator('#toolbar-title')).toHaveText('Счета и кошельки');
+  await expect(page.locator('#storage-context-chip')).toHaveText('На сервере');
+  await expect(page.locator('#storage-context-title')).toHaveText('Счета в аккаунте');
+  await expect(page.locator('#storage-context-footnote')).toContainText('Счета хранятся на сервере');
+  await expect(page.locator('#top-add')).toBeHidden();
   await expect(page.locator('.fh-accounts-total')).toContainText('Всего на счетах');
   await expect(page.locator('.fh-accounts-total')).toContainText('0');
   // Assertions come from the synthetic localhost backend itself rather
@@ -66,6 +70,10 @@ test('#33 reviewed production entry uses existing FH session and reads only auth
   expect(await receipt()).toEqual({session: 1, state: 1});
   await page.getByRole('button', {name: /К обзору/}).click();
   await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
+  await expect(page.locator('#storage-context-chip')).toHaveText('Локально');
+  await expect(page.locator('#storage-context-title')).toHaveText('Хранится на устройстве');
+  await expect(page.locator('#storage-context-footnote')).toContainText('Данные остаются в этом браузере');
+  await expect(page.locator('#top-add')).toBeVisible();
   expect(await receipt()).toEqual({session: 1, state: 1});
   watch.assertClean();
 });
