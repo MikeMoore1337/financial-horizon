@@ -519,7 +519,11 @@ def public_probe(path: str, *, method: str = "GET", origin: str | None = None) -
 
 
 def caddy_original_backup(sha: str) -> Path:
-    return BACKUPS / ("fh-finance-api-caddy-" + sha + ".bak")
+    # One fixed, root-only rollback receipt. Never derive a filesystem path
+    # from a CLI supplied SHA; release provenance is validated independently.
+    if not re.fullmatch(r"[a-f0-9]{40}", sha):
+        deny("INVALID_EXACT_SHA")
+    return BACKUPS / "fh-finance-api-caddy.original.bak"
 
 
 def caddy_snapshot() -> tuple[bytes, int]:
