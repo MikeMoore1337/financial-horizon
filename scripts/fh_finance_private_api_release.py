@@ -402,7 +402,7 @@ def approved_uvicorn_args() -> list[str]:
     try:
         cmdline = [
             arg.decode("utf-8") for arg in
-            Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\\0") if arg
+            Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") if arg
         ]
         return safe_uvicorn_argv(cmdline, BACKEND_PORT)
     except (OSError, UnicodeError, ValueError):
@@ -426,14 +426,14 @@ def finance_systemd_dropin() -> bytes:
     args = [
         str(python_binary()), str(LAUNCHER_INSTALLED), "--", *approved_uvicorn_args(),
     ]
-    if not all(re.fullmatch(r"[/A-Za-z0-9_.,:/*=+\\-]+", a) for a in args):
+    if not all(re.fullmatch(r"[/A-Za-z0-9_.,:/*=+-]+", a) for a in args):
         deny("SYSTEMD_AUTH_LAUNCH_ARGUMENTS_UNSAFE")
     return (
-        "[Service]\\n"
-        "EnvironmentFile=/etc/financial-horizon/finance/runtime.env\\n"
-        "LoadCredential=" + CREDENTIAL_NAME + ":" + str(SECRETS) + "\\n"
-        "ExecStart=\\n"
-        "ExecStart=" + " ".join(args) + "\\n"
+        "[Service]\n"
+        "EnvironmentFile=/etc/financial-horizon/finance/runtime.env\n"
+        "LoadCredential=" + CREDENTIAL_NAME + ":" + str(SECRETS) + "\n"
+        "ExecStart=\n"
+        "ExecStart=" + " ".join(args) + "\n"
     ).encode("ascii")
 
 
