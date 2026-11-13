@@ -339,22 +339,93 @@ def python_env(target: Path) -> dict[str, str]:
     }
 
 
+def grant_staged_service_read_access(stage: Path) -> None:
+    """Grant ONLY the auth service group access to a fresh root-owned stage.
+
+    shutil.copytree() preserves the root checkout's source modes. An operator's
+    0700/0600 Git checkout therefore creates an unreadable staged Python
+    package even with umask 022. A previous OAuth rollout already used an
+    explicit service-group ownership pass for precisely this reason.
+
+    Never alter the live release, shared dependencies or outside symlink
+    targets; all changes stay under the not-yet-active, exact-SHA stage.
+    """
+    if (stage.is_symlink() or not stage.is_dir() or
+            stage.parent.resolve(strict=True) != RELEASES.resolve(strict=True) or
+            stage == CURRENT.resolve(strict=True)):
+        deny("STAGED_RELEASE_ACCESS_SCOPE_INVALID")
+    account = pwd.getpwnam(USER)
+    if account.pw_uid <= 0 or account.pw_gid <= 0:
+        deny("SERVICE_USER_PRIVILEGED")
+    owner = os.geteuid()
+    items: list[tuple[Path, os.stat_result]] = []
+    for root, directories, files in os.walk(stage, followlinks=False):
+        for name in (".", *directories, *files):
+            child = Path(root) if name == "." else Path(root) / name
+            info = child.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                # Isolated virtualenv launchers may legitimately be symlinks.
+                # Never follow, chown, chmod or rewrite their targets.
+                if not child.relative_to(stage).parts[0] == ".finance-venv":
+                    deny("STAGED_SOURCE_SYMLINK_FORBIDDEN")
+                continue
+            if (info.st_uid != owner or
+                not (stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)) or
+                (stat.S_ISREG(info.st_mode) and info.st_nlink != 1)):
+                deny("STAGED_SHARED_OR_UNTRUSTED_INODE")
+            items.append((child, info))
+    for child, info in items:
+        old = stat.S_IMODE(info.st_mode)
+        if stat.S_ISDIR(info.st_mode):
+            # Traverse and list as the service group, never world-readable.
+            group = 0o050
+        else:
+            # Preserve executable files without granting write privileges.
+            group = 0o040 | (0o010 if old & 0o100 else 0)
+        new = (old | group) & ~0o027  # strip world rights and group write
+        os.chown(child, -1, account.pw_gid, follow_symlinks=False)
+        os.chmod(child, new, follow_symlinks=False)
+
+
 def check_staged_import(sha: str, target: Path, python: Path) -> None:
-    code = (
-        "import pathlib,sys;"
-        "from fh_email_auth.app import _personal_finance_runtime_options;"
-        "import fh_auth.app,backend.finance_db.finance_router,"
-        "backend.finance_api.accounts_v2_service;"
-        "assert _personal_finance_runtime_options()=={};"
-        "r=pathlib.Path(sys.argv[1]);"
-        "assert pathlib.Path(sys.modules['fh_email_auth.app'].__file__).resolve()"
-        ".is_relative_to(r.resolve());"
-        "assert pathlib.Path(sys.modules['backend.finance_db.finance_router'].__file__)"
-        ".resolve().is_relative_to(r.resolve())"
+    """Check the real service identity with *separate sanitized failure codes*.
+
+    Never expose Python traceback/stdout from staging (may reveal private
+    filesystem paths). A dependency error is distinguished from unreadable
+    packages or a feature accidentally enabled; none activates production.
+    """
+    env = python_env(target)
+    base = target / "backend"
+    checked(["test", "-x", str(base)], cwd=base, env=env,
+            as_user=True, code="STAGED_BACKEND_NOT_TRAVERSABLE")
+    checked(["test", "-x", str(python)], cwd=base, env=env,
+            as_user=True, code="STAGED_VENV_NOT_EXECUTABLE")
+    for package in PACKAGES:
+        checked(["test", "-r", str(base / package / "__init__.py")],
+                cwd=base, env=env, as_user=True,
+                code="STAGED_PACKAGE_NOT_READABLE_" + package.upper())
+    modules = (
+        ("AUTH", "fh_email_auth.app"),
+        ("OAUTH", "fh_auth.app"),
+        ("LEDGER", "backend.finance_db.finance_router"),
+        ("FINANCE_API", "backend.finance_api.accounts_v2_service"),
     )
-    checked([str(python), "-c", code, str(target)], cwd=target / "backend",
-            env=python_env(target), as_user=True, timeout=30,
-            code="AUTH_FINANCE_IMPORT_AS_SERVICE_USER_FAILED")
+    for label, module in modules:
+        code = (
+            "import importlib,pathlib,sys;"
+            "module=importlib.import_module(sys.argv[1]);"
+            "root=pathlib.Path(sys.argv[2]).resolve();"
+            "assert pathlib.Path(module.__file__).resolve().is_relative_to(root)"
+        )
+        checked([str(python), "-c", code, module, str(target)],
+                cwd=base, env=env, as_user=True, timeout=30,
+                code="STAGED_MODULE_IMPORT_" + label + "_FAILED")
+    checked([
+        str(python), "-c",
+        "from fh_email_auth.app import _personal_finance_runtime_options;"
+        "assert _personal_finance_runtime_options()=={}",
+    ], cwd=base, env=env, as_user=True, timeout=30,
+       code="STAGED_FINANCE_DEFAULT_OFF_FAILED")
 
 
 def stage(sha: str) -> None:
@@ -399,6 +470,7 @@ def stage(sha: str) -> None:
                        sort_keys=True, separators=(",", ":")),
             encoding="utf-8",
         )
+        grant_staged_service_read_access(target)
         check_staged_import(sha, target, python)
     except Exception:
         # Delete only the new, inactive stage, never the live release.
