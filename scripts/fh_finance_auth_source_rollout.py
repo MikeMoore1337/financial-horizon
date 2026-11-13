@@ -222,6 +222,11 @@ def source_files(root: Path) -> dict[str, str]:
     if root.is_symlink() or not root.is_dir():
         deny("BACKEND_SOURCE_DIRECTORY_MISSING")
     listing: dict[str, str] = {}
+    for name in ("requirements.txt", "requirements-finance.txt"):
+        file = root / name
+        if file.is_symlink() or not file.is_file():
+            deny("REQUIREMENTS_SOURCE_INVALID")
+        listing[name] = hashlib.sha256(file.read_bytes()).hexdigest()
     for pkg in PACKAGES:
         path = root / pkg
         if not path.is_dir() or path.is_symlink():
