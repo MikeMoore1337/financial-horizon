@@ -81,12 +81,12 @@ FINANCE_PERSONAL_BOOTSTRAP=PASS, FINANCE_PERSONAL_BACKUP_RESTORE=PASS.
 
 ## Если первичная установка остановилась на ONLY_LOOPBACK_DATABASE_PORT_ALLOWED
 
-Docker 29/Compose 5 могут иначе оформлять текст `docker port`. Ранее
-`personal-bootstrap.sh` сравнивал строку целиком; новый
-`personal_port_check.py` сравнивает **фактические** настройки Docker
-(`PortBindings`, `NetworkSettings.Ports`, сеть, образ и путь данных).
-Если вместо `127.0.0.1:54329` опубликован другой адрес/порт, проверка
-останавливает выпуск, а не игнорирует опасную конфигурацию.
+На Docker Engine 29.6.2 контейнер, подключённый **только** к сети
+`internal: true`, может сохранить `HostConfig.PortBindings` с
+`127.0.0.1:54329`, но вернуть `NetworkSettings.Ports=null` и не открыть
+TCP-порт. Это **не** текстовая ошибка `docker port`. Строгую проверку
+фактической публикации ослаблять нельзя: требуется отдельная сеть и
+действительное подключение к `127.0.0.1:54329`.
 
 При первом сбое после `Container ... Healthy` и до миграций **не удаляйте**
 контейнер или каталог `pgdata`, не запускайте `personal-prepare.sh`
@@ -105,6 +105,7 @@ Docker 29/Compose 5 могут иначе оформлять текст `docker 
    с обязательным успешным CI - от root выполните в отдельном production SSH:
 
    ```bash
+   set -Eeuo pipefail
    systemctl disable --now fh-finance-personal.service
    systemctl disable --now fh-finance-personal-backup.timer
    cd /opt/financial-horizon-ops
