@@ -460,6 +460,8 @@ def public_probe(path: str, *, method: str = "GET", origin: str | None = None) -
                     "Connection: close",
                     "Cache-Control: no-store",
                 ]
+                if method == "POST":
+                    headers.append("Content-Length: 0")
                 if origin is not None:
                     headers.append("Origin: " + origin)
                 headers.append("")
@@ -503,7 +505,11 @@ def publish(sha: str) -> None:
     except UnicodeError:
         deny("CADDY_SITE_NOT_UTF8")
     backup = caddy_original_backup(sha)
-    write_exclusive(backup, original)
+    if backup.exists() or backup.is_symlink():
+        if secure_file(backup, 0, 0o600) != original:
+            deny("CADDY_ORIGINAL_BACKUP_CHANGED")
+    else:
+        write_exclusive(backup, original)
     try:
         atomic_replace(CADDY, patched, mode=mode)
         run(["caddy", "validate", "--config", str(CADDYFILE)],
@@ -545,13 +551,15 @@ def rollback(sha: str) -> None:
         if backup.is_file():
             original = secure_file(backup, 0, 0o600)
             current, mode = caddy_snapshot()
-            if current != compose_caddy(original.decode("utf-8")).encode("utf-8"):
+            expected_published = compose_caddy(original.decode("utf-8")).encode("utf-8")
+            if current == expected_published:
+                atomic_replace(CADDY, original, mode=mode)
+                run(["caddy", "validate", "--config", str(CADDYFILE)],
+                    error="CADDY_RESTORE_VALIDATE_FAILED")
+                run(["systemctl", "reload", "caddy.service"],
+                    error="CADDY_RESTORE_RELOAD_FAILED")
+            elif current != original:
                 deny("CADDY_CONCURRENT_EDIT_REQUIRES_MANUAL_REVIEW")
-            atomic_replace(CADDY, original, mode=mode)
-            run(["caddy", "validate", "--config", str(CADDYFILE)],
-                error="CADDY_RESTORE_VALIDATE_FAILED")
-            run(["systemctl", "reload", "caddy.service"],
-                error="CADDY_RESTORE_RELOAD_FAILED")
         FINANCE_DROPIN.unlink()
         run(["systemctl", "daemon-reload"])
         run(["systemctl", "restart", SERVICE], timeout=45)
