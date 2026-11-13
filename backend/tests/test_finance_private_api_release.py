@@ -130,7 +130,8 @@ def test_caddy_rollback_rejects_unexpected_concurrent_edits(tmp_path, monkeypatc
     monkeypatch.setattr(m, "CADDY", stage)
     monkeypatch.setattr(m, "BACKUPS", backup_root)
     backup = m.caddy_original_backup("a" * 40)
-    assert backup.name == "fh-finance-api-caddy-" + "a" * 40 + ".bak"
+    assert backup.name == "fh-finance-api-caddy.original.bak"
+    assert backup.parent == backup_root
     m.write_exclusive(backup, source)
     assert backup.read_bytes() == source
     stage.write_text("concurrent Caddy admin edits", encoding="utf-8")
