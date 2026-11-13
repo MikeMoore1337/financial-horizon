@@ -28,7 +28,7 @@ import stat
 import sys
 
 from fh_finance_private_api_release import (
-    BACKUPS, CADDY, CADDYFILE, CA_CERT, CA_SHA, HOST,
+    BACKUPS, CADDY, CADDYFILE, CA_CERT, CA_SHA, HOST, REPO,
     NoGo, auth_provider_baseline, caddy_snapshot, current_sha,
     deny, atomic_replace, public_probe, run, secure_file, write_exclusive,
 )
@@ -201,10 +201,31 @@ def verify(sha: str) -> None:
     print("FINANCE_ETAG_CADDY_ONLY=PASS")
 
 
+def emergency_rollback_gate(sha: str) -> None:
+    """Rollback must work even when GitHub or the live auth service is down.
+
+    Trust only root, the exact clean local Git checkout and the known source
+    origin. The original backup and expected Caddy patch are verified below.
+    Never depend on a remote CI lookup for an emergency Caddy restoration.
+    """
+    if os.geteuid() != 0 or os.environ.get("GITHUB_ACTIONS") == "true":
+        deny("AUTHORIZED_NATIVE_ROOT_REQUIRED")
+    if run(["git", "-C", str(REPO), "rev-parse", "HEAD"]) != sha:
+        deny("SOURCE_SHA_MISMATCH")
+    if run(["git", "-C", str(REPO), "status", "--porcelain"]):
+        deny("SOURCE_DIRTY")
+    if run(["git", "-C", str(REPO), "remote", "get-url", "origin"]) not in {
+        "https://github.com/MikeMoore1337/financial-horizon.git",
+        "https://github.com/MikeMoore1337/financial-horizon",
+        "git@github.com:MikeMoore1337/financial-horizon.git",
+    }:
+        deny("UNTRUSTED_SOURCE")
+
+
 def rollback(sha: str) -> None:
     if os.environ.get("FH_FINANCE_ETAG_ROLLBACK") != "YES":
         deny("EXPLICIT_ROLLBACK_REQUIRED")
-    current_sha(sha)
+    emergency_rollback_gate(sha)
     original = secure_file(BACKUP, 0, 0o600)
     expected = patch(original)
     now, mode = caddy_snapshot()
