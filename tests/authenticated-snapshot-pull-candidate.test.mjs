@@ -94,7 +94,7 @@ test('no explicit consent, wrong identity and stale unlock forbid all network',a
     ...base(id),fetchImpl,
   }),/SYNC_HOLD/);
   await assert.rejects(downloadVerifiedFinanceSnapshotCandidate({
-    ...base(),origin:'https://other.invalid',fetchImpl,
+    ...base(),origin:'http://other.invalid',fetchImpl,
   }),/No requests allowed|SYNC_HOLD/);
   assert.equal(calls,0);
 });
