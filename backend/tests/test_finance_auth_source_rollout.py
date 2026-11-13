@@ -256,3 +256,78 @@ def test_staged_import_checks_emit_specific_sanitized_failure_category(
     assert "STAGED_MODULE_IMPORT_AUTH_FAILED" in checks
     assert "STAGED_MODULE_IMPORT_OAUTH_FAILED" in checks
     assert checks[-1] == "STAGED_MODULE_IMPORT_LEDGER_FAILED"
+
+
+
+def test_release_ready_accepts_verified_standard_venv_python_symlink(
+    tmp_path, monkeypatch,
+):
+    """Regression: --stage PASS must not turn into --apply STAGED_PYTHON_UNAVAILABLE."""
+    import shutil
+
+    m = load()
+    sha = "b" * 40
+    repo = tmp_path / "repo"
+    source = repo / "backend"
+    source.mkdir(parents=True)
+    for pkg in m.PACKAGES:
+        package = source / pkg
+        package.mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+    for filename in ("requirements.txt", "requirements-finance.txt"):
+        (source / filename).write_text("synthetic-only\n", encoding="utf-8")
+
+    releases = tmp_path / "releases"
+    releases.mkdir()
+    stage = releases / sha
+    stage.mkdir()
+    shutil.copytree(source, stage / "backend")
+    (stage / ".finance-venv" / "bin").mkdir(parents=True)
+    interpreter = stage / ".finance-venv" / "bin" / "python"
+    interpreter.symlink_to(sys.executable)
+    (stage / "__finance_source.json").write_text(
+        json.dumps({"sha": sha, "source_hashes": m.source_files(source)}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(m, "RELEASES", releases)
+    monkeypatch.setattr(m, "REPO", repo)
+    target, resolved_python = m.release_ready(sha)
+    assert target == stage
+    assert resolved_python == interpreter
+    assert resolved_python.is_symlink()
+
+    # A link to a different executable is NOT an acceptable venv interpreter.
+    interpreter.unlink()
+    interpreter.symlink_to("/bin/sh")
+    with pytest.raises(m.NoGo, match="STAGED_PYTHON_UNTRUSTED"):
+        m.release_ready(sha)
+
+    interpreter.unlink()
+    interpreter.symlink_to(stage / "nonexistent")
+    with pytest.raises(m.NoGo, match="STAGED_PYTHON_UNAVAILABLE"):
+        m.release_ready(sha)
+
+
+def test_staged_python_rejects_symlinks_outside_pinned_interpreter(
+    tmp_path,
+):
+    """Only operator Python or a private stage-owned interpreter may be linked."""
+    import shutil
+
+    m = load()
+    target = tmp_path / "releases" / ("b" * 40)
+    bin_dir = target / ".finance-venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    python = bin_dir / "python"
+    # A symlink pointing outside the release to an arbitrary executable
+    # must fail even when that executable is otherwise root-owned and executable.
+    python.symlink_to("/usr/bin/env")
+    with pytest.raises(m.NoGo, match="STAGED_PYTHON_UNTRUSTED"):
+        m.verified_staged_python(target)
+
+    python.unlink()
+    # A normal copied executable inside the stage remains valid.
+    shutil.copyfile(sys.executable, python)
+    python.chmod(0o750)
+    assert m.verified_staged_python(target) == python
