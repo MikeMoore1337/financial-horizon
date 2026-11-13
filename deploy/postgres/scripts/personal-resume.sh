@@ -205,7 +205,7 @@ FH_FINANCE_GPG_HOME="$FH_FINANCE_GPG_HOME" \
 # rename preserves the original configuration if any preceding step failed.
 tmp="$(mktemp /etc/financial-horizon/finance/start.env.new.XXXXXXXX)" ||
   deny CANNOT_PREPARE_START_PIN
-trap 'cleanup; rm -f -- "${tmp:-}"' EXIT
+trap 'cleanup; if [[ -n "${tmp:-}" ]]; then rm -f -- "$tmp"; fi' EXIT
 sed "s/^FH_FINANCE_APPROVED_SHA=$old_sha$/FH_FINANCE_APPROVED_SHA=$FH_FINANCE_APPROVED_SHA/" \
   "$start_env" > "$tmp" || deny START_PIN_UPDATE_FAILED
 [[ "$(stat -c '%a:%u' "$tmp")" = 600:0 ]] || deny START_PIN_PERMISSIONS
