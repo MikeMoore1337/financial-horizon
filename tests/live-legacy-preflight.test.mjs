@@ -292,3 +292,32 @@ test('#69 account selection needs exact owner and all import consents',async()=>
   }),/IMPORT_HOLD/);
   assert.equal(db.writeCount,0);
 });
+
+
+test('#69 encrypted legacy preview of a single unused server zero account never uploads money',async()=>{
+  const state=legacy(),backup=await encryptBackup(state,backupPassword);
+  const db=mount({['account-state-v2:'+accountA]:state});
+  const zero='11111111-1111-4111-8111-111111111111';
+  const target=livePreviewTarget({
+    hasRemoteRecords:true,serverRevision:1,preserveZeroAccountId:zero,
+  });
+  const originalFetch=globalThis.fetch;
+  let http=0;
+  globalThis.fetch=()=>{http++;throw Error('No network during encrypted preflight')};
+  try{
+    const withheld=await previewFromBrowser(account(accountA),backup,{target});
+    assert.equal(withheld.status,'NEEDS_CONFLICT_DECISION');
+    assert.equal(withheld.sendAllowed,false);
+    const confirmed=await previewFromBrowser(account(accountA),backup,{
+      target,consent:{...livePreviewConsent(),confirmPreserveZeroAccount:true},
+    });
+    assert.equal(confirmed.status,'PREVIEW_ONLY');
+    assert.equal(confirmed.preservedZeroAccountId,zero);
+    assert.equal(confirmed.expectedServerRevision,1);
+    assert.deepEqual(confirmed.plannedAccounts,[]);
+    assert.deepEqual(confirmed.plannedLedgerPostings,[]);
+    assert.equal(db.writeCount,0);
+    assert.equal(http,0);
+    assert.deepEqual(db.values.get('account-state-v2:'+accountA),state);
+  }finally{globalThis.fetch=originalFetch}
+});
