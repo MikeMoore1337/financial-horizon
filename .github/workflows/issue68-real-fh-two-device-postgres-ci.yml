@@ -54,12 +54,13 @@ jobs:
         run: |
           python backend/finance_db/tests/bootstrap_ci.py
           alembic -c backend/finance_db/alembic.ini upgrade head
-      - name: Build review-only UI with production finance flag disabled
+      - name: Build reviewed accounts-only UI with import kept disabled
         run: |
           npm run lint
           npm run typecheck
           npm run build
-          grep -Fq '<meta name="fh-finance-accounts" content="disabled">' dist/index.html
+          grep -Fq '<meta name="fh-finance-accounts" content="enabled">' dist/index.html
+          grep -Fq '<meta name="fh-finance-import" content="disabled">' dist/index.html
       - name: Install real Chromium + WebKit
         run: |
           npx playwright install-deps chromium webkit
