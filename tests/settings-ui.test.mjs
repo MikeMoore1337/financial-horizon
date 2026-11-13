@@ -72,3 +72,17 @@ test('approved primary button palettes in light/dark remain unchanged',()=>{
  assert.match(css,/body\[data-theme=dark\][^\n]*--accent:#6c9dff;[^\n]*--onaccent:#081625/);
  assert.match(css,/body\{margin:0;[^\n]*--accent:#3078fa;[^\n]*--onaccent:#fff/);
 });
+
+
+test('storage context distinguishes server accounts from the local browser budget',()=>{
+ for(const id of ['storage-context-chip','storage-context-title','storage-context-detail','storage-context-footnote']){
+  assert.ok(html.includes('id="'+id+'"'),id);
+ }
+ assert.match(app,/function syncStorageContext\(\)/);
+ assert.match(app,/serverAccounts\?'На сервере':'Локально'/);
+ assert.match(app,/serverAccounts\?'Счета в аккаунте':'Хранится на устройстве'/);
+ assert.match(app,/serverAccounts\?'Локальный бюджет отдельно':'Без банковских подключений'/);
+ assert.match(app,/globalAdd\.hidden=serverAccounts/);
+ assert.match(css,/#top-add\[hidden\]\{display:none\}/);
+ assert.match(html,/<meta name="fh-finance-import" content="disabled">/);
+});
