@@ -15,6 +15,12 @@ PostgreSQL 17 с 15 FORCE RLS, зашифрованным резервирова
 `127.0.0.1:54329` с минимальной ролью `fh_finance_runtime`.
 Стабильный случайный UUID финансового пространства создаётся **один раз**
 и сохраняется в закрытом `runtime.env` с root-only резервной копией.
+**Пароль PostgreSQL не копируется в этот файл и его backup:** он остаётся
+только в существующем `secrets/runtime_password` (UID 999, 0400),
+а systemd `LoadCredential` передаёт его через закрытый runtime каталог
+`/run/credentials/fh-email-auth.service`. Небольшой проверенный Python
+launcher собирает DSN только **в памяти процесса** до запуска Uvicorn.
+В `ExecStart`, Caddy, GitHub, журнал и PWA секрет не передаётся.
 Не использовать мигратор или суперпользователя PostgreSQL для HTTP.
 
 В отдельном `90-finance-runtime.conf` включаются
