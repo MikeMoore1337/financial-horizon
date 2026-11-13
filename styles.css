@@ -76,6 +76,10 @@ button,input,select{font:inherit}button{cursor:pointer}svg{width:20px;height:20p
 .toolbar-logout[hidden],#account-entry[hidden],#account-session[hidden]{display:none}
 @media(max-width:760px){.toolbar-logout{width:44px;min-width:44px;padding:0;border-radius:13px}.toolbar-logout-label{display:none}}
 .settings-grid .setting-actions [hidden]{display:none}
+/* The optional import consent stays hidden until a verified zero account is found. */
+#cloud-import-preserve-row[hidden]{display:none}
+#cloud-import-preserve-zero-account,#cloud-import-final-consent{display:inline-block;width:auto;min-width:0;height:auto;padding:0;vertical-align:middle}
+
 
 /* Account management lives in the toolbar; vendor-provided Lucide user-round icon. */
 .toolbar-account{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;border-radius:13px}

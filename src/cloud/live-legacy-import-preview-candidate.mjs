@@ -44,12 +44,14 @@ export async function planLiveLegacyImportPreviewCandidate({
     confirmedTargetAccount: consent?.confirmedTargetAccount === true,
     previewRequested: consent?.previewRequested === true,
     explicitGuestTransfer: consent?.explicitGuestTransfer === true,
+    confirmPreserveZeroAccount: consent?.confirmPreserveZeroAccount === true,
   };
   const pinnedTarget = {
     accountScope: target?.accountScope,
     profileId: target?.profileId,
     serverRevision: target?.serverRevision,
     hasRemoteRecords: target?.hasRemoteRecords,
+    preserveZeroAccountId: target?.preserveZeroAccountId ?? null,
   };
   const original = await verifyLiveLegacyBackup({
     selection: chosen, backupText: pinnedBackup,
@@ -75,6 +77,8 @@ export async function planLiveLegacyImportPreviewCandidate({
       preview.sourceScope !== matched.sourceScope ||
       preview.sourceRevision !== matched.sourceRevision ||
       preview.recordCount !== matched.recordCount ||
+      preview.preservedZeroAccountId !== matched.preservedZeroAccountId ||
+      preview.expectedServerRevision !== matched.expectedServerRevision ||
       JSON.stringify(preview.counts) !== JSON.stringify(matched.counts)) {
     reject();
   }

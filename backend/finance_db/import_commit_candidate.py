@@ -22,7 +22,9 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from .db import finance_transaction
-from .import_manifest_candidate import _safe_manifest, _KIND
+from .import_manifest_candidate import (
+    _safe_manifest, _KIND, import_batch_id, require_safe_import_target,
+)
 from .ledger_service import FinanceCommandError, VerifiedFinanceScope
 
 _MAX_BYTES = 8_000_000
@@ -301,14 +303,6 @@ _SQL = {
 }
 
 
-def _batch_id(scope: VerifiedFinanceScope, manifest) -> UUID:
-    return uuid5(
-        scope.profile_id, "financial-horizon:import-manifest:v1:" +
-        manifest.source_scope + ":" + manifest.source_sha256 + ":" +
-        str(manifest.source_revision),
-    )
-
-
 def commit_verified_legacy_import_candidate(
     engine: Engine, *, scope: VerifiedFinanceScope, manifest: object,
     source_canonical_json: str,
@@ -337,7 +331,7 @@ def commit_verified_legacy_import_candidate(
     if inventory != expected:
         _invalid()
 
-    batch_id = _batch_id(scope, request)
+    batch_id = import_batch_id(scope, request)
     digest = bytes.fromhex(request.source_sha256)
     receipt_id = uuid5(batch_id, "financial-horizon:verified-import-commit:v1")
     counts = {kind: len(rows[kind]) for kind in _KIND}
@@ -381,18 +375,9 @@ def commit_verified_legacy_import_candidate(
             raise FinanceCommandError("stale_revision",
                                       "Профиль изменился после подготовки", 412,
                                       int(profile["revision"]))
-        # Reject even a server dataset created independently of a profile revision.
-        occupied = session.execute(text("""
-            SELECT EXISTS(SELECT 1 FROM accounts WHERE profile_id=:p)
-              OR EXISTS(SELECT 1 FROM obligations WHERE profile_id=:p)
-              OR EXISTS(SELECT 1 FROM loans WHERE profile_id=:p)
-              OR EXISTS(SELECT 1 FROM reserves WHERE profile_id=:p)
-              OR EXISTS(SELECT 1 FROM settlements WHERE profile_id=:p)
-              OR EXISTS(SELECT 1 FROM loan_payments WHERE profile_id=:p)
-              OR EXISTS(SELECT 1 FROM ledger_transactions WHERE profile_id=:p)
-        """), {"p": scope.profile_id}).scalar_one()
-        if occupied:
-            _conflict()
+        # Recheck exact same server account UUID, zero cash and no postings
+        # under the profile lock immediately before any import SQL writes.
+        require_safe_import_target(session, scope.profile_id, request)
 
         mapped = session.execute(text("""
             SELECT record_type,source_record_id,target_id FROM import_record_map

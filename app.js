@@ -477,7 +477,10 @@ async function handleAction(button){
  }
  if(type==='cancel-cloud-import'){
   cloudImportController?.abort();pendingCloudImport=null;cloudImportFile=null;
-  $('#cloud-import-final-consent').checked=false;$('#cloud-import-dialog').close();return;
+  $('#cloud-import-final-consent').checked=false;
+  $('#cloud-import-preserve-zero-account').checked=false;
+  $('#cloud-import-preserve-row').hidden=true;
+  $('#cloud-import-dialog').close();return;
  }
  if(type==='confirm-cloud-import'){await confirmCloudImport();return;}
  if(type==='excel-import'){$('#excel-file').value='';$('#excel-file').click();return;}
@@ -657,7 +660,11 @@ async function prepareCloudImport(password){
   $('#cloud-import-summary').textContent=
    'Готово к переносу: '+count.entries+' регулярных записей, '+count.loans+' кредитов, '+
    count.settlements+' фактических оплат и '+count.loanPayments+' платежей по кредитам. '+
-   'Серверная ревизия: '+prepared.revision+'. Пока ничего не загружено.';
+   'Серверная ревизия: '+prepared.revision+'. Пока ничего не загружено.'+
+   (prepared.preservedZeroAccountId ? ' Существующий счёт «'+
+    prepared.preservedZeroAccountName+'» с нулевым остатком останется на сервере без изменений.' : '');
+  $('#cloud-import-preserve-row').hidden=!prepared.preservedZeroAccountId;
+  $('#cloud-import-preserve-zero-account').checked=false;
   $('#cloud-import-final-consent').checked=false;
   // Never retain the original encrypted file or password in global state.
   cloudImportFile=null;
@@ -672,6 +679,8 @@ async function confirmCloudImport(){
  if($('#cloud-import-final-consent').checked!==true)
   throw Error('Требуется отдельное подтверждение сохранённой шифрованной копии');
  const prepared=pendingCloudImport, actor=prepared.actor;
+ if(prepared.preservedZeroAccountId&&$('#cloud-import-preserve-zero-account').checked!==true)
+  throw Error('Отдельно подтвердите сохранение существующего пустого счёта');
  cloudImportBusy=true;
  const button=$('#cloud-import-dialog [data-action="confirm-cloud-import"]');
  button.disabled=true;
@@ -684,11 +693,16 @@ async function confirmCloudImport(){
   if(!unchanged)throw Error('Локальные данные изменились. Создайте новую копию и предпросмотр.');
   const result=await executeConfirmedPersonalImportCandidate({
    prepared,verifiedActorUserId:actor,currentLocalSnapshotMatches:unchanged,
-   explicitFinalConsent:true,fetchImpl:window.fetch.bind(window),
+   explicitFinalConsent:true,
+   explicitPreserveZeroAccountConsent:prepared.preservedZeroAccountId ?
+    $('#cloud-import-preserve-zero-account').checked===true : false,
+   fetchImpl:window.fetch.bind(window),
    signal:cloudImportController?.signal,
   });
   pendingCloudImport=null;cloudImportFile=null;
   $('#cloud-import-final-consent').checked=false;
+  $('#cloud-import-preserve-zero-account').checked=false;
+  $('#cloud-import-preserve-row').hidden=true;
   $('#cloud-import-summary').textContent=
    'Перенесено '+result.recordCount+' записей. Сервер вернул точную копию исходных данных. '+
    'Локальная бухгалтерия не удалена. Пока синхронизация не включена, '+
@@ -698,6 +712,8 @@ async function confirmCloudImport(){
   // A network failure AFTER commit is UNKNOWN. Do not retry automatically.
   pendingCloudImport=null;cloudImportFile=null;cloudImportController?.abort();
   $('#cloud-import-final-consent').checked=false;
+  $('#cloud-import-preserve-zero-account').checked=false;
+  $('#cloud-import-preserve-row').hidden=true;
   $('#cloud-import-summary').textContent=
    'Результат переноса неизвестен. Локальные данные сохранены. Не повторяйте импорт, '+
    'пока не проверите серверную копию и квитанцию.';
@@ -762,6 +778,8 @@ function bindEvents(){
   cloudImportController?.abort();cloudImportController=null;
   pendingCloudImport=null;cloudImportFile=null;
   $('#cloud-import-final-consent').checked=false;
+  $('#cloud-import-preserve-zero-account').checked=false;
+  $('#cloud-import-preserve-row').hidden=true;
  });
  $('#excel-file').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;try{await previewExcelImport(file);}catch(e){pendingExcelImport=null;fail(e);}finally{event.target.value='';}});
  $('#schedule-file').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;
