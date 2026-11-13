@@ -364,8 +364,10 @@ def stage(sha: str) -> None:
         deny("RELEASE_DIRECTORY_UNSAFE")
     source = REPO / "backend"
     before = source_files(source)
+    old_umask = os.umask(0o022)
     try:
         target.mkdir(mode=0o755)
+        target.chmod(0o755)
         shutil.copytree(source, target / "backend",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         python = target / ".finance-venv" / "bin" / "python"
@@ -403,6 +405,8 @@ def stage(sha: str) -> None:
         if target.is_dir() and not target.is_symlink():
             shutil.rmtree(target)
         raise
+    finally:
+        os.umask(old_umask)
     print("FINANCE_BACKEND_STAGED=PASS")
     print("FINANCE_RUNTIME_FLAGS=OFF")
     print("LIVE_AUTH_SERVICE_UNCHANGED=YES")
