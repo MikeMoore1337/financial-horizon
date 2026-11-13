@@ -238,6 +238,15 @@ test('#68 true FH SQLite + PostgreSQL: two browser devices converge on money and
     expect(strangerProfile).not.toBe(profileA);
     const stranger = await state(third);
     expect(stranger.body.entities).toEqual([]);
+    // An authenticated but unrelated FH identity may not alter another
+    // profile's account even with the real account UUID and revision.
+    const crossProfileWrite = await submit(third, stranger, 'account.update', {
+      account_id: firstId, name: 'Чужая правка', kind: 'cash',
+    }, {[firstId]: versionOf(afterVoid, firstId)});
+    expect(crossProfileWrite.status()).toBe(409);
+    const ownerAfterIntrusion = await state(second);
+    expect(ownerAfterIntrusion.revision).toBe(afterVoid.revision);
+    expect(entity(ownerAfterIntrusion, firstId).data.name).toBe('Счёт А');
 
     await logoutViaUi(page);
     const denied = await context.request.get(ORIGIN + '/api/finance/v1/state');
