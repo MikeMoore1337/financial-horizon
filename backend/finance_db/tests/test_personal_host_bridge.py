@@ -149,6 +149,8 @@ def test_startup_never_recreates_an_initialized_postgresql_container():
     resume = (SCRIPTS / "personal-resume.sh").read_text(encoding="utf-8")
     assert "personal-host-bridge.py" in startup
     assert "personal-host-bridge.py" in bootstrap
+    # Do not let a Compose dependency restart/recreate the just-connected DB.
+    assert bootstrap.count("--no-deps") >= 2
     assert "personal-host-bridge.py" in resume
     assert "--verify-configured" in startup
     assert "--verify-configured" in resume
