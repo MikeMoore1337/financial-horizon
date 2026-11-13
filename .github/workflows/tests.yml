@@ -161,3 +161,20 @@ jobs:
         run: |
           python -m compileall -q backend/finance_db
           bash -n deploy/postgres/init/10-roles.sh deploy/postgres/scripts/*.sh
+
+
+  codeql-pr171-annotation-triage:
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 171
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
+    steps:
+      - name: Read completed CodeQL high-severity annotations
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/\${GITHUB_REPOSITORY}/check-runs/131942072733/annotations?per_page=100" \
+            --jq '.[] | {path,start_line,end_line,title,message,annotation_level}' \
+            | head -c 20000
