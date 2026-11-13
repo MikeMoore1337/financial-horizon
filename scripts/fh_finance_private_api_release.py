@@ -27,6 +27,8 @@ import time
 from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
 
+from fh_oauth_production_release import safe_uvicorn_argv
+
 REPO = Path("/opt/financial-horizon-ops")
 SERVICE = "fh-email-auth.service"
 ORIGIN = "https://fin-horizon.mikemoore.top"
@@ -36,6 +38,9 @@ FINANCE_PORT = 54329
 SHA_ENV = Path("/etc/financial-horizon/finance/start.env")
 SECRETS = Path("/etc/financial-horizon/finance/secrets/runtime_password")
 FINANCE_ENV = Path("/etc/financial-horizon/finance/runtime.env")
+LAUNCHER_SOURCE = REPO / "scripts/fh_finance_api_launcher.py"
+LAUNCHER_INSTALLED = Path("/usr/local/lib/financial-horizon/finance_api_launcher.py")
+CREDENTIAL_NAME = "fh_finance_runtime_password"
 FINANCE_DROPIN = Path("/etc/systemd/system/fh-email-auth.service.d/90-finance-runtime.conf")
 AUTH_SOURCE_DROPIN = Path("/etc/systemd/system/fh-email-auth.service.d/80-finance-source.conf")
 OAUTH_DROPIN = Path("/etc/systemd/system/fh-email-auth.service.d/70-oauth.conf")
@@ -288,7 +293,6 @@ def parse_runtime(content: str) -> dict[str, str]:
     if set(result) != {
         "FH_FINANCE_RUNTIME_MODE", "FH_FINANCE_V2_RUNTIME",
         "FH_FINANCE_IMPORT_RUNTIME", "FH_FINANCE_PROFILE_NAMESPACE",
-        "FH_FINANCE_DATABASE_URL",
     } or (
         result["FH_FINANCE_RUNTIME_MODE"] != "personal" or
         result["FH_FINANCE_V2_RUNTIME"] != "on" or
@@ -299,9 +303,8 @@ def parse_runtime(content: str) -> dict[str, str]:
         namespace = UUID(result["FH_FINANCE_PROFILE_NAMESPACE"])
     except (ValueError, KeyError):
         deny("FINANCE_PROFILE_NAMESPACE_INVALID")
-    if (namespace.int == 0 or str(namespace) != result["FH_FINANCE_PROFILE_NAMESPACE"]
-        or result["FH_FINANCE_DATABASE_URL"] != dsn(role_password())):
-        deny("RUNTIME_ENV_SECRET_OR_IDENTITY_MISMATCH")
+    if namespace.int == 0 or str(namespace) != result["FH_FINANCE_PROFILE_NAMESPACE"]:
+        deny("RUNTIME_ENV_IDENTITY_MISMATCH")
     return result
 
 
@@ -363,7 +366,6 @@ def prepare(sha: str) -> None:
             "FH_FINANCE_V2_RUNTIME": "on",
             "FH_FINANCE_IMPORT_RUNTIME": "off",
             "FH_FINANCE_PROFILE_NAMESPACE": str(uuid4()),
-            "FH_FINANCE_DATABASE_URL": dsn(role_password()),
         }
         value = "".join(k + "=" + v + "\n" for k, v in config.items())
         parse_runtime(value)
@@ -375,7 +377,7 @@ def prepare(sha: str) -> None:
         write_exclusive(backup, secure_file(FINANCE_ENV, 0, 0o600))
     if secure_file(backup, 0, 0o600) != secure_file(FINANCE_ENV, 0, 0o600):
         deny("FINANCE_PROFILE_BACKUP_DIVERGED")
-    role_connectivity(config["FH_FINANCE_DATABASE_URL"])
+    role_connectivity(dsn(role_password()))
     print("FINANCE_RUNTIME_CREDENTIALS=PASS")
     print("FINANCE_PROFILE_NAMESPACE_BACKUP=PASS")
     print("FINANCE_API_PREPARED=PASS")
@@ -393,16 +395,57 @@ def enabled_local_smoke() -> None:
         deny("FINANCE_LOCAL_UNAUTHENTICATED_SECURITY_REGRESSION")
 
 
+def approved_uvicorn_args() -> list[str]:
+    pid = run(["systemctl", "show", SERVICE, "-p", "MainPID", "--value"])
+    if not pid.isdecimal() or int(pid) <= 1:
+        deny("AUTH_PROCESS_UNAVAILABLE")
+    try:
+        cmdline = [
+            arg.decode("utf-8") for arg in
+            Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\\0") if arg
+        ]
+        return safe_uvicorn_argv(cmdline, BACKEND_PORT)
+    except (OSError, UnicodeError, ValueError):
+        deny("LIVE_UVICORN_ARGUMENTS_UNSAFE")
+
+
+def prepare_launcher() -> None:
+    if (LAUNCHER_INSTALLED.parent.is_symlink() or
+            not LAUNCHER_INSTALLED.parent.is_dir() or
+            LAUNCHER_INSTALLED.parent.stat().st_uid != 0):
+        deny("TRUSTED_LAUNCHER_DIRECTORY_REQUIRED")
+    source = LAUNCHER_SOURCE.read_bytes()
+    if LAUNCHER_INSTALLED.exists() or LAUNCHER_INSTALLED.is_symlink():
+        if secure_file(LAUNCHER_INSTALLED, 0, 0o644) != source:
+            deny("INSTALLED_LAUNCHER_CHANGED")
+    else:
+        write_exclusive(LAUNCHER_INSTALLED, source, mode=0o644)
+
+
+def finance_systemd_dropin() -> bytes:
+    args = [
+        str(python_binary()), str(LAUNCHER_INSTALLED), "--", *approved_uvicorn_args(),
+    ]
+    if not all(re.fullmatch(r"[/A-Za-z0-9_.,:/*=+\\-]+", a) for a in args):
+        deny("SYSTEMD_AUTH_LAUNCH_ARGUMENTS_UNSAFE")
+    return (
+        "[Service]\\n"
+        "EnvironmentFile=/etc/financial-horizon/finance/runtime.env\\n"
+        "LoadCredential=" + CREDENTIAL_NAME + ":" + str(SECRETS) + "\\n"
+        "ExecStart=\\n"
+        "ExecStart=" + " ".join(args) + "\\n"
+    ).encode("ascii")
+
+
 def enable_local(sha: str) -> None:
     preflight(sha)
-    config = load_runtime()
-    role_connectivity(config["FH_FINANCE_DATABASE_URL"])
+    load_runtime()
+    role_connectivity(dsn(role_password()))
     if not (FINANCE_DROPIN.parent.is_dir() and not FINANCE_DROPIN.parent.is_symlink()):
         deny("SYSTEMD_DROPIN_DIRECTORY_MISSING")
-    write_exclusive(FINANCE_DROPIN, (
-        "[Service]\n"
-        "EnvironmentFile=/etc/financial-horizon/finance/runtime.env\n"
-    ).encode("ascii"), mode=0o644)
+    prepare_launcher()
+    content = finance_systemd_dropin()
+    write_exclusive(FINANCE_DROPIN, content, mode=0o644)
     try:
         run(["systemctl", "daemon-reload"], error="SYSTEMD_RELOAD_FAILED")
         run(["systemctl", "restart", SERVICE], timeout=45, error="AUTH_RESTART_FAILED")
