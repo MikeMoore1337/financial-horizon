@@ -1,9 +1,23 @@
 name: issue68-real-fh-two-device-postgres-ci
 on:
-  push:
-    branches: [feat/68-real-browser-finance-ci-20261112]
   pull_request:
-    branches: [feat/33-finance-api-react-bridge-20261112]
+    branches: [main]
+    paths:
+      - 'tests/e2e/finance-real-multidevice.spec.mjs'
+      - 'tests/e2e/server.py'
+      - 'backend/finance_api/**'
+      - 'backend/finance_db/**'
+      - 'src/react/accounts-finance-gateway.ts'
+      - '.github/workflows/issue68-real-fh-two-device-postgres-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tests/e2e/finance-real-multidevice.spec.mjs'
+      - 'tests/e2e/server.py'
+      - 'backend/finance_api/**'
+      - 'backend/finance_db/**'
+      - 'src/react/accounts-finance-gateway.ts'
+      - '.github/workflows/issue68-real-fh-two-device-postgres-ci.yml'
 permissions:
   contents: read
 concurrency:
