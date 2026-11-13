@@ -242,6 +242,49 @@ def source_files(root: Path) -> dict[str, str]:
     return listing
 
 
+
+def verified_staged_python(target: Path) -> Path:
+    """Accept the standard venv/bin/python symlink, never an arbitrary target.
+
+    Both venv and uv may link bin/python to the interpreter used to create
+    the environment. The previous release_ready() rejected these ordinary
+    links even though --stage had already run them successfully as the
+    unprivileged service identity.
+
+    Follow the exact interpreter installed during staging, with root-owned
+    trusted system interpreter OR the stage-private executable, and preserve
+    the execution/readability checks performed as the auth service user.
+    """
+    venv = target / ".finance-venv"
+    bin_dir = venv / "bin"
+    python = bin_dir / "python"
+    if (venv.is_symlink() or bin_dir.is_symlink() or
+            not venv.is_dir() or not bin_dir.is_dir()):
+        deny("STAGED_PYTHON_UNAVAILABLE")
+    try:
+        symlink_or_file = python.lstat()
+        actual = python.resolve(strict=True)
+        base = venv.resolve(strict=True)
+        operator_python = Path(sys.executable).resolve(strict=True)
+        info = actual.stat()
+    except (OSError, RuntimeError):
+        deny("STAGED_PYTHON_UNAVAILABLE")
+    if (symlink_or_file.st_uid != os.geteuid() or
+            not (stat.S_ISLNK(symlink_or_file.st_mode) or
+                 stat.S_ISREG(symlink_or_file.st_mode)) or
+            not stat.S_ISREG(info.st_mode) or
+            not (info.st_mode & stat.S_IXUSR) or
+            (info.st_mode & 0o022) != 0):
+        deny("STAGED_PYTHON_UNTRUSTED")
+    if actual.is_relative_to(base):
+        if info.st_uid != os.geteuid():
+            deny("STAGED_PYTHON_UNTRUSTED")
+    elif actual != operator_python or info.st_uid != 0:
+        # No links to random system commands or other Python installations.
+        deny("STAGED_PYTHON_UNTRUSTED")
+    return python
+
+
 def release_ready(sha: str) -> tuple[Path, Path]:
     target = release_path(sha)
     if target.is_symlink() or not target.is_dir():
@@ -257,9 +300,7 @@ def release_ready(sha: str) -> tuple[Path, Path]:
     if (data != {"sha": sha, "source_hashes": source_files(root)} or
         data["source_hashes"] != source_files(REPO / "backend")):
         deny("STAGED_SOURCE_CHANGED")
-    python = target / ".finance-venv" / "bin" / "python"
-    if not python.is_file() or python.is_symlink():
-        deny("STAGED_PYTHON_UNAVAILABLE")
+    python = verified_staged_python(target)
     return target, python
 
 
