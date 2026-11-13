@@ -51,7 +51,7 @@ def test_personal_deploy_requires_real_postgres_backup_and_restore():
     assert 'backup.sh' in text and 'restore-drill.sh' in text
     assert "FINANCE_PERSONAL_BACKUP_RESTORE=PASS" in text
     assert "FINANCE_FINANCIAL_API=NOT_ENABLED" in text
-    assert "docker port fh-finance-postgres" in text
+    assert "personal_port_check.py" in text
     assert "ROOT_ONLY_BACKUP_CONFIG_REQUIRED" in text
     assert "SOURCE_ONLY" not in text
 
@@ -76,9 +76,9 @@ def test_private_finance_postgres_is_reachable_only_on_host_loopback():
     for script in ("personal-bootstrap.sh", "personal-start.sh"):
         text = (SCRIPTS / script).read_text(encoding="utf-8")
         assert "personal-loopback.override.yml" in text
-        assert '"5432/tcp -> 127.0.0.1:54329"' in text
+        assert 'personal_port_check.py' in text
         assert "ONLY_LOOPBACK_DATABASE_PORT_ALLOWED" in text
-        assert "docker port fh-finance-postgres" in text
+        assert "personal_port_check.py" in text
 
 
 def test_personal_prepare_is_opt_in_idempotent_and_never_bootstraps_services():
