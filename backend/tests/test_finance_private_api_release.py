@@ -143,3 +143,34 @@ def test_rollback_is_never_silent_or_implicit():
     m = module()
     with pytest.raises(m.NoGo, match="ROLLBACK_EXPLICIT_ROOT_APPROVAL_REQUIRED"):
         m.rollback("a" * 40)
+
+
+
+def test_least_privilege_postgres_probe_uses_service_identity_no_sql_data(monkeypatch):
+    from types import SimpleNamespace
+
+    m = module()
+    seen = {}
+    monkeypatch.setattr(m, "python_binary", lambda: Path(sys.executable))
+    monkeypatch.setattr(
+        m.pwd, "getpwnam",
+        lambda username: SimpleNamespace(pw_dir="/var/empty", pw_uid=1234, pw_gid=1234),
+    )
+
+    def fake_run(args, **kwargs):
+        seen["args"] = args
+        seen["options"] = kwargs
+        compile(args[2], "<finance-probe>", "exec")
+        return ""
+
+    monkeypatch.setattr(m, "run", fake_run)
+    url = m.dsn("a" * 64)
+    m.role_connectivity(url)
+    assert seen["args"][:2] == [sys.executable, "-c"]
+    assert "finance.finance_profiles LIMIT 0" in seen["args"][2]
+    assert "COUNT(*) FROM pg_class" in seen["args"][2]
+    assert "FH_FINANCE_DATABASE_URL" in seen["args"][2]
+    assert url not in seen["args"][2]
+    assert seen["options"]["user"] == "fh-email-auth"
+    assert seen["options"]["env"]["FH_FINANCE_DATABASE_URL"] == url
+    assert seen["options"]["error"] == "FH_RUNTIME_DATABASE_ROLE_UNUSABLE"
