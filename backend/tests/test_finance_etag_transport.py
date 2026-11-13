@@ -143,3 +143,36 @@ def test_backup_path_fixed_and_root_private():
         "/var/backups/financial-horizon-finance/fh-finance-etag-caddy-original.bak"
     )
     assert m.BACKUP.is_relative_to(m.BACKUPS)
+
+
+
+def test_emergency_rollback_needs_no_remote_ci_or_healthy_service(monkeypatch):
+    m = load()
+    sha = "a" * 40
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr(m.os, "geteuid", lambda: 0)
+
+    def local_command(args, **kwargs):
+        if args[-2:] == ["rev-parse", "HEAD"]:
+            return sha
+        if args[-2:] == ["status", "--porcelain"]:
+            return ""
+        if args[-3:] == ["remote", "get-url", "origin"]:
+            return "https://github.com/MikeMoore1337/financial-horizon.git"
+        raise AssertionError("Emergency rollback must not depend on live API/CI")
+
+    monkeypatch.setattr(m, "run", local_command)
+    monkeypatch.setattr(
+        m, "current_sha",
+        lambda unused: pytest.fail("No remote current_sha or health gate during rollback"),
+    )
+    m.emergency_rollback_gate(sha)
+    with pytest.raises(m.NoGo, match="SOURCE_SHA_MISMATCH"):
+        m.emergency_rollback_gate("b" * 40)
+
+
+def test_rollback_requires_explicit_operator_opt_in(monkeypatch):
+    m = load()
+    monkeypatch.delenv("FH_FINANCE_ETAG_ROLLBACK", raising=False)
+    with pytest.raises(m.NoGo, match="EXPLICIT_ROLLBACK_REQUIRED"):
+        m.rollback("a" * 40)
