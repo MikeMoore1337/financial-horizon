@@ -149,7 +149,9 @@ export async function planVerifiedLegacyImportCandidate({
   if (!target || !isObject(target) || !userScope.test(target.accountScope) ||
       !uuid.test(target.profileId) ||
       !Number.isSafeInteger(target.serverRevision) || target.serverRevision < 0 ||
-      typeof target.hasRemoteRecords !== 'boolean') {
+      typeof target.hasRemoteRecords !== 'boolean' ||
+      (target.preserveZeroAccountId != null &&
+        (!target.hasRemoteRecords || !uuid.test(target.preserveZeroAccountId)))) {
     fail('Не подтверждён серверный финансовый профиль');
   }
   if (verified.scope.startsWith('account:') &&
@@ -171,6 +173,9 @@ export async function planVerifiedLegacyImportCandidate({
   } catch {
     fail('Повреждены исходные финансовые данные');
   }
+  const approvedZeroAccount = target.hasRemoteRecords &&
+    typeof target.preserveZeroAccountId === 'string' &&
+    consent.confirmPreserveZeroAccount === true;
   const index = recordIndex(pinned);
   const canonicalSnapshot = canonical(pinned);
   const sourceSha256 = await fingerprint(canonicalSnapshot);
@@ -182,7 +187,9 @@ export async function planVerifiedLegacyImportCandidate({
 
   return Object.freeze({
     schemaVersion: 1,
-    status: target.hasRemoteRecords ? 'NEEDS_CONFLICT_DECISION' : 'PREVIEW_ONLY',
+    status: target.hasRemoteRecords && !approvedZeroAccount
+      ? 'NEEDS_CONFLICT_DECISION' : 'PREVIEW_ONLY',
+    preservedZeroAccountId: approvedZeroAccount ? target.preserveZeroAccountId : null,
     sourceScope: verified.scope,
     targetScope: target.accountScope,
     targetProfileId: target.profileId,
@@ -222,6 +229,8 @@ export async function prepareVerifiedLegacyImportTransportCandidate({
       !uuid.test(preview.targetProfileId) ||
       !Number.isSafeInteger(preview.expectedServerRevision) ||
       preview.expectedServerRevision < 0 ||
+      (preview.preservedZeroAccountId != null &&
+       !uuid.test(preview.preservedZeroAccountId)) ||
       !/^[0-9a-f]{64}$/.test(preview.sourceSha256)) {
     fail('Не подтверждён безопасный перенос в собственный пустой профиль');
   }
@@ -265,6 +274,10 @@ export async function prepareVerifiedLegacyImportTransportCandidate({
       external_encrypted_backup_checked: true,
       explicit_owner_consent: true,
       explicit_guest_transfer: false,
+      ...(preview.preservedZeroAccountId ? {
+        preserve_zero_account_id: preview.preservedZeroAccountId,
+        confirm_preserve_zero_account: true,
+      } : {}),
       rows,
     }),
     source_canonical_json: canonicalSnapshot,
