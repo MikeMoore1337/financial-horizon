@@ -1,0 +1,21 @@
+name: One-time CodeQL PR #171 diagnostics
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  checks: read
+  contents: read
+jobs:
+  codeql-annotations:
+    if: github.event.pull_request.number == 171
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read existing high-security check annotations without printing credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api \
+            "repos/${GITHUB_REPOSITORY}/check-runs/131942072733/annotations?per_page=100" \
+            --jq '.[] | {path,start_line,end_line,title,message,annotation_level}' \
+            | head -c 20000
