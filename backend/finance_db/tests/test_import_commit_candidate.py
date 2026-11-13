@@ -303,3 +303,126 @@ def test_two_concurrent_identical_commits_create_one_financial_revision(context)
     assert responses[0]["revision"] == responses[1]["revision"] == 1
     assert counts(engine, scope)["command_receipts"] == 1
     assert counts(engine, scope)["obligations"] == 2
+
+
+def test_preserve_exact_one_unused_zero_account_requires_owner_opt_in(context):
+    """A pre-existing 0-RUB test account is retained, never wiped or reused."""
+    engine, scope = context
+    account_id, _ = add_account(engine, scope, opening=0, name="Synthetic zero")
+    before = get_account_snapshot(engine, scope=scope)
+    assert before.body["revision"] == 1
+    assert len(before.body["entities"]) == 1
+    source = original()
+    raw = canonical(source)
+    request = manifest_for(
+        scope, source, raw, expected_server_revision=before.body["revision"],
+        preserve_zero_account_id=account_id,
+        confirm_preserve_zero_account=True,
+    )
+    staged = stage_import_manifest_candidate(engine, scope=scope, manifest=request)
+    assert staged["status"] == "UNVERIFIED_MANIFEST_STAGED"
+    committed = commit_verified_legacy_import_candidate(
+        engine, scope=scope, manifest=request, source_canonical_json=raw,
+    )
+    assert committed["status"] == "COMMITTED"
+    assert committed["revision"] == 2
+    assert committed["cash_postings_created"] == 0
+    after = get_account_snapshot(engine, scope=scope)
+    assert after.body["revision"] == 2
+    assert len(after.body["entities"]) == 1
+    assert after.body["entities"][0] == before.body["entities"][0]
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as db:
+        assert db.execute(text("SELECT count(*) FROM accounts")).scalar_one() == 1
+        assert db.execute(text("SELECT count(*) FROM ledger_postings")).scalar_one() == 0
+        assert db.execute(text("SELECT count(*) FROM obligations")).scalar_one() == 2
+    replay = commit_verified_legacy_import_candidate(
+        engine, scope=scope, manifest=request, source_canonical_json=raw,
+    )
+    assert replay["replayed"] is True and replay["revision"] == 2
+    recovered = restore_original_legacy_source_candidate(
+        engine, scope=scope, batch_id=committed["batch_id"],
+        source_sha256=request["source_sha256"],
+    )
+    assert recovered == raw
+
+
+@pytest.mark.parametrize("opening,additional,wrong_id", [
+    (0, False, False),
+    (100, False, False),
+    (-100, False, False),
+    (0, True, False),
+    (0, False, True),
+])
+def test_nonempty_profile_requires_exact_zero_account_and_consent(
+        context, opening, additional, wrong_id):
+    engine, scope = context
+    account_id, _ = add_account(engine, scope, opening=opening)
+    if additional:
+        add_account(engine, scope, opening=0)
+    version = get_account_snapshot(engine, scope=scope).body["revision"]
+    source = original()
+    raw = canonical(source)
+    candidate = manifest_for(
+        scope, source, raw, expected_server_revision=version,
+        preserve_zero_account_id=str(uuid4()) if wrong_id else account_id,
+        confirm_preserve_zero_account=True,
+    )
+    before = counts(engine, scope)
+    if opening == 0 and not additional and not wrong_id:
+        with pytest.raises(FinanceCommandError) as missing:
+            stage_import_manifest_candidate(
+                engine, scope=scope,
+                manifest={k: v for k, v in candidate.items()
+                          if k not in ("preserve_zero_account_id",
+                                      "confirm_preserve_zero_account")},
+            )
+        assert missing.value.status == 409
+    else:
+        with pytest.raises(FinanceCommandError) as error:
+            stage_import_manifest_candidate(engine, scope=scope, manifest=candidate)
+        assert error.value.status == 409
+    assert counts(engine, scope) == before
+
+
+def test_malformed_preservation_consent_does_not_stage_any_manifest(context):
+    engine, scope = context
+    account_id, _ = add_account(engine, scope, opening=0)
+    source = original()
+    raw = canonical(source)
+    version = get_account_snapshot(engine, scope=scope).body["revision"]
+    valid = manifest_for(scope, source, raw, expected_server_revision=version,
+                         preserve_zero_account_id=account_id,
+                         confirm_preserve_zero_account=True)
+    initial = counts(engine, scope)
+    for damaged in (
+        {**valid, "confirm_preserve_zero_account": False},
+        {**valid, "confirm_preserve_zero_account": "true"},
+        {**valid, "preserve_zero_account_id": None},
+        {**valid, "preserve_zero_account_id": "../../other"},
+    ):
+        with pytest.raises(FinanceCommandError) as error:
+            stage_import_manifest_candidate(engine, scope=scope, manifest=damaged)
+        assert error.value.status == 422
+    assert counts(engine, scope) == initial
+
+
+def test_new_server_account_between_zero_account_stage_and_commit_denies_import(context):
+    engine, scope = context
+    aid, _ = add_account(engine, scope, opening=0)
+    snapshot = get_account_snapshot(engine, scope=scope)
+    source = original()
+    raw = canonical(source)
+    manifest = manifest_for(
+        scope, source, raw, expected_server_revision=snapshot.body["revision"],
+        preserve_zero_account_id=aid, confirm_preserve_zero_account=True,
+    )
+    stage_import_manifest_candidate(engine, scope=scope, manifest=manifest)
+    add_account(engine, scope, opening=0)
+    before = counts(engine, scope)
+    with pytest.raises(FinanceCommandError) as error:
+        commit_verified_legacy_import_candidate(
+            engine, scope=scope, manifest=manifest, source_canonical_json=raw,
+        )
+    assert error.value.status in (409, 412)
+    assert counts(engine, scope) == before

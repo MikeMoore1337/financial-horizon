@@ -160,6 +160,7 @@
     <div class="dialog-head"><div><span class="eyebrow">Личный финансовый аккаунт</span><h2 id="cloud-import-heading">Подтвердить перенос</h2></div><button type="button" class="tool-icon" data-action="cancel-cloud-import" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ico-close"/></svg></button></div>
     <p class="form-note">Шифрованная копия сверена с текущей бухгалтерией. На сервере пока ничего не изменено. Локальные данные останутся на устройстве даже после импорта.</p>
     <p id="cloud-import-summary" class="form-note" role="status" aria-live="polite"></p>
+    <label class="field" id="cloud-import-preserve-row" hidden><span><input type="checkbox" id="cloud-import-preserve-zero-account"> Я отдельно подтверждаю сохранение существующего пустого счёта на сервере. Он не будет удалён или объединён с локальными суммами.</span></label>
     <label class="field"><span><input type="checkbox" id="cloud-import-final-consent"> Я сохранил зашифрованную копию вне браузера, проверил данные и разрешаю однократный перенос в свой аккаунт.</span></label>
     <p class="form-note">Если импорт прервётся после подтверждения, не запускайте его повторно, пока не проверите результат на сервере. Автоматического удаления локальной базы нет.</p>
     <div class="dialog-actions"><button type="button" class="button-secondary" data-action="cancel-cloud-import">Отмена</button><button type="button" class="button-primary" data-action="confirm-cloud-import">Перенести на сервер</button></div>

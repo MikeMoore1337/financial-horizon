@@ -253,3 +253,46 @@ test('never prepare a money upload after changed backup, different owner or remo
     verified: original, preview, signal: cancelled.signal,
   }));
 });
+
+test('zero account is preserved only after explicit consent with an exact UUID', async () => {
+  const accountId = '11111111-1111-4111-8111-111111111111';
+  const compatible = target({
+    serverRevision: 1, hasRemoteRecords: true,
+    preserveZeroAccountId: accountId,
+  });
+  const denied = await plan({target: compatible});
+  assert.equal(denied.status, 'NEEDS_CONFLICT_DECISION');
+  await expectHold(prepareVerifiedLegacyImportTransportCandidate({
+    verified: verified(createSampleState()), preview: denied,
+    signal: new AbortController().signal,
+  }));
+  const approved = await plan({
+    target: compatible,
+    consent: {...consent(), confirmPreserveZeroAccount: true},
+  });
+  assert.equal(approved.status, 'PREVIEW_ONLY');
+  assert.equal(approved.expectedServerRevision, 1);
+  assert.equal(approved.preservedZeroAccountId, accountId);
+  const snapshot = createSampleState();
+  const actual = await plan({
+    verified: verified(snapshot), target: compatible,
+    consent: {...consent(), confirmPreserveZeroAccount: true},
+  });
+  const payload = await prepareVerifiedLegacyImportTransportCandidate({
+    verified: verified(snapshot), preview: actual,
+    signal: new AbortController().signal,
+  });
+  assert.equal(payload.manifest.preserve_zero_account_id, accountId);
+  assert.equal(payload.manifest.confirm_preserve_zero_account, true);
+  assert.equal(payload.manifest.expected_server_revision, 1);
+  await expectHold(plan({
+    target: target({serverRevision:1, hasRemoteRecords:false,
+      preserveZeroAccountId:accountId}),
+    consent:{...consent(), confirmPreserveZeroAccount:true},
+  }));
+  await expectHold(plan({
+    target:target({serverRevision:1, hasRemoteRecords:true,
+      preserveZeroAccountId:'not-a-valid-uuid'}),
+    consent:{...consent(), confirmPreserveZeroAccount:true},
+  }));
+});
