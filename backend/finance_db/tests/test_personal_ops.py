@@ -73,12 +73,16 @@ def test_private_finance_postgres_is_reachable_only_on_host_loopback():
     content = override.read_text(encoding="utf-8")
     assert '127.0.0.1:54329:5432' in content
     assert '0.0.0.0:' not in content and '[::]:' not in content
-    for script in ("personal-bootstrap.sh", "personal-start.sh"):
-        text = (SCRIPTS / script).read_text(encoding="utf-8")
-        assert "personal-loopback.override.yml" in text
-        assert 'personal_port_check.py' in text
-        assert "ONLY_LOOPBACK_DATABASE_PORT_ALLOWED" in text
+    bootstrap = (SCRIPTS / "personal-bootstrap.sh").read_text(encoding="utf-8")
+    restart = (SCRIPTS / "personal-start.sh").read_text(encoding="utf-8")
+    assert "personal-loopback.override.yml" in bootstrap
+    assert "personal-host-bridge.py" in bootstrap
+    assert "personal-host-bridge.py" in restart
+    assert "docker start fh-finance-postgres" in restart
+    assert "docker compose" not in restart
+    for text in (bootstrap, restart):
         assert "personal_port_check.py" in text
+        assert "ONLY_LOOPBACK_DATABASE_PORT_ALLOWED" in text
 
 
 def test_personal_prepare_is_opt_in_idempotent_and_never_bootstraps_services():
