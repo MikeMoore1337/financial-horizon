@@ -176,3 +176,61 @@ test('preparation cannot access unprotected origins, missing backup or unverifie
   }
   assert.equal(calls,0);
 });
+
+
+test('preserved server zero account cannot be committed without separate checkbox', async () => {
+  const candidate = await example();
+  const existingId = '11111111-1111-4111-8111-111111111111';
+  const prepared = {
+    ...candidate,
+    preservedZeroAccountId: existingId,
+    preservedZeroAccountName: 'Synthetic zero',
+    payload: {
+      ...candidate.payload,
+      manifest: {
+        ...candidate.payload.manifest,
+        preserve_zero_account_id: existingId,
+        confirm_preserve_zero_account: true,
+      },
+    },
+  };
+  let requests = 0;
+  const run = (changes = {}, fetchImpl = async () => {
+    requests++;
+    throw Error('Unexpected HTTP');
+  }) => executeConfirmedPersonalImportCandidate({
+    prepared, verifiedActorUserId: USER,
+    currentLocalSnapshotMatches: true, explicitFinalConsent: true,
+    explicitPreserveZeroAccountConsent: false,
+    signal: req(), fetchImpl, ...changes,
+  });
+  await assert.rejects(run(), /IMPORT_HOLD:/);
+  assert.equal(requests, 0);
+  await assert.rejects(run({
+    explicitPreserveZeroAccountConsent: true,
+    prepared: {...prepared, payload: {...prepared.payload, manifest: {
+      ...prepared.payload.manifest, confirm_preserve_zero_account: false,
+    }}},
+  }), /IMPORT_HOLD:/);
+  assert.equal(requests, 0);
+
+  const responses = [
+    reply({status:'UNVERIFIED_MANIFEST_STAGED', batch_id:BATCH,
+      record_count:prepared.preview.recordCount, financial_write:false},202),
+    reply({status:'COMMITTED',batch_id:BATCH,revision:1,
+      record_count:prepared.preview.recordCount,
+      source_sha256:prepared.preview.sourceSha256,
+      source_original_preserved:true,cash_postings_created:0},201),
+    reply(JSON.parse(prepared.payload.source_canonical_json)),
+  ];
+  const result = await run({
+    explicitPreserveZeroAccountConsent: true,
+  }, async (url, options) => {
+    requests++;
+    assert.equal(options.credentials, 'same-origin');
+    return responses.shift();
+  });
+  assert.equal(requests, 3);
+  assert.equal(result.status, 'COMMITTED_AND_SOURCE_RESTORED');
+  assert.equal(result.serverZeroAccountPreserved, true);
+});
