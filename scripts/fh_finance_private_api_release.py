@@ -426,9 +426,23 @@ def prepare_launcher() -> None:
             LAUNCHER_INSTALLED.stat().st_gid != account.pw_gid):
             deny("INSTALLED_LAUNCHER_CHANGED")
     else:
-        write_exclusive(LAUNCHER_INSTALLED, source, mode=0o600)
-        os.chown(LAUNCHER_INSTALLED, 0, account.pw_gid)
-        os.chmod(LAUNCHER_INSTALLED, 0o640)
+        # Keep the launcher unreadable until its content and owner/group have
+        # been installed through the same open file descriptor. No path-based
+        # chmod/chown race; only the dedicated non-root auth group can read it.
+        fd = None
+        try:
+            fd = os.open(
+                LAUNCHER_INSTALLED,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
+                0o600,
+            )
+            os.write(fd, source)
+            os.fsync(fd)
+            os.fchown(fd, 0, account.pw_gid)
+            os.fchmod(fd, 0o640)
+        finally:
+            if fd is not None:
+                os.close(fd)
 
 
 def finance_systemd_dropin() -> bytes:
