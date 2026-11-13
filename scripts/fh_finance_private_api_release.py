@@ -332,7 +332,7 @@ def role_connectivity(url: str) -> None:
         " ON c.relnamespace=n.oid WHERE n.nspname=\\'finance\\'"
         " AND c.relkind=\\'r\\' AND c.relforcerowsecurity');"
         "assert cursor.fetchone()[0]==15;"
-        "cursor.execute('SELECT COUNT(*) FROM finance.finance_profiles');"
+        "cursor.execute('SELECT 1 FROM finance.finance_profiles LIMIT 0');"
         "conn.close()"
     )
     run([str(python), "-c", module], timeout=20, user="fh-email-auth",
