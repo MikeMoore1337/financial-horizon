@@ -279,7 +279,7 @@ def verified_staged_python(target: Path) -> Path:
     if actual.is_relative_to(base):
         if info.st_uid != os.geteuid():
             deny("STAGED_PYTHON_UNTRUSTED")
-    elif actual != operator_python or info.st_uid != 0:
+    elif actual != operator_python or info.st_uid not in (0, os.geteuid()):
         # No links to random system commands or other Python installations.
         deny("STAGED_PYTHON_UNTRUSTED")
     return python
