@@ -118,6 +118,8 @@ bash deploy/postgres/scripts/personal-storage-preflight.sh ||
   deny DOCKER_AUTO_RESTART_FORBIDDEN
 python3 deploy/postgres/scripts/personal_port_check.py --configured-only ||
   deny UNSAFE_EXISTING_CONTAINER_CONFIG
+python3 deploy/postgres/scripts/personal-host-bridge.py --verify-configured ||
+  deny VERIFIED_HOST_BRIDGE_NOT_ATTACHED
 docker compose -f deploy/postgres/compose.yml -f deploy/postgres/personal-loopback.override.yml config --quiet ||
   deny INVALID_PRIVATE_COMPOSE
 

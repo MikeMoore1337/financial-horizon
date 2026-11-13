@@ -81,12 +81,12 @@ FINANCE_PERSONAL_BOOTSTRAP=PASS, FINANCE_PERSONAL_BACKUP_RESTORE=PASS.
 
 ## Если первичная установка остановилась на ONLY_LOOPBACK_DATABASE_PORT_ALLOWED
 
-Docker 29/Compose 5 могут иначе оформлять текст `docker port`. Ранее
-`personal-bootstrap.sh` сравнивал строку целиком; новый
-`personal_port_check.py` сравнивает **фактические** настройки Docker
-(`PortBindings`, `NetworkSettings.Ports`, сеть, образ и путь данных).
-Если вместо `127.0.0.1:54329` опубликован другой адрес/порт, проверка
-останавливает выпуск, а не игнорирует опасную конфигурацию.
+На Docker Engine 29.6.2 контейнер, подключённый **только** к сети
+`internal: true`, может сохранить `HostConfig.PortBindings` с
+`127.0.0.1:54329`, но вернуть `NetworkSettings.Ports=null` и не открыть
+TCP-порт. Это **не** текстовая ошибка `docker port`. Строгую проверку
+фактической публикации ослаблять нельзя: требуется отдельная сеть и
+действительное подключение к `127.0.0.1:54329`.
 
 При первом сбое после `Container ... Healthy` и до миграций **не удаляйте**
 контейнер или каталог `pgdata`, не запускайте `personal-prepare.sh`
@@ -105,6 +105,7 @@ Docker 29/Compose 5 могут иначе оформлять текст `docker 
    с обязательным успешным CI - от root выполните в отдельном production SSH:
 
    ```bash
+   set -Eeuo pipefail
    systemctl disable --now fh-finance-personal.service
    systemctl disable --now fh-finance-personal-backup.timer
    cd /opt/financial-horizon-ops
@@ -120,6 +121,24 @@ Docker 29/Compose 5 могут иначе оформлять текст `docker 
    export FH_FINANCE_DATA_DIR=/srv/financial-horizon-finance/pgdata
    export FH_FINANCE_APPROVED_SHA="$(git rev-parse HEAD)"
    python3 deploy/postgres/scripts/personal_port_check.py --configured-only
+
+   # Docker Engine 29.x: HostConfig may request localhost while the sole
+   # internal network silently suppresses the *effective* publication.
+   # First attach a separate dedicated ordinary bridge without recreating DB.
+   test "$(docker inspect -f '{{.State.Running}}' fh-finance-postgres)" = true
+   export FH_FINANCE_ATTACH_HOST_LOOPBACK=YES
+   python3 deploy/postgres/scripts/personal-host-bridge.py --attach
+   python3 deploy/postgres/scripts/personal-host-bridge.py --verify
+
+   # Assert no finance migration ran before this original interruption.
+   tables="$(docker exec -u postgres fh-finance-postgres \
+     psql -X -U postgres -d fh_finance -Atqc \
+     "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname='finance'")"
+   test "$tables" = 0
+
+   # Only this DB is stopped: volume, container and auth service are preserved.
+   docker stop --time=30 fh-finance-postgres
+   test "$(docker inspect -f '{{.State.Status}}' fh-finance-postgres)" = exited
 
    export FH_FINANCE_RESUME_PRE_MIGRATION=YES
    bash deploy/postgres/scripts/personal-resume.sh
@@ -140,6 +159,28 @@ Docker 29/Compose 5 могут иначе оформлять текст `docker 
    `FINANCE_PERSONAL_START_ENV_UPDATED=PASS` - выполните **шаг 4** выше,
    затем проверьте `fh-email-auth.service`. Наличие этих PASS не включает
    финансовый API и не подтверждает пользовательскую миграцию.
+
+**Docker 29.x / Compose 5.x:** изолированная сеть `finance_private`
+намеренно остаётся `internal: true`, но исключительно internal-only мост
+не публикует порт PostgreSQL на хост. Новая `fh-finance_host_loopback`
+создаётся отдельно с опциями `host_binding_ipv4=127.0.0.1` и
+`enable_icc=false`; на ней допускается только один FH-контейнер.
+После `docker network connect` скрипт требует точную реальную привязку
+через Docker inspect **и** TCP-соединение с `127.0.0.1:54329`.
+При несовпадении ничего не удаляется, миграции не начинаются.
+Дополнительная обычная bridge-сеть даёт контейнеру путь для исходящего
+трафика: это отличие от полной исходной internal-only изоляции;
+входящий финансовый порт по-прежнему доступен только с localhost,
+а публичный порт VPS не открывается. Никогда не переключать порт на
+`0.0.0.0`, не использовать `network_mode: host` или `docker compose down`.
+
+После успешного восстановления системная служба использует
+`docker start` только для **того же самого** контейнера и проверяет
+сохранённое членство в обеих сетях. Команда `docker compose up`
+не используется для штатного старта/перезапуска: она могла бы
+пересоздать контейнер и потерять вторую сетевую привязку.
+При наличии уже проведённых финансовых таблиц повторять
+`personal-resume.sh` запрещено.
 
 При `UNSAFE_CONFIGURED_PORT`, `UNSAFE_EFFECTIVE_PORT`,
 `UNEXPECTED_CONTAINER_IDENTITY`, `EXISTING_SCHEMA_REQUIRES_MANUAL_REVIEW`
