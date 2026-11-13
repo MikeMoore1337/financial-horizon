@@ -114,11 +114,11 @@ python3 "$script_dir/personal_port_check.py" ||
   deny "ONLY_LOOPBACK_DATABASE_PORT_ALLOWED"
 [[ "$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' fh-finance-postgres)" = no ]] ||
   deny "DOCKER_AUTO_RESTART_FORBIDDEN"
-docker compose -f deploy/postgres/compose.yml -f deploy/postgres/personal-loopback.override.yml --profile ops run --build --rm migrator ||
+docker compose -f deploy/postgres/compose.yml -f deploy/postgres/personal-loopback.override.yml --profile ops run --no-deps --build --rm migrator ||
   deny "SCHEMA_MIGRATION_FAILED"
 
 # Migrations may evolve; accept ONLY the actual HEAD as reported by Alembic.
-docker compose -f deploy/postgres/compose.yml -f deploy/postgres/personal-loopback.override.yml --profile ops run --rm migrator >/dev/null ||
+docker compose -f deploy/postgres/compose.yml -f deploy/postgres/personal-loopback.override.yml --profile ops run --no-deps --rm migrator >/dev/null ||
   deny "MIGRATION_IDEMPOTENCE_FAILED"
 tables="$(docker exec -u postgres fh-finance-postgres psql -U postgres -d fh_finance -Atc "
  SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
