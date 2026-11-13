@@ -78,6 +78,74 @@ restore в одноразовый контейнер без сети. Он не 
 FINANCE_PERSONAL_EXACT_SHA_CI=PASS, RESTORE_DRILL_PASS,
 FINANCE_PERSONAL_BOOTSTRAP=PASS, FINANCE_PERSONAL_BACKUP_RESTORE=PASS.
 
+
+## Если первичная установка остановилась на ONLY_LOOPBACK_DATABASE_PORT_ALLOWED
+
+Docker 29/Compose 5 могут иначе оформлять текст `docker port`. Ранее
+`personal-bootstrap.sh` сравнивал строку целиком; новый
+`personal_port_check.py` сравнивает **фактические** настройки Docker
+(`PortBindings`, `NetworkSettings.Ports`, сеть, образ и путь данных).
+Если вместо `127.0.0.1:54329` опубликован другой адрес/порт, проверка
+останавливает выпуск, а не игнорирует опасную конфигурацию.
+
+При первом сбое после `Container ... Healthy` и до миграций **не удаляйте**
+контейнер или каталог `pgdata`, не запускайте `personal-prepare.sh`
+повторно и не выполняйте `docker compose down -v`. Даже пустой кластер уже
+создан, поэтому прежний bootstrap закономерно откажет в новой инициализации.
+
+1. Сначала сохраните безопасный вывод:
+
+   ```bash
+   docker inspect fh-finance-postgres --format 'PORT_BINDINGS={{json .HostConfig.PortBindings}}'
+   docker inspect fh-finance-postgres --format 'CONTAINER_STATUS={{.State.Status}}'
+   ```
+
+2. Только если это именно первый прерванный запуск **до миграций**, Docker
+   показывает корректную привязку localhost, и исправление слито в `main`
+   с обязательным успешным CI - от root выполните в отдельном production SSH:
+
+   ```bash
+   systemctl disable --now fh-finance-personal.service
+   systemctl disable --now fh-finance-personal-backup.timer
+   cd /opt/financial-horizon-ops
+   test -z "$(git status --porcelain)"
+   if test "$(git rev-parse --is-shallow-repository)" = true; then
+     git -c credential.helper= fetch --unshallow origin main
+   else
+     git -c credential.helper= fetch origin main
+   fi
+   git merge --ff-only origin/main
+
+   export FH_FINANCE_PERSONAL_MODE=YES
+   export FH_FINANCE_DATA_DIR=/srv/financial-horizon-finance/pgdata
+   export FH_FINANCE_APPROVED_SHA="$(git rev-parse HEAD)"
+   python3 deploy/postgres/scripts/personal_port_check.py --configured-only
+
+   export FH_FINANCE_RESUME_PRE_MIGRATION=YES
+   bash deploy/postgres/scripts/personal-resume.sh
+   ```
+
+   Скрипт проверяет старый SHA из `start.env`, fast-forward на новый
+   `main`, обязательные CI именно нового SHA, точные Docker image/network/
+   mount/loopback, PG17, отсутствие финансовых таблиц, наличие двух
+   специализированных ролей и выключенные systemd-службы. Он запускает
+   **только прежний контейнер** через `docker start`, применяет миграции,
+   делает шифрованный backup и реальный изолированный restore, затем
+   **атомарно** меняет только SHA в `start.env`. При ошибке останавливает
+   контейнер, том сохраняет. Это **не** универсальный DB upgrade и не
+   разрешение восстанавливать поверх пользовательских данных.
+
+3. Только при `FINANCE_PERSONAL_RESUME=PASS`,
+   `FINANCE_PERSONAL_BACKUP_RESTORE=PASS` и
+   `FINANCE_PERSONAL_START_ENV_UPDATED=PASS` - выполните **шаг 4** выше,
+   затем проверьте `fh-email-auth.service`. Наличие этих PASS не включает
+   финансовый API и не подтверждает пользовательскую миграцию.
+
+При `UNSAFE_CONFIGURED_PORT`, `UNSAFE_EFFECTIVE_PORT`,
+`UNEXPECTED_CONTAINER_IDENTITY`, `EXISTING_SCHEMA_REQUIRES_MANUAL_REVIEW`
+или другом `NO_GO` остановитесь. Не редактируйте Docker-команды, переменные,
+дампы, роли и `start.env` вручную ради обхода проверки.
+
 ## Шаг 4 - только финансовая systemd-служба и таймер копий
 
 После всех PASS:

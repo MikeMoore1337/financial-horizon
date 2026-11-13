@@ -108,7 +108,7 @@ cleanup() {
 trap cleanup EXIT
 docker compose -f deploy/postgres/compose.yml -f deploy/postgres/personal-loopback.override.yml up -d --wait db || deny "DB_START_FAILED"
 started=1
-[[ "$(docker port fh-finance-postgres)" = "5432/tcp -> 127.0.0.1:54329" ]] ||
+python3 "$script_dir/personal_port_check.py" ||
   deny "ONLY_LOOPBACK_DATABASE_PORT_ALLOWED"
 [[ "$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' fh-finance-postgres)" = no ]] ||
   deny "DOCKER_AUTO_RESTART_FORBIDDEN"

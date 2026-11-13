@@ -21,10 +21,12 @@ bash "$root/deploy/postgres/scripts/personal-storage-preflight.sh" ||
   deny "EXISTING_PG17_DATA_REQUIRED_DO_NOT_REINITIALIZE"
 docker inspect -f '{{.State.Status}}' fh-finance-postgres >/dev/null 2>&1 ||
   deny "FINANCE_DB_NOT_BOOTSTRAPPED"
+python3 "$root/deploy/postgres/scripts/personal_port_check.py" --configured-only ||
+  deny "UNSAFE_STOPPED_CONTAINER_CONFIG"
 cd "$root"
 docker compose -f deploy/postgres/compose.yml -f deploy/postgres/personal-loopback.override.yml up -d --wait db ||
   deny "HEALTH_CHECK_FAILED"
-[[ "$(docker port fh-finance-postgres)" = "5432/tcp -> 127.0.0.1:54329" ]] ||
+python3 "$root/deploy/postgres/scripts/personal_port_check.py" ||
   deny "ONLY_LOOPBACK_DATABASE_PORT_ALLOWED"
 [[ "$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' fh-finance-postgres)" = no ]] ||
   deny "UNSAFE_DOCKER_RESTART_POLICY"
