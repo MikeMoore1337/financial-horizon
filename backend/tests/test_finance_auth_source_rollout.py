@@ -147,3 +147,112 @@ def test_release_link_switch_is_atomic_and_checks_expected_old_release(tmp_path,
         m.switch_current(old, new)
     m.switch_current(new, old)
     assert current.resolve() == old
+
+
+def test_restricted_source_copy_gets_service_group_read_without_world_access(
+    tmp_path, monkeypatch,
+):
+    """shutil.copytree preserves 0700/0600 - the observed VPS deployment mode."""
+    import types
+    import stat
+
+    m = load()
+    releases = tmp_path / "releases"
+    releases.mkdir()
+    current_old = releases / ("a" * 40)
+    current_old.mkdir()
+    target = releases / ("b" * 40)
+    target.mkdir(mode=0o700)
+    source = target / "backend"
+    source.mkdir(mode=0o700)
+    package = source / "fh_email_auth"
+    package.mkdir(mode=0o700)
+    item = package / "__init__.py"
+    item.write_text("from __future__ import annotations\n", encoding="utf-8")
+    item.chmod(0o600)
+    # A venv interpreter may be linked to a system-owned binary.
+    venv = target / ".finance-venv"
+    venv.mkdir(mode=0o700)
+    (venv / "bin").mkdir(mode=0o700)
+    (venv / "bin" / "python").symlink_to(sys.executable)
+
+    current = tmp_path / "current"
+    current.symlink_to(current_old)
+    monkeypatch.setattr(m, "RELEASES", releases)
+    monkeypatch.setattr(m, "CURRENT", current)
+    # No root permission is required by the isolated test. The production
+    # code uses real pwd/chown with the dedicated service group's primary gid.
+    monkeypatch.setattr(m.pwd, "getpwnam", lambda name: types.SimpleNamespace(
+        pw_uid=1234, pw_gid=1234,
+    ))
+    affected = []
+    monkeypatch.setattr(m.os, "chown", lambda *args, **kwargs: affected.append(args[0]))
+    m.grant_staged_service_read_access(target)
+
+    for d in (target, source, package, venv, venv / "bin"):
+        assert stat.S_IMODE(d.stat().st_mode) & 0o750 == 0o750
+        assert not stat.S_IMODE(d.stat().st_mode) & 0o007
+    assert stat.S_IMODE(item.stat().st_mode) == 0o640
+    assert not any(str(x).endswith("/bin/python") for x in affected)
+    assert (venv / "bin" / "python").is_symlink()
+    assert current.resolve() == current_old
+
+
+def test_service_group_permissions_reject_hardlinks_and_source_symlinks(
+    tmp_path, monkeypatch,
+):
+    import types
+
+    m = load()
+    releases = tmp_path / "releases"
+    releases.mkdir()
+    current_old = releases / ("a" * 40)
+    current_old.mkdir()
+    target = releases / ("b" * 40)
+    target.mkdir()
+    monkeypatch.setattr(m, "RELEASES", releases)
+    current = tmp_path / "current"
+    current.symlink_to(current_old)
+    monkeypatch.setattr(m, "CURRENT", current)
+    monkeypatch.setattr(m.pwd, "getpwnam", lambda name: types.SimpleNamespace(
+        pw_uid=1234, pw_gid=1234,
+    ))
+    file = target / "file.py"
+    file.write_text("data = 1\n", encoding="utf-8")
+    (target / "hardlink.py").hardlink_to(file)
+    with pytest.raises(m.NoGo, match="STAGED_SHARED_OR_UNTRUSTED_INODE"):
+        m.grant_staged_service_read_access(target)
+    (target / "hardlink.py").unlink()
+    (target / "outside.py").symlink_to(file)
+    with pytest.raises(m.NoGo, match="STAGED_SOURCE_SYMLINK_FORBIDDEN"):
+        m.grant_staged_service_read_access(target)
+    assert current.resolve() == current_old
+
+
+def test_staged_import_checks_emit_specific_sanitized_failure_category(
+    tmp_path, monkeypatch,
+):
+    import types
+
+    m = load()
+    target = tmp_path / ("b" * 40)
+    python = target / ".finance-venv" / "bin" / "python"
+    checks = []
+    monkeypatch.setattr(m.pwd, "getpwnam", lambda name: types.SimpleNamespace(
+        pw_uid=1234, pw_gid=1234, pw_dir="/nonexistent",
+    ))
+    def checked_probe(args, **kwargs):
+        checks.append(kwargs.get("code"))
+        if kwargs.get("code") == "STAGED_MODULE_IMPORT_LEDGER_FAILED":
+            raise m.NoGo(kwargs["code"])
+        return b""
+
+    monkeypatch.setattr(m, "checked", checked_probe)
+    with pytest.raises(m.NoGo, match="STAGED_MODULE_IMPORT_LEDGER_FAILED"):
+        m.check_staged_import("b" * 40, target, python)
+    assert "STAGED_BACKEND_NOT_TRAVERSABLE" in checks
+    assert "STAGED_VENV_NOT_EXECUTABLE" in checks
+    assert "STAGED_PACKAGE_NOT_READABLE_FINANCE_DB" in checks
+    assert "STAGED_MODULE_IMPORT_AUTH_FAILED" in checks
+    assert "STAGED_MODULE_IMPORT_OAUTH_FAILED" in checks
+    assert checks[-1] == "STAGED_MODULE_IMPORT_LEDGER_FAILED"
