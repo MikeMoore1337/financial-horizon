@@ -221,15 +221,15 @@ def local_app(directory):
         if not target.is_relative_to(base.resolve()) or not target.is_file():
             raise HTTPException(404)
         if real_finance and resource == "index.html":
-            # E2E-only explicit accounts UI, with actual FH cookies/SQL.
+            # Real-FH/SQL E2E must exercise the same reviewed accounts entry
+            # as production, never a silently rewritten feature flag.
             contents = target.read_text(encoding="utf-8")
-            previous = '<meta name="fh-finance-accounts" content="disabled">'
-            if contents.count(previous) != 1:
+            if (contents.count('<meta name="fh-finance-accounts" content="enabled">') != 1
+                or contents.count('<meta name="fh-finance-import" content="disabled">') != 1):
                 raise HTTPException(503)
             return Response(
-                contents.replace(previous,
-                                 '<meta name="fh-finance-accounts" content="enabled">'),
-                media_type="text/html", headers={"Cache-Control": "no-store"},
+                contents, media_type="text/html",
+                headers={"Cache-Control": "no-store"},
             )
         return FileResponse(target)
 

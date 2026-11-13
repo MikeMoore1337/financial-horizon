@@ -1,14 +1,23 @@
 # Financial Horizon #33 - connected accounts in the existing PWA
 
-**Status: CODE CANDIDATE / DEFAULT OFF / NOT DEPLOYED TO PRODUCTION.**
+**Status: REVIEWED OWNER-APPROVED ACCOUNTS-ONLY RELEASE / PRODUCTION PENDING.**
 
 The owner-approved React `Accounts` screen is linked to the existing PWA
-navigation without adding a sixth mobile dock item. When a reviewed production
-release explicitly sets `<meta name="fh-finance-accounts" content="enabled">`,
-an authenticated user sees a **Счета и кошельки** card in Settings, leading
-to the server-backed screen. The default `disabled` value hides it for
-guests, installed old builds and unaudited releases. The `data-view`
-handler also refuses manually forged navigation attempts while locked.
+navigation without adding a sixth mobile dock item. The reviewed production
+release now sets `<meta name="fh-finance-accounts" content="enabled">`
+while preserving `<meta name="fh-finance-import" content="disabled">`.
+An authenticated FH user sees a **Счета и кошельки** card in Settings,
+leading to a **separate** server-backed screen. Guests do not see it;
+older installed builds with the disabled flag are still supported.
+The `data-view` handler also refuses forged navigation while locked.
+No IndexedDB migration, old-ledger replacement, account reclassification,
+automatic sync, user-record upload or importing is caused by opening it.
+
+**Release condition:** this file describes the candidate source. The owner
+must still confirm the actual static production SHA, authenticate in the
+installed browser, open the screen and verify that the pre-existing test
+account is shown with 0 RUB, balances are authoritative and guest isolation
+survives refresh/logout. Green CI alone is not evidence of deployment.
 
 The PWA host supplies only the FH AuthStore verified user ID, never a
 client-chosen `profile_id`. The existing `AuthBoundary` verifies that
@@ -54,6 +63,8 @@ session/foreign account negative tests, and a tested app rollback. Complete
 local encrypted source migration and two-device conflict resolution remain
 under #68/#69/#70; do not claim them from mocked React component tests.
 
-**A merge of this source while `disabled` is safe but does NOT satisfy
-production acceptance or close Issue #33.** Do not edit an installed PWA,
-force a feature flag on or publish real user finance values in CI/issues.
+**Enabling the accounts-only source flag does not by itself satisfy
+production acceptance or close Issue #33.** Record actual deployed static
+SHA, real FH session, read-only account screen and logout behavior, plus
+finance API negative/security results. Never publish user financial values
+in CI, issues or screenshots; no importing or cross-device sync by this flag.
