@@ -139,9 +139,25 @@ export async function prepareLivePersonalImportCandidate({
       snapshot.profile_id !== session.profile_id || snapshot.currency !== 'RUB' ||
       snapshot.schema_version !== 1 ||
       !Number.isSafeInteger(snapshot.revision) || snapshot.revision < 0 ||
-      !Array.isArray(snapshot.entities) || snapshot.entities.length !== 0 ||
-      snapshot.next_cursor != null) {
+      !Array.isArray(snapshot.entities) ||
+      snapshot.entities.length > 1 || snapshot.next_cursor != null) {
     hold('Сервер содержит записи или вернул неполный финансовый снимок');
+  }
+  // The only compatible nonempty target is a single untouched 0-RUB account.
+  // Its UUID/revision and absence of all other server facts are rechecked by
+  // PostgreSQL under profile lock at both stage and commit. Never delete it.
+  const existing = snapshot.entities[0] ?? null;
+  if (existing && (existing.kind !== 'account' || !UUID.test(existing.id) ||
+      existing.entity_revision !== 1 ||
+      typeof existing.data?.name !== 'string' ||
+      existing.data.name.length < 1 || existing.data.name.length > 160 ||
+      existing.data.currency !== 'RUB' ||
+      existing.data.opening_minor !== 0 ||
+      existing.data.balance_minor !== 0 ||
+      existing.data.reserved_minor !== 0 ||
+      existing.data.available_minor !== 0 ||
+      existing.data.archived_at != null)) {
+    hold('На сервере есть действующие финансовые записи. Автоматическое объединение запрещено');
   }
   active(signal);
   const selection = {kind: 'account', verifiedUserId: verifiedActorUserId};
@@ -149,11 +165,15 @@ export async function prepareLivePersonalImportCandidate({
     savedEncryptedBackupOutsideThisBrowser: true, confirmedReadOnlyPreflight: true,
     externalEncryptedBackupVerified: true, confirmedTargetAccount: true,
     previewRequested: true, explicitGuestTransfer: false,
+    // This only prepares a proposal; the SECOND explicit checkbox is still
+    // required before HTTP stage/commit.
+    confirmPreserveZeroAccount: existing !== null,
   };
   const target = {
     accountScope: 'account:' + verifiedActorUserId,
     profileId: session.profile_id, serverRevision: snapshot.revision,
-    hasRemoteRecords: false,
+    hasRemoteRecords: existing !== null,
+    preserveZeroAccountId: existing?.id ?? null,
   };
   const preview = await planLiveLegacyImportPreviewCandidate({
     selection, backupText, backupPassword, consent, target, signal,
@@ -171,6 +191,8 @@ export async function prepareLivePersonalImportCandidate({
     actor: verifiedActorUserId, origin, etag,
     profileId: session.profile_id, revision: snapshot.revision,
     snapshot: source.snapshot, preview, payload,
+    preservedZeroAccountId: existing?.id ?? null,
+    preservedZeroAccountName: existing?.data.name ?? null,
   });
 }
 
@@ -182,7 +204,8 @@ export async function prepareLivePersonalImportCandidate({
  */
 export async function executeConfirmedPersonalImportCandidate({
   prepared, verifiedActorUserId, currentLocalSnapshotMatches,
-  explicitFinalConsent, fetchImpl, signal,
+  explicitFinalConsent, explicitPreserveZeroAccountConsent = false,
+  fetchImpl, signal,
 }) {
   active(signal);
   if (!prepared || prepared.actor !== verifiedActorUserId ||
@@ -190,6 +213,11 @@ export async function executeConfirmedPersonalImportCandidate({
       !USER.test(verifiedActorUserId) || !STRONG_ETAG.test(prepared.etag || '') ||
       !HASH.test(prepared.preview?.sourceSha256 || '') ||
       prepared.preview?.status !== 'PREVIEW_ONLY' ||
+      (prepared.preservedZeroAccountId &&
+       (explicitPreserveZeroAccountConsent !== true ||
+        prepared.payload?.manifest?.preserve_zero_account_id !==
+          prepared.preservedZeroAccountId ||
+        prepared.payload?.manifest?.confirm_preserve_zero_account !== true)) ||
       typeof fetchImpl !== 'function') {
     hold('Перенос не подтверждён пользователем или исходная база изменилась');
   }
@@ -239,5 +267,6 @@ export async function executeConfirmedPersonalImportCandidate({
     revision: committed.revision, recordCount: committed.record_count,
     sourceSha256: committed.source_sha256,
     localDataPreserved: true, cashPostingsCreated: 0,
+    ...(prepared.preservedZeroAccountId ? {serverZeroAccountPreserved: true} : {}),
   });
 }
