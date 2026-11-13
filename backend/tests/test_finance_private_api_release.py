@@ -243,3 +243,18 @@ def test_runtime_file_does_not_store_any_password(monkeypatch):
     assert "CREDENTIALS_DIRECTORY" in (
         SCRIPT.parent / "fh_finance_api_launcher.py"
     ).read_text(encoding="utf-8")
+
+
+
+def test_codeql_security_fixes_require_owner_only_create_and_tls_12_floor():
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert (
+        "os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)"
+        in source
+    )
+    assert 'context.minimum_version = ssl.TLSVersion.TLSv1_2' in source
+    assert 'write_exclusive(FINANCE_DROPIN, content, mode=0o600)' in source
+    assert 'os.chmod(LAUNCHER_INSTALLED, 0o640)' in source
+    assert 'LAUNCHER_INSTALLED.stat().st_gid != account.pw_gid' in source
+    assert "ssl.CERT_NONE" not in source
+    assert "check_hostname = False" not in source
