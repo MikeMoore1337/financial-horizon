@@ -67,6 +67,37 @@ FINANCE_RUNTIME_FLAGS=OFF
 LIVE_AUTH_SERVICE_UNCHANGED=YES
 ```
 
+### Исправление ограниченных прав staged Python (2026-11-13)
+
+Если `--preflight` проходит, а `--stage` сообщает
+`AUTH_FINANCE_IMPORT_AS_SERVICE_USER_FAILED`, это **не** отказ
+PostgreSQL и не доказательство повреждения OAuth. Исходный скрипт
+копировал backend через `shutil.copytree()`, который сохраняет
+исходные права root-only `0700/0600`. Новый каталог release мог стать
+нечитаемым для `fh-email-auth` даже после `umask 022`.
+
+Исправленный `--stage` проверяет владельца каждого inode внутри
+нового неактивного релиза, запрещает внешние symlink в исходниках и
+совместно используемые hardlink, выдаёт право чтения/доступа **только**
+основной группе `fh-email-auth` без права записи и без изменения
+старого release. Виртуальное окружение проверяется отдельно.
+При последующей ошибке не публикует Python traceback, а возвращает
+конкретную безопасную категорию: `STAGED_BACKEND_NOT_TRAVERSABLE`,
+`STAGED_VENV_NOT_EXECUTABLE`,
+`STAGED_PACKAGE_NOT_READABLE_*`,
+`STAGED_MODULE_IMPORT_AUTH_FAILED`,
+`STAGED_MODULE_IMPORT_OAUTH_FAILED`,
+`STAGED_MODULE_IMPORT_LEDGER_FAILED`,
+`STAGED_MODULE_IMPORT_FINANCE_API_FAILED` или
+`STAGED_FINANCE_DEFAULT_OFF_FAILED`.
+Подготовленный неактивный каталог удаляется при ошибке, работающие
+`current`, systemd, OAuth, SQLite и PostgreSQL не изменяются.
+
+Перед повторной попыткой использовать **новый точный `main` SHA**
+с успешным 4/4 CI; старый SHA/скрипт не запускайте.
+Повторно выполняются только `--preflight`, затем `--stage`;
+`--apply` допускается исключительно после `FINANCE_BACKEND_STAGED=PASS`.
+
 При ошибке `NO_GO` не повторять этап с обходом проверок.
 Сохранить точный код отказа, не присылать секреты и вывод конфигурационных файлов.
 
