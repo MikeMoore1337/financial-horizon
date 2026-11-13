@@ -123,3 +123,25 @@ def test_script_has_no_unexpected_top_level_execution():
         capture_output=True, text=True, timeout=5, check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_release_link_switch_is_atomic_and_checks_expected_old_release(tmp_path, monkeypatch):
+    m = load()
+    releases = tmp_path / "releases"
+    releases.mkdir()
+    old = releases / ("a" * 40)
+    new = releases / ("b" * 40)
+    old.mkdir()
+    new.mkdir()
+    current = tmp_path / "current"
+    current.symlink_to(old)
+    monkeypatch.setattr(m, "RELEASES", releases)
+    monkeypatch.setattr(m, "CURRENT", current)
+
+    m.switch_current(old, new)
+    assert current.is_symlink() and current.resolve() == new
+    assert old.is_dir()
+    with pytest.raises(m.NoGo, match="AUTH_RELEASE_LINK_CHANGED"):
+        m.switch_current(old, new)
+    m.switch_current(new, old)
+    assert current.resolve() == old
