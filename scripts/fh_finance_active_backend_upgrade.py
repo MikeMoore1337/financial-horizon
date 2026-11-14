@@ -24,7 +24,6 @@ import shutil
 import stat
 import sys
 import time
-from uuid import UUID
 
 import fh_finance_auth_source_rollout as source
 import fh_finance_private_api_release as finance
@@ -132,14 +131,13 @@ def check_checkout(sha: str) -> None:
 def live_state() -> Path:
     """Require a running personal instance, not a source-only auth service."""
     source.active_services()
-    if source.systemd_value("User") != source.USER or (
-        source.checked(
-            ["systemctl", "is-active", "--quiet",
-             "fh-finance-personal-backup.timer"],
-            code="FINANCE_BACKUP_TIMER_INACTIVE",
-        ) is None
-    ):
+    if source.systemd_value("User") != source.USER:
         refuse("SOURCE_RUNTIME_NOT_PERSONAL")
+    source.checked(
+        ["systemctl", "is-active", "--quiet",
+         "fh-finance-personal-backup.timer"],
+        code="FINANCE_BACKUP_TIMER_INACTIVE",
+    )
     if not (DROP70.is_file() and DROP80.is_file() and DROP90.is_file()):
         refuse("ALL_THREE_PROTECTED_DROPINS_REQUIRED")
     paths = source.systemd_value("DropInPaths").split()
