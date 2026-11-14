@@ -139,9 +139,14 @@ def test_failed_public_smoke_restores_runtime_caddy_and_restarts_auth(
     monkeypatch.setattr(m.finance, "run",
                         lambda args, **kwargs: events.append(tuple(args)) or "")
     monkeypatch.setattr(m, "restart_auth", lambda: events.append("restart-auth"))
-    monkeypatch.setattr(m.finance, "local_probe",
-                        lambda path, **kwargs: (
-                            401 if b"IMPORT_RUNTIME=on" in values[m.RUNTIME] else 404))
+    monkeypatch.setattr(
+        m.finance, "local_probe",
+        lambda path, **kwargs: (
+            200 if path == "/api/auth/providers" else
+            (401 if b"IMPORT_RUNTIME=on" in values[m.RUNTIME] else 404)
+            if path.startswith("/api/finance/v1/import/") else 401
+        ),
+    )
     monkeypatch.setattr(m.finance, "public_probe",
                         lambda path, **kwargs: 503)
     with pytest.raises(m.Hold, match="IMPORT_PUBLIC_DENY_ANONYMOUS_OR_CSRF_FAILED"):
