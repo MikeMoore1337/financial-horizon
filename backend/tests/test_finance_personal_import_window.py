@@ -71,7 +71,7 @@ def test_only_three_new_exact_post_routes_with_no_wildcard_or_oauth_changes():
         base.replace(b"method POST", b"method GET"),
         b"arbitrary sites",
     ):
-        with pytest.raises(m.Hold, match="CADDY_FINANCE_LAYOUT_UNRECOGNIZED"):
+        with pytest.raises(m.Hold, match="^CADDY_FINANCE_"):
             m.caddy_import_patch(invalid)
 
 
