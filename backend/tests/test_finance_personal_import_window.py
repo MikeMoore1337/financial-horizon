@@ -214,3 +214,64 @@ def test_bad_production_mode_does_not_touch_external_resources():
         "rm -rf", "indexedDB.deleteDatabase", "post_import_financial_data",
     ):
         assert forbidden not in text
+
+
+def test_live_preflight_has_actual_exported_oauth_dropin_and_reaches_read_only_pass(
+    monkeypatch, tmp_path, capsys,
+):
+    """Regression: source.OAUTH_DROPIN exists; source.DROP70 never existed.
+
+    Exercise the real preflight control flow with synthetic responses, rather
+    than stubbing live_preflight() itself as other candidate tests do.
+    """
+    m = load()
+    from types import SimpleNamespace
+
+    assert m.source.OAUTH_DROPIN.name == "70-oauth.conf"
+    assert not hasattr(m.source, "DROP70")
+    sha = "1" * 40
+
+    monkeypatch.setattr(m.os, "geteuid", lambda: 0)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr(m.backend, "check_checkout", lambda _sha: None)
+    monkeypatch.setattr(m.source, "active_services", lambda: None)
+    live = m.source.RELEASES / sha / "backend"
+    monkeypatch.setattr(m, "current_source", lambda: live)
+    monkeypatch.setattr(m.source, "source_files", lambda path: {"same": "hash"})
+
+    actual_is_file = Path.is_file
+    approved = {m.source.OAUTH_DROPIN, m.backend.DROP80, m.backend.DROP90}
+    monkeypatch.setattr(
+        Path, "is_file",
+        lambda self: True if self in approved else actual_is_file(self),
+    )
+    monkeypatch.setattr(m.backend, "protected", lambda path, mode: b"synthetic")
+    monkeypatch.setattr(m.backend, "expected_configs",
+                        lambda *args: (b"safe-source", b"safe-runtime"))
+    monkeypatch.setattr(m.finance, "enabled_local_smoke", lambda: None)
+    monkeypatch.setattr(
+        m.finance, "public_probe",
+        lambda path, **kwargs: 200 if path == "/api/auth/providers" else 401,
+    )
+    monkeypatch.setattr(m, "trusted_runtime_file", fixture_env)
+    old_caddy = fixture_caddy(m)
+    monkeypatch.setattr(m.finance, "caddy_snapshot",
+                        lambda: (old_caddy, 0o640))
+    monkeypatch.setattr(m.finance, "local_probe", lambda *args, **kw: 404)
+    monkeypatch.setattr(m, "BACKUPS", tmp_path)
+    actual_stat = Path.stat
+    monkeypatch.setattr(
+        Path, "stat",
+        lambda self, **kw: SimpleNamespace(st_mode=0o40700, st_uid=0)
+        if self == tmp_path else actual_stat(self, **kw),
+    )
+
+    runtime, caddy, caddy_mode, mode = m.live_preflight(sha)
+    assert runtime == fixture_env()
+    assert caddy == old_caddy
+    assert caddy_mode == 0o640
+    assert mode == "off"
+    stdout = capsys.readouterr().out
+    assert "FH_IMPORT_WINDOW_PREFLIGHT=PASS" in stdout
+    assert "FH_IMPORT_RUNTIME_BEFORE=OFF" in stdout
+    assert "FH_FINANCIAL_DATA_UNCHANGED=YES" in stdout
