@@ -71,8 +71,104 @@ def test_only_three_new_exact_post_routes_with_no_wildcard_or_oauth_changes():
         base.replace(b"method POST", b"method GET"),
         b"arbitrary sites",
     ):
-        with pytest.raises(m.Hold, match="CADDY_FINANCE_LAYOUT_UNRECOGNIZED"):
+        with pytest.raises(m.Hold, match="^CADDY_FINANCE_"):
             m.caddy_import_patch(invalid)
+
+
+def test_interleaved_existing_finance_caddy_blocks_are_safe_and_preserved():
+    """Production: separate valid read/write blocks, no contiguous ROUTES."""
+    m = load()
+    original = fixture_caddy(m).decode("utf-8")
+    marker = "    @fh_finance_write {"
+    unrelated = (
+        "    @fh_auxiliary_health {\n"
+        "        method GET\n"
+        "        path /internal-healthz\n"
+        "    }\n"
+        "    handle @fh_auxiliary_health {\n"
+        "        reverse_proxy 127.0.0.1:9138\n"
+        "    }\n"
+    )
+    assert original.count(marker) == 1
+    current = original.replace(marker, unrelated + marker, 1).encode("utf-8")
+    assert current.count(m.finance.ROUTES.encode("utf-8")) == 0
+    # Matches the operator's diagnostic: one matcher+one handle per finance
+    # method, but their old contiguous constant is absent.
+    assert current.count(b"@fh_finance_read {") == 2
+    assert current.count(b"handle @fh_finance_read {") == 1
+    assert current.count(b"@fh_finance_write {") == 2
+    assert current.count(b"handle @fh_finance_write {") == 1
+    result = m.caddy_import_patch(current)
+    assert result.replace(m.IMPORT_ROUTING.encode(), b"", 1) == current
+    assert result.count(b"/api/finance/v1/import/manifest") == 1
+    assert result.count(b"@fh_personal_import_write") == 2
+    assert result.count(b"@fh_auxiliary_health") == 2
+    with pytest.raises(m.Hold, match="CADDY_FINANCE_LAYOUT_UNRECOGNIZED"):
+        m.caddy_import_patch(result)
+
+
+def test_caddy_approved_existing_path_alternative_order_does_not_change_policy():
+    m = load()
+    base = fixture_caddy(m)
+    rearranged = (
+        base.replace(
+            b"path /api/finance/v1/state /api/finance/v1/changes",
+            b"path /api/finance/v1/changes /api/finance/v1/state",
+        )
+        .replace(
+            b"path /api/auth/email/finance/session /api/finance/v1/commands /api/finance/v2/commands",
+            b"path /api/finance/v2/commands /api/auth/email/finance/session /api/finance/v1/commands",
+        )
+    )
+    assert rearranged != base
+    assert m.caddy_import_patch(rearranged).replace(
+        m.IMPORT_ROUTING.encode(), b"", 1
+    ) == rearranged
+
+
+@pytest.mark.parametrize("tamper", [
+    lambda b: b.replace(b"method GET", b"method POST", 1),
+    lambda b: b.replace(b"method POST", b"method GET", 1),
+    lambda b: b.replace(
+        b"path /api/finance/v1/state /api/finance/v1/changes",
+        b"path /api/finance/v1/state /api/finance/v1/changes /api/finance/v1/*",
+    ),
+    lambda b: b.replace(
+        b"path /api/auth/email/finance/session /api/finance/v1/commands /api/finance/v2/commands",
+        b"path /api/auth/email/finance/session /api/finance/v1/commands",
+    ),
+    lambda b: b.replace(
+        b"path /api/auth/email/finance/session /api/finance/v1/commands /api/finance/v2/commands",
+        b"path /api/auth/email/finance/session /api/finance/v1/commands /api/finance/v2/commands /api/finance/v1/import/commit",
+    ),
+    lambda b: b.replace(
+        b"reverse_proxy 127.0.0.1:9138", b"reverse_proxy 0.0.0.0:9138", 1
+    ),
+    lambda b: b.replace(
+        b"reverse_proxy 127.0.0.1:9138",
+        b"reverse_proxy 127.0.0.1:9138\n        uri strip_prefix /api/",
+        1
+    ),
+    lambda b: b.replace(
+        b"    handle @fh_finance_write {",
+        b"    handle @fh_finance_write {\n        route {"
+    ),
+    lambda b: b.replace(
+        b"    @fh_finance_write {",
+        b"    @fh_finance_write {\n        method POST\n    }\n    @fh_finance_write {",
+    ),
+    lambda b: b.replace(
+        b"    handle @fh_finance_read {",
+        b"    handle @fh_finance_read {\n        reverse_proxy 127.0.0.1:9138\n    }\n    handle @fh_finance_read {",
+    ),
+    lambda b: b.replace(b"    @fh_oauth_live_get {", b"    @fh_untrusted_get {"),
+])
+def test_import_caddy_refuses_extra_matchers_methods_paths_proxy_or_rewrites(tamper):
+    m = load()
+    modified = tamper(fixture_caddy(m))
+    assert modified != fixture_caddy(m)
+    with pytest.raises(m.Hold, match="^CADDY_FINANCE_"):
+        m.caddy_import_patch(modified)
 
 
 def test_private_runtime_diff_changes_only_import_flag():
