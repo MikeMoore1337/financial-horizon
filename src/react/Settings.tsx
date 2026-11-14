@@ -103,6 +103,9 @@ export function Settings({
             <button className="button-primary" data-action="backup">
               <Icon name="download" /> Скачать копию
             </button>
+            <button className="button-secondary" data-action="verify-backup">
+              <Icon name="shield" /> Проверить копию
+            </button>
             <button className="button-secondary" data-action="restore">
               <Icon name="upload" /> Восстановить
             </button>
@@ -112,6 +115,7 @@ export function Settings({
               </button>
             )}
           </div>
+          <p id="backup-verify-status" className="small-hint settings-footnote" role="status" aria-live="polite" />
         </SettingsCard>
         <SettingsCard id="import" icon="sheet">
           <h2>Импорт из Excel</h2>
