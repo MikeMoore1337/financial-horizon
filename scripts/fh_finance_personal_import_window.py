@@ -99,8 +99,8 @@ def _named_caddy_block(text: str, name: str) -> tuple[tuple[str, ...], ...]:
     discard or weaken the directive required for strong financial ETags.
     """
     pattern = re.compile(
-        r"(?m)^[ \\t]*" + re.escape(name) +
-        r"[ \\t]*\\{[ \\t]*(?:#[^\\r\\n]*)?\\r?$"
+        r"(?m)^[ \t]*" + re.escape(name) +
+        r"[ \t]*\{[ \t]*(?:#[^\r\n]*)?\r?$"
     )
     found = list(pattern.finditer(text))
     if len(found) != 1:
