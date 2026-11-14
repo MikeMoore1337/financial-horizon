@@ -58,6 +58,27 @@ def fixture_caddy(m):
     ).encode("utf-8")
 
 
+def test_nested_finance_fixture_matches_shipped_etag_release_contract():
+    """Prevent synthetic tests drifting away from actual owner Caddy history."""
+    spec = importlib.util.spec_from_file_location(
+        "fh_finance_etag_transport", SCRIPTS / "fh_finance_etag_transport.py",
+    )
+    assert spec and spec.loader is not None
+    etag = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        spec.loader.exec_module(etag)
+    finally:
+        sys.path.remove(str(SCRIPTS))
+    m = load()
+    site = fixture_caddy(m)
+    assert site.count(etag.NEW_READ.encode()) == 1
+    assert site.count(etag.NEW_WRITE.encode()) == 1
+    assert site.count(etag.HEADER.encode()) == 2
+    assert etag.OLD_READ.encode() not in site
+    assert etag.OLD_WRITE.encode() not in site
+
+
 def fixture_env():
     return (
         b"FH_FINANCE_RUNTIME_MODE=personal\n"
