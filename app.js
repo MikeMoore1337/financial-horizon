@@ -9,6 +9,7 @@ import {createScreenRoot} from './src/react/ScreenRoot.tsx';
 import {createAppShellRoots} from './src/react/AppShell.tsx';
 import {sameFinancialJSON} from './src/security/protected-staging.ts';
 import {prepareLivePersonalImportCandidate,executeConfirmedPersonalImportCandidate} from './src/cloud/personal-import-transport-candidate.mjs';
+import {verifySavedFinancialBackupReadOnly} from './src/cloud/read-only-backup-verification.mjs';
 
 const $=sel=>document.querySelector(sel);
 const svg=name=>`<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-${name}"></use></svg>`;
@@ -21,7 +22,7 @@ const titles={overview:'Обзор',calendar:'Календарь',obligations:'�
 // FastAPI authentication and profile scoping remain the sole authorization boundary.
 const financeAccountsEnabled=document.querySelector('meta[name="fh-finance-accounts"]')?.content==='enabled';
 const financeImportEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-import"]')?.content==='enabled';
-let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null},passwordMode='export',restoreFile=null,cloudImportFile=null,pendingCloudImport=null,cloudImportController=null,cloudImportBusy=false,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
+let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null},passwordMode='export',restoreFile=null,verifyBackupFile=null,cloudImportFile=null,pendingCloudImport=null,cloudImportController=null,cloudImportBusy=false,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
 const emailSession=createEmailSession();
 let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
 const GUEST_MODE_KEY='fh-guest-session-v2';
@@ -37,7 +38,7 @@ let lastStorageContext=null;
 function revokeDisplayedLedger(){
  revokeStateScope(); // invalidate pending IDB reads/writes before clearing the UI
  state=null;
- restoreFile=null;cloudImportFile=null;pendingCloudImport=null;cloudImportController?.abort();cloudImportController=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
+ restoreFile=null;verifyBackupFile=null;cloudImportFile=null;pendingCloudImport=null;cloudImportController?.abort();cloudImportController=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
  if(navRoots){navRoots.unmount();navRoots=null;}
  $('#main').replaceChildren();
@@ -469,6 +470,7 @@ async function handleAction(button){
  if(type==='theme'){themeSet(button.dataset.theme);render();return;}
  if(type==='persist'){const ok=await askPersistentStorage();toast(ok?'Браузер подтвердил постоянное хранение':'Браузер не предоставил постоянное хранение. Экспортируйте копии.',ok?'success':'error');renderStorageStatus();return;}
  if(type==='backup'){passwordMode='export';$('#password-heading').textContent='Создать резервную копию';$('#password-form').reset();openDialog('#password-dialog');return;}
+ if(type==='verify-backup'){$('#backup-verify-status').textContent='';$('#verify-backup-file').value='';$('#verify-backup-file').click();return;}
  if(type==='restore'){$('#restore-file').value='';$('#restore-file').click();return;}
  if(type==='cloud-import'){
   if(!financeImportEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId)throw Error('Перенос доступен только своему FH-аккаунту');
@@ -626,6 +628,27 @@ async function performBackup(password){
  const file=await encryptBackup(await readState(),password);const url=URL.createObjectURL(new Blob([file],{type:'application/json'}));
  const a=document.createElement('a');a.href=url;a.download=`finansovyi-gorizont-${today()}-encrypted.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),12000);toast('Шифрованная резервная копия подготовлена');
 }
+async function performVerifyBackup(password){
+ if(!verifyBackupFile)throw Error('Выберите сохранённый зашифрованный файл');
+ const actor=activeUserId,wasGuest=guestMode;
+ const original=await readState();
+ if(actor!==activeUserId||wasGuest!==guestMode||!state)
+  throw Error('Сессия сменилась во время проверки копии');
+ const result=await verifySavedFinancialBackupReadOnly({
+  backupText:await verifyBackupFile.text(),password,currentSnapshot:original,
+ });
+ if(actor!==activeUserId||wasGuest!==guestMode||!state)
+  throw Error('Сессия сменилась во время проверки копии');
+ const counts=result.recordCounts;
+ const prefix='AES-GCM: файл расшифрован, финансовая схема проверена. '+
+  'Записей: '+counts.entries+', кредитов: '+counts.loans+
+  ', фактических оплат: '+counts.settlements+
+  ', платежей по кредитам: '+counts.loanPayments+'. ';
+ $('#backup-verify-status').textContent=prefix+
+  (result.matchesCurrent
+   ? 'Содержимое полностью совпадает с текущей локальной бухгалтерией. Данные не менялись.'
+   : 'Содержимое отличается от текущей локальной бухгалтерии. Для переноса создайте и проверьте новую копию. Данные не менялись.');
+}
 async function performRestore(password){
  const originalRevision=state?.revision;
  const decrypted=await decryptBackup(await restoreFile.text(),password);
@@ -743,6 +766,7 @@ async function onFormSubmit(event){
    if(password.length<12)throw Error('Пароль должен содержать не менее 12 символов');
    try{
     if(passwordMode==='export')await performBackup(password);
+    else if(passwordMode==='verify')await performVerifyBackup(password);
     else if(passwordMode==='cloud')await prepareCloudImport(password);
     else await performRestore(password);
    }finally{form.elements.password.value='';}
@@ -772,6 +796,17 @@ function bindEvents(){
  $('#payment-form').addEventListener('input',updatePaymentPreview);
  $('#payment-form').addEventListener('change',updatePaymentPreview);
  $('#payment-loan').addEventListener('change',()=>{const l=state.loans.find(x=>x.id===$('#payment-loan').value);if(l){$('#payment-form').elements.amount.value=numberInput(loanLedger(l,state.loanPayments).monthlyCents);updatePaymentPreview();}});
+ $('#password-dialog').addEventListener('close',()=>{
+  verifyBackupFile=null;
+  $('#verify-backup-file').value='';
+ });
+ $('#verify-backup-file').addEventListener('change',event=>{
+  const file=event.target.files[0];if(!file)return;
+  if(file.size>8_000_000){toast('Зашифрованная копия превышает 8 МБ','error');return;}
+  verifyBackupFile=file;passwordMode='verify';
+  $('#password-heading').textContent='Проверить копию без восстановления';
+  $('#password-form').reset();openDialog('#password-dialog');
+ });
  $('#restore-file').addEventListener('change',event=>{const file=event.target.files[0];if(!file)return;if(file.size>8_000_000){toast('Файл превышает предел 8 МБ','error');return;}restoreFile=file;passwordMode='import';$('#password-heading').textContent='Восстановить резервную копию';$('#password-form').reset();openDialog('#password-dialog');});
  $('#cloud-import-file').addEventListener('change',event=>{const file=event.target.files[0];if(!file)return;if(file.size>8_000_000){toast('Зашифрованная копия превышает 8 МБ','error');return;}cloudImportFile=file;passwordMode='cloud';$('#password-heading').textContent='Проверить шифрованную копию для переноса';$('#password-form').reset();openDialog('#password-dialog');});
  $('#cloud-import-dialog').addEventListener('close',()=>{
