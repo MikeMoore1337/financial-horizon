@@ -91,35 +91,43 @@ def checked_runtime(raw: bytes) -> tuple[str, bytes]:
 
 
 def _named_caddy_block(text: str, name: str) -> tuple[tuple[str, ...], ...]:
-    """Read exactly one simple Caddy named matcher/handle, not nearby blocks.
+    """Parse exactly one known finance matcher/handler, including ETag proxy.
 
-    Match statements by their actual anchored name (not substring counts:
-    '@fh_finance_read {' appears inside 'handle @fh_finance_read {').
-    Existing finance blocks may be separated by other valid Caddy rules.
-    Never accept additional methods, paths, directives or proxy targets.
+    The deployed Caddy handlers intentionally nest a reverse_proxy block with
+    'header_down Cache-Control "private, no-store, no-transform"'.
+    Do not mistake that trusted nesting for an unrelated route, and do not
+    discard or weaken the directive required for strong financial ETags.
     """
-    pattern = re.compile(r"(?m)^[ \t]*" + re.escape(name) + r"[ \t]*\{")
+    pattern = re.compile(
+        r"(?m)^[ \t]*" + re.escape(name) +
+        r"[ \t]*\{[ \t]*(?:#[^\r\n]*)?\r?$"
+    )
     found = list(pattern.finditer(text))
     if len(found) != 1:
         deny("CADDY_FINANCE_BLOCK_MISSING_OR_DUPLICATE")
-    opening = found[0].end()
-    # Existing approved named matchers/handlers are flat. Nested Caddy
-    # subroutes are NOT silently accepted by this migration.
-    closing = text.find("}", opening)
-    if closing < 0 or "{" in text[opening:closing]:
-        deny("CADDY_FINANCE_BLOCK_NESTED_OR_UNCLOSED")
-    end_line = text.find("\n", closing)
-    if end_line < 0:
-        end_line = len(text)
-    if text[closing + 1:end_line].strip().lstrip("#").strip():
-        deny("CADDY_FINANCE_BLOCK_TRAILING_CONTENT")
-    lines = []
-    for line in text[opening:closing].splitlines():
-        # Only simple exact directives, no unrelated directives or quotes.
-        directive = line.split("#", 1)[0].strip()
-        if directive:
+    depth = 1
+    lines: list[tuple[str, ...]] = []
+    for raw_line in text[found[0].end():].splitlines():
+        directive = raw_line.split("#", 1)[0].strip()
+        if not directive:
+            continue
+        if directive == "}":
+            depth -= 1
+            if depth == 0:
+                return tuple(lines)
+            if depth != 1:
+                deny("CADDY_FINANCE_BLOCK_NESTED_OR_UNCLOSED")
+            lines.append(("}",))
+        elif directive.endswith(" {"):
+            if depth != 1:
+                deny("CADDY_FINANCE_BLOCK_NESTED_OR_UNCLOSED")
+            depth += 1
             lines.append(tuple(directive.split()))
-    return tuple(lines)
+        else:
+            if "{" in directive or "}" in directive:
+                deny("CADDY_FINANCE_BLOCK_NESTED_OR_UNCLOSED")
+            lines.append(tuple(directive.split()))
+    deny("CADDY_FINANCE_BLOCK_NESTED_OR_UNCLOSED")
 
 
 def _require_existing_finance_routes(text: str) -> None:
@@ -134,10 +142,16 @@ def _require_existing_finance_routes(text: str) -> None:
              "/api/finance/v1/commands", "/api/finance/v2/commands"),
         }),
         ("handle @fh_finance_read", {
-            ("reverse_proxy", "127.0.0.1:9138"),
+            ("reverse_proxy", "127.0.0.1:9138", "{"),
+            ("header_down", "Cache-Control",
+             '"private,', "no-store,", 'no-transform"'),
+            ("}",),
         }),
         ("handle @fh_finance_write", {
-            ("reverse_proxy", "127.0.0.1:9138"),
+            ("reverse_proxy", "127.0.0.1:9138", "{"),
+            ("header_down", "Cache-Control",
+             '"private,', "no-store,", 'no-transform"'),
+            ("}",),
         }),
     )
     def canonical(directive: tuple[str, ...]) -> tuple[str, ...]:

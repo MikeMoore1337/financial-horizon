@@ -28,9 +28,27 @@ def load():
 
 
 def fixture_caddy(m):
+    # Exact finance reverse_proxy layout installed by the existing
+    # fh_finance_etag_transport.py release. This preserves strong ETags.
+    finance_routes = m.finance.ROUTES
+    for name in ("read", "write"):
+        old = (
+            f"    handle @fh_finance_{name} {{\n"
+            "        reverse_proxy 127.0.0.1:9138\n"
+            "    }\n"
+        )
+        new = (
+            f"    handle @fh_finance_{name} {{\n"
+            "        reverse_proxy 127.0.0.1:9138 {\n"
+            '            header_down Cache-Control "private, no-store, no-transform"\n'
+            "        }\n"
+            "    }\n"
+        )
+        assert finance_routes.count(old) == 1
+        finance_routes = finance_routes.replace(old, new, 1)
     return (
         "fin-horizon.mikemoore.top:8444 {\n"
-        + m.finance.ROUTES
+        + finance_routes
         + "    @fh_oauth_live_get {\n"
         + "        method GET\n"
         + "        path /api/auth/providers\n"
@@ -38,6 +56,27 @@ def fixture_caddy(m):
         + "    handle @fh_oauth_live_get { reverse_proxy 127.0.0.1:9138 }\n"
         + "}\n"
     ).encode("utf-8")
+
+
+def test_nested_finance_fixture_matches_shipped_etag_release_contract():
+    """Prevent synthetic tests drifting away from actual owner Caddy history."""
+    spec = importlib.util.spec_from_file_location(
+        "fh_finance_etag_transport", SCRIPTS / "fh_finance_etag_transport.py",
+    )
+    assert spec and spec.loader is not None
+    etag = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        spec.loader.exec_module(etag)
+    finally:
+        sys.path.remove(str(SCRIPTS))
+    m = load()
+    site = fixture_caddy(m)
+    assert site.count(etag.NEW_READ.encode()) == 1
+    assert site.count(etag.NEW_WRITE.encode()) == 1
+    assert site.count(etag.HEADER.encode()) == 2
+    assert etag.OLD_READ.encode() not in site
+    assert etag.OLD_WRITE.encode() not in site
 
 
 def fixture_env():
@@ -57,6 +96,7 @@ def test_only_three_new_exact_post_routes_with_no_wildcard_or_oauth_changes():
     assert patched.count(b"@fh_personal_import_write") == 2
     assert patched.count(b"method POST") >= 2
     assert b"reverse_proxy 127.0.0.1:9138" in patched
+    assert patched.count(b'header_down Cache-Control "private, no-store, no-transform"') == 2
     assert b"handle @fh_oauth_live_get" in patched
     assert b"method GET\n        path /api/finance/v1/import/" not in patched
     assert b"/api/finance/v1/import/*" not in patched
@@ -128,6 +168,22 @@ def test_caddy_approved_existing_path_alternative_order_does_not_change_policy()
 
 @pytest.mark.parametrize("tamper", [
     lambda b: b.replace(b"method GET", b"method POST", 1),
+    lambda b: b.replace(
+        b'header_down Cache-Control "private, no-store, no-transform"',
+        b'header_down Cache-Control "private, no-store"', 1,
+    ),
+    lambda b: b.replace(
+        b'header_down Cache-Control "private, no-store, no-transform"',
+        b'header_down ETag W/"forged"', 1,
+    ),
+    lambda b: b.replace(
+        b"reverse_proxy 127.0.0.1:9138 {",
+        b"reverse_proxy 127.0.0.1:9138", 1,
+    ),
+    lambda b: b.replace(
+        b'header_down Cache-Control "private, no-store, no-transform"',
+        b'header_down Cache-Control "private, no-store, no-transform"\\n            header_up Authorization leaked', 1,
+    ),
     lambda b: b.replace(b"method POST", b"method GET", 1),
     lambda b: b.replace(
         b"path /api/finance/v1/state /api/finance/v1/changes",
@@ -169,6 +225,21 @@ def test_import_caddy_refuses_extra_matchers_methods_paths_proxy_or_rewrites(tam
     assert modified != fixture_caddy(m)
     with pytest.raises(m.Hold, match="^CADDY_FINANCE_"):
         m.caddy_import_patch(modified)
+
+
+def test_caddy_rejects_old_flat_proxy_layout_without_strong_etag_policy():
+    m = load()
+    source = (
+        "fin-horizon.mikemoore.top:8444 {\n" +
+        m.finance.ROUTES +
+        "    @fh_oauth_live_get {\n"
+        "        method GET\n"
+        "        path /api/auth/providers\n"
+        "    }\n"
+        "}\n"
+    ).encode("utf-8")
+    with pytest.raises(m.Hold, match="CADDY_FINANCE_BLOCK_UNEXPECTED_DIRECTIVES"):
+        m.caddy_import_patch(source)
 
 
 def test_private_runtime_diff_changes_only_import_flag():
