@@ -90,22 +90,85 @@ def checked_runtime(raw: bytes) -> tuple[str, bytes]:
     return mode, normalized
 
 
+def _named_caddy_block(text: str, name: str) -> tuple[tuple[str, ...], ...]:
+    """Read exactly one simple Caddy named matcher/handle, not nearby blocks.
+
+    Match statements by their actual anchored name (not substring counts:
+    '@fh_finance_read {' appears inside 'handle @fh_finance_read {').
+    Existing finance blocks may be separated by other valid Caddy rules.
+    Never accept additional methods, paths, directives or proxy targets.
+    """
+    pattern = re.compile(r"(?m)^[ \t]*" + re.escape(name) + r"[ \t]*\{")
+    found = list(pattern.finditer(text))
+    if len(found) != 1:
+        deny("CADDY_FINANCE_BLOCK_MISSING_OR_DUPLICATE")
+    opening = found[0].end()
+    # Existing approved named matchers/handlers are flat. Nested Caddy
+    # subroutes are NOT silently accepted by this migration.
+    closing = text.find("}", opening)
+    if closing < 0 or "{" in text[opening:closing]:
+        deny("CADDY_FINANCE_BLOCK_NESTED_OR_UNCLOSED")
+    end_line = text.find("\n", closing)
+    if end_line < 0:
+        end_line = len(text)
+    if text[closing + 1:end_line].strip().lstrip("#").strip():
+        deny("CADDY_FINANCE_BLOCK_TRAILING_CONTENT")
+    lines = []
+    for line in text[opening:closing].splitlines():
+        # Only simple exact directives, no unrelated directives or quotes.
+        directive = line.split("#", 1)[0].strip()
+        if directive:
+            lines.append(tuple(directive.split()))
+    return tuple(lines)
+
+
+def _require_existing_finance_routes(text: str) -> None:
+    required = (
+        ("@fh_finance_read", {
+            ("method", "GET"),
+            ("path", "/api/finance/v1/state", "/api/finance/v1/changes"),
+        }),
+        ("@fh_finance_write", {
+            ("method", "POST"),
+            ("path", "/api/auth/email/finance/session",
+             "/api/finance/v1/commands", "/api/finance/v2/commands"),
+        }),
+        ("handle @fh_finance_read", {
+            ("reverse_proxy", "127.0.0.1:9138"),
+        }),
+        ("handle @fh_finance_write", {
+            ("reverse_proxy", "127.0.0.1:9138"),
+        }),
+    )
+    for name, expected in required:
+        found = _named_caddy_block(text, name)
+        if len(found) != len(expected) or set(found) != expected:
+            deny("CADDY_FINANCE_BLOCK_UNEXPECTED_DIRECTIVES")
+
+
 def caddy_import_patch(original: bytes) -> bytes:
-    """Fail closed on unknown prior Caddy routing, never create a wildcard."""
+    """Append exact import POST handler without rewriting live finance/OAuth.
+
+    The old release's finance read/write blocks are validated individually:
+    their byte-contiguous layout is not a security requirement. Other site
+    rules may be interleaved. The entire existing site remains byte-for-byte
+    unchanged except for inserting our small known import-only allowlist.
+    """
     if type(original) is not bytes or len(original) > 256_000:
         deny("CADDY_BYTES_INVALID")
     try:
         text = original.decode("utf-8")
     except UnicodeError:
         deny("CADDY_ENCODING_INVALID")
-    if (text.count(finance.ROUTES) != 1 or
-        text.count(finance.CADDY_MARKER) != 1 or
-        text.count("@fh_personal_import_write") or
-        "/api/finance/v1/import/" in text or
-        text.count("handle @fh_finance_write {") != 1):
+    if (text.count(finance.CADDY_MARKER) != 1 or
+        "@fh_personal_import_write" in text or
+        "/api/finance/v1/import/" in text):
         deny("CADDY_FINANCE_LAYOUT_UNRECOGNIZED")
-    return text.replace(finance.ROUTES,
-                        finance.ROUTES + IMPORT_ROUTING, 1).encode("utf-8")
+    _require_existing_finance_routes(text)
+    # Same stable insertion anchor as the original private OAuth/finance
+    # routing rollout. Never add a wildcard route or alter existing handlers.
+    return text.replace(finance.CADDY_MARKER,
+                        IMPORT_ROUTING + finance.CADDY_MARKER, 1).encode("utf-8")
 
 
 def trusted_runtime_file() -> bytes:
