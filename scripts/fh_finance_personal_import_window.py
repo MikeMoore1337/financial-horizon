@@ -132,7 +132,7 @@ def live_preflight(sha: str) -> tuple[bytes, bytes, int, str]:
     cwd = current_source()
     if source.source_files(cwd) != source.source_files(source.REPO / "backend"):
         deny("BACKEND_FINANCE_SOURCE_DRIFT")
-    if not (source.DROP70.is_file() and backend.DROP80.is_file()
+    if not (source.OAUTH_DROPIN.is_file() and backend.DROP80.is_file()
             and backend.DROP90.is_file()):
         deny("REQUIRED_FINANCE_DROPINS_MISSING")
     # The existing 70/80/90 contract remains untouched during import window.
