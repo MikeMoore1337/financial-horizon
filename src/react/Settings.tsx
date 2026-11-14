@@ -115,7 +115,12 @@ export function Settings({
               </button>
             )}
           </div>
-          <p id="backup-verify-status" className="small-hint settings-footnote" role="status" aria-live="polite" />
+          <p
+            id="backup-verify-status"
+            className="small-hint settings-footnote"
+            role="status"
+            aria-live="polite"
+          />
         </SettingsCard>
         <SettingsCard id="import" icon="sheet">
           <h2>Импорт из Excel</h2>
