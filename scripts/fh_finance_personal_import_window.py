@@ -140,9 +140,18 @@ def _require_existing_finance_routes(text: str) -> None:
             ("reverse_proxy", "127.0.0.1:9138"),
         }),
     )
+    def canonical(directive: tuple[str, ...]) -> tuple[str, ...]:
+        # Caddy's path matcher alternatives have no meaningful order.
+        # Sorting may not introduce or suppress a path: exact membership and
+        # arity are still checked, including duplicate alternatives.
+        if directive and directive[0] == "path":
+            return ("path", *sorted(directive[1:]))
+        return directive
+
     for name, expected in required:
         found = _named_caddy_block(text, name)
-        if len(found) != len(expected) or set(found) != expected:
+        if (len(found) != len(expected) or
+            {canonical(x) for x in found} != {canonical(x) for x in expected}):
             deny("CADDY_FINANCE_BLOCK_UNEXPECTED_DIRECTIVES")
 
 
