@@ -108,9 +108,10 @@ def test_protected_dropins_reject_wrong_ownership_permissions_and_symlinks(
     # CI uses non-root files; test only mode + hardlink/symlink properties
     # with the module's stat.owner check explicitly faked to root.
     real_lstat = original.lstat
-    owner = original.stat()
     class FakeStat:
-        st_mode = owner.st_mode
+        @property
+        def st_mode(self):
+            return real_lstat().st_mode
         st_uid = 0
         st_nlink = 1
     monkeypatch.setattr(Path, "lstat", lambda self: FakeStat())
