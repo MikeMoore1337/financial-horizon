@@ -7,6 +7,50 @@
 Это два подтверждённых владельцем этапа. Реальных операций импорта в
 PostgreSQL ещё не выполнялось.
 
+## Уточнение схемы Caddy по реальной диагностике (14.11.2026)
+
+Владелец подтвердил read-only квитанции production:
+
+```text
+FINANCE_ROUTES_EXACT=0
+FINANCE_ROUTES_NORMALIZED=0
+OAUTH_MARKER_EXACT=1
+FINANCE_READ_MATCHER=2
+FINANCE_READ_HANDLER=1
+FINANCE_WRITE_MATCHER=2
+FINANCE_WRITE_HANDLER=1
+FINANCE_STATE_PATH=1
+FINANCE_COMMAND_PATH=1
+FINANCE_V2_COMMAND_PATH=1
+IMPORT_PATH_OCCURRENCES=0
+IMPORT_MATCHER=0
+```
+
+Подстрока `@fh_finance_read {` встречается **два** раза, потому что
+включена также в `handle @fh_finance_read {`. Это не означает два
+маршрута. Старый скрипт требовал, чтобы все finance matcher/handler
+располагались одним цельным блоком `finance.ROUTES`, хотя такой порядок
+не является частью политики безопасности.
+
+Исправленный `caddy_import_patch` **не копирует и не меняет** имеющиеся
+finance/OAuth-блоки и не допускает wildcard. Он отдельно валидирует
+ровно четыре существующих именованных блока: read GET c точным списком
+`/state` и `/changes`; write POST с тремя разрешёнными путями;
+и два обработчика `reverse_proxy 127.0.0.1:9138`.
+Любые дополнительные методы/пути/директивы, дубли или другое назначение
+proxy отклоняются. Допускаются разделённые существующими правилами
+блоки и иной порядок альтернативных путей. Новый import-only POST-блок
+вставляется непосредственно перед прежним уникальным маркером OAuth,
+**без редактирования остальных байтов**. После включения Caddy и
+backend обязательны отрицательные HTTP 401/403 со всех трёх import routes,
+иначе исходная конфигурация восстанавливается.
+
+Если реальный VPS после исправления всё ещё сообщает
+`CADDY_FINANCE_BLOCK_UNEXPECTED_DIRECTIVES` или
+`CADDY_FINANCE_BLOCK_MISSING_OR_DUPLICATE`, **не обходить отказ**:
+проверять и согласовать реальные matcher/handler без публикации
+конфиденциальных строк site.
+
 ## Не делать
 
 - Не запускать `fh_finance_private_api_release.py` и
