@@ -225,7 +225,7 @@ def local_app(directory):
             # as production, never a silently rewritten feature flag.
             contents = target.read_text(encoding="utf-8")
             if (contents.count('<meta name="fh-finance-accounts" content="enabled">') != 1
-                or contents.count('<meta name="fh-finance-import" content="disabled">') != 1):
+                or contents.count('<meta name="fh-finance-import" content="enabled">') != 1):
                 raise HTTPException(503)
             return Response(
                 contents, media_type="text/html",
