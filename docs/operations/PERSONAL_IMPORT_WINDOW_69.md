@@ -229,13 +229,40 @@ FH_IMPORT_WINDOW_FINANCIAL_WRITE=NOT_PERFORMED
 FH_IMPORT_FRONTEND=INDEPENDENTLY_GATED
 ```
 
+## Реальная квитанция включённого backend
+
+15.11.2026 после подтверждённого `FH_LAUNCHER_UPGRADE=PASS` и
+`FH_IMPORT_WINDOW_PREFLIGHT=PASS` команда `--enable` разорвала
+операторский терминал, но последующая **читающая** проверка непосредственно
+на VPS зафиксировала:
+
+```text
+IMPORT_RUNTIME=ON
+fh-email-auth.service=active
+fh-finance-personal.service=active
+caddy.service=active
+IMPORT_CADDY_ROUTE=PRESENT
+AUTH_HTTP=200
+FINANCE_HTTP=401
+IMPORT_LOCAL_HTTP=401
+IMPORT_PUBLIC_HTTP=401
+DIAGNOSTICS_COMPLETE=YES
+CONFIGURATION_UNCHANGED=YES
+```
+
+Это доказательство включённой маршрутизации и отрицательного доступа
+анонимного пользователя, **не** выполненного переноса средств. Не вызывать
+`--enable` повторно. Проверка отрицательного Origin/CSRF для всех трёх
+POST endpoints ещё не представлена как отдельная квитанция; не считать
+одного ответа HTTP 401 доказательством всей авторизации и защиты.
+
 ## Отдельный выпуск интерфейса
 
-В исходном `index.html` флаг
-`<meta name="fh-finance-import" content="disabled">` **остаётся
-выключенным в этом PR**. После PASS на backend нужно отдельным
-точным PR переключить его на `enabled`, пройти тесты/CodeQL,
-выпустить конкретный SHA через штатный production static workflow
+В отдельном статическом PR #69 флаг `index.html`
+`<meta name="fh-finance-import" content="enabled">` включается только
+после подтверждённого на VPS `IMPORT_RUNTIME=ON` и защиты анонимного
+доступа. Нужны полные app/auth/PG/Chromium+WebKit CI, CodeQL и публикация
+конкретного SHA через штатный production static workflow
 и сверить `PRODUCTION_DEPLOYED=<sha>`.
 
 После этого кнопка «Настройки → Зашифрованная копия →
