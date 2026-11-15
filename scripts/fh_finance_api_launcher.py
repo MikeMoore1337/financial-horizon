@@ -37,7 +37,7 @@ def main() -> int:
     # private systemd credential, existing FH session, Origin and RLS.
     if os.environ.get("FH_FINANCE_RUNTIME_MODE") != "personal" or (
         os.environ.get("FH_FINANCE_V2_RUNTIME") != "on" or
-        os.environ.get("FH_FINANCE_IMPORT_RUNTIME", "off") not in ("off", "on")
+        os.environ.get("FH_FINANCE_IMPORT_RUNTIME") not in ("off", "on")
     ):
         raise SystemExit("FINANCE_LAUNCHER_NO_GO: FINANCE_FLAGS_NOT_EXPLICIT")
     # Never print, persist or expose this URL in argv or journal.
