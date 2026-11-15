@@ -1,7 +1,7 @@
 import {test,expect} from '@playwright/test';
-import {observe,visitGuest,registerViaUi,logoutViaUi,view,scopedState} from './helpers.mjs';
+import {observe,visitGuest,logoutViaUi,view,scopedState} from './helpers.mjs';
 
-test('#69 import entry only for verified FH owner, no automatic financial POST',async({page,context,request})=>{
+test('#69 import entry only for verified FH owner, no automatic financial POST',async({page,context})=>{
  const watch=await observe(context,page);
  const importPosts=[];
  page.on('request',req=>{
@@ -16,8 +16,15 @@ test('#69 import entry only for verified FH owner, no automatic financial POST',
  await expect(page.locator('[data-action="cloud-import"]')).toHaveCount(0);
  expect(importPosts).toEqual([]);
 
- const email='e2e-personal-import-'+test.info().project.name+'@example.invalid';
- await registerViaUi(page,request,email);
+ // Create a genuine revocable FH AuthStore cookie with the isolated E2E
+ // identity fixture. Avoid consuming the global mail registration quota,
+ // which made unrelated browser tests rate-limited after retries.
+ const created=await context.request.post('/__e2e__/personal-session');
+ expect(created.status()).toBe(200);
+ const owner=(await created.json()).user;
+ expect(owner.id).toMatch(/^[0-9a-f]{32}$/);
+ await page.goto('/');
+ await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
  await view(page,'settings');
  const launch=page.locator('[data-action="cloud-import"]');
  await expect(launch).toBeVisible();
@@ -34,15 +41,12 @@ test('#69 import entry only for verified FH owner, no automatic financial POST',
  await expect(page.locator('#password-dialog')).toBeVisible();
  await expect(page.locator('#password-heading')).toContainText('Проверить шифрованную копию для переноса');
  expect(importPosts).toEqual([]);
- await page.locator('#password-dialog button[value="cancel"]').click();
+ await page.locator('#password-dialog .dialog-head button[value="cancel"]').click();
  await expect(page.locator('#password-dialog')).not.toBeVisible();
  expect(importPosts).toEqual([]);
 
  // A real logout removes the owner-only entry, not the local finance data.
- const snapshot=await scopedState(page,'account-state-v2:'+(await page.evaluate(async()=>{
-  const r=await fetch('/api/auth/email/me',{credentials:'same-origin',cache:'no-store'});
-  return (await r.json()).user.id;
- })));
+ const snapshot=await scopedState(page,'account-state-v2:'+owner.id);
  await logoutViaUi(page);
  await visitGuest(page);
  await view(page,'settings');
