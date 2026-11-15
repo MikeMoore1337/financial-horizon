@@ -23,7 +23,11 @@ test('#69 import entry only for verified FH owner, no automatic financial POST',
  expect(created.status()).toBe(200);
  const owner=(await created.json()).user;
  expect(owner.id).toMatch(/^[0-9a-f]{32}$/);
- await page.goto('/');
+ // A browser tab that was previously in guest mode retains its guest
+ // sessionStorage key. Follow the app's actual successful-auth callback
+ // transition, which clears guest mode and still revalidates the FH cookie.
+ await page.goto('/?auth=success');
+ await expect(page).toHaveURL('http://127.0.0.1:8791/');
  await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
  await view(page,'settings');
  const launch=page.locator('[data-action="cloud-import"]');
