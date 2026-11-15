@@ -25,7 +25,7 @@ test('seven default Settings cards remain; optional finance card requires review
  assert.equal(cards.filter(id=>id==='finance-accounts').length,1);
  assert.match(settings,/\{showFinanceAccounts && \(/);
  assert.match(html,/<meta name="fh-finance-accounts" content="enabled">/);
- assert.match(html,/<meta name="fh-finance-import" content="disabled">/);
+ assert.match(html,/<meta name="fh-finance-import" content="enabled">/);
  assert.ok(settings.includes('settings-install'));
  assert.ok(css.includes('.settings-grid{display:grid;'));
  assert.ok(css.includes('grid-template-columns:repeat(2,minmax(0,1fr))'));
@@ -84,5 +84,5 @@ test('storage context distinguishes server accounts from the local browser budge
  assert.match(app,/serverAccounts\?'Локальный бюджет отдельно':'Без банковских подключений'/);
  assert.match(app,/globalAdd\.hidden=serverAccounts/);
  assert.match(css,/#top-add\[hidden\]\{display:none\}/);
- assert.match(html,/<meta name="fh-finance-import" content="disabled">/);
+ assert.match(html,/<meta name="fh-finance-import" content="enabled">/);
 });
