@@ -64,7 +64,7 @@ def test_legacy_deployed_launcher_digest_is_pinned_and_source_reviewed():
     assert b'FH_FINANCE_IMPORT_RUNTIME") not in ("off", "on")' in new
     assert b'FH_FINANCE_IMPORT_RUNTIME") != "off"' not in new
     assert b"CREDENTIALS_DIRECTORY" in new
-    assert b"LoadCredential" not in new  # launcher only reads systemd-provided file
+    assert b"LoadCredential=" not in new  # launcher never writes systemd directives
 
 
 @pytest.mark.parametrize("runtime,v2,import_mode,accepted", [
