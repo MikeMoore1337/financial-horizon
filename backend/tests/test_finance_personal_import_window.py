@@ -452,6 +452,10 @@ def test_import_preflight_rejects_legacy_installed_launcher_before_enable(
     m = load()
     fake = tmp_path / "installed.py"
     fake.write_bytes(b"legacy-no-import-support")
+    # The operator uses the native VPS checkout path; CI must explicitly
+    # supply its actual synthetic repository source.
+    monkeypatch.setattr(m.finance, "LAUNCHER_SOURCE",
+                        SCRIPTS / "fh_finance_api_launcher.py")
     monkeypatch.setattr(m.finance, "LAUNCHER_INSTALLED", fake)
     monkeypatch.setattr(m.finance, "secure_file",
                         lambda path, *_args: path.read_bytes())
