@@ -83,6 +83,63 @@ handle @fh_finance_read {
 Caddy. На VPS до подтверждённого `FH_IMPORT_WINDOW_PREFLIGHT=PASS`
 **не выполнять `--enable`** и не менять сайт вручную.
 
+## Исправление системного загрузчика после rollback (15.11.2026)
+
+Первая попытка оператора открыть импорт завершилась безопасно:
+
+```text
+FH_IMPORT_WINDOW_PREFLIGHT=PASS
+AUTH_SQLITE_PROTECTED_BACKUP=PASS
+FH_IMPORT_WINDOW_ROLLBACK=STARTED
+FH_IMPORT_WINDOW_ROLLBACK=PASS
+FH_IMPORT_WINDOW=NO_GO
+FAILURE_CODE=LOCAL_HTTP_PROBE_UNAVAILABLE
+```
+
+Последующая независимая диагностика подтвердила
+`IMPORT_RUNTIME=OFF`, `fh-email-auth.service=active`,
+`fh-finance-personal.service=active`, `caddy.service=active`,
+`AUTH_HTTP=200`, `FINANCE_HTTP=401`, `IMPORT_HTTP=404`,
+`IMPORT_CHECK=PASS` и `PYDANTIC_VERSION=2.14.3`.
+
+Точная причина найдена **в существующем системном загрузчике**, а не в
+состоянии PostgreSQL, Pydantic или вложенном Caddy: установленный
+`scripts/fh_finance_api_launcher.py` имел проверку
+`FH_FINANCE_IMPORT_RUNTIME != "off" → FINANCE_LAUNCHER_NO_GO` и
+останавливал Uvicorn при переводе разрешённого backend флага в `on`.
+Никакого автоматического обхода старой защиты не предусмотрено.
+
+Требуется обновить **только** установленную копию загрузчика по сравнению
+с точным ранее выпущенным хешем SHA-256. Новая версия принимает только
+`FH_FINANCE_RUNTIME_MODE=personal`, `FH_FINANCE_V2_RUNTIME=on`,
+**явно указанный** `FH_FINANCE_IMPORT_RUNTIME=off|on`, а также обязательный
+systemd `LoadCredential`, существующий личный UID/namespace/OAuth-сервис.
+Не меняются PostgreSQL/SQLite, токены, порт, Caddy, пути и подписки.
+В режиме OFF загрузчик работает по-прежнему.
+
+Порядок на VPS после успешного CI новой версии:
+
+```bash
+# Предварительные проверки и repin PostgreSQL SHA выполняются как описано ниже.
+# НЕ менять флаг импорта и НЕ запускать --enable до обновления загрузчика.
+python3 scripts/fh_finance_personal_launcher_upgrade.py --sha "$sha" --preflight
+
+FH_PERSONAL_LAUNCHER_UPGRADE=YES \
+  python3 scripts/fh_finance_personal_launcher_upgrade.py --sha "$sha" --install
+
+# Проверяет, что root-owned installed launcher точь-в-точь новый reviewed
+# source, mode=0640, group=fh-email-auth, auth/PG/Caddy и import OFF.
+python3 scripts/fh_finance_personal_import_window.py --sha "$sha" --preflight
+```
+
+Установка не перезапускает сервис. Она сохраняет точную старую программу
+в режиме 0600 в root-only каталоге backup, заменяет файл атомарно с
+`root:fh-email-auth 0640` и повторно проверяет действующий OAuth/finance.
+При ошибке установки предусмотрен побайтовый откат файла загрузчика.
+**Не удалять** старые резервные файлы после предыдущего отказа.
+`--enable` теперь допускает использовать их повторно, только если
+оба root-only файла совпадают с текущими защищёнными исходными конфигурациями.
+
 ## Не делать
 
 - Не запускать `fh_finance_private_api_release.py` и
@@ -116,9 +173,15 @@ python3 scripts/fh_finance_ops_repin.py --sha "$sha" --preflight
 FH_FINANCE_PERSONAL_OPS_REPIN=YES \
   python3 scripts/fh_finance_ops_repin.py --sha "$sha" --apply
 
+# Проверить установленный СТАРЫЙ загрузчик и атомарно заменить его
+# новой проверенной программой БЕЗ перезапуска живого OAuth/backend.
+python3 scripts/fh_finance_personal_launcher_upgrade.py --sha "$sha" --preflight
+FH_PERSONAL_LAUNCHER_UPGRADE=YES \
+  python3 scripts/fh_finance_personal_launcher_upgrade.py --sha "$sha" --install
+
 # Только чтение: точный main+CI, исходники backend, OAuth,
 # PostgreSQL/backup.timer, TLS Origin CA, 70/80/90, runtime=off,
-# исходный Caddy и анонимное отсутствие import endpoints.
+# установленный новый загрузчик, Caddy и отсутствие import endpoints.
 python3 scripts/fh_finance_personal_import_window.py --sha "$sha" --preflight
 ```
 
