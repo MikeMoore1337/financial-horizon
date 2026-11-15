@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import pwd
 import re
 import sys
 import time
@@ -208,7 +209,19 @@ def current_source() -> Path:
     return working
 
 
-def live_preflight(sha: str) -> tuple[bytes, bytes, int, str]:
+def launcher_ready() -> None:
+    """Require the audited installed systemd loader before runtime opt-in."""
+    expected = finance.LAUNCHER_SOURCE.read_bytes()
+    installed = finance.secure_file(finance.LAUNCHER_INSTALLED, 0, 0o640)
+    service_gid = pwd.getpwnam(source.USER).pw_gid
+    if (installed != expected or
+        finance.LAUNCHER_INSTALLED.stat().st_gid != service_gid):
+        deny("FINANCE_LAUNCHER_UPGRADE_REQUIRED")
+
+
+def live_preflight(
+    sha: str, *, require_launcher: bool = True,
+) -> tuple[bytes, bytes, int, str]:
     """Must be read-only. Verify current main, CI, OAuth, PWA/finance guard."""
     verified_sha(sha)
     if os.geteuid() != 0 or os.getenv("GITHUB_ACTIONS") == "true":
@@ -262,6 +275,8 @@ def live_preflight(sha: str) -> tuple[bytes, bytes, int, str]:
         BACKUPS.stat().st_uid != 0 or
         (BACKUPS.stat().st_mode & 0o777) != 0o700):
         deny("BACKUP_DIRECTORY_UNTRUSTED")
+    if require_launcher:
+        launcher_ready()
     print("FH_IMPORT_WINDOW_PREFLIGHT=PASS")
     print("FH_IMPORT_RUNTIME_BEFORE=" + mode.upper())
     print("FH_FINANCIAL_DATA_UNCHANGED=YES")
@@ -322,8 +337,17 @@ def enable(sha: str) -> None:
     if mode != "off":
         deny("IMPORT_WINDOW_ALREADY_ENABLED")
     backup_runtime, backup_caddy = backup_paths(sha)
-    if any(p.exists() or p.is_symlink() for p in (backup_runtime, backup_caddy)):
-        deny("IMPORT_WINDOW_BACKUP_ALREADY_EXISTS")
+    # A prior failed ENABLE might have already created exact root-only
+    # rollback receipts before safely restoring runtime/Caddy. Reuse only
+    # when both copies exactly match the current verified OFF originals.
+    existing = tuple(p.exists() or p.is_symlink()
+                     for p in (backup_runtime, backup_caddy))
+    if any(existing) and not all(existing):
+        deny("IMPORT_WINDOW_PARTIAL_BACKUP_REQUIRES_REVIEW")
+    if all(existing):
+        if (finance.secure_file(backup_runtime, 0, 0o600) != raw or
+            finance.secure_file(backup_caddy, 0, 0o600) != caddy):
+            deny("IMPORT_WINDOW_BACKUP_MISMATCH_REQUIRES_REVIEW")
     new_caddy = caddy_import_patch(caddy)
     new_runtime = raw.replace(OFF, ON, 1)
     checked_runtime(new_runtime)
@@ -332,8 +356,11 @@ def enable(sha: str) -> None:
     # Revalidate latest main & exact tests immediately before the write gate.
     backend.check_checkout(sha)
     source.backup_live_auth_db()
-    finance.write_exclusive(backup_runtime, raw, mode=0o600)
-    finance.write_exclusive(backup_caddy, caddy, mode=0o600)
+    if not all(existing):
+        finance.write_exclusive(backup_runtime, raw, mode=0o600)
+        finance.write_exclusive(backup_caddy, caddy, mode=0o600)
+    else:
+        print("FH_IMPORT_ORIGINAL_BACKUPS=VERIFIED_REUSE")
     try:
         finance.atomic_replace(RUNTIME, new_runtime, mode=0o600)
         restart_auth()

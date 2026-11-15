@@ -30,9 +30,14 @@ def main() -> int:
         raise SystemExit("FINANCE_LAUNCHER_NO_GO: PRIVATE_CREDENTIAL_UNAVAILABLE") from None
     if not re.fullmatch(r"[0-9a-f]{64}", secret):
         raise SystemExit("FINANCE_LAUNCHER_NO_GO: INVALID_PRIVATE_CREDENTIAL")
+    # #69: the owner may open a bounded import window on the existing
+    # personal/v2 finance backend. Keep OFF as the required default and
+    # reject every unknown or inconsistent runtime combination. Import ON
+    # alone never creates finance access: the service still requires its
+    # private systemd credential, existing FH session, Origin and RLS.
     if os.environ.get("FH_FINANCE_RUNTIME_MODE") != "personal" or (
         os.environ.get("FH_FINANCE_V2_RUNTIME") != "on" or
-        os.environ.get("FH_FINANCE_IMPORT_RUNTIME") != "off"
+        os.environ.get("FH_FINANCE_IMPORT_RUNTIME") not in ("off", "on")
     ):
         raise SystemExit("FINANCE_LAUNCHER_NO_GO: FINANCE_FLAGS_NOT_EXPLICIT")
     # Never print, persist or expose this URL in argv or journal.

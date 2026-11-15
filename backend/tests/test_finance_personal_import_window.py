@@ -416,6 +416,7 @@ def test_live_preflight_has_actual_exported_oauth_dropin_and_reaches_read_only_p
     monkeypatch.setattr(m.backend, "expected_configs",
                         lambda *args: (b"safe-source", b"safe-runtime"))
     monkeypatch.setattr(m.finance, "enabled_local_smoke", lambda: None)
+    monkeypatch.setattr(m, "launcher_ready", lambda: None)
     monkeypatch.setattr(
         m.finance, "public_probe",
         lambda path, **kwargs: 200 if path == "/api/auth/providers" else 401,
@@ -442,3 +443,89 @@ def test_live_preflight_has_actual_exported_oauth_dropin_and_reaches_read_only_p
     assert "FH_IMPORT_WINDOW_PREFLIGHT=PASS" in stdout
     assert "FH_IMPORT_RUNTIME_BEFORE=OFF" in stdout
     assert "FH_FINANCIAL_DATA_UNCHANGED=YES" in stdout
+
+
+def test_import_preflight_rejects_legacy_installed_launcher_before_enable(
+    tmp_path, monkeypatch,
+):
+    """The service launcher must be upgraded before changing runtime.env."""
+    m = load()
+    fake = tmp_path / "installed.py"
+    fake.write_bytes(b"legacy-no-import-support")
+    # The operator uses the native VPS checkout path; CI must explicitly
+    # supply its actual synthetic repository source.
+    monkeypatch.setattr(m.finance, "LAUNCHER_SOURCE",
+                        SCRIPTS / "fh_finance_api_launcher.py")
+    monkeypatch.setattr(m.finance, "LAUNCHER_INSTALLED", fake)
+    monkeypatch.setattr(m.finance, "secure_file",
+                        lambda path, *_args: path.read_bytes())
+    monkeypatch.setattr(m.pwd, "getpwnam",
+                        lambda _name: __import__("types").SimpleNamespace(
+                            pw_gid=fake.stat().st_gid,
+                        ))
+    with pytest.raises(m.Hold, match="FINANCE_LAUNCHER_UPGRADE_REQUIRED"):
+        m.launcher_ready()
+    fake.write_bytes(m.finance.LAUNCHER_SOURCE.read_bytes())
+    m.launcher_ready()
+
+
+def test_import_enable_reuses_only_exact_matching_previous_rollback_receipts(
+    tmp_path, monkeypatch, capsys,
+):
+    """Prior failure created two private backups before restoring OFF. Reuse."""
+    m = load()
+    original_runtime = fixture_env()
+    original_caddy = fixture_caddy(m)
+    values = {m.RUNTIME: original_runtime, m.CADDY: original_caddy}
+    monkeypatch.setenv("FH_PERSONAL_IMPORT_WINDOW", "ENABLE")
+    monkeypatch.setattr(m, "live_preflight",
+                        lambda _sha: (original_runtime, original_caddy, 0o640, "off"))
+    monkeypatch.setattr(m, "BACKUPS", tmp_path)
+    r, c = m.backup_paths("1" * 40)
+    r.write_bytes(original_runtime)
+    c.write_bytes(original_caddy)
+    monkeypatch.setattr(m.backend, "check_checkout", lambda *_args: None)
+    monkeypatch.setattr(m.source, "backup_live_auth_db", lambda: None)
+    monkeypatch.setattr(m.finance, "secure_file",
+                        lambda path, *_args: path.read_bytes())
+    monkeypatch.setattr(m.finance, "write_exclusive",
+                        lambda *_args, **_kwargs: pytest.fail(
+                            "Matching rollback receipts must be reused"
+                        ))
+    monkeypatch.setattr(m.finance, "atomic_replace",
+                        lambda path, data, **kw: values.__setitem__(path, data))
+    monkeypatch.setattr(m.finance, "caddy_snapshot",
+                        lambda: (values[m.CADDY], 0o640))
+    monkeypatch.setattr(m.finance, "local_probe",
+                        lambda *_args, **_kw: 401)
+    monkeypatch.setattr(m.finance, "run", lambda *_a, **_kw: "")
+    monkeypatch.setattr(m, "restart_auth", lambda: None)
+    monkeypatch.setattr(m, "verify_enabled", lambda: None)
+    m.enable("1" * 40)
+    assert values[m.RUNTIME] == original_runtime.replace(m.OFF, m.ON)
+    assert values[m.CADDY] == m.caddy_import_patch(original_caddy)
+    out = capsys.readouterr().out
+    assert "FH_IMPORT_ORIGINAL_BACKUPS=VERIFIED_REUSE" in out
+    assert "FH_IMPORT_WINDOW_BACKEND=ENABLED" in out
+
+
+@pytest.mark.parametrize("tamper", ["runtime", "caddy", "partial"])
+def test_import_previous_rollback_receipts_tampered_or_partial_halt_before_writes(
+    tmp_path, monkeypatch, tamper,
+):
+    m = load()
+    old = fixture_env()
+    site = fixture_caddy(m)
+    monkeypatch.setattr(m, "live_preflight", lambda _sha: (old, site, 0o640, "off"))
+    monkeypatch.setattr(m, "BACKUPS", tmp_path)
+    monkeypatch.setenv("FH_PERSONAL_IMPORT_WINDOW", "ENABLE")
+    r, c = m.backup_paths("1" * 40)
+    r.write_bytes(b"mismatch" if tamper == "runtime" else old)
+    if tamper != "partial":
+        c.write_bytes(b"mismatch" if tamper == "caddy" else site)
+    monkeypatch.setattr(m.finance, "secure_file", lambda path, *_a: path.read_bytes())
+    monkeypatch.setattr(m.finance, "write_exclusive",
+                        lambda *_a, **_kw: pytest.fail("No writes on backup mismatch"))
+    with pytest.raises(m.Hold, match="IMPORT_WINDOW_"):
+        m.enable("1" * 40)
+
