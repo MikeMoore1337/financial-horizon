@@ -1,5 +1,5 @@
 import {test,expect} from '@playwright/test';
-import {observe,visitGuest,logoutViaUi,view,scopedState} from './helpers.mjs';
+import {observe,visitGuest,logoutViaUi,view,addEntry,scopedState} from './helpers.mjs';
 
 test('#69 import entry only for verified FH owner, no automatic financial POST',async({page,context})=>{
  const watch=await observe(context,page);
@@ -29,6 +29,9 @@ test('#69 import entry only for verified FH owner, no automatic financial POST',
  await page.goto('/?auth=success');
  await expect(page).toHaveURL('http://127.0.0.1:8791/');
  await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
+ // Populate real native IndexedDB for the owner so the test can prove
+ // that opening/cancelling import never mutates or removes existing records.
+ await addEntry(page,'E2E owner local entry preserved',{amount:'43.27'});
  await view(page,'settings');
  const launch=page.locator('[data-action="cloud-import"]');
  await expect(launch).toBeVisible();
@@ -51,11 +54,12 @@ test('#69 import entry only for verified FH owner, no automatic financial POST',
 
  // A real logout removes the owner-only entry, not the local finance data.
  const snapshot=await scopedState(page,'account-state-v2:'+owner.id);
+ expect(snapshot?.entries.some(e=>e.title==='E2E owner local entry preserved')).toBe(true);
  await logoutViaUi(page);
  await visitGuest(page);
  await view(page,'settings');
  await expect(page.locator('[data-action="cloud-import"]')).toHaveCount(0);
  expect(importPosts).toEqual([]);
- expect(snapshot).toBeTruthy();
+ expect(await scopedState(page,'account-state-v2:'+owner.id)).toEqual(snapshot);
  watch.assertClean();
 });
