@@ -196,7 +196,7 @@ tables="$(docker exec -u postgres fh-finance-postgres psql -X -U postgres -d fh_
  SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
  WHERE n.nspname='finance' AND c.relkind='r' AND c.relname<>'alembic_version'
  AND c.relrowsecurity AND c.relforcerowsecurity")"
-[[ "$tables" = 15 ]] || deny FORCE_RLS_MISSING
+[[ "$tables" = 16 ]] || deny FORCE_RLS_MISSING
 archive="$(bash deploy/postgres/scripts/backup.sh)" || deny ENCRYPTED_BACKUP_FAILED
 [[ -f "$archive" && -s "$archive" ]] || deny EMPTY_BACKUP
 FH_FINANCE_GPG_HOME="$FH_FINANCE_GPG_HOME" \
