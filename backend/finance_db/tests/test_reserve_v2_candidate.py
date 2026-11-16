@@ -145,6 +145,9 @@ def test_update_allocate_release_and_archive_keep_history(financial_context):
     assert submit(engine, scope, "reserve.allocate", {
         "reserve_id": rid["id"], "account_id": account_id, "delta_minor": 2000,
     }, [rid["id"], account_id]).status == 201
+    # Target reduction preserves the already-reserved surplus for the next cycle.
+    amended = {**amended, "target_minor": 4_000}
+    assert submit(engine, scope, "reserve.update", amended, [rid["id"]]).status == 201
     before_bad_archive = snapshot(engine, scope)
     with pytest.raises(FinanceCommandError) as exc:
         submit(engine, scope, "reserve.archive", {"reserve_id": rid["id"]}, [rid["id"]])
@@ -167,7 +170,7 @@ def test_update_allocate_release_and_archive_keep_history(financial_context):
         assert session.execute(text("SELECT count(*) FROM ledger_transactions")).scalar_one() == 0
 
 
-def test_no_overfunding_duplicates_or_unowned_accounts(financial_context):
+def test_available_cash_duplicates_and_unowned_accounts(financial_context):
     engine, scope, account_id, obligation_id = financial_context
     payload = reserve_input(account_id, obligation_id)
     assert submit(engine, scope, "reserve.create", payload, [account_id, obligation_id]).status == 201
@@ -247,7 +250,7 @@ def test_invalid_plan_rejected_before_sql(financial_context):
         {"period_months": 61},
         {"contribution_mode": "fixed"},
         {"due_day": 31},
-        {"opening_reserved_minor": 10_000},
+        {"opening_reserved_minor": 1_000_000_000_001},
     ):
         payload = {**reserve_input(account_id, obligation_id), **override}
         with pytest.raises(FinanceCommandError) as exc:
