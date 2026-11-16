@@ -384,3 +384,182 @@ def test_direct_orphan_reserved_payment_fails_at_sql_commit(financial_context):
             })
     assert snapshot(engine, scope).body["revision"] == before.body["revision"]
     assert entities(engine, scope)[account_id]["data"]["reserved_minor"] == 3000
+
+
+
+def test_reserve_event_undo_and_skipped_installment(financial_context):
+    engine, scope, account, obligation = financial_context
+    plan = reserve_input(account, obligation)
+    reserve = plan["id"]
+    create = submit(engine, scope, "reserve.create", plan, [account, obligation])
+    assert create.status == 201
+    original = entities(engine, scope)[reserve]["data"]
+    assert original["opening_reserved_minor"] == 3000
+    assert original["cycle_number"] == 1
+    assert original["event_log"] == []
+
+    paid_in = submit(engine, scope, "reserve.allocate", {
+        "reserve_id": reserve, "account_id": account,
+        "delta_minor": 2000, "occurred_on": "2026-11-17",
+    }, [reserve, account])
+    assert paid_in.status == 201
+    state = entities(engine, scope)
+    assert state[reserve]["data"]["allocated_minor"] == 5000
+    contribution, = state[reserve]["data"]["event_log"]
+    assert contribution["kind"] == "contribution"
+    assert contribution["amount_minor"] == 2000
+    assert contribution["occurred_on"] == "2026-11-17"
+    assert contribution["cycle_number"] == 1
+    assert contribution["revision"] == paid_in.body["revision"]
+    assert contribution["allocation_id"]
+
+    void = submit(engine, scope, "reserve.event.void", {
+        "reserve_id": reserve, "account_id": account,
+        "target_event_id": contribution["id"],
+        "occurred_on": "2026-11-18", "reason": "Исправление суммы",
+    }, [reserve, account])
+    assert void.status == 201
+    state = entities(engine, scope)
+    assert state[reserve]["data"]["allocated_minor"] == 3000
+    assert state[account]["data"]["balance_minor"] == 10000
+    history = state[reserve]["data"]["event_log"]
+    assert [event["kind"] for event in history] == ["contribution", "void"]
+    assert history[1]["target_event_id"] == contribution["id"]
+    assert history[1]["note"] == "Исправление суммы"
+    assert history[1]["allocation_id"]
+    before_duplicate = snapshot(engine, scope)
+    with pytest.raises(FinanceCommandError) as exc:
+        submit(engine, scope, "reserve.event.void", {
+            "reserve_id": reserve, "account_id": account,
+            "target_event_id": contribution["id"],
+            "occurred_on": "2026-11-19", "reason": "Повторная отмена",
+        }, [reserve, account])
+    assert exc.value.code == "semantic_conflict"
+    assert snapshot(engine, scope).body["revision"] == before_duplicate.body["revision"]
+
+    skipped = submit(engine, scope, "reserve.skip", {
+        "reserve_id": reserve, "slot_on": "2026-12-16",
+        "occurred_on": "2026-12-17",
+    }, [reserve])
+    assert skipped.status == 201
+    skip_event = entities(engine, scope)[reserve]["data"]["event_log"][-1]
+    assert skip_event["kind"] == "skip"
+    assert skip_event["slot_on"] == "2026-12-16"
+    with pytest.raises(FinanceCommandError) as exc:
+        submit(engine, scope, "reserve.skip", {
+            "reserve_id": reserve, "slot_on": "2026-12-16",
+            "occurred_on": "2026-12-18",
+        }, [reserve])
+    assert exc.value.code == "semantic_conflict"
+    assert submit(engine, scope, "reserve.event.void", {
+        "reserve_id": reserve, "account_id": account,
+        "target_event_id": skip_event["id"],
+        "occurred_on": "2026-12-18", "reason": "Взнос не пропускали",
+    }, [reserve, account]).status == 201
+    assert submit(engine, scope, "reserve.skip", {
+        "reserve_id": reserve, "slot_on": "2026-12-16",
+        "occurred_on": "2026-12-19",
+    }, [reserve]).status == 201
+
+    release = submit(engine, scope, "reserve.allocate", {
+        "reserve_id": reserve, "account_id": account,
+        "delta_minor": -1500, "occurred_on": "2026-12-20",
+    }, [reserve, account])
+    assert release.status == 201
+    release_event = entities(engine, scope)[reserve]["data"]["event_log"][-1]
+    assert release_event["kind"] == "release"
+    assert release_event["amount_minor"] == 1500
+    assert submit(engine, scope, "reserve.event.void", {
+        "reserve_id": reserve, "account_id": account,
+        "target_event_id": release_event["id"],
+        "occurred_on": "2026-12-21", "reason": "Отмена ошибочного снятия",
+    }, [reserve, account]).status == 201
+    assert entities(engine, scope)[reserve]["data"]["allocated_minor"] == 3000
+
+    state = entities(engine, scope)
+    assert state[account]["data"]["reserved_minor"] == 3000
+    assert state[account]["data"]["available_minor"] == 7000
+    assert state[account]["data"]["balance_minor"] == 10000
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        assert session.execute(text("SELECT count(*) FROM ledger_transactions")).scalar_one() == 0
+        events = session.execute(text("""
+            SELECT count(*) FROM reserve_events WHERE reserve_id=:id
+        """), {"id": reserve}).scalar_one()
+        assert events == len(state[reserve]["data"]["event_log"])
+
+
+def test_paid_cycle_close_rolls_original_date_forward_without_posting_cash(financial_context):
+    engine, scope, account, obligation = financial_context
+    plan = reserve_input(account, obligation, opening=6000)
+    reserve = plan["id"]
+    submit(engine, scope, "reserve.create", plan, [account, obligation])
+    with pytest.raises(FinanceCommandError) as exc:
+        submit(engine, scope, "reserve.cycle.close", {
+            "reserve_id": reserve, "occurred_on": "2026-11-17",
+        }, [reserve])
+    assert exc.value.code == "semantic_conflict"
+    assert submit(engine, scope, "settlement.payment.record", {
+        "account_id": account, "obligation_id": obligation,
+        "amount_minor": 9000, "occurrence_on": "2027-11-16",
+        "paid_on": "2027-11-16", "reserve_id": reserve,
+        "reserved_used_minor": 6000,
+    }, [account, obligation, reserve]).status == 201
+    payment = entities(engine, scope)[reserve]["data"]["event_log"][-1]
+    assert payment["kind"] == "payment"
+    assert payment["amount_minor"] == 9000
+    assert payment["reserved_used_minor"] == 6000
+    assert payment["transaction_id"]
+    cash_before_close = entities(engine, scope)[account]["data"]
+    closed = submit(engine, scope, "reserve.cycle.close", {
+        "reserve_id": reserve, "occurred_on": "2027-11-16",
+    }, [reserve])
+    assert closed.status == 201
+    state = entities(engine, scope)
+    assert state[reserve]["data"]["cycle_number"] == 2
+    assert state[reserve]["data"]["target_on"] == "2028-11-16"
+    assert state[reserve]["data"]["first_due_on"] == "2027-11-16"
+    assert [e["kind"] for e in state[reserve]["data"]["event_log"]] == ["payment", "cycle_close"]
+    assert state[account]["data"] == cash_before_close
+    assert state[account]["data"]["balance_minor"] == 1000
+    assert state[reserve]["data"]["allocated_minor"] == 0
+    with pytest.raises(FinanceCommandError) as exc:
+        submit(engine, scope, "reserve.cycle.close", {
+            "reserve_id": reserve, "occurred_on": "2027-11-17",
+        }, [reserve])
+    assert exc.value.code == "semantic_conflict"
+    with pytest.raises(FinanceCommandError) as exc:
+        submit(engine, scope, "settlement.payment.void", {
+            "transaction_id": payment["transaction_id"],
+            "fact_id": next(
+                e["id"] for e in snapshot(engine, scope).body["entities"]
+                if e["kind"] == "settlement"
+            ),
+            "account_id": account, "reserve_id": reserve,
+            "reason": "После закрытия цикла",
+        }, [payment["transaction_id"],
+            next(e["id"] for e in snapshot(engine, scope).body["entities"]
+                 if e["kind"] == "settlement"), account, reserve])
+    assert exc.value.code == "semantic_conflict"
+    assert entities(engine, scope)[reserve]["data"]["cycle_number"] == 2
+
+
+def test_skipped_short_month_anchor_validated(financial_context):
+    engine, scope, account, obligation = financial_context
+    plan = {
+        **reserve_input(account, obligation, opening=0),
+        "opened_on": "2028-01-31", "first_due_on": "2028-02-29",
+        "period_months": 1, "due_day": 31,
+    }
+    submit(engine, scope, "reserve.create", plan, [account, obligation])
+    assert submit(engine, scope, "reserve.skip", {
+        "reserve_id": plan["id"], "slot_on": "2028-02-29",
+        "occurred_on": "2028-03-01",
+    }, [plan["id"]]).status == 201
+    for bad in ["2028-02-28", "2028-03-31", "2028-02-30"]:
+        with pytest.raises(FinanceCommandError) as exc:
+            submit(engine, scope, "reserve.skip", {
+                "reserve_id": plan["id"], "slot_on": bad,
+                "occurred_on": "2028-03-02",
+            }, [plan["id"]])
+        assert exc.value.code == "invalid_command"
