@@ -41,7 +41,8 @@ _PUBLIC_V2_ACCOUNT_ACTIONS = frozenset((
     "transaction.record", "settlement.payment.record", "loan.payment.record",
     "settlement.payment.void", "loan.payment.void",
     "reserve.create", "reserve.update", "reserve.archive", "reserve.allocate",
-    "reserve.skip", "reserve.cycle.close", "reserve.event.void",
+    "reserve.skip", "reserve.cycle.close", "reserve.cycle.void",
+    "reserve.event.void",
 ))
 
 
@@ -1381,6 +1382,57 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         affected_revision = int(reserve["entity_revision"]) + 1
         change_payload = {
             "event_id": str(event_id), "next_due_on": next_on.isoformat(),
+            "entity": _reserve_sync_entity(session, p, target),
+        }
+    elif action == "reserve.cycle.void":
+        required = {"reserve_id", "occurred_on", "reason"}
+        _shape(payload, required, required)
+        target = _uuid(payload["reserve_id"])
+        when = _date(payload["occurred_on"])
+        reason = payload["reason"]
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 500:
+            raise _reject("Укажите причину отмены закрытия цикла")
+        plan = session.execute(text("""
+            SELECT entity_revision,first_due_on,period_months,due_day,
+                   cycle_number,archived_at FROM reserves
+            WHERE profile_id=:p AND id=:reserve FOR UPDATE
+        """), {"p": p, "reserve": target}).mappings().one_or_none()
+        if (plan is None or plan["archived_at"] is not None
+            or plan["period_months"] is None or int(plan["cycle_number"]) <= 1):
+            raise FinanceCommandError("semantic_conflict", "Закрытый цикл недоступен", 409)
+        _require_revision(versions, target, plan["entity_revision"])
+        current_cycle = int(plan["cycle_number"])
+        last_event = session.execute(text("""
+            SELECT id,kind,cycle_number,occurred_on FROM reserve_events
+            WHERE profile_id=:p AND reserve_id=:reserve
+            ORDER BY revision DESC LIMIT 1
+        """), {"p": p, "reserve": target}).mappings().one_or_none()
+        if (last_event is None or last_event["kind"] != "cycle_close"
+            or int(last_event["cycle_number"]) != current_cycle - 1):
+            raise FinanceCommandError(
+                "semantic_conflict", "В следующем цикле уже есть операции", 409,
+            )
+        if when < last_event["occurred_on"]:
+            raise _reject("Отмена не может предшествовать закрытию")
+        old_due = _next_reserve_due(
+            plan["first_due_on"], int(plan["period_months"]),
+            int(plan["due_day"]), current_cycle - 2,
+        )
+        event_id = _reserve_append_event(
+            session, p, target, kind="void", on=when,
+            cycle=current_cycle - 1, revision=new_revision,
+            target_event_id=last_event["id"], note=reason.strip(),
+        )
+        session.execute(text("""
+            UPDATE reserves SET cycle_number=:prior,target_on=:due,
+                entity_revision=entity_revision+1,updated_at=now()
+            WHERE profile_id=:p AND id=:reserve
+        """), {"p": p, "reserve": target, "prior": current_cycle - 1,
+                 "due": old_due})
+        affected_revision = int(plan["entity_revision"]) + 1
+        change_payload = {
+            "event_id": str(event_id), "voided_event_id": str(last_event["id"]),
+            "restored_due_on": old_due.isoformat(),
             "entity": _reserve_sync_entity(session, p, target),
         }
     elif action == "reserve.event.void":

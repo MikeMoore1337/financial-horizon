@@ -374,7 +374,8 @@
               "reserve.allocate",
               "reserve.skip",
               "reserve.cycle.close",
-              "reserve.event.void"
+              "reserve.event.void",
+              "reserve.cycle.void"
             ]
           },
           "expected_entity_revisions": {
@@ -647,6 +648,22 @@
               "properties": {
                 "payload": {
                   "$ref": "#/components/schemas/ReserveEventVoidV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "reserve.cycle.void"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/ReserveCycleVoidV2"
                 }
               }
             }
@@ -1134,6 +1151,31 @@
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
           },
           "target_event_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "occurred_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "\\S"
+          }
+        }
+      },
+      "ReserveCycleVoidV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reserve_id",
+          "occurred_on",
+          "reason"
+        ],
+        "properties": {
+          "reserve_id": {
             "type": "string",
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
           },
