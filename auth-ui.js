@@ -3,6 +3,7 @@ const PROVIDER_LABELS = Object.freeze({
   google: 'Войти через Google',
   yandex: 'Войти через Яндекс ID',
   vk: 'Войти через VK ID',
+  telegram: 'Войти через Telegram',
 });
 const PROVIDER_ORDER = Object.keys(PROVIDER_LABELS);
 
@@ -75,8 +76,9 @@ export async function cloudLogout({fetcher=fetch}={}) {
 /** Approved design C - fail-closed OAuth choices below the existing email form. */
 const PROVIDER_ICONS=Object.freeze({
   google:'./assets/providers/google.svg',
-  yandex:'./assets/providers/yandex.svg',
-  vk:'./assets/providers/vk.svg'
+  yandex:'./assets/providers/yandex.webp',
+  vk:'./assets/providers/vk.svg',
+  telegram:'./assets/providers/telegram.svg'
 });
 
 /**

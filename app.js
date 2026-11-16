@@ -1,4 +1,4 @@
-import {cents,rubles,numberInput,monthKey,monthIndex,shiftMonth,monthLabel,dayInMonth,loanLedger,previewLoanPayment,getMonthEvents,monthTotals,createSampleState,isActive,emptyState,payoffMonths} from './finance.js';
+import {cents,rubles,numberInput,monthKey,monthIndex,shiftMonth,monthLabel,dayInMonth,loanLedger,previewLoanPayment,getMonthEvents,monthTotals,createSampleState,isActive,emptyState,payoffMonths,MAX_QR_BYTES,validQrData,safePaymentUrl,upsertPaymentMethod,deletePaymentMethod,choosePrimaryPaymentMethod} from './finance.js';
 import {readState,updateState,replaceState,askPersistentStorage,storageStatus,selectStateScope,revokeStateScope} from './storage.js?rev=auth-scopes-v18';
 import {encryptBackup,decryptBackup} from './backup.js';
 import {parseSchedule} from './schedule.js';
@@ -7,6 +7,9 @@ import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
 import {createScreenRoot} from './src/react/ScreenRoot.tsx';
 import {createAppShellRoots} from './src/react/AppShell.tsx';
+import {sameFinancialJSON} from './src/security/protected-staging.ts';
+import {prepareLivePersonalImportCandidate,executeConfirmedPersonalImportCandidate} from './src/cloud/personal-import-transport-candidate.mjs';
+import {verifySavedFinancialBackupReadOnly} from './src/cloud/read-only-backup-verification.mjs';
 
 const $=sel=>document.querySelector(sel);
 const svg=name=>`<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-${name}"></use></svg>`;
@@ -14,8 +17,12 @@ const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<
 const formatDate=date=>new Intl.DateTimeFormat('ru-RU',{day:'numeric',month:'short',year:'numeric'}).format(new Date(`${date}T12:00:00`));
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
 const uuid=()=>crypto.randomUUID();
-const titles={overview:'Обзор',calendar:'Календарь',obligations:'Обязательства',loans:'Кредиты',settings:'Настройки'};
-let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null},passwordMode='export',restoreFile=null,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
+const titles={overview:'Обзор',calendar:'Календарь',obligations:'Обязательства',loans:'Кредиты',settings:'Настройки','accounts-connected':'Счета и кошельки'};
+// Only an explicit reviewed release can present the optional server-backed accounts view.
+// FastAPI authentication and profile scoping remain the sole authorization boundary.
+const financeAccountsEnabled=document.querySelector('meta[name="fh-finance-accounts"]')?.content==='enabled';
+const financeImportEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-import"]')?.content==='enabled';
+let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null},passwordMode='export',restoreFile=null,verifyBackupFile=null,cloudImportFile=null,pendingCloudImport=null,cloudImportController=null,cloudImportBusy=false,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
 const emailSession=createEmailSession();
 let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
 const GUEST_MODE_KEY='fh-guest-session-v2';
@@ -27,10 +34,11 @@ function getAuthAccess(){
 }
 let storageStatusMessage='Браузер может удалить данные при очистке хранилища. Делайте резервные копии.';
 let storageStatusRequest=0;
+let lastStorageContext=null;
 function revokeDisplayedLedger(){
  revokeStateScope(); // invalidate pending IDB reads/writes before clearing the UI
  state=null;
- restoreFile=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
+ restoreFile=null;verifyBackupFile=null;cloudImportFile=null;pendingCloudImport=null;cloudImportController?.abort();cloudImportController=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
  if(navRoots){navRoots.unmount();navRoots=null;}
  $('#main').replaceChildren();
@@ -53,16 +61,42 @@ async function mutate(change,msg='Сохранено на устройстве',
 function stampFormRevision(form){form.dataset.stateRevision=String(state.revision);}
 function revisionForForm(form){const revision=Number(form.dataset.stateRevision);if(!Number.isSafeInteger(revision)||revision<0)throw Error('Не удалось определить версию записи. Откройте форму повторно.');return revision;}
 function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#172336':'#ffffff';$('#theme-toggle').innerHTML=svg(mode==='dark'?'sun':'moon');$('#theme-toggle').setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}
-function navigation(view){ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings'){void renderStorageStatus();if(!guestMode)void refreshEmailSession();}}
+function syncStorageContext(){
+ const serverAccounts=ui.view==='accounts-connected'&&financeAccountsEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId;
+ const labels=[
+  ['storage-context-chip',serverAccounts?'На сервере':'Локально'],
+  ['storage-context-title',serverAccounts?'Счета в аккаунте':'Хранится на устройстве'],
+  ['storage-context-detail',serverAccounts?'Локальный бюджет отдельно':'Без банковских подключений'],
+  ['storage-context-footnote',serverAccounts?'Счета хранятся на сервере. Локальная бухгалтерия остаётся в этом браузере.':'Данные остаются в этом браузере. Делайте резервные копии.'],
+ ];
+ for(const [id,value] of labels){
+  const element=document.getElementById(id);
+  if(element)element.textContent=value;
+ }
+ // The global Add action edits the local planner, not a server account.
+ // Accounts has its own explicit "Новый счёт" button.
+ const globalAdd=$('#top-add');
+ if(globalAdd)globalAdd.hidden=serverAccounts;
+ if(lastStorageContext!==serverAccounts){
+  $('#save-indicator').textContent=serverAccounts?'Серверный раздел':'Локальная база готова';
+  lastStorageContext=serverAccounts;
+ }
+}
+function navigation(view){
+ if(view==='accounts-connected'&&(!financeAccountsEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId))return;
+ ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings'){void renderStorageStatus();if(!guestMode)void refreshEmailSession();}}
 function render(){
  if(!state)return;
+ syncStorageContext();
  $('#toolbar-title').textContent=titles[ui.view];
  if(!navRoots)navRoots=createAppShellRoots($('.sidebar-nav'),$('.bottom-nav'));
- navRoots.render(ui.view);
+ navRoots.render(ui.view==='accounts-connected'?'settings':ui.view);
  const main=$('#main');
- if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'||ui.view==='settings'){
+ if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'||ui.view==='settings'||ui.view==='accounts-connected'){
   if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main,getAuthAccess);}
-  if(ui.view==='calendar'){
+  if(ui.view==='accounts-connected'){
+   screenRoot.render({view:'accounts-connected',props:{verifiedActorUserId:emailSession.userId||null,onBack:()=>navigation('overview')}});
+  }else if(ui.view==='calendar'){
    const events=monthEvents(),totals=monthTotals(events);
    screenRoot.render({view:'calendar',props:{events,month:ui.month,selectedDate:ui.selectedDate,currentDate:today(),monthTitle:monthLabel(ui.month),netPlanCents:totals.netPlanCents,netFactCents:totals.netFactCents,formatDate,rubles}});
   }else if(ui.view==='overview'){
@@ -133,7 +167,8 @@ function render(){
    }));
    screenRoot.render({view:'settings',props:{
     currentDate:today(),categories:state.categories,archived,audit,storageMessage:storageStatusMessage,
-    formatDate,
+    formatDate,showFinanceAccounts:financeAccountsEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId,
+    showFinanceImport:financeImportEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId,
    }});
   }
  }else{
@@ -199,11 +234,154 @@ function openDialog(sel){
 }
 function formValue(form,name){return form.elements.namedItem(name).value;}
 function fillSelect(el,items,selected){el.innerHTML=items.map(x=>`<option value="${escapeHtml(x.id)}" ${x.id===selected?'selected':''}>${escapeHtml(x.title)}</option>`).join('');}
+
+const paymentTypeNames={
+ payment_url:'Ссылка',qr_image:'QR-код',sbp_link:'СБП',requisites:'Реквизиты',instructions:'Инструкция'
+};
+function syncEntryPaymentAccess(){
+ const form=$('#entry-form'),id=formValue(form,'id');
+ const entry=state.entries.find(e=>e.id===id&&!e.deletedAt);
+ $('#entry-methods-access').hidden=!(entry&&formValue(form,'kind')==='expense'&&
+   ['monthly','yearly'].includes(formValue(form,'recurrence')));
+ $('#entry-method-count').textContent=String(entry?.paymentMethods?.length||0);
+}
+function updateMethodType(){
+ const type=formValue($('#payment-method-form'),'type'),isQr=type==='qr_image';
+ $('#payment-method-text-field').hidden=isQr;
+ $('#payment-method-qr-field').hidden=!isQr;
+ const f=$('#payment-method-form');f.elements.value.required=!isQr;
+ $('#payment-method-value-label').textContent=type==='requisites'?'Реквизиты и назначение':type==='instructions'?'Порядок оплаты':'Адрес HTTPS';
+ f.elements.value.placeholder=type==='sbp_link'?'https://qr.nspk.ru/...':type==='requisites'?'Банк, номер счёта, получатель, назначение':type==='instructions'?'Как оплатить этот расход':'https://example.com/pay';
+}
+function resetPaymentMethodForm(){
+ const form=$('#payment-method-form');form.reset();form.elements.methodId.value='';
+ $('#payment-method-save-title').textContent='Новый способ оплаты';updateMethodType();
+}
+function currentPaymentEntry(){
+ const id=$('#payment-method-form').dataset.entryId;
+ const entry=state?.entries.find(e=>e.id===id&&!e.deletedAt);
+ if(!entry||entry.kind!=='expense'||!['monthly','yearly'].includes(entry.recurrence))
+  throw Error('Регулярный расход недоступен');
+ return entry;
+}
+function renderPaymentMethods(){
+ const entry=currentPaymentEntry(),list=$('#payment-methods-list');list.replaceChildren();
+ const methods=entry.paymentMethods||[];
+ if(!methods.length){
+  const empty=document.createElement('p');empty.className='form-note';
+  empty.textContent='Способы оплаты пока не добавлены.';list.append(empty);
+ }
+ for(const method of methods){
+  const row=document.createElement('div');row.className='archive-row';
+  row.style.alignItems='start';row.style.gap='10px';
+  const info=document.createElement('div');info.style.minWidth='0';
+  const name=document.createElement('strong');name.textContent=method.label;info.append(name);
+  const type=document.createElement('p');type.className='small-hint';
+  type.textContent=paymentTypeNames[method.type]+(method.primary?' · Основной':'');
+  info.append(type);
+  if(method.type==='qr_image'){
+   if(validQrData(method.imageData)){
+    const img=document.createElement('img');img.src=method.imageData;img.alt='Сохранённый QR-код';
+    img.style.cssText='display:block;max-width:160px;max-height:160px;object-fit:contain';
+    img.onerror=()=>{img.remove();const err=document.createElement('p');err.textContent='Изображение повреждено. Замените файл.';info.append(err);};
+    info.append(img);
+   }else{
+    const missing=document.createElement('p');missing.textContent='Изображение отсутствует или повреждено. Измените способ оплаты.';info.append(missing);
+   }
+  }else if(method.type==='payment_url'||method.type==='sbp_link'){
+   try{
+    const link=safePaymentUrl(method.value),anchor=document.createElement('a');
+    anchor.href=link.href;anchor.target='_blank';anchor.rel='noopener noreferrer';anchor.referrerPolicy='no-referrer';
+    anchor.textContent='Открыть: '+link.hostname;info.append(anchor);
+    if(method.type==='sbp_link'){
+     const hint=document.createElement('p');hint.className='small-hint';
+     hint.textContent='Если ссылка СБП не поддерживается устройством, воспользуйтесь QR или реквизитами.';
+     info.append(hint);
+    }
+   }catch{
+    const invalid=document.createElement('p');invalid.textContent='Небезопасная или неподдерживаемая ссылка. Исправьте её.';info.append(invalid);
+   }
+  }else{
+   const value=document.createElement('p');value.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere';
+   value.textContent=method.value;info.append(value);
+  }
+  const actions=document.createElement('div');actions.style.cssText='display:flex;gap:6px;flex-wrap:wrap';
+  function addButton(label,action){
+   const button=document.createElement('button');button.type='button';button.className='button-text';
+   button.textContent=label;button.dataset.action=action;button.dataset.id=method.id;
+   actions.append(button);
+  }
+  if(!method.primary)addButton('Основным','primary-payment-method');
+  addButton('Изменить','edit-payment-method');addButton('Удалить','delete-payment-method');
+  row.append(info,actions);list.append(row);
+ }
+}
+function openPaymentMethods(){
+ const entry=state.entries.find(e=>e.id===formValue($('#entry-form'),'id')&&!e.deletedAt);
+ if(!entry||entry.kind!=='expense'||!['monthly','yearly'].includes(entry.recurrence))
+  throw Error('Сначала сохраните регулярный расход');
+ const form=$('#payment-method-form');form.dataset.entryId=entry.id;
+ resetPaymentMethodForm();stampFormRevision(form);
+ $('#payment-methods-heading').textContent='Способы оплаты: '+entry.title;
+ renderPaymentMethods();openDialog('#payment-methods-dialog');
+}
+function editPaymentMethod(id){
+ const method=currentPaymentEntry().paymentMethods?.find(x=>x.id===id);
+ if(!method)throw Error('Способ оплаты не найден');
+ const form=$('#payment-method-form');form.reset();
+ form.elements.methodId.value=method.id;form.elements.type.value=method.type;
+ form.elements.label.value=method.label;form.elements.value.value=method.value||'';
+ form.elements.primary.checked=method.primary;
+ $('#payment-method-save-title').textContent='Изменить способ оплаты';updateMethodType();
+}
+async function localQrImage(file){
+ if(!file||!['image/png','image/jpeg','image/webp'].includes(file.type)||
+    file.size===0||file.size>MAX_QR_BYTES)
+  throw Error('Используйте PNG, JPEG или WebP размером до 192 КБ');
+ const data=await new Promise((resolve,reject)=>{
+  const reader=new FileReader();
+  reader.onload=()=>resolve(reader.result);
+  reader.onerror=()=>reject(Error('Не удалось прочитать QR-изображение'));
+  reader.readAsDataURL(file);
+ });
+ if(!validQrData(data))throw Error('Содержимое QR-файла не соответствует его формату');
+ const blobUrl=URL.createObjectURL(file);
+ try{
+  await new Promise((resolve,reject)=>{
+   const img=new Image();
+   img.onload=()=>{
+    if(!img.naturalWidth||!img.naturalHeight||img.naturalWidth>4096||img.naturalHeight>4096)
+     reject(Error('Недопустимые размеры QR-изображения'));
+    else resolve();
+   };
+   img.onerror=()=>reject(Error('QR-изображение повреждено'));
+   img.src=blobUrl;
+  });
+ }finally{URL.revokeObjectURL(blobUrl);}
+ return data;
+}
+async function savePaymentMethodForm(form){
+ const entry=currentPaymentEntry(),id=formValue(form,'methodId'),type=formValue(form,'type');
+ const original=entry.paymentMethods?.find(m=>m.id===id);
+ const input={id,type,label:formValue(form,'label'),primary:form.elements.primary.checked};
+ if(type==='qr_image'){
+  const file=form.elements.qrFile.files?.[0];
+  input.imageData=file?await localQrImage(file):original?.type==='qr_image'?original.imageData:undefined;
+ }else input.value=formValue(form,'value');
+ if(!form.isConnected)throw Error('Сеанс редактирования завершён');
+ await mutate(s=>{
+  upsertPaymentMethod(s,entry.id,input);
+  audit(s,'payment-method-save','Сохранён способ оплаты для записи '+entry.id);
+ },'Способ оплаты сохранён',revisionForForm(form));
+ stampFormRevision(form);stampFormRevision($('#entry-form'));
+ resetPaymentMethodForm();renderPaymentMethods();syncEntryPaymentAccess();
+}
+
 function openEntry(id=null,kind='expense'){
  const form=$('#entry-form');form.reset();stampFormRevision(form);const record=state.entries.find(x=>x.id===id);$('#entry-heading').textContent=record?'Изменить запись':'Добавить запись';
  form.elements.id.value=id||'';form.elements.title.value=record?.title||'';form.elements.kind.value=record?.kind||kind;form.elements.amount.value=record?numberInput(record.amountCents):'';
  form.elements.date.value=record?.date||today();form.elements.recurrence.value=record?.recurrence||'monthly';
- fillSelect($('#entry-category'),state.categories.map(x=>({id:x,title:x})),record?.category||'Другое');openDialog('#entry-dialog');
+ fillSelect($('#entry-category'),state.categories.map(x=>({id:x,title:x})),record?.category||'Другое');syncEntryPaymentAccess();openDialog('#entry-dialog');
 }
 function openLoan(id=null){
  const form=$('#loan-form');form.reset();stampFormRevision(form);const record=state.loans.find(x=>x.id===id);$('#loan-heading').textContent=record?'Изменить кредит':'Добавить кредит';
@@ -256,6 +434,29 @@ async function handleAction(button){
  if(type==='new-entry'){openEntry(null,button.dataset.kind||'expense');return;}
  if(type==='new-loan'){openLoan();return;}
  if(type==='edit-entry'){openEntry(id);return;}
+ if(type==='open-payment-methods'){openPaymentMethods();return;}
+ if(type==='close-payment-methods'){$('#payment-methods-dialog').close();return;}
+ if(type==='reset-payment-method'){resetPaymentMethodForm();return;}
+ if(type==='edit-payment-method'){editPaymentMethod(id);return;}
+ if(type==='primary-payment-method'){
+  const form=$('#payment-method-form'),entry=currentPaymentEntry();
+  await mutate(s=>{
+   choosePrimaryPaymentMethod(s,entry.id,id);
+   audit(s,'payment-method-primary','Изменён основной способ для записи '+entry.id);
+  },'Основной способ изменён',revisionForForm(form));
+  stampFormRevision(form);stampFormRevision($('#entry-form'));
+  renderPaymentMethods();syncEntryPaymentAccess();return;
+ }
+ if(type==='delete-payment-method'){
+  const form=$('#payment-method-form'),entry=currentPaymentEntry(),revision=revisionForForm(form);
+  if(!await requireConfirm('Удалить способ оплаты?','Будет удалён только способ оплаты. Расход, график и фактические платежи сохранятся.'))return;
+  await mutate(s=>{
+   deletePaymentMethod(s,entry.id,id);
+   audit(s,'payment-method-delete','Удалён способ оплаты для записи '+entry.id);
+  },'Способ оплаты удалён',revision);
+  stampFormRevision(form);stampFormRevision($('#entry-form'));
+  resetPaymentMethodForm();renderPaymentMethods();syncEntryPaymentAccess();return;
+ }
  if(type==='edit-loan'){openLoan(id);return;}
  if(type==='pay'){openPayment(id);return;}
  if(type==='edit-payment'){const p=state.loanPayments.find(x=>x.id===id&&!x.voidedAt);if(p)openPayment(p.loanId,id);return;}
@@ -269,7 +470,21 @@ async function handleAction(button){
  if(type==='theme'){themeSet(button.dataset.theme);render();return;}
  if(type==='persist'){const ok=await askPersistentStorage();toast(ok?'Браузер подтвердил постоянное хранение':'Браузер не предоставил постоянное хранение. Экспортируйте копии.',ok?'success':'error');renderStorageStatus();return;}
  if(type==='backup'){passwordMode='export';$('#password-heading').textContent='Создать резервную копию';$('#password-form').reset();openDialog('#password-dialog');return;}
+ if(type==='verify-backup'){$('#backup-verify-status').textContent='';$('#verify-backup-file').value='';$('#verify-backup-file').click();return;}
  if(type==='restore'){$('#restore-file').value='';$('#restore-file').click();return;}
+ if(type==='cloud-import'){
+  if(!financeImportEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId)throw Error('Перенос доступен только своему FH-аккаунту');
+  pendingCloudImport=null;cloudImportFile=null;
+  $('#cloud-import-file').value='';$('#cloud-import-file').click();return;
+ }
+ if(type==='cancel-cloud-import'){
+  cloudImportController?.abort();pendingCloudImport=null;cloudImportFile=null;
+  $('#cloud-import-final-consent').checked=false;
+  $('#cloud-import-preserve-zero-account').checked=false;
+  $('#cloud-import-preserve-row').hidden=true;
+  $('#cloud-import-dialog').close();return;
+ }
+ if(type==='confirm-cloud-import'){await confirmCloudImport();return;}
  if(type==='excel-import'){$('#excel-file').value='';$('#excel-file').click();return;}
  if(type==='cancel-excel-import'){pendingExcelImport=null;$('#excel-import-dialog').close();return;}
  if(type==='confirm-excel-import'){
@@ -373,6 +588,8 @@ async function saveEntry(form){
  const kind=formValue(form,'kind'),date=formValue(form,'date'),recurrence=formValue(form,'recurrence'),category=formValue(form,'category');
  if(!title||!/^\d{4}-\d{2}-\d{2}$/.test(date)||!['income','expense'].includes(kind)||!['monthly','once','yearly'].includes(recurrence)||amountCents<1)throw Error('Заполните корректные поля записи');
  if(!state.categories.includes(category))throw Error('Категория не найдена');
+ if(state.entries.find(e=>e.id===id)?.paymentMethods?.length&&(kind!=='expense'||recurrence==='once'))
+  throw Error('Сначала удалите способы оплаты, затем измените тип или периодичность расхода');
  await mutate(s=>applyEntry(s,{id,title,amountCents,kind,date,recurrence,category}),id?'Запись обновлена':'Запись добавлена',revisionForForm(form));
  $('#entry-dialog').close();
 }
@@ -411,11 +628,120 @@ async function performBackup(password){
  const file=await encryptBackup(await readState(),password);const url=URL.createObjectURL(new Blob([file],{type:'application/json'}));
  const a=document.createElement('a');a.href=url;a.download=`finansovyi-gorizont-${today()}-encrypted.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),12000);toast('Шифрованная резервная копия подготовлена');
 }
+async function performVerifyBackup(password){
+ if(!verifyBackupFile)throw Error('Выберите сохранённый зашифрованный файл');
+ const actor=activeUserId,wasGuest=guestMode;
+ const original=await readState();
+ if(actor!==activeUserId||wasGuest!==guestMode||!state)
+  throw Error('Сессия сменилась во время проверки копии');
+ const result=await verifySavedFinancialBackupReadOnly({
+  backupText:await verifyBackupFile.text(),password,currentSnapshot:original,
+ });
+ if(actor!==activeUserId||wasGuest!==guestMode||!state)
+  throw Error('Сессия сменилась во время проверки копии');
+ const counts=result.recordCounts;
+ const prefix='AES-GCM: файл расшифрован, финансовая схема проверена. '+
+  'Записей: '+counts.entries+', кредитов: '+counts.loans+
+  ', фактических оплат: '+counts.settlements+
+  ', платежей по кредитам: '+counts.loanPayments+'. ';
+ $('#backup-verify-status').textContent=prefix+
+  (result.matchesCurrent
+   ? 'Содержимое полностью совпадает с текущей локальной бухгалтерией. Данные не менялись.'
+   : 'Содержимое отличается от текущей локальной бухгалтерии. Для переноса создайте и проверьте новую копию. Данные не менялись.');
+}
 async function performRestore(password){
  const originalRevision=state?.revision;
  const decrypted=await decryptBackup(await restoreFile.text(),password);
  if(!await requireConfirm('Заменить локальные данные?', 'Импорт заменит всю текущую бухгалтерию данными из резервной копии. При необходимости сохраните текущую копию перед продолжением.'))return;
  await mutate(s=>{for(const key of Object.keys(s))delete s[key];Object.assign(s,structuredClone(decrypted));audit(s,'restore-backup','Восстановлена резервная копия');},'Данные восстановлены',originalRevision);
+}
+
+// Owner-only, dormant by default. Preview NEVER posts financial data.
+async function prepareCloudImport(password){
+ if(cloudImportBusy||busy||!financeImportEnabled||guestMode||!cloudImportFile)
+  throw Error('Перенос недоступен или уже выполняется');
+ const actor=activeUserId;
+ if(!actor||emailSession.userId!==actor||!await refreshEmailSession())
+  throw Error('Сессия финансового аккаунта не подтверждена');
+ cloudImportBusy=true;
+ cloudImportController?.abort();
+ const controller=new AbortController();
+ cloudImportController=controller;
+ pendingCloudImport=null;
+ try{
+  const text=await cloudImportFile.text();
+  if(text.length>8_000_000)throw Error('Зашифрованный файл превышает 8 МБ');
+  const prepared=await prepareLivePersonalImportCandidate({
+   verifiedActorUserId:actor,backupText:text,backupPassword:password,
+   fetchImpl:window.fetch.bind(window),origin:window.location.origin,
+   signal:controller.signal,explicitConsent:true,
+  });
+  if(controller.signal.aborted||guestMode||activeUserId!==actor||emailSession.userId!==actor)
+   throw Error('Сессия изменилась во время проверки импорта');
+  pendingCloudImport=prepared;
+  const count=prepared.preview.counts;
+  $('#cloud-import-summary').textContent=
+   'Готово к переносу: '+count.entries+' регулярных записей, '+count.loans+' кредитов, '+
+   count.settlements+' фактических оплат и '+count.loanPayments+' платежей по кредитам. '+
+   'Серверная ревизия: '+prepared.revision+'. Пока ничего не загружено.'+
+   (prepared.preservedZeroAccountId ? ' Существующий счёт «'+
+    prepared.preservedZeroAccountName+'» с нулевым остатком останется на сервере без изменений.' : '');
+  $('#cloud-import-preserve-row').hidden=!prepared.preservedZeroAccountId;
+  $('#cloud-import-preserve-zero-account').checked=false;
+  $('#cloud-import-final-consent').checked=false;
+  // Never retain the original encrypted file or password in global state.
+  cloudImportFile=null;
+ }catch(error){
+  pendingCloudImport=null;cloudImportFile=null;controller.abort();
+  throw error;
+ }finally{cloudImportBusy=false;}
+}
+async function confirmCloudImport(){
+ if(cloudImportBusy||busy||!financeImportEnabled||!pendingCloudImport)
+  throw Error('Нет подтверждённого переноса. Сначала проверьте резервную копию.');
+ if($('#cloud-import-final-consent').checked!==true)
+  throw Error('Требуется отдельное подтверждение сохранённой шифрованной копии');
+ const prepared=pendingCloudImport, actor=prepared.actor;
+ if(prepared.preservedZeroAccountId&&$('#cloud-import-preserve-zero-account').checked!==true)
+  throw Error('Отдельно подтвердите сохранение существующего пустого счёта');
+ cloudImportBusy=true;
+ const button=$('#cloud-import-dialog [data-action="confirm-cloud-import"]');
+ button.disabled=true;
+ try{
+  if(guestMode||actor!==activeUserId||emailSession.userId!==actor||
+     !await refreshEmailSession())
+   throw Error('Сессия изменилась. Перенос отменён.');
+  const current=await readState();
+  const unchanged=sameFinancialJSON(current,prepared.snapshot);
+  if(!unchanged)throw Error('Локальные данные изменились. Создайте новую копию и предпросмотр.');
+  const result=await executeConfirmedPersonalImportCandidate({
+   prepared,verifiedActorUserId:actor,currentLocalSnapshotMatches:unchanged,
+   explicitFinalConsent:true,
+   explicitPreserveZeroAccountConsent:prepared.preservedZeroAccountId ?
+    $('#cloud-import-preserve-zero-account').checked===true : false,
+   fetchImpl:window.fetch.bind(window),
+   signal:cloudImportController?.signal,
+  });
+  pendingCloudImport=null;cloudImportFile=null;
+  $('#cloud-import-final-consent').checked=false;
+  $('#cloud-import-preserve-zero-account').checked=false;
+  $('#cloud-import-preserve-row').hidden=true;
+  $('#cloud-import-summary').textContent=
+   'Перенесено '+result.recordCount+' записей. Сервер вернул точную копию исходных данных. '+
+   'Локальная бухгалтерия не удалена. Пока синхронизация не включена, '+
+   'не ведите параллельные изменения на разных устройствах.';
+  toast('Перенос подтверждён сервером, исходные данные сохранены');
+ }catch(error){
+  // A network failure AFTER commit is UNKNOWN. Do not retry automatically.
+  pendingCloudImport=null;cloudImportFile=null;cloudImportController?.abort();
+  $('#cloud-import-final-consent').checked=false;
+  $('#cloud-import-preserve-zero-account').checked=false;
+  $('#cloud-import-preserve-row').hidden=true;
+  $('#cloud-import-summary').textContent=
+   'Результат переноса неизвестен. Локальные данные сохранены. Не повторяйте импорт, '+
+   'пока не проверите серверную копию и квитанцию.';
+  throw error;
+ }finally{cloudImportBusy=false;button.disabled=true;}
 }
 async function onFormSubmit(event){
  const form=event.target;
@@ -424,6 +750,7 @@ async function onFormSubmit(event){
  event.preventDefault();if(busy)return;
  try{
   if(form.getAttribute('id')==='entry-form')await saveEntry(form);
+  if(form.getAttribute('id')==='payment-method-form')await savePaymentMethodForm(form);
   if(form.getAttribute('id')==='loan-form')await saveLoan(form);
   if(form.getAttribute('id')==='payment-form')await savePayment(form);
   if(form.getAttribute('id')==='settlement-form')await saveSettlement(form);
@@ -437,8 +764,17 @@ async function onFormSubmit(event){
   if(form.getAttribute('id')==='password-form'){
    const password=form.elements.password.value;
    if(password.length<12)throw Error('Пароль должен содержать не менее 12 символов');
-   if(passwordMode==='export')await performBackup(password);else await performRestore(password);
-   form.elements.password.value='';$('#password-dialog').close();
+   try{
+    if(passwordMode==='export')await performBackup(password);
+    else if(passwordMode==='verify')await performVerifyBackup(password);
+    else if(passwordMode==='cloud')await prepareCloudImport(password);
+    else await performRestore(password);
+   }finally{form.elements.password.value='';}
+   $('#password-dialog').close();
+   if(passwordMode==='cloud'&&pendingCloudImport){
+    $('#cloud-import-dialog [data-action="confirm-cloud-import"]').disabled=false;
+    openDialog('#cloud-import-dialog');
+   }
   }
  }catch(e){fail(e);}
 }
@@ -455,10 +791,31 @@ function bindEvents(){
  document.addEventListener('submit',onFormSubmit);
  $('#theme-toggle').addEventListener('click',()=>{themeSet(document.body.dataset.theme==='dark'?'light':'dark');render();});
  $('#top-add').addEventListener('click',()=>openEntry());
+ $('#entry-form').addEventListener('change',syncEntryPaymentAccess);
+ $('#payment-method-type').addEventListener('change',updateMethodType);
  $('#payment-form').addEventListener('input',updatePaymentPreview);
  $('#payment-form').addEventListener('change',updatePaymentPreview);
  $('#payment-loan').addEventListener('change',()=>{const l=state.loans.find(x=>x.id===$('#payment-loan').value);if(l){$('#payment-form').elements.amount.value=numberInput(loanLedger(l,state.loanPayments).monthlyCents);updatePaymentPreview();}});
+ $('#password-dialog').addEventListener('close',()=>{
+  verifyBackupFile=null;
+  $('#verify-backup-file').value='';
+ });
+ $('#verify-backup-file').addEventListener('change',event=>{
+  const file=event.target.files[0];if(!file)return;
+  if(file.size>8_000_000){toast('Зашифрованная копия превышает 8 МБ','error');return;}
+  verifyBackupFile=file;passwordMode='verify';
+  $('#password-heading').textContent='Проверить копию без восстановления';
+  $('#password-form').reset();openDialog('#password-dialog');
+ });
  $('#restore-file').addEventListener('change',event=>{const file=event.target.files[0];if(!file)return;if(file.size>8_000_000){toast('Файл превышает предел 8 МБ','error');return;}restoreFile=file;passwordMode='import';$('#password-heading').textContent='Восстановить резервную копию';$('#password-form').reset();openDialog('#password-dialog');});
+ $('#cloud-import-file').addEventListener('change',event=>{const file=event.target.files[0];if(!file)return;if(file.size>8_000_000){toast('Зашифрованная копия превышает 8 МБ','error');return;}cloudImportFile=file;passwordMode='cloud';$('#password-heading').textContent='Проверить шифрованную копию для переноса';$('#password-form').reset();openDialog('#password-dialog');});
+ $('#cloud-import-dialog').addEventListener('close',()=>{
+  cloudImportController?.abort();cloudImportController=null;
+  pendingCloudImport=null;cloudImportFile=null;
+  $('#cloud-import-final-consent').checked=false;
+  $('#cloud-import-preserve-zero-account').checked=false;
+  $('#cloud-import-preserve-row').hidden=true;
+ });
  $('#excel-file').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;try{await previewExcelImport(file);}catch(e){pendingExcelImport=null;fail(e);}finally{event.target.value='';}});
  $('#schedule-file').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;
   try{if(file.size>1_000_000)throw Error('График CSV превышает 1 МБ');const rows=parseSchedule(await file.text());const id=scheduleLoanId;

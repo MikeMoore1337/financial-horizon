@@ -1,0 +1,447 @@
+"""Feature-off FastAPI finance routes with current FH session and strict Origin guard.
+
+The existing email login cookie is Path=/api/auth; a protected same-origin
+bootstrap POST verifies it and creates a separate /api/finance/v1 scoped
+HttpOnly cookie backed by the SAME AuthStore session (including revocation).
+No local encryption passphrase or identity/profiles are accepted from JSON.
+"""
+from __future__ import annotations
+
+import json
+import logging
+from typing import Callable
+from uuid import UUID
+
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
+from fastapi.exception_handlers import http_exception_handler
+from starlette.concurrency import run_in_threadpool
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
+from backend.finance_api.contracts import parse_v1_command
+from backend.finance_api.contracts_v2_candidate import parse_v2_account_command
+from backend.finance_api.accounts_v2_service import submit_account_v2_candidate
+
+from .ledger_service import (
+    FinanceCommandError, VerifiedFinanceScope, derive_verified_scope,
+    ensure_verified_profile, submit_account_command,
+)
+from .snapshot import get_finance_snapshot, get_finance_delta
+
+log = logging.getLogger("fh.finance_api")
+AUTH_COOKIE = "fh_email_session"
+FINANCE_COOKIE = "fh_finance_session"
+FINANCE_COOKIE_PATH = "/api/finance/v1"
+# Distinct cookie paths allow opt-in v2 testing without broadening the v1 cookie.
+FINANCE_V2_COOKIE_PATH = "/api/finance/v2"
+
+
+def _guard_origin(request: Request, origin: str) -> None:
+    if request.headers.get("origin") != origin:
+        raise HTTPException(status_code=403, detail="Недопустимый источник запроса")
+    site = request.headers.get("sec-fetch-site")
+    if site and site not in ("same-origin", "none"):
+        raise HTTPException(status_code=403, detail="Запрос с другого сайта")
+
+
+def _finance_response(result) -> JSONResponse:
+    # Enforce transport quota for all snapshots, deltas and command receipts.
+    if len(json.dumps(result.body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")) > 2_000_000:
+        raise FinanceCommandError("service_unavailable", "Ответ превышает лимит", 503)
+    return JSONResponse(
+        result.body,
+        status_code=result.status,
+        headers={"ETag": result.etag, "Cache-Control": "private, no-store",
+                 "Vary": "Cookie", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+def _finance_error(error: FinanceCommandError) -> JSONResponse:
+    body = {"code": error.code, "message": error.message}
+    if error.server_revision is not None:
+        body["server_revision"] = error.server_revision
+    return JSONResponse(body, status_code=error.status,
+                        headers={"Cache-Control": "private, no-store", "Vary": "Cookie",
+                                 "X-Content-Type-Options": "nosniff"})
+
+
+def _query_integer(request: Request, key: str, default: int | None,
+                   minimum: int, maximum: int) -> int:
+    values = request.query_params.getlist(key)
+    if len(values) > 1 or (not values and default is None):
+        raise FinanceCommandError("invalid_command", "Неверные параметры запроса", 422)
+    if not values:
+        return default
+    raw = values[0]
+    if len(raw) > 20 or not raw.isascii() or not raw.isdecimal():
+        raise FinanceCommandError("invalid_command", "Неверные параметры запроса", 422)
+    value = int(raw)
+    if value < minimum or value > maximum:
+        raise FinanceCommandError("invalid_command", "Параметр вне допустимых границ", 422)
+    return value
+
+
+def mount_finance_routes(
+    app: FastAPI, *, engine: Engine, namespace: UUID, public_origin: str,
+    auth_resolver: Callable[[str | None], dict | None],
+    secure_cookie: bool, rate_limiter: Callable[[Request, str], None] | None = None,
+    enable_account_v2_candidate: bool = False,
+    enable_import_candidate: bool = False,
+) -> None:
+    """Explicit application wiring only; create_app() default does not call it.
+
+    auth_resolver MUST be FH AuthStore.current, never a header/body resolver.
+    namespace is stable, server-owned and included in recoverable configuration.
+    """
+    if (engine is None or engine.dialect.name != "postgresql"
+        or not isinstance(namespace, UUID) or not public_origin):
+        raise ValueError("Finance routes require validated PostgreSQL and server namespace")
+    if type(enable_account_v2_candidate) is not bool or type(enable_import_candidate) is not bool:
+        raise ValueError("Candidate route opt-in must be explicit boolean")
+    if enable_import_candidate and not enable_account_v2_candidate:
+        raise ValueError("Import requires approved private finance v2 runtime")
+
+    # The existing FH auth app has its own HTTPException wire shape.
+    # Only finance endpoints use code/message so #68 can decode 401/403/429/503
+    # consistently; leave every other auth endpoint byte-for-byte compatible.
+    async def finance_http_errors(request: Request, error: HTTPException):
+        path = request.url.path
+        if (path.startswith("/api/finance/v1/")
+            or path.startswith("/api/finance/v2/")
+            or path == "/api/auth/email/finance/session"):
+            code, message = {
+                401: ("unauthenticated", "Войдите в аккаунт"),
+                403: ("forbidden", "Доступ запрещён"),
+                429: ("rate_limited", "Превышен лимит запросов"),
+                503: ("service_unavailable", "Финансовый сервис недоступен"),
+            }.get(
+                error.status_code,
+                ("service_unavailable", "Финансовый сервис недоступен")
+                if error.status_code >= 500 else ("invalid_command", "Запрос отклонён"),
+            )
+            return _finance_error(FinanceCommandError(code, message, error.status_code))
+        return await http_exception_handler(request, error)
+
+    app.add_exception_handler(HTTPException, finance_http_errors)
+
+    # The primary FH session may be replaced by email verify/login/rotation OR
+    # by a separately mounted OAuth provider callback. Its cookie lives at
+    # /api/auth, while the finance session lives at /api/finance/v1. Browsers
+    # do not automatically discard the second cookie when the first changes.
+    # Install this only on explicit finance opt-in and on *every* response
+    # that rotates or removes the primary cookie, regardless of auth provider.
+    @app.middleware("http")
+    async def invalidate_finance_cookie_on_primary_session_change(
+        request: Request, call_next,
+    ):
+        response = await call_next(request)
+        if any(
+            name.lower() == b"set-cookie"
+            and raw.strip().lower().startswith(b"fh_email_session=")
+            for name, raw in response.raw_headers
+        ):
+            response.delete_cookie(
+                FINANCE_COOKIE, path=FINANCE_COOKIE_PATH,
+                secure=secure_cookie, httponly=True, samesite="strict",
+            )
+            if enable_account_v2_candidate:
+                response.delete_cookie(
+                    FINANCE_COOKIE, path=FINANCE_V2_COOKIE_PATH,
+                    secure=secure_cookie, httponly=True, samesite="strict",
+                )
+        return response
+
+    def require_user(request: Request, *, finance_cookie: bool) -> str:
+        cookie = request.cookies.get(FINANCE_COOKIE if finance_cookie else AUTH_COOKIE)
+        try:
+            user = auth_resolver(cookie)
+        except Exception as exc:
+            log.error("finance_session_resolution_failed category=%s", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="Сессия временно недоступна") from None
+        if not user or not isinstance(user.get("id"), str):
+            raise HTTPException(status_code=401, detail="Войдите в аккаунт")
+        return user["id"]
+
+    def scope(request: Request) -> VerifiedFinanceScope:
+        return derive_verified_scope(require_user(request, finance_cookie=True), namespace)
+
+    def rate(request: Request, action: str) -> None:
+        if rate_limiter is None:
+            # A public finance service must have a shared, cross-worker limiter.
+            raise HTTPException(status_code=503, detail="Финансовый сервис недоступен")
+        try:
+            rate_limiter(request, action)
+        except HTTPException:
+            # Preserve existing 429 quota rejection; never mask it as 503.
+            raise
+        except Exception as exc:
+            # SQLite failures are not successful authentication or an open quota.
+            # Never print the database exception text or SQL parameter values.
+            log.error("finance_rate_store_failed category=%s", type(exc).__name__)
+            raise HTTPException(status_code=503, detail="Финансовый сервис недоступен") from None
+
+    @app.post("/api/auth/email/finance/session", include_in_schema=False)
+    def begin_finance_session(request: Request, response: Response):
+        _guard_origin(request, public_origin)
+        rate(request, "finance-session")
+        raw_token = request.cookies.get(AUTH_COOKIE)
+        user_id = require_user(request, finance_cookie=False)
+        try:
+            verified = ensure_verified_profile(
+                engine, verified_user_id=user_id, server_namespace=namespace
+            )
+        except SQLAlchemyError:
+            log.error("finance_session_provision_failed")
+            raise HTTPException(status_code=503, detail="Финансовый сервис недоступен") from None
+        response.set_cookie(
+            FINANCE_COOKIE, raw_token,
+            path=FINANCE_COOKIE_PATH, max_age=7 * 86400,
+            secure=secure_cookie, httponly=True, samesite="strict",
+        )
+        if enable_account_v2_candidate:
+            # Only the isolated opt-in candidate can issue this second path cookie.
+            # It remains backed by the SAME revocable FH SQLite AuthStore session.
+            response.set_cookie(
+                FINANCE_COOKIE, raw_token,
+                path=FINANCE_V2_COOKIE_PATH, max_age=7 * 86400,
+                secure=secure_cookie, httponly=True, samesite="strict",
+            )
+        response.headers["Cache-Control"] = "private, no-store"
+        return {"ok": True, "profile_id": str(verified.profile_id)}
+
+    router = APIRouter(prefix="/api/finance/v1", include_in_schema=False)
+
+    @router.get("/state")
+    def state(request: Request):
+        rate(request, "finance-read")
+        verified = scope(request)
+        try:
+            if not set(request.query_params).issubset({"cursor", "limit_entities"}):
+                raise FinanceCommandError("invalid_command", "Недопустимый параметр снимка", 422)
+            cursor_values = request.query_params.getlist("cursor")
+            if len(cursor_values) > 1:
+                raise FinanceCommandError("invalid_command", "Дублирован курсор", 422)
+            cursor = cursor_values[0] if cursor_values else None
+            limit = _query_integer(request, "limit_entities", 1000, 1, 5000)
+            return _finance_response(get_finance_snapshot(
+                engine, scope=verified, cursor=cursor, limit_entities=limit
+            ))
+        except FinanceCommandError as exc:
+            return _finance_error(exc)
+        except SQLAlchemyError:
+            log.error("finance_state_read_failed")
+            return _finance_error(FinanceCommandError(
+                "service_unavailable", "Финансовый сервис недоступен", 503
+            ))
+
+    @router.get("/changes")
+    def changes(request: Request):
+        rate(request, "finance-read")
+        verified = scope(request)
+        try:
+            if not set(request.query_params).issubset({"since_revision", "limit_revisions"}):
+                raise FinanceCommandError("invalid_command", "Недопустимый параметр журнала", 422)
+            since = _query_integer(request, "since_revision", None, 0, (1 << 53) - 1)
+            limit = _query_integer(request, "limit_revisions", 50, 1, 100)
+            return _finance_response(get_finance_delta(
+                engine, scope=verified, since_revision=since, page_revisions=limit,
+            ))
+        except FinanceCommandError as exc:
+            return _finance_error(exc)
+        except SQLAlchemyError:
+            log.error("finance_delta_read_failed")
+            return _finance_error(FinanceCommandError(
+                "service_unavailable", "Финансовый сервис недоступен", 503
+            ))
+
+    @router.post("/commands")
+    async def commands(request: Request):
+        _guard_origin(request, public_origin)
+        # Do not run SQLite rate limits or blocking PostgreSQL row locks in
+        # the ASGI event loop; unrelated sessions must remain responsive.
+        await run_in_threadpool(rate, request, "finance-write")
+        verified = await run_in_threadpool(scope, request)
+        try:
+            body = await parse_v1_command(request)
+        except FinanceCommandError as exc:
+            return _finance_error(exc)
+        # The request body may be delayed by network streaming. Revalidate the
+        # real SQLite AuthStore session after parsing, in the SAME worker as
+        # the SQL command. A logout/revocation during streaming must block the
+        # write instead of using the initial (now stale) scope.
+        def submit_with_fresh_session():
+            current = scope(request)
+            if current != verified:
+                raise HTTPException(status_code=401, detail="Сеанс изменился")
+            return submit_account_command(
+                engine, scope=current, command=body,
+                if_match=request.headers.get("if-match", ""),
+                idempotency_key=request.headers.get("idempotency-key", ""),
+                allow_internal=False,  # Never enable unpublished internal CRUD.
+            )
+
+        try:
+            result = await run_in_threadpool(submit_with_fresh_session)
+            return _finance_response(result)
+        except FinanceCommandError as exc:
+            return _finance_error(exc)
+        except SQLAlchemyError:
+            # The transaction context rolls back. Do not log SQL params,
+            # raw financial amounts, private identifiers or session cookies.
+            log.error("finance_command_db_failed")
+            return _finance_error(FinanceCommandError(
+                "service_unavailable", "Операция не подтверждена сервером", 503
+            ))
+
+    # Inactive default: owner-confirmed, source-preserving personal import.
+    # Actual authenticated FH session and idempotent SQL commit are mandatory.
+    if enable_import_candidate:
+        from backend.finance_api.import_http_candidate import (
+            parse_personal_import_envelope, require_manifest_if_match,
+        )
+        from .import_manifest_candidate import stage_import_manifest_candidate
+        from .import_commit_candidate import (
+            commit_verified_legacy_import_candidate,
+            restore_original_legacy_source_candidate,
+        )
+
+        async def _import_payload(request: Request, action: str):
+            _guard_origin(request, public_origin)
+            await run_in_threadpool(rate, request, "finance-write")
+            verified = await run_in_threadpool(scope, request)
+            try:
+                payload = await parse_personal_import_envelope(request, action=action)
+            except FinanceCommandError as error:
+                return verified, None, _finance_error(error)
+            return verified, payload, None
+
+        def _fresh_import_scope(request: Request, prior: VerifiedFinanceScope):
+            current = scope(request)
+            if current != prior:
+                raise HTTPException(status_code=401, detail="Сеанс изменился")
+            return current
+
+        def _import_metadata(data: dict, status: int) -> JSONResponse:
+            return JSONResponse(
+                data, status_code=status,
+                headers={"Cache-Control":"private, no-store", "Vary":"Cookie",
+                         "X-Content-Type-Options":"nosniff"},
+            )
+
+        @router.post("/import/manifest")
+        async def stage_import_http(request: Request):
+            prior, payload, error = await _import_payload(request, "manifest")
+            if error is not None:
+                return error
+            def operation():
+                current = _fresh_import_scope(request, prior)
+                require_manifest_if_match(request, scope=current, manifest=payload["manifest"])
+                return stage_import_manifest_candidate(
+                    engine, scope=current, manifest=payload["manifest"],
+                )
+            try:
+                data = await run_in_threadpool(operation)
+                return _import_metadata(data, 200 if data["replayed"] else 202)
+            except FinanceCommandError as exc:
+                return _finance_error(exc)
+            except SQLAlchemyError:
+                log.error("finance_import_stage_db_failed")
+                return _finance_error(FinanceCommandError(
+                    "service_unavailable", "Серверный импорт недоступен", 503,
+                ))
+
+        @router.post("/import/commit")
+        async def commit_import_http(request: Request):
+            prior, payload, error = await _import_payload(request, "commit")
+            if error is not None:
+                return error
+            def operation():
+                current = _fresh_import_scope(request, prior)
+                require_manifest_if_match(request, scope=current, manifest=payload["manifest"])
+                return commit_verified_legacy_import_candidate(
+                    engine, scope=current, manifest=payload["manifest"],
+                    source_canonical_json=payload["source_canonical_json"],
+                )
+            try:
+                data = await run_in_threadpool(operation)
+                return _import_metadata(data, 200 if data["replayed"] else 201)
+            except FinanceCommandError as exc:
+                return _finance_error(exc)
+            except SQLAlchemyError:
+                log.error("finance_import_commit_db_failed")
+                return _finance_error(FinanceCommandError(
+                    "service_unavailable", "Результат импорта не подтверждён", 503,
+                ))
+
+        @router.post("/import/restore")
+        async def restore_import_http(request: Request):
+            prior, payload, error = await _import_payload(request, "restore")
+            if error is not None:
+                return error
+            def operation():
+                current = _fresh_import_scope(request, prior)
+                return restore_original_legacy_source_candidate(
+                    engine, scope=current,
+                    batch_id=payload["batch_id"], source_sha256=payload["source_sha256"],
+                )
+            try:
+                original = await run_in_threadpool(operation)
+                # No IndexedDB write or automatic replacement. Only an explicit
+                # owner action returns the verified original source over HTTPS.
+                return Response(
+                    content=original, media_type="application/json",
+                    headers={"Cache-Control":"private, no-store", "Vary":"Cookie",
+                             "X-Content-Type-Options":"nosniff",
+                             "Content-Disposition":'attachment; filename="fh-original-import.json"'},
+                )
+            except FinanceCommandError as exc:
+                return _finance_error(exc)
+            except SQLAlchemyError:
+                log.error("finance_import_restore_db_failed")
+                return _finance_error(FinanceCommandError(
+                    "service_unavailable", "Исходная копия недоступна", 503,
+                ))
+
+    app.include_router(router)
+
+    # Unpublished v2 contract candidate. No environment variable enables this:
+    # the host MUST explicitly provide both a finance engine and this opt-in.
+    # Accepted v1 routing, cookies and command whitelist remain unchanged.
+    if enable_account_v2_candidate:
+        v2 = APIRouter(prefix="/api/finance/v2", include_in_schema=False)
+
+        @v2.post("/commands")
+        async def account_v2_commands(request: Request):
+            _guard_origin(request, public_origin)
+            await run_in_threadpool(rate, request, "finance-write")
+            verified = await run_in_threadpool(scope, request)
+            try:
+                body = await parse_v2_account_command(request)
+            except FinanceCommandError as exc:
+                return _finance_error(exc)
+
+            # Recheck the actual SQLite FH session AFTER streamed request input.
+            # A login/logout/revocation between the first check and commit
+            # cannot post a transaction under a stale principal.
+            def submit_with_fresh_session():
+                current = scope(request)
+                if current != verified:
+                    raise HTTPException(status_code=401, detail="Сеанс изменился")
+                return submit_account_v2_candidate(
+                    engine, scope=current, command=body,
+                    if_match=request.headers.get("if-match", ""),
+                    idempotency_key=request.headers.get("idempotency-key", ""),
+                )
+
+            try:
+                result = await run_in_threadpool(submit_with_fresh_session)
+                return _finance_response(result)
+            except FinanceCommandError as exc:
+                return _finance_error(exc)
+            except SQLAlchemyError:
+                log.error("finance_v2_candidate_db_failed")
+                return _finance_error(FinanceCommandError(
+                    "service_unavailable", "Операция не подтверждена сервером", 503,
+                ))
+
+        app.include_router(v2)

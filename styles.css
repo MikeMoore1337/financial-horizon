@@ -76,6 +76,10 @@ button,input,select{font:inherit}button{cursor:pointer}svg{width:20px;height:20p
 .toolbar-logout[hidden],#account-entry[hidden],#account-session[hidden]{display:none}
 @media(max-width:760px){.toolbar-logout{width:44px;min-width:44px;padding:0;border-radius:13px}.toolbar-logout-label{display:none}}
 .settings-grid .setting-actions [hidden]{display:none}
+/* The optional import consent stays hidden until a verified zero account is found. */
+#cloud-import-preserve-row[hidden]{display:none}
+#cloud-import-preserve-zero-account,#cloud-import-final-consent{display:inline-block;width:auto;min-width:0;height:auto;padding:0;vertical-align:middle}
+
 
 /* Account management lives in the toolbar; vendor-provided Lucide user-round icon. */
 .toolbar-account{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;border-radius:13px}
@@ -121,3 +125,12 @@ body[data-theme=light] .bottom-nav button:not(.active){color:#41536c}
 /* #44 Linux Chromium: intrinsic loan stat grid widths must not overflow 320px. */
 .loan-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
 .loan-stats>div{min-width:0;overflow-wrap:anywhere}
+
+/* #136: existing obligation editor - payment methods only. */
+#payment-method-form{display:grid;gap:12px}
+#payment-method-form textarea{display:block;width:100%;min-width:0;padding:12px 13px;border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink);font:inherit;resize:vertical}
+#payment-method-form input[type=checkbox]{display:inline-block;width:auto;height:auto;min-width:0;padding:0;vertical-align:middle}
+#payment-methods-dialog .archive-row>div:first-child{overflow-wrap:anywhere}
+
+/* The server accounts view has its own New Account action, not the local planner Add. */
+#top-add[hidden]{display:none}

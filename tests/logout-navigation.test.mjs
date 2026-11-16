@@ -28,6 +28,8 @@ function invoke({email='test@example.com',userId=email?'a'.repeat(32):null,logou
   activeUserId:'a'.repeat(32),
   authBroadcast:null,
   restoreFile:{synthetic:'private'},pendingExcelImport:{synthetic:'private'},
+   cloudImportFile:{synthetic:'backup'},pendingCloudImport:{synthetic:'plaintext'},
+   cloudImportController:{abort:()=>events.push('import-aborted')},
   scheduleLoanId:'private-loan',lastDialogActivator:{synthetic:'private'},
   revokeStateScope:()=>events.push('scope-revoked'),
   document:{querySelectorAll(selector){
@@ -60,6 +62,7 @@ test('successful logout returns to the login page after server confirmation',asy
  assert.ok(ui.events.indexOf('logout-request')<ui.events.indexOf('redirect:./account.html'));
  assert.ok(ui.events.indexOf('react-unmount')>ui.events.indexOf('logout-request'));
  assert.ok(ui.events.includes('scope-revoked'));
+  assert.ok(ui.events.includes('import-aborted'));
  assert.ok(ui.events.indexOf('scope-revoked')<ui.events.indexOf('ledger-cleared'));
  assert.ok(ui.events.includes('dialog-closed'));
  assert.ok(ui.events.includes('dialog-cleared'));
