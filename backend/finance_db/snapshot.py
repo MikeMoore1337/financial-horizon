@@ -35,6 +35,8 @@ _ENTITY_FIELDS = {
     )),
     "reserves": ("reserve", (
         "title", "target_minor", "target_on", "archived_at", "allocated_minor",
+        "obligation_id", "account_id", "opened_on", "first_due_on",
+        "period_months", "due_day", "contribution_mode", "fixed_monthly_minor",
     )),
     "ledger_transactions": ("transaction", (
         "kind", "occurred_on", "note", "posted_at", "reversed_transaction_id",
@@ -62,6 +64,8 @@ _ENTITY_QUERIES = {
     ),
     "reserves": text(
         "SELECT r.id,r.entity_revision,r.title,r.target_minor,r.target_on,r.archived_at, "
+        "r.obligation_id,r.account_id,r.opened_on,r.first_due_on,r.period_months,"
+        "r.due_day,r.contribution_mode,r.fixed_monthly_minor, "
         "COALESCE((SELECT SUM(a.delta_minor) FROM reserve_allocations a "
         "WHERE a.profile_id=r.profile_id AND a.reserve_id=r.id),0) AS allocated_minor "
         "FROM reserves r WHERE r.profile_id=:p AND r.id>:after ORDER BY r.id LIMIT :n"
