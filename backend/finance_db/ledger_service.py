@@ -568,6 +568,43 @@ def _mandatory_reserve_plan(payload: Mapping[str, Any], opened_on: date) -> tupl
     return first_due, period, due_day, mode, fixed
 
 
+
+def _reserve_append_event(
+    session: Session, profile_id: UUID, reserve_id: UUID, *,
+    kind: str, on: date, cycle: int, revision: int,
+    amount: int | None = None, reserved_used: int | None = None,
+    target_minor: int | None = None, slot_on: date | None = None,
+    target_event_id: UUID | None = None, allocation_id: UUID | None = None,
+    transaction_id: UUID | None = None,
+) -> UUID:
+    """One immutable, bounded, profile-revision-linked journal event per command."""
+    last = session.execute(text("""
+        SELECT occurred_on FROM reserve_events
+        WHERE profile_id=:p AND reserve_id=:r
+        ORDER BY revision DESC LIMIT 1
+    """), {"p": profile_id, "r": reserve_id}).scalar_one_or_none()
+    if last is not None and on < last:
+        raise FinanceCommandError(
+            "semantic_conflict", "Дата события раньше последней операции резерва", 409,
+        )
+    event_id = uuid4()
+    session.execute(text("""
+        INSERT INTO reserve_events
+          (profile_id,id,reserve_id,kind,occurred_on,cycle_number,revision,
+           amount_minor,reserved_used_minor,target_minor,slot_on,
+           target_event_id,allocation_id,transaction_id)
+        VALUES (:p,:id,:reserve,:kind,:date,:cycle,:revision,
+                :amount,:used,:target,:slot,:void,:allocation,:transaction)
+    """), {
+        "p": profile_id, "id": event_id, "reserve": reserve_id,
+        "kind": kind, "date": on, "cycle": cycle, "revision": revision,
+        "amount": amount, "used": reserved_used, "target": target_minor,
+        "slot": slot_on, "void": target_event_id,
+        "allocation": allocation_id, "transaction": transaction_id,
+    })
+    return event_id
+
+
 def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any],
            versions: Mapping[str, int], new_revision: int) -> dict[str, Any]:
     p = scope.profile_id
@@ -1043,14 +1080,14 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             INSERT INTO reserves
                 (profile_id,id,title,target_minor,target_on,obligation_id,account_id,
                  opened_on,first_due_on,period_months,due_day,contribution_mode,
-                 fixed_monthly_minor)
+                 fixed_monthly_minor,opening_reserved_minor)
             VALUES (:p,:id,:title,:target,:due,:obligation,:account,
-                    :opened,:due,:period,:day,:mode,:fixed)
+                    :opened,:due,:period,:day,:mode,:fixed,:opening)
         """), {
             "p": p, "id": target, "title": name.strip(), "target": amount,
             "due": due, "obligation": obligation_id, "account": account_id,
             "opened": opened, "period": period, "day": due_day,
-            "mode": mode, "fixed": fixed,
+            "mode": mode, "fixed": fixed, "opening": opening,
         })
         if opening:
             session.execute(text("""
@@ -1075,11 +1112,12 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         allowed = {
             "reserve_id", "title", "target_minor", "first_due_on",
             "period_months", "due_day", "contribution_mode", "fixed_monthly_minor",
+            "occurred_on",
         }
-        _shape(payload, allowed, allowed - {"fixed_monthly_minor"})
+        _shape(payload, allowed, allowed - {"fixed_monthly_minor", "occurred_on"})
         target = _uuid(payload["reserve_id"])
         old = session.execute(text("""
-            SELECT entity_revision,opened_on,archived_at FROM reserves
+            SELECT entity_revision,opened_on,archived_at,target_minor,cycle_number FROM reserves
             WHERE profile_id=:p AND id=:id FOR UPDATE
         """), {"p": p, "id": target}).mappings().one_or_none()
         if old is None or old["archived_at"] is not None or old["opened_on"] is None:
@@ -1096,6 +1134,14 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         """), {"p": p, "id": target}).scalar_one())
         if allocated < 0:
             raise FinanceCommandError("service_unavailable", "Отрицательный остаток резерва", 503)
+        if old["target_minor"] != amount:
+            changed_on = _date(payload["occurred_on"]) if "occurred_on" in payload else datetime.now(timezone.utc).date()
+            if changed_on < old["opened_on"]:
+                raise _reject("Изменение цели раньше открытия резерва")
+            _reserve_append_event(
+                session, p, target, kind="target_change", on=changed_on,
+                cycle=int(old["cycle_number"]), revision=new_revision, target_minor=amount,
+            )
         session.execute(text("""
             UPDATE reserves SET title=:title,target_minor=:amount,target_on=:due,
                 first_due_on=:due,period_months=:period,due_day=:day,
@@ -1133,7 +1179,7 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         change_payload = {"entity": _reserve_sync_entity(session, p, target)}
     elif action == "reserve.allocate":
         required = {"reserve_id", "account_id", "delta_minor"}
-        _shape(payload, required, required)
+        _shape(payload, required | {"occurred_on"}, required)
         target = _uuid(payload["reserve_id"])
         account_id = _uuid(payload["account_id"])
         delta = _integer(payload["delta_minor"], -MAX_MINOR, MAX_MINOR)
@@ -1141,7 +1187,8 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             raise _reject("Нулевое изменение резерва запрещено")
         account = _account(session, p, account_id, versions)
         reserve = session.execute(text("""
-            SELECT entity_revision,target_minor,archived_at,account_id,period_months
+            SELECT entity_revision,target_minor,archived_at,account_id,period_months,
+                   opened_on,cycle_number
             FROM reserves WHERE profile_id=:p AND id=:id FOR UPDATE
         """), {"p": p, "id": target}).mappings().one_or_none()
         if reserve is None or reserve["archived_at"] is not None:
@@ -1185,6 +1232,16 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             "p": p, "id": allocation_id, "reserve": target,
             "account": account_id, "delta": delta,
         })
+        if reserve["period_months"] is not None:
+            recorded_on = _date(payload["occurred_on"]) if "occurred_on" in payload else datetime.now(timezone.utc).date()
+            if recorded_on < reserve["opened_on"]:
+                raise _reject("Пополнение раньше открытия резерва")
+            _reserve_append_event(
+                session, p, target,
+                kind="contribution" if delta > 0 else "release",
+                on=recorded_on, cycle=int(reserve["cycle_number"]), revision=new_revision,
+                amount=abs(delta), allocation_id=allocation_id,
+            )
         session.execute(text("""
             UPDATE reserves SET entity_revision=entity_revision+1, updated_at=now()
             WHERE profile_id=:p AND id=:id

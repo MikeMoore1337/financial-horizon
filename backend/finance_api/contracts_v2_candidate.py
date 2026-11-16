@@ -193,6 +193,12 @@ class ReserveCreateV2(ReservePlanFields):
 
 class ReserveUpdateV2(ReservePlanFields):
     reserve_id: str = Field(pattern=UUID_PATTERN)
+    occurred_on: str | None = None
+
+    @field_validator("occurred_on")
+    @classmethod
+    def validate_change_date(cls, value: str | None) -> str | None:
+        return _date(value) if value is not None else None
 
 
 class ReserveArchiveV2(Wire):
@@ -203,6 +209,12 @@ class ReserveAllocationV2(Wire):
     reserve_id: str = Field(pattern=UUID_PATTERN)
     account_id: str = Field(pattern=UUID_PATTERN)
     delta_minor: StrictInt = Field(ge=-MAX_MINOR, le=MAX_MINOR)
+    occurred_on: str | None = None
+
+    @field_validator("occurred_on")
+    @classmethod
+    def validate_allocation_date(cls, value: str | None) -> str | None:
+        return _date(value) if value is not None else None
 
     @field_validator("delta_minor")
     @classmethod
