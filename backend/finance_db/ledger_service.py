@@ -873,7 +873,7 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         release = session.execute(text("""
             SELECT id,reserve_id,account_id,delta_minor FROM reserve_allocations
             WHERE profile_id=:p AND linked_transaction_id=:tx
-              AND reverses_allocation_id IS NULL FOR UPDATE
+              AND reverses_allocation_id IS NULL
         """), {"p": p, "tx": original_id}).mappings().one_or_none()
         release_plan = None
         if release is not None:
