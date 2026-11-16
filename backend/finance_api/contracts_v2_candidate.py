@@ -106,6 +106,16 @@ class SettlementPaymentRecordV2(Wire):
     amount_minor: StrictInt = Field(ge=1, le=MAX_MINOR)
     paid_on: str
     occurrence_on: str
+    reserve_id: str | None = Field(default=None, pattern=UUID_PATTERN)
+    reserved_used_minor: StrictInt | None = Field(default=None, ge=1, le=MAX_MINOR)
+
+    @model_validator(mode="after")
+    def reserve_link(self):
+        if (self.reserve_id is None) != (self.reserved_used_minor is None):
+            raise ValueError("Linked reserve and amount must be supplied together")
+        if self.reserved_used_minor is not None and self.reserved_used_minor > self.amount_minor:
+            raise ValueError("Reserved amount exceeds paid amount")
+        return self
 
     @field_validator("paid_on", "occurrence_on")
     @classmethod
@@ -131,6 +141,7 @@ class PaymentVoidV2(Wire):
     fact_id: str = Field(pattern=UUID_PATTERN)
     account_id: str = Field(pattern=UUID_PATTERN)
     reason: str = Field(min_length=1, max_length=500)
+    reserve_id: str | None = Field(default=None, pattern=UUID_PATTERN)
 
     @field_validator("reason")
     @classmethod
@@ -278,10 +289,14 @@ def validate_v2_account_candidate(
         required = {payload.reserve_id}
     elif candidate.action == "settlement.payment.record":
         required = {payload.account_id, payload.obligation_id}
+        if payload.reserve_id is not None:
+            required.add(payload.reserve_id)
     elif candidate.action == "loan.payment.record":
         required = {payload.account_id, payload.loan_id}
     elif candidate.action.endswith(".payment.void"):
         required = {payload.account_id, payload.transaction_id, payload.fact_id}
+        if payload.reserve_id is not None:
+            required.add(payload.reserve_id)
     else:
         required = {payload.account_id}
     if set(candidate.expected_entity_revisions) != required:
