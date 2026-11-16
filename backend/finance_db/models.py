@@ -94,10 +94,30 @@ class Loan(ProfileEntity, Revisable, Base):
 
 class Reserve(ProfileEntity, Revisable, Base):
     __tablename__ = "reserves"
-    __table_args__ = (profile_fk(),)
+    __table_args__ = (
+        profile_fk(),
+        ForeignKeyConstraint(
+            ["profile_id", "obligation_id"],
+            ["finance.obligations.profile_id", "finance.obligations.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["profile_id", "account_id"],
+            ["finance.accounts.profile_id", "finance.accounts.id"],
+            ondelete="RESTRICT",
+        ),
+    )
     title: Mapped[str] = mapped_column(String(160))
     target_minor: Mapped[int] = mapped_column(BigInteger)
     target_on: Mapped[date | None] = mapped_column(Date)
+    obligation_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
+    account_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
+    opened_on: Mapped[date | None] = mapped_column(Date)
+    first_due_on: Mapped[date | None] = mapped_column(Date)
+    period_months: Mapped[int | None] = mapped_column(SmallInteger)
+    due_day: Mapped[int | None] = mapped_column(SmallInteger)
+    contribution_mode: Mapped[str | None] = mapped_column(String(8))
+    fixed_monthly_minor: Mapped[int | None] = mapped_column(BigInteger)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
