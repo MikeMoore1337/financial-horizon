@@ -605,6 +605,23 @@ def _reserve_append_event(
     return event_id
 
 
+
+def _reserve_paid_this_cycle(
+    session: Session, profile_id: UUID, reserve_id: UUID, cycle: int,
+) -> int:
+    """Sum actual, not-voided settlement facts in the current reserve cycle."""
+    total = session.execute(text("""
+        SELECT COALESCE(SUM(e.amount_minor),0) FROM reserve_events e
+        WHERE e.profile_id=:p AND e.reserve_id=:r AND e.cycle_number=:cycle
+          AND e.kind='payment'
+          AND NOT EXISTS (
+            SELECT 1 FROM reserve_events v
+            WHERE v.profile_id=e.profile_id AND v.target_event_id=e.id AND v.kind='void'
+          )
+    """), {"p": profile_id, "r": reserve_id, "cycle": cycle}).scalar_one()
+    return _safe_balance(total)
+
+
 def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any],
            versions: Mapping[str, int], new_revision: int) -> dict[str, Any]:
     p = scope.profile_id
@@ -838,7 +855,8 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             reserve_id = _uuid(payload["reserve_id"])
             used_minor = _integer(payload["reserved_used_minor"], 1, amount)
             plan = session.execute(text("""
-                SELECT entity_revision,obligation_id,account_id,archived_at,period_months
+                SELECT entity_revision,obligation_id,account_id,archived_at,
+                       period_months,opened_on,cycle_number,target_minor
                 FROM reserves WHERE profile_id=:p AND id=:id FOR UPDATE
             """), {"p": p, "id": reserve_id}).mappings().one_or_none()
             if (plan is None or plan["archived_at"] is not None
@@ -846,6 +864,13 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
                 or plan["obligation_id"] != fact_source or plan["account_id"] != acc):
                 raise FinanceCommandError("semantic_conflict", "Резерв не связан с этим платежом", 409)
             _require_revision(versions, reserve_id, plan["entity_revision"])
+            if paid_on < plan["opened_on"]:
+                raise _reject("Подтверждённая оплата раньше открытия накопления")
+            already_paid = _reserve_paid_this_cycle(session, p, reserve_id, int(plan["cycle_number"]))
+            if already_paid + amount > int(plan["target_minor"]):
+                raise FinanceCommandError(
+                    "semantic_conflict", "Оплата превышает остаток обязательства в цикле", 409,
+                )
             available = _safe_balance(session.execute(text("""
                 SELECT COALESCE(SUM(delta_minor),0) FROM reserve_allocations
                 WHERE profile_id=:p AND reserve_id=:reserve AND account_id=:account
@@ -865,7 +890,10 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
                 UPDATE reserves SET entity_revision=entity_revision+1,updated_at=now()
                 WHERE profile_id=:p AND id=:id
             """), {"p": p, "id": reserve_id})
-            reserve_payment = (reserve_id, int(plan["entity_revision"]) + 1, used_minor)
+            reserve_payment = (
+                reserve_id, int(plan["entity_revision"]) + 1, used_minor,
+                int(plan["cycle_number"]),
+            )
         _post(session, p, target, "payment", scope.user_id, paid_on,
               [(acc, signed)])
         # Both fact types have their own profile-scoped unique constraints;
@@ -889,8 +917,14 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         }
         extra_changes.append(("upsert", fact_id, 1, fact_payload))
         if reserve_payment is not None:
-            res_id, res_rev, released = reserve_payment
+            res_id, res_rev, released, cycle = reserve_payment
+            payment_event_id = _reserve_append_event(
+                session, p, res_id, kind="payment", on=paid_on,
+                cycle=cycle, revision=new_revision, amount=amount,
+                reserved_used=released, transaction_id=target,
+            )
             change_payload["reserved_used_minor"] = released
+            change_payload["reserve_event_id"] = str(payment_event_id)
             extra_changes.append((
                 "upsert", res_id, res_rev,
                 {"entity": _reserve_sync_entity(session, p, res_id)},
