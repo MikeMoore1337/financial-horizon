@@ -545,6 +545,69 @@ def test_paid_cycle_close_rolls_original_date_forward_without_posting_cash(finan
     assert exc.value.code == "semantic_conflict"
     assert entities(engine, scope)[reserve]["data"]["cycle_number"] == 2
 
+    reopened = submit(engine, scope, "reserve.cycle.void", {
+        "reserve_id": reserve, "occurred_on": "2027-11-17",
+        "reason": "Ошибочно закрытый цикл",
+    }, [reserve])
+    assert reopened.status == 201
+    restored = entities(engine, scope)[reserve]["data"]
+    assert restored["cycle_number"] == 1
+    assert restored["target_on"] == "2027-11-16"
+    assert [e["kind"] for e in restored["event_log"]] == ["payment", "cycle_close", "void"]
+    assert restored["event_log"][-1]["target_event_id"] == restored["event_log"][1]["id"]
+    assert entities(engine, scope)[account]["data"] == cash_before_close
+    with pytest.raises(FinanceCommandError) as exc:
+        submit(engine, scope, "reserve.cycle.void", {
+            "reserve_id": reserve, "occurred_on": "2027-11-18",
+            "reason": "Повторная отмена",
+        }, [reserve])
+    assert exc.value.code == "semantic_conflict"
+
+    fact_id = next(e["id"] for e in snapshot(engine, scope).body["entities"]
+                   if e["kind"] == "settlement")
+    payment_void = submit(engine, scope, "settlement.payment.void", {
+        "transaction_id": payment["transaction_id"], "fact_id": fact_id,
+        "account_id": account, "reserve_id": reserve,
+        "reason": "После исправления ошибочно закрытого цикла",
+    }, [payment["transaction_id"], fact_id, account, reserve])
+    assert payment_void.status == 201
+    after = entities(engine, scope)
+    assert after[reserve]["data"]["allocated_minor"] == 6000
+    assert after[reserve]["data"]["cycle_number"] == 1
+    assert after[account]["data"]["balance_minor"] == 10000
+    assert after[account]["data"]["reserved_minor"] == 6000
+    assert after[account]["data"]["available_minor"] == 4000
+
+
+def test_cycle_undo_rejects_newer_cycle_contributions(financial_context):
+    engine, scope, account, obligation = financial_context
+    reserve_data = reserve_input(account, obligation, opening=0)
+    reserve = reserve_data["id"]
+    submit(engine, scope, "reserve.create", reserve_data, [account, obligation])
+    assert submit(engine, scope, "settlement.payment.record", {
+        "account_id": account, "obligation_id": obligation,
+        "amount_minor": 9000, "occurrence_on": "2027-11-16",
+        "paid_on": "2027-11-16", "reserve_id": reserve,
+        "reserved_used_minor": 0,
+    }, [account, obligation, reserve]).status == 201
+    assert submit(engine, scope, "reserve.cycle.close", {
+        "reserve_id": reserve, "occurred_on": "2027-11-16",
+    }, [reserve]).status == 201
+    assert submit(engine, scope, "reserve.allocate", {
+        "reserve_id": reserve, "account_id": account,
+        "delta_minor": 500, "occurred_on": "2027-12-01",
+    }, [reserve, account]).status == 201
+    before = snapshot(engine, scope)
+    with pytest.raises(FinanceCommandError) as exc:
+        submit(engine, scope, "reserve.cycle.void", {
+            "reserve_id": reserve, "occurred_on": "2027-12-02",
+            "reason": "Нельзя отменить цикл с новыми операциями",
+        }, [reserve])
+    assert exc.value.code == "semantic_conflict"
+    assert snapshot(engine, scope).body["revision"] == before.body["revision"]
+    assert entities(engine, scope)[reserve]["data"]["cycle_number"] == 2
+    assert entities(engine, scope)[reserve]["data"]["allocated_minor"] == 500
+
 
 def test_skipped_short_month_anchor_validated(financial_context):
     engine, scope, account, obligation = financial_context
