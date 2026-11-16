@@ -853,8 +853,6 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         due, period, due_day, mode, fixed = _mandatory_reserve_plan(payload, opened)
         amount = _integer(payload["target_minor"], 1, MAX_MINOR)
         opening = _integer(payload["opening_reserved_minor"], 0, MAX_MINOR)
-        if opening > amount:
-            raise _reject("Первоначальный резерв превышает цель")
         account = _account(session, p, account_id, versions)
         obligation = session.execute(text("""
             SELECT entity_revision,direction,deleted_at FROM obligations
@@ -928,8 +926,8 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             SELECT COALESCE(SUM(delta_minor),0) FROM reserve_allocations
             WHERE profile_id=:p AND reserve_id=:id
         """), {"p": p, "id": target}).scalar_one())
-        if allocated < 0 or allocated > amount:
-            raise FinanceCommandError("semantic_conflict", "Новая цель меньше выделенных средств", 409)
+        if allocated < 0:
+            raise FinanceCommandError("service_unavailable", "Отрицательный остаток резерва", 503)
         session.execute(text("""
             UPDATE reserves SET title=:title,target_minor=:amount,target_on=:due,
                 first_due_on=:due,period_months=:period,due_day=:day,
@@ -975,12 +973,14 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             raise _reject("Нулевое изменение резерва запрещено")
         account = _account(session, p, account_id, versions)
         reserve = session.execute(text("""
-            SELECT entity_revision,target_minor,archived_at FROM reserves
-            WHERE profile_id=:p AND id=:id FOR UPDATE
+            SELECT entity_revision,target_minor,archived_at,account_id,period_months
+            FROM reserves WHERE profile_id=:p AND id=:id FOR UPDATE
         """), {"p": p, "id": target}).mappings().one_or_none()
         if reserve is None or reserve["archived_at"] is not None:
             raise FinanceCommandError("semantic_conflict", "Резерв недоступен", 409)
         _require_revision(versions, target, reserve["entity_revision"])
+        if reserve["account_id"] is not None and account_id != reserve["account_id"]:
+            raise FinanceCommandError("semantic_conflict", "Счёт не принадлежит этому резерву", 409)
         pair = _safe_balance(session.execute(text("""
             SELECT COALESCE(SUM(delta_minor),0) FROM reserve_allocations
             WHERE profile_id=:p AND reserve_id=:reserve AND account_id=:account
@@ -1004,7 +1004,8 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         if pair + delta < 0:
             raise FinanceCommandError("semantic_conflict", "Недостаточно средств в указанном резерве", 409)
         if delta > 0 and (
-            reserve_total + delta > int(reserve["target_minor"])
+            (reserve["period_months"] is None
+             and reserve_total + delta > int(reserve["target_minor"]))
             or account_reserved + delta > account_balance
         ):
             raise FinanceCommandError("semantic_conflict", "Недостаточно доступных средств или превышена цель", 409)
