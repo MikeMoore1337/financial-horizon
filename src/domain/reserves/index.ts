@@ -37,6 +37,12 @@ export interface ReserveContribution extends BaseEvent {
   readonly amountCents: number;
 }
 
+/** Release an allocation without a bank posting; not an expense. */
+export interface ReserveRelease extends BaseEvent {
+  readonly kind: 'release';
+  readonly amountCents: number;
+}
+
 export interface ReservePayment extends BaseEvent {
   readonly kind: 'payment';
   /** Full amount actually paid. Account transaction must be posted once in #33. */
@@ -67,6 +73,7 @@ export interface ReserveVoid extends BaseEvent {
 
 export type ReserveEvent =
   | ReserveContribution
+  | ReserveRelease
   | ReservePayment
   | ReserveTargetChange
   | ReserveSkippedContribution
@@ -284,6 +291,9 @@ export function calculateReserve(
       case 'contribution':
         money(event.amountCents, 'Пополнение', true);
         break;
+      case 'release':
+        money(event.amountCents, 'Освобождение резерва', true);
+        break;
       case 'payment':
         money(event.amountCents, 'Оплата обязательства', true);
         money(event.reservedUsedCents, 'Использовано из резерва');
@@ -336,6 +346,12 @@ export function calculateReserve(
       case 'contribution':
         reservedCents = plus(reservedCents, event.amountCents);
         totalContributedCents = plus(totalContributedCents, event.amountCents);
+        break;
+      case 'release':
+        if (event.amountCents > reservedCents) {
+          throw new RangeError('Нельзя освободить больше зарезервированных средств, чем имеется');
+        }
+        reservedCents -= event.amountCents;
         break;
       case 'payment':
         if (event.reservedUsedCents > reservedCents) {
