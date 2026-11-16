@@ -1,5 +1,5 @@
 import {test,expect} from '@playwright/test';
-import {observe,registerViaUi,addEntry,currentUser} from './helpers.mjs';
+import {observe,addEntry,currentUser} from './helpers.mjs';
 
 // Exercises the REAL unbundled compatibility app served to old installed PWAs,
 // native Chromium/WebKit, real local auth and native IndexedDB on synthetic data.
@@ -8,8 +8,12 @@ test('legacy PWA clears finance and dialogs before redirecting on cross-tab logo
  try{
   expect((await request.post('/__e2e__/sw-version/legacy')).ok()).toBe(true);
   const watcher=await observe(context,page);
-  const email='e2e-legacy-scope-'+test.info().project.name+'@example.invalid';
-  await registerViaUi(page,request,email);
+  // This test checks revocation, not registration. Reuse the documented
+  // synthetic-session fixture so the shared public sign-up quota stays intact.
+  const session = await context.request.post('/__e2e__/personal-session');
+  expect(session.status()).toBe(200);
+  await page.goto('/');
+  await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
   const identity=await currentUser(page);
   expect(identity?.id).toMatch(/^[a-f0-9]{32}$/);
   await addEntry(page,'PRIVATE_LEGACY_CROSS_TAB',{amount:'129.99'});
