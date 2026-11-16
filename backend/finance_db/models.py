@@ -111,6 +111,7 @@ class Reserve(ProfileEntity, Revisable, Base):
     target_minor: Mapped[int] = mapped_column(BigInteger)
     target_on: Mapped[date | None] = mapped_column(Date)
     opening_reserved_minor: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
+    opening_target_minor: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
     cycle_number: Mapped[int] = mapped_column(Integer, server_default=text("1"))
     obligation_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
     account_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))

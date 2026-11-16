@@ -162,6 +162,7 @@ def test_update_allocate_release_and_archive_keep_history(financial_context):
     state = entities(engine, scope)
     assert state[rid["id"]]["data"]["archived_at"] is not None
     assert state[rid["id"]]["data"]["fixed_monthly_minor"] == 750
+    assert state[rid["id"]]["data"]["opening_target_minor"] == 9000
     assert state[account_id]["data"]["balance_minor"] == 10_000
     assert state[account_id]["data"]["reserved_minor"] == 0
     with finance_transaction(engine, verified_user_id=scope.user_id,
@@ -395,6 +396,7 @@ def test_reserve_event_undo_and_skipped_installment(financial_context):
     assert create.status == 201
     original = entities(engine, scope)[reserve]["data"]
     assert original["opening_reserved_minor"] == 3000
+    assert original["opening_target_minor"] == 9000
     assert original["cycle_number"] == 1
     assert original["event_log"] == []
 

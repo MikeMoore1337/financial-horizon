@@ -424,7 +424,7 @@ def _reserve_sync_entity(session: Session, profile_id: UUID, reserve_id: UUID) -
     """Full server-owned reserve image including the committed allocation total."""
     row = session.execute(text("""
         SELECT r.id,r.entity_revision,r.title,r.target_minor,r.target_on,r.archived_at,
-               r.opening_reserved_minor,r.cycle_number,
+               r.opening_reserved_minor,r.opening_target_minor,r.cycle_number,
                r.obligation_id,r.account_id,r.opened_on,r.first_due_on,
                r.period_months,r.due_day,r.contribution_mode,r.fixed_monthly_minor,
           COALESCE((SELECT SUM(a.delta_minor) FROM reserve_allocations a
@@ -437,6 +437,7 @@ def _reserve_sync_entity(session: Session, profile_id: UUID, reserve_id: UUID) -
         "data": {
             "title": row["title"], "target_minor": int(row["target_minor"]),
             "opening_reserved_minor": int(row["opening_reserved_minor"]),
+            "opening_target_minor": int(row["opening_target_minor"]),
             "cycle_number": int(row["cycle_number"]),
             "target_on": row["target_on"].isoformat() if row["target_on"] else None,
             "obligation_id": str(row["obligation_id"]) if row["obligation_id"] else None,
@@ -1159,9 +1160,9 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             INSERT INTO reserves
                 (profile_id,id,title,target_minor,target_on,obligation_id,account_id,
                  opened_on,first_due_on,period_months,due_day,contribution_mode,
-                 fixed_monthly_minor,opening_reserved_minor)
+                 fixed_monthly_minor,opening_reserved_minor,opening_target_minor)
             VALUES (:p,:id,:title,:target,:due,:obligation,:account,
-                    :opened,:due,:period,:day,:mode,:fixed,:opening)
+                    :opened,:due,:period,:day,:mode,:fixed,:opening,:target)
         """), {
             "p": p, "id": target, "title": name.strip(), "target": amount,
             "due": due, "obligation": obligation_id, "account": account_id,
@@ -1197,7 +1198,8 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         target = _uuid(payload["reserve_id"])
         old = session.execute(text("""
             SELECT entity_revision,opened_on,archived_at,target_minor,cycle_number,
-                   first_due_on,period_months,due_day FROM reserves
+                   first_due_on,period_months,due_day,
+                   contribution_mode,fixed_monthly_minor FROM reserves
             WHERE profile_id=:p AND id=:id FOR UPDATE
         """), {"p": p, "id": target}).mappings().one_or_none()
         if old is None or old["archived_at"] is not None or old["opened_on"] is None:
@@ -1207,14 +1209,25 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         if not isinstance(name, str) or not name.strip() or len(name) > 160:
             raise _reject("Некорректное название резерва")
         due, period, due_day, mode, fixed = _mandatory_reserve_plan(payload, old["opened_on"])
-        if int(old["cycle_number"]) != 1 and (
+        changed_schedule = (
             due != old["first_due_on"] or period != old["period_months"]
             or due_day != old["due_day"]
-        ):
-            raise FinanceCommandError(
-                "semantic_conflict", "Период и день оплаты нельзя менять после закрытого цикла", 409,
-            )
+            or mode != old["contribution_mode"] or fixed != old["fixed_monthly_minor"]
+        )
+        if changed_schedule:
+            has_events = session.execute(text("""
+                SELECT 1 FROM reserve_events WHERE profile_id=:p AND reserve_id=:reserve
+                LIMIT 1
+            """), {"p": p, "reserve": target}).first()
+            if has_events or int(old["cycle_number"]) != 1:
+                raise FinanceCommandError(
+                    "semantic_conflict", "График нельзя менять после первых событий накопления", 409,
+                )
         amount = _integer(payload["target_minor"], 1, MAX_MINOR)
+        if amount < _reserve_paid_this_cycle(session, p, target, int(old["cycle_number"])):
+            raise FinanceCommandError(
+                "semantic_conflict", "Цель ниже уже оплаченной суммы в цикле", 409,
+            )
         allocated = _safe_balance(session.execute(text("""
             SELECT COALESCE(SUM(delta_minor),0) FROM reserve_allocations
             WHERE profile_id=:p AND reserve_id=:id
@@ -1365,7 +1378,7 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             raise FinanceCommandError("semantic_conflict", "Резерв недоступен", 409)
         _require_revision(versions, target, plan["entity_revision"])
         original = session.execute(text("""
-            SELECT id,kind,amount_minor,cycle_number FROM reserve_events
+            SELECT id,kind,amount_minor,cycle_number,revision FROM reserve_events
             WHERE profile_id=:p AND reserve_id=:reserve AND id=:event
         """), {"p": p, "reserve": target, "event": original_id}).mappings().one_or_none()
         if original is None or original["kind"] not in ("skip", "contribution", "release"):
@@ -1377,6 +1390,22 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         """), {"p": p, "event": original_id}).first()
         if already:
             raise FinanceCommandError("semantic_conflict", "Действие уже отменено", 409)
+        if original["kind"] in ("contribution", "release"):
+            following_money = session.execute(text("""
+                SELECT 1 FROM reserve_events e
+                WHERE e.profile_id=:p AND e.reserve_id=:reserve
+                  AND e.revision>:revision AND e.kind IN ('contribution','release','payment')
+                  AND NOT EXISTS (
+                    SELECT 1 FROM reserve_events v
+                    WHERE v.profile_id=e.profile_id AND v.target_event_id=e.id
+                      AND v.kind='void'
+                  )
+                LIMIT 1
+            """), {"p": p, "reserve": target, "revision": original["revision"]}).first()
+            if following_money:
+                raise FinanceCommandError(
+                    "semantic_conflict", "Сначала отмените более поздние денежные движения", 409,
+                )
         compensation_id = None
         if original["kind"] != "skip":
             correction = (

@@ -21,6 +21,8 @@ def upgrade() -> None:
         ALTER TABLE finance.reserves
           ADD COLUMN opening_reserved_minor bigint NOT NULL DEFAULT 0
             CHECK (opening_reserved_minor BETWEEN 0 AND 1000000000000),
+          ADD COLUMN opening_target_minor bigint NOT NULL DEFAULT 0
+            CHECK (opening_target_minor BETWEEN 0 AND 1000000000000),
           ADD COLUMN cycle_number integer NOT NULL DEFAULT 1
             CHECK (cycle_number BETWEEN 1 AND 10000)
     """)
