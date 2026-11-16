@@ -171,18 +171,27 @@ def test_no_overfunding_duplicates_or_unowned_accounts(financial_context):
     engine, scope, account_id, obligation_id = financial_context
     payload = reserve_input(account_id, obligation_id)
     assert submit(engine, scope, "reserve.create", payload, [account_id, obligation_id]).status == 201
-    for invalid in [
-        {**reserve_input(account_id, obligation_id), "id": str(uuid4())},
-        {**reserve_input(account_id, obligation_id), "id": str(uuid4()), "account_id": str(uuid4())},
-    ]:
-        required = [invalid["account_id"], obligation_id]
-        try:
-            submit(engine, scope, "reserve.create", invalid, required)
-        except (FinanceCommandError, KeyError) as exc:
-            # A foreign account cannot carry a real entity revision from this tenant.
-            assert isinstance(exc, KeyError) or exc.code == "semantic_conflict"
-        else:
-            raise AssertionError("Duplicate or unowned reserve was accepted")
+    duplicate = reserve_input(account_id, obligation_id)
+    with pytest.raises(FinanceCommandError) as exc:
+        submit(engine, scope, "reserve.create", duplicate, [account_id, obligation_id])
+    assert exc.value.code == "semantic_conflict"
+    # A different profile's account ID with a syntactically correct revision
+    # must be rejected by the server-side RLS-scoped account lookup.
+    foreign_account = str(uuid4())
+    foreign_payload = reserve_input(foreign_account, obligation_id)
+    state = snapshot(engine, scope)
+    cmd = {
+        "schema_version": 2, "client_mutation_id": str(uuid4()),
+        "base_revision": state.body["revision"], "action": "reserve.create",
+        "expected_entity_revisions": {foreign_account: 1, obligation_id: 1},
+        "payload": foreign_payload,
+    }
+    with pytest.raises(FinanceCommandError) as exc:
+        submit_account_v2_candidate(
+            engine, scope=scope, command=cmd, if_match=state.etag,
+            idempotency_key=cmd["client_mutation_id"],
+        )
+    assert exc.value.code == "semantic_conflict"
     before = snapshot(engine, scope)
     with pytest.raises(FinanceCommandError) as exc:
         submit(engine, scope, "reserve.allocate", {
@@ -215,16 +224,17 @@ def test_request_replay_and_conflicting_mutation_preserve_exact_cash(financial_c
     with pytest.raises(FinanceCommandError) as exc:
         dispatch({**command, "payload": {**p, "target_minor": 9500}})
     assert exc.value.code == "idempotency_key_reuse"
+    new_mid = str(uuid4())
     with pytest.raises(FinanceCommandError) as exc:
         submit_account_v2_candidate(
             engine, scope=scope,
-            command={**command, "client_mutation_id": str(uuid4()),
+            command={**command, "client_mutation_id": new_mid,
                      "action": "reserve.archive", "payload": {"reserve_id": p["id"]},
                      "expected_entity_revisions": {p["id"]: 1}},
-            if_match=initial.etag, idempotency_key=str(uuid4()),
+            if_match=initial.etag, idempotency_key=new_mid,
         )
-    # Two distinct mutation IDs are rejected before the stale-revision branch.
-    assert exc.value.code == "invalid_command"
+    assert exc.value.code == "stale_revision"
+    assert exc.value.status == 412
     final = entities(engine, scope)
     assert final[account_id]["data"]["balance_minor"] == 10_000
     assert final[account_id]["data"]["reserved_minor"] == 3_000
