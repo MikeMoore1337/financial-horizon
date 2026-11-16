@@ -271,6 +271,24 @@ def get_finance_snapshot(
                     "settlement_id": _as_json(link["settlement_id"]),
                     "loan_payment_id": _as_json(link["loan_payment_id"]),
                 }
+            reserve_payments = session.execute(text("""
+                SELECT id,reserve_id,account_id,delta_minor,
+                       linked_transaction_id,reverses_allocation_id
+                FROM reserve_allocations
+                WHERE profile_id=:p AND linked_transaction_id=ANY(:ids)
+                ORDER BY linked_transaction_id
+            """), {"p": scope.profile_id, "ids": transaction_ids}).mappings().all()
+            for allocation in reserve_payments:
+                tx = transactions.get(str(allocation["linked_transaction_id"]))
+                if tx is None or "reserve_allocation" in tx["data"]:
+                    raise FinanceCommandError("service_unavailable", "Повреждён журнал резерва", 503)
+                tx["data"]["reserve_allocation"] = {
+                    "id": str(allocation["id"]),
+                    "reserve_id": str(allocation["reserve_id"]),
+                    "account_id": str(allocation["account_id"]),
+                    "delta_minor": int(allocation["delta_minor"]),
+                    "reverses_allocation_id": _as_json(allocation["reverses_allocation_id"]),
+                }
 
         body = {
             "schema_version": 1, "profile_id": str(scope.profile_id),
