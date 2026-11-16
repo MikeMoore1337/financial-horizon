@@ -792,7 +792,7 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         # commits. The new Alembic 0002 deferred SQL triggers reject either
         # half of a compensation, even if a trusted caller bypasses this code.
         is_settlement = action == "settlement.payment.void"
-        _shape(payload, {"transaction_id", "fact_id", "account_id", "reason"},
+        _shape(payload, {"transaction_id", "fact_id", "account_id", "reason", "reserve_id"},
                {"transaction_id", "fact_id", "account_id", "reason"})
         original_id = _uuid(payload["transaction_id"])
         fact_id = _uuid(payload["fact_id"])
@@ -851,6 +851,30 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         if original_minor == 0 or abs(original_minor) > MAX_MINOR:
             raise FinanceCommandError("semantic_conflict", "Повреждённая оплата", 409)
 
+        # A linked reservation must be restored with the SAME void operation,
+        # never by a separate client command or a trusted-looking local edit.
+        release = session.execute(text("""
+            SELECT id,reserve_id,account_id,delta_minor FROM reserve_allocations
+            WHERE profile_id=:p AND linked_transaction_id=:tx
+              AND reverses_allocation_id IS NULL FOR UPDATE
+        """), {"p": p, "tx": original_id}).mappings().one_or_none()
+        release_plan = None
+        if release is not None:
+            if not is_settlement or payload.get("reserve_id") is None:
+                raise _reject("Отмена оплаты требует ревизию связанного резерва")
+            reserve_id = _uuid(payload["reserve_id"])
+            if release["reserve_id"] != reserve_id or release["account_id"] != acc_id:
+                raise FinanceCommandError("semantic_conflict", "Счёт или резерв не совпадает", 409)
+            release_plan = session.execute(text("""
+                SELECT entity_revision FROM reserves
+                WHERE profile_id=:p AND id=:reserve FOR UPDATE
+            """), {"p": p, "reserve": reserve_id}).mappings().one_or_none()
+            if release_plan is None:
+                raise FinanceCommandError("semantic_conflict", "Резерв оплаты недоступен", 409)
+            _require_revision(versions, reserve_id, release_plan["entity_revision"])
+        elif payload.get("reserve_id") is not None:
+            raise _reject("Исходная оплата не связана с резервом")
+
         target = uuid4()
         # Guarded SQL columns allow only a one-time void of this fact.
         if is_settlement:
@@ -881,6 +905,35 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
                 session, p, fact_id, settlement=is_settlement,
             )},
         ))
+        if release is not None:
+            restore_minor = -_safe_balance(release["delta_minor"])
+            if restore_minor <= 0:
+                raise FinanceCommandError("service_unavailable", "Повреждена связь резерва", 503)
+            account_now = _account_sync_entity(session, p, acc_id)
+            if account_now["data"]["available_minor"] < restore_minor:
+                raise FinanceCommandError(
+                    "semantic_conflict", "Для восстановления резерва недостаточно средств", 409
+                )
+            session.execute(text("""
+                INSERT INTO reserve_allocations
+                  (profile_id,id,reserve_id,account_id,delta_minor,
+                   linked_transaction_id,reverses_allocation_id)
+                VALUES (:p,:id,:reserve,:account,:amount,:tx,:original)
+            """), {
+                "p": p, "id": uuid4(), "reserve": release["reserve_id"],
+                "account": acc_id, "amount": restore_minor,
+                "tx": target, "original": release["id"],
+            })
+            session.execute(text("""
+                UPDATE reserves SET archived_at=NULL,entity_revision=entity_revision+1,
+                                    updated_at=now()
+                WHERE profile_id=:p AND id=:reserve
+            """), {"p": p, "reserve": release["reserve_id"]})
+            change_payload["restored_reserved_minor"] = restore_minor
+            extra_changes.append((
+                "upsert", release["reserve_id"], int(release_plan["entity_revision"]) + 1,
+                {"entity": _reserve_sync_entity(session, p, release["reserve_id"])},
+            ))
     elif action == "reserve.create":
         allowed = {
             "id", "obligation_id", "account_id", "title", "opened_on",
