@@ -565,3 +565,53 @@ def test_skipped_short_month_anchor_validated(financial_context):
                 "occurred_on": "2028-03-02",
             }, [plan["id"]])
         assert exc.value.code == "invalid_command"
+
+
+
+def test_reserved_payment_can_use_zero_allocated_cash_and_void_atomically(financial_context):
+    engine, scope, account, obligation = financial_context
+    plan = reserve_input(account, obligation, opening=3000)
+    reserve = plan["id"]
+    submit(engine, scope, "reserve.create", plan, [account, obligation])
+    starting = snapshot(engine, scope)
+    with pytest.raises(FinanceCommandError) as exc:
+        submit(engine, scope, "settlement.payment.record", {
+            "account_id": account, "obligation_id": obligation,
+            "amount_minor": 2000, "occurrence_on": "2027-11-16",
+            "paid_on": "2027-11-16",
+        }, [account, obligation])
+    assert exc.value.code == "semantic_conflict"
+    assert snapshot(engine, scope).body["revision"] == starting.body["revision"]
+
+    record = submit(engine, scope, "settlement.payment.record", {
+        "account_id": account, "obligation_id": obligation,
+        "amount_minor": 2000, "occurrence_on": "2027-11-16",
+        "paid_on": "2027-11-16", "reserve_id": reserve,
+        "reserved_used_minor": 0,
+    }, [account, obligation, reserve])
+    assert record.status == 201
+    event = entities(engine, scope)[reserve]["data"]["event_log"][-1]
+    assert event["kind"] == "payment"
+    assert event["reserved_used_minor"] == 0
+    a = entities(engine, scope)[account]["data"]
+    assert (a["balance_minor"], a["reserved_minor"], a["available_minor"]) == (8000, 3000, 5000)
+    fact_id = next(e["id"] for e in snapshot(engine, scope).body["entities"]
+                   if e["kind"] == "settlement")
+    undone = submit(engine, scope, "settlement.payment.void", {
+        "transaction_id": event["transaction_id"], "fact_id": fact_id,
+        "account_id": account, "reserve_id": reserve, "reason": "Ошибка оплаты",
+    }, [event["transaction_id"], fact_id, account, reserve])
+    assert undone.status == 201
+    final = entities(engine, scope)
+    a = final[account]["data"]
+    assert (a["balance_minor"], a["reserved_minor"], a["available_minor"]) == (10000, 3000, 7000)
+    journal = final[reserve]["data"]["event_log"]
+    assert len(journal) == 2 and journal[-1]["kind"] == "void"
+    assert journal[-1]["target_event_id"] == event["id"]
+    assert journal[-1]["note"] == "Ошибка оплаты"
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        assert session.execute(text("SELECT count(*) FROM reserve_allocations")).scalar_one() == 1
+        assert sorted(session.execute(text("""
+            SELECT signed_minor FROM ledger_postings
+        """)).scalars().all()) == [-2000, 2000]

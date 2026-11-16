@@ -801,6 +801,17 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             occurrence = _date(payload["occurrence_on"])
             if source["direction"] not in ("income", "expense"):
                 raise _reject("Неизвестное направление обязательства")
+            if source["direction"] == "expense" and "reserve_id" not in payload:
+                active_plan = session.execute(text("""
+                    SELECT 1 FROM reserves WHERE profile_id=:p AND obligation_id=:obligation
+                      AND archived_at IS NULL AND period_months IS NOT NULL
+                    LIMIT 1
+                """), {"p": p, "obligation": fact_source}).first()
+                if active_plan:
+                    raise FinanceCommandError(
+                        "semantic_conflict",
+                        "Подтвердите оплату через действующий резерв обязательства", 409,
+                    )
             signed = amount if source["direction"] == "income" else -amount
             session.execute(text("""
                 INSERT INTO settlements
@@ -870,7 +881,7 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             if source["direction"] != "expense" or "reserved_used_minor" not in payload:
                 raise _reject("Накопления доступны только для расходов")
             reserve_id = _uuid(payload["reserve_id"])
-            used_minor = _integer(payload["reserved_used_minor"], 1, amount)
+            used_minor = _integer(payload["reserved_used_minor"], 0, amount)
             plan = session.execute(text("""
                 SELECT entity_revision,obligation_id,account_id,archived_at,
                        period_months,opened_on,cycle_number,target_minor
@@ -894,15 +905,16 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             """), {"p": p, "reserve": reserve_id, "account": acc}).scalar_one())
             if available < used_minor:
                 raise FinanceCommandError("semantic_conflict", "Недостаточно накоплено для оплаты", 409)
-            allocation_id = uuid4()
-            session.execute(text("""
-                INSERT INTO reserve_allocations
-                  (profile_id,id,reserve_id,account_id,delta_minor,linked_transaction_id)
-                VALUES (:p,:id,:reserve,:account,:delta,:transaction)
-            """), {
-                "p": p, "id": allocation_id, "reserve": reserve_id,
-                "account": acc, "delta": -used_minor, "transaction": target,
-            })
+            if used_minor:
+                allocation_id = uuid4()
+                session.execute(text("""
+                    INSERT INTO reserve_allocations
+                      (profile_id,id,reserve_id,account_id,delta_minor,linked_transaction_id)
+                    VALUES (:p,:id,:reserve,:account,:delta,:transaction)
+                """), {
+                    "p": p, "id": allocation_id, "reserve": reserve_id,
+                    "account": acc, "delta": -used_minor, "transaction": target,
+                })
             session.execute(text("""
                 UPDATE reserves SET entity_revision=entity_revision+1,updated_at=now()
                 WHERE profile_id=:p AND id=:id
@@ -1018,27 +1030,37 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
               AND reverses_allocation_id IS NULL
         """), {"p": p, "tx": original_id}).mappings().one_or_none()
         payment_event = session.execute(text("""
-            SELECT id,reserve_id,cycle_number FROM reserve_events
+            SELECT id,reserve_id,cycle_number,reserved_used_minor FROM reserve_events
             WHERE profile_id=:p AND transaction_id=:tx AND kind='payment'
         """), {"p": p, "tx": original_id}).mappings().one_or_none()
-        if (payment_event is None) != (release is None):
+        if payment_event is None and release is not None:
             raise FinanceCommandError(
-                "semantic_conflict", "Событие оплаты и резерв не согласованы", 409,
+                "semantic_conflict", "Резерв и история оплаты не согласованы", 409,
             )
+        if payment_event is not None:
+            paid_release = int(payment_event["reserved_used_minor"])
+            if (paid_release > 0) != (release is not None):
+                raise FinanceCommandError(
+                    "semantic_conflict", "Сумма возврата не соответствует записи резерва", 409,
+                )
         release_plan = None
-        if release is not None:
+        if payment_event is not None:
             if not is_settlement or payload.get("reserve_id") is None:
                 raise _reject("Отмена оплаты требует ревизию связанного резерва")
             reserve_id = _uuid(payload["reserve_id"])
-            if release["reserve_id"] != reserve_id or release["account_id"] != acc_id:
-                raise FinanceCommandError("semantic_conflict", "Счёт или резерв не совпадает", 409)
             if payment_event["reserve_id"] != reserve_id:
-                raise FinanceCommandError("semantic_conflict", "Событие оплаты относится к другому резерву", 409)
+                raise FinanceCommandError(
+                    "semantic_conflict", "Событие оплаты относится к другому резерву", 409,
+                )
+            if release is not None and (
+                release["reserve_id"] != reserve_id or release["account_id"] != acc_id
+            ):
+                raise FinanceCommandError("semantic_conflict", "Счёт или резерв не совпадает", 409)
             release_plan = session.execute(text("""
-                SELECT entity_revision,cycle_number FROM reserves
+                SELECT entity_revision,cycle_number,account_id FROM reserves
                 WHERE profile_id=:p AND id=:reserve FOR UPDATE
             """), {"p": p, "reserve": reserve_id}).mappings().one_or_none()
-            if release_plan is None:
+            if release_plan is None or release_plan["account_id"] != acc_id:
                 raise FinanceCommandError("semantic_conflict", "Резерв оплаты недоступен", 409)
             _require_revision(versions, reserve_id, release_plan["entity_revision"])
             if int(release_plan["cycle_number"]) != int(payment_event["cycle_number"]):
@@ -1078,49 +1100,50 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
                 session, p, fact_id, settlement=is_settlement,
             )},
         ))
-        if release is not None:
-            restore_minor = -_safe_balance(release["delta_minor"])
-            if restore_minor <= 0:
-                raise FinanceCommandError("service_unavailable", "Повреждена связь резерва", 503)
-            account_now = _account_sync_entity(session, p, acc_id)
-            if account_now["data"]["available_minor"] < restore_minor:
-                raise FinanceCommandError(
-                    "semantic_conflict", "Для восстановления резерва недостаточно средств", 409
-                )
-            session.execute(text("""
-                INSERT INTO reserve_allocations
-                  (profile_id,id,reserve_id,account_id,delta_minor,
-                   linked_transaction_id,reverses_allocation_id)
-                VALUES (:p,:id,:reserve,:account,:amount,:tx,:original)
-            """), {
-                "p": p, "id": uuid4(), "reserve": release["reserve_id"],
-                "account": acc_id, "amount": restore_minor,
-                "tx": target, "original": release["id"],
-            })
+        if payment_event is not None:
+            if release is not None:
+                restore_minor = -_safe_balance(release["delta_minor"])
+                if restore_minor <= 0:
+                    raise FinanceCommandError("service_unavailable", "Повреждена связь резерва", 503)
+                account_now = _account_sync_entity(session, p, acc_id)
+                if account_now["data"]["available_minor"] < restore_minor:
+                    raise FinanceCommandError(
+                        "semantic_conflict", "Для восстановления резерва недостаточно средств", 409,
+                    )
+                session.execute(text("""
+                    INSERT INTO reserve_allocations
+                      (profile_id,id,reserve_id,account_id,delta_minor,
+                       linked_transaction_id,reverses_allocation_id)
+                    VALUES (:p,:id,:reserve,:account,:amount,:tx,:original)
+                """), {
+                    "p": p, "id": uuid4(), "reserve": reserve_id,
+                    "account": acc_id, "amount": restore_minor,
+                    "tx": target, "original": release["id"],
+                })
+                change_payload["restored_reserved_minor"] = restore_minor
             session.execute(text("""
                 UPDATE reserves SET archived_at=NULL,entity_revision=entity_revision+1,
                                     updated_at=now()
                 WHERE profile_id=:p AND id=:reserve
-            """), {"p": p, "reserve": release["reserve_id"]})
-            change_payload["restored_reserved_minor"] = restore_minor
+            """), {"p": p, "reserve": reserve_id})
             history_on = datetime.now(timezone.utc).date()
             last_event = session.execute(text("""
                 SELECT occurred_on FROM reserve_events
                 WHERE profile_id=:p AND reserve_id=:reserve
                 ORDER BY revision DESC LIMIT 1
-            """), {"p": p, "reserve": release["reserve_id"]}).scalar_one_or_none()
+            """), {"p": p, "reserve": reserve_id}).scalar_one_or_none()
             if last_event is not None and history_on < last_event:
                 history_on = last_event
             void_event_id = _reserve_append_event(
-                session, p, release["reserve_id"], kind="void", on=history_on,
+                session, p, reserve_id, kind="void", on=history_on,
                 cycle=int(release_plan["cycle_number"]), revision=new_revision,
                 target_event_id=payment_event["id"], transaction_id=target,
                 note=reason.strip(),
             )
             change_payload["reserve_void_event_id"] = str(void_event_id)
             extra_changes.append((
-                "upsert", release["reserve_id"], int(release_plan["entity_revision"]) + 1,
-                {"entity": _reserve_sync_entity(session, p, release["reserve_id"])},
+                "upsert", reserve_id, int(release_plan["entity_revision"]) + 1,
+                {"entity": _reserve_sync_entity(session, p, reserve_id)},
             ))
     elif action == "reserve.create":
         allowed = {

@@ -108,7 +108,7 @@ class SettlementPaymentRecordV2(Wire):
     paid_on: str
     occurrence_on: str
     reserve_id: str | None = Field(default=None, pattern=UUID_PATTERN)
-    reserved_used_minor: StrictInt | None = Field(default=None, ge=1, le=MAX_MINOR)
+    reserved_used_minor: StrictInt | None = Field(default=None, ge=0, le=MAX_MINOR)
 
     @model_validator(mode="after")
     def reserve_link(self):
