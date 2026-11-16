@@ -864,6 +864,13 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             or obligation["direction"] != "expense"):
             raise FinanceCommandError("semantic_conflict", "Обязательство недоступно", 409)
         _require_revision(versions, obligation_id, obligation["entity_revision"])
+        duplicate = session.execute(text("""
+            SELECT id FROM reserves
+            WHERE profile_id=:p AND obligation_id=:obligation AND archived_at IS NULL
+            FOR UPDATE
+        """), {"p": p, "obligation": obligation_id}).first()
+        if duplicate:
+            raise FinanceCommandError("semantic_conflict", "У обязательства уже есть резерв", 409)
         if opening > _account_sync_entity(session, p, account_id)["data"]["available_minor"]:
             raise FinanceCommandError("semantic_conflict", "Недостаточно незарезервированных средств", 409)
         session.execute(text("""
