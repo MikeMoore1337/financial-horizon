@@ -655,6 +655,8 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             "paid_on", "loan_id", "strategy",
         })
         _shape(payload, required | ({"reserve_id", "reserved_used_minor"} if is_settlement else set()), required)
+        if is_settlement and (("reserve_id" in payload) != ("reserved_used_minor" in payload)):
+            raise _reject("Резерв и использованная сумма обязательны вместе")
         target = _uuid(payload["transaction_id"])
         fact_id = _uuid(payload["fact_id"])
         acc = _uuid(payload["account_id"])
