@@ -1,5 +1,5 @@
 import {test,expect} from '@playwright/test';
-import {observe,addEntry,currentUser} from './helpers.mjs';
+import {observe,view,addEntry,currentUser} from './helpers.mjs';
 
 // Exercises the REAL unbundled compatibility app served to old installed PWAs,
 // native Chromium/WebKit, real local auth and native IndexedDB on synthetic data.
@@ -19,7 +19,7 @@ test('legacy PWA clears finance and dialogs before redirecting on cross-tab logo
   await addEntry(page,'PRIVATE_LEGACY_CROSS_TAB',{amount:'129.99'});
   // The overview intentionally lists only upcoming dates. The entry fixture
   // is dated 2026-11-15, so verify it in the obligations ledger instead.
-  await page.locator('.sidebar-nav [data-view="obligations"]').click();
+  await view(page,'obligations');
   await expect(page.locator('#main')).toContainText('PRIVATE_LEGACY_CROSS_TAB');
 
   const served=await request.get('/app.js');
