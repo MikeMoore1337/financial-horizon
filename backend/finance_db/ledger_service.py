@@ -430,6 +430,21 @@ def _transaction_sync_entity(session: Session, profile_id: UUID, txid: UUID) -> 
             "settlement_id": str(link["settlement_id"]) if link["settlement_id"] else None,
             "loan_payment_id": str(link["loan_payment_id"]) if link["loan_payment_id"] else None,
         }
+    allocation = session.execute(text("""
+        SELECT id,reserve_id,account_id,delta_minor,reverses_allocation_id
+        FROM reserve_allocations
+        WHERE profile_id=:p AND linked_transaction_id=:id
+    """), {"p": profile_id, "id": txid}).mappings().one_or_none()
+    if allocation:
+        data["reserve_allocation"] = {
+            "id": str(allocation["id"]), "reserve_id": str(allocation["reserve_id"]),
+            "account_id": str(allocation["account_id"]),
+            "delta_minor": int(allocation["delta_minor"]),
+            "reverses_allocation_id": (
+                str(allocation["reverses_allocation_id"])
+                if allocation["reverses_allocation_id"] else None
+            ),
+        }
     return {
         "id": str(row["id"]), "entity_revision": int(row["entity_revision"]),
         "kind": "transaction", "data": data,
