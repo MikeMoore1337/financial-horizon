@@ -240,6 +240,8 @@ class ReserveAllocation(ProfileEntity, Base):
     reserve_id: Mapped[Uuid] = mapped_column(UUID(as_uuid=True))
     account_id: Mapped[Uuid] = mapped_column(UUID(as_uuid=True))
     delta_minor: Mapped[int] = mapped_column(BigInteger)
+    linked_transaction_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
+    reverses_allocation_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
 
