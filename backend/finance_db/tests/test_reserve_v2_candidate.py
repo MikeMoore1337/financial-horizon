@@ -615,3 +615,29 @@ def test_reserved_payment_can_use_zero_allocated_cash_and_void_atomically(financ
         assert sorted(session.execute(text("""
             SELECT signed_minor FROM ledger_postings
         """)).scalars().all()) == [-2000, 2000]
+
+
+def test_zero_funded_reserve_allows_signed_negative_account_without_cash_movement(financial_context):
+    engine, scope, _, obligation_id = financial_context
+    account_id = str(uuid4())
+    opening = -500
+    created = submit(engine, scope, "account.create", {
+        "id": account_id, "name": "Отрицательный синтетический счёт",
+        "kind": "cash", "currency": "RUB", "opening_minor": opening,
+    }, [])
+    assert created.status == 201
+    before = snapshot(engine, scope)
+    plan = reserve_input(account_id, obligation_id, opening=0)
+    result = submit(engine, scope, "reserve.create", plan, [account_id, obligation_id])
+    assert result.status == 201
+    assert result.body["revision"] == before.body["revision"] + 1
+    after = entities(engine, scope)
+    assert after[account_id]["data"]["opening_minor"] == opening
+    assert after[account_id]["data"]["balance_minor"] == opening
+    assert after[account_id]["data"]["reserved_minor"] == 0
+    assert after[account_id]["data"]["available_minor"] == opening
+    assert after[plan["id"]]["data"]["allocated_minor"] == 0
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        assert session.execute(text("SELECT count(*) FROM reserve_allocations")).scalar_one() == 0
+        assert session.execute(text("SELECT count(*) FROM ledger_transactions")).scalar_one() == 0
