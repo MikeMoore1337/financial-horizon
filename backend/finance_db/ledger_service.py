@@ -1408,6 +1408,10 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             raise FinanceCommandError(
                 "semantic_conflict", "Это действие нельзя отменить отдельно", 409,
             )
+        if int(original["cycle_number"]) != int(plan["cycle_number"]):
+            raise FinanceCommandError(
+                "semantic_conflict", "Событие предыдущего цикла нельзя отменить отдельно", 409,
+            )
         already = session.execute(text("""
             SELECT 1 FROM reserve_events WHERE profile_id=:p AND target_event_id=:event
         """), {"p": p, "event": original_id}).first()
