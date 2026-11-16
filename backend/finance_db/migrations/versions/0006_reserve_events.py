@@ -33,6 +33,7 @@ def upgrade() -> None:
             ('contribution','release','payment','skip','target_change','cycle_close','void')),
           occurred_on date NOT NULL,
           cycle_number integer NOT NULL CHECK (cycle_number BETWEEN 1 AND 10000),
+          revision bigint NOT NULL CHECK (revision BETWEEN 1 AND 9007199254740991),
           amount_minor bigint CHECK (amount_minor BETWEEN 1 AND 1000000000000),
           reserved_used_minor bigint CHECK (reserved_used_minor BETWEEN 0 AND 1000000000000),
           target_minor bigint CHECK (target_minor BETWEEN 1 AND 1000000000000),

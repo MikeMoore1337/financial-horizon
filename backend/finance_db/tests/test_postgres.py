@@ -48,7 +48,7 @@ def test_mapping_covers_all_finance_tables():
     expected = {
         "finance_profiles", "accounts", "obligations", "loans", "reserves",
         "ledger_transactions", "ledger_postings", "settlements", "loan_payments",
-        "ledger_payment_links", "reserve_allocations", "command_receipts",
+        "ledger_payment_links", "reserve_allocations", "reserve_events", "command_receipts",
         "change_log", "import_batches", "import_record_map",
     }
     assert {t.name for t in Base.metadata.tables.values()} == expected

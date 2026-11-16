@@ -368,10 +368,61 @@ def _reserve_pairs(
     return breakdown
 
 
+
+_MAX_RESERVE_EVENTS_PER_SNAPSHOT = 10_000
+
+
+def _reserve_history(
+    session: Session, profile_id: UUID, reserve_ids: list[UUID],
+) -> dict[UUID, list[dict[str, Any]]]:
+    """Read the append-only event journal in authoritative profile revision order.
+
+    Never truncate an event list silently: losing an old payment or void would
+    silently alter the forecast on another device.
+    """
+    history: dict[UUID, list[dict[str, Any]]] = {key: [] for key in reserve_ids}
+    if not reserve_ids:
+        return history
+    rows = session.execute(text("""
+        SELECT id,reserve_id,kind,occurred_on,cycle_number,revision,
+               amount_minor,reserved_used_minor,target_minor,slot_on,target_event_id,
+               allocation_id,transaction_id
+        FROM reserve_events
+        WHERE profile_id=:p AND reserve_id=ANY(:ids)
+        ORDER BY reserve_id,revision,id
+        LIMIT :n
+    """), {
+        "p": profile_id, "ids": reserve_ids,
+        "n": _MAX_RESERVE_EVENTS_PER_SNAPSHOT + 1,
+    }).mappings().all()
+    if len(rows) > _MAX_RESERVE_EVENTS_PER_SNAPSHOT:
+        raise FinanceCommandError(
+            "service_unavailable", "История накоплений требует постраничной загрузки", 503,
+        )
+    for row in rows:
+        key = row["reserve_id"]
+        if key not in history:
+            raise FinanceCommandError("service_unavailable", "Чужая запись в журнале", 503)
+        history[key].append({
+            "id": str(row["id"]), "reserve_id": str(key), "kind": row["kind"],
+            "occurred_on": row["occurred_on"].isoformat(),
+            "cycle_number": int(row["cycle_number"]), "revision": int(row["revision"]),
+            "amount_minor": row["amount_minor"],
+            "reserved_used_minor": row["reserved_used_minor"],
+            "target_minor": row["target_minor"],
+            "slot_on": row["slot_on"].isoformat() if row["slot_on"] else None,
+            "target_event_id": str(row["target_event_id"]) if row["target_event_id"] else None,
+            "allocation_id": str(row["allocation_id"]) if row["allocation_id"] else None,
+            "transaction_id": str(row["transaction_id"]) if row["transaction_id"] else None,
+        })
+    return history
+
+
 def _reserve_sync_entity(session: Session, profile_id: UUID, reserve_id: UUID) -> dict[str, Any]:
     """Full server-owned reserve image including the committed allocation total."""
     row = session.execute(text("""
         SELECT r.id,r.entity_revision,r.title,r.target_minor,r.target_on,r.archived_at,
+               r.opening_reserved_minor,r.cycle_number,
                r.obligation_id,r.account_id,r.opened_on,r.first_due_on,
                r.period_months,r.due_day,r.contribution_mode,r.fixed_monthly_minor,
           COALESCE((SELECT SUM(a.delta_minor) FROM reserve_allocations a
@@ -383,6 +434,8 @@ def _reserve_sync_entity(session: Session, profile_id: UUID, reserve_id: UUID) -
         "kind": "reserve",
         "data": {
             "title": row["title"], "target_minor": int(row["target_minor"]),
+            "opening_reserved_minor": int(row["opening_reserved_minor"]),
+            "cycle_number": int(row["cycle_number"]),
             "target_on": row["target_on"].isoformat() if row["target_on"] else None,
             "obligation_id": str(row["obligation_id"]) if row["obligation_id"] else None,
             "account_id": str(row["account_id"]) if row["account_id"] else None,
@@ -396,6 +449,7 @@ def _reserve_sync_entity(session: Session, profile_id: UUID, reserve_id: UUID) -
             "allocations_by_account": _reserve_pairs(
                 session, profile_id, [reserve_id]
             )[reserve_id],
+            "event_log": _reserve_history(session, profile_id, [reserve_id])[reserve_id],
         },
     }
 

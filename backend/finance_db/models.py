@@ -272,6 +272,7 @@ class ReserveEvent(ProfileEntity, Base):
     kind: Mapped[str] = mapped_column(String(20))
     occurred_on: Mapped[date] = mapped_column(Date)
     cycle_number: Mapped[int] = mapped_column(Integer)
+    revision: Mapped[int] = mapped_column(BigInteger)
     amount_minor: Mapped[int | None] = mapped_column(BigInteger)
     reserved_used_minor: Mapped[int | None] = mapped_column(BigInteger)
     target_minor: Mapped[int | None] = mapped_column(BigInteger)
