@@ -1177,7 +1177,9 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         """), {"p": p, "obligation": obligation_id}).first()
         if duplicate:
             raise FinanceCommandError("semantic_conflict", "У обязательства уже есть резерв", 409)
-        if opening > _account_sync_entity(session, p, account_id)["data"]["available_minor"]:
+        if opening > 0 and opening > _account_sync_entity(
+            session, p, account_id,
+        )["data"]["available_minor"]:
             raise FinanceCommandError("semantic_conflict", "Недостаточно незарезервированных средств", 409)
         session.execute(text("""
             INSERT INTO reserves
