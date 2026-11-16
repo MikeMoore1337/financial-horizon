@@ -22,7 +22,7 @@ jobs:
   build:
     if: github.event_name == 'workflow_dispatch' || vars.FH_STATIC_AUTO_DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 50
     outputs:
       source_sha: ${{ steps.gate.outputs.sha }}
       archive_sha256: ${{ steps.package.outputs.sha256 }}
@@ -49,13 +49,15 @@ jobs:
           [[ "$latest" == "$TARGET_SHA" ]] || { echo 'Superseded main' >&2; exit 1; }
           for workflow in tests.yml security-vault.yml; do
             confirmed=false
-            for attempt in $(seq 1 40); do
+            # Real Chromium/WebKit CI can take 17+ minutes; wait for the exact SHA
+            # instead of treating a still-running test as a failed release.
+            for attempt in $(seq 1 270); do
               status="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?head_sha=$TARGET_SHA&branch=main&event=push&per_page=10" --jq '.workflow_runs[0].conclusion // "pending"')"
               if [[ "$status" == success ]]; then confirmed=true; break; fi
               if [[ "$status" == failure || "$status" == cancelled || "$status" == timed_out || "$status" == action_required ]]; then
                 echo "$workflow blocked: $status" >&2; exit 1
               fi
-              [[ "$attempt" == 40 ]] || sleep 8
+              [[ "$attempt" == 270 ]] || sleep 8
             done
             [[ "$confirmed" == true ]] || { echo "$workflow not green for exact SHA" >&2; exit 1; }
           done
