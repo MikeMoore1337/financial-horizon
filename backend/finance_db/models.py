@@ -110,6 +110,8 @@ class Reserve(ProfileEntity, Revisable, Base):
     title: Mapped[str] = mapped_column(String(160))
     target_minor: Mapped[int] = mapped_column(BigInteger)
     target_on: Mapped[date | None] = mapped_column(Date)
+    opening_reserved_minor: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
+    cycle_number: Mapped[int] = mapped_column(Integer, server_default=text("1"))
     obligation_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
     account_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
     opened_on: Mapped[date | None] = mapped_column(Date)
@@ -243,6 +245,41 @@ class ReserveAllocation(ProfileEntity, Base):
     linked_transaction_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
     reverses_allocation_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class ReserveEvent(ProfileEntity, Base):
+    __tablename__ = "reserve_events"
+    __table_args__ = (
+        profile_fk(),
+        ForeignKeyConstraint(
+            ["profile_id", "reserve_id"], ["finance.reserves.profile_id", "finance.reserves.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["profile_id", "target_event_id"],
+            ["finance.reserve_events.profile_id", "finance.reserve_events.id"],
+        ),
+        ForeignKeyConstraint(
+            ["profile_id", "allocation_id"],
+            ["finance.reserve_allocations.profile_id", "finance.reserve_allocations.id"],
+        ),
+        ForeignKeyConstraint(
+            ["profile_id", "transaction_id"],
+            ["finance.ledger_transactions.profile_id", "finance.ledger_transactions.id"],
+        ),
+    )
+    reserve_id: Mapped[Uuid] = mapped_column(UUID(as_uuid=True))
+    kind: Mapped[str] = mapped_column(String(20))
+    occurred_on: Mapped[date] = mapped_column(Date)
+    cycle_number: Mapped[int] = mapped_column(Integer)
+    amount_minor: Mapped[int | None] = mapped_column(BigInteger)
+    reserved_used_minor: Mapped[int | None] = mapped_column(BigInteger)
+    target_minor: Mapped[int | None] = mapped_column(BigInteger)
+    slot_on: Mapped[date | None] = mapped_column(Date)
+    target_event_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
+    allocation_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
+    transaction_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
 
 class CommandReceipt(Base):
