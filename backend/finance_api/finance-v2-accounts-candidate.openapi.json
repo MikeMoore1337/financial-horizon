@@ -3,7 +3,7 @@
   "info": {
     "title": "Financial Horizon - Accounts and linked payment v2 candidate (NOT LIVE)",
     "version": "2.0.0-candidate",
-    "description": "Unapproved feature-off #33/#67 proposal: account CRUD, actual cash movements, confirmed linked obligations/loans, one-step fact void + append-only cash reversal. No deployment. Source-owned server-generated payment fact/transaction UUIDs from owner-scoped mutation keys. #6 draft reserve-plan CRUD and non-ledger allocation are additive; payment/void and owner UI remain NOT_READY."
+    "description": "Unapproved feature-off #33/#67 proposal: account CRUD, actual cash movements, confirmed linked obligations/loans, one-step fact void + append-only cash reversal. No deployment. Source-owned server-generated payment fact/transaction UUIDs from owner-scoped mutation keys. #6 draft reserve-plan CRUD and non-ledger allocation are additive; payment/void and owner UI remain NOT_READY. Reserved settlement payments optionally use one owner-scoped reserve; the same transaction releases earmarked funds, and the void reverses cash and restores that reservation atomically."
   },
   "x-go-live": "NO_GO",
   "x-account-v2-opt-in-default": false,
@@ -700,6 +700,32 @@
             "type": "string",
             "format": "date",
             "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "reserve_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "reserved_used_minor": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000000000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Exact amount removed from the selected reserve in the same SQL COMMIT as the settlement and bank debit"
           }
         }
       },
@@ -768,6 +794,18 @@
             "minLength": 1,
             "maxLength": 500,
             "pattern": "\\S"
+          },
+          "reserve_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         }
       },
