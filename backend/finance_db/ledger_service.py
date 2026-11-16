@@ -40,6 +40,7 @@ _PUBLIC_V2_ACCOUNT_ACTIONS = frozenset((
     "account.create", "account.update", "account.archive", "account.unarchive",
     "transaction.record", "settlement.payment.record", "loan.payment.record",
     "settlement.payment.void", "loan.payment.void",
+    "reserve.create", "reserve.update", "reserve.archive", "reserve.allocate",
 ))
 
 
@@ -371,6 +372,8 @@ def _reserve_sync_entity(session: Session, profile_id: UUID, reserve_id: UUID) -
     """Full server-owned reserve image including the committed allocation total."""
     row = session.execute(text("""
         SELECT r.id,r.entity_revision,r.title,r.target_minor,r.target_on,r.archived_at,
+               r.obligation_id,r.account_id,r.opened_on,r.first_due_on,
+               r.period_months,r.due_day,r.contribution_mode,r.fixed_monthly_minor,
           COALESCE((SELECT SUM(a.delta_minor) FROM reserve_allocations a
             WHERE a.profile_id=r.profile_id AND a.reserve_id=r.id),0) AS allocated_minor
         FROM reserves r WHERE r.profile_id=:p AND r.id=:id
@@ -381,6 +384,13 @@ def _reserve_sync_entity(session: Session, profile_id: UUID, reserve_id: UUID) -
         "data": {
             "title": row["title"], "target_minor": int(row["target_minor"]),
             "target_on": row["target_on"].isoformat() if row["target_on"] else None,
+            "obligation_id": str(row["obligation_id"]) if row["obligation_id"] else None,
+            "account_id": str(row["account_id"]) if row["account_id"] else None,
+            "opened_on": row["opened_on"].isoformat() if row["opened_on"] else None,
+            "first_due_on": row["first_due_on"].isoformat() if row["first_due_on"] else None,
+            "period_months": row["period_months"],
+            "due_day": row["due_day"], "contribution_mode": row["contribution_mode"],
+            "fixed_monthly_minor": row["fixed_monthly_minor"],
             "archived_at": row["archived_at"].isoformat() if row["archived_at"] else None,
             "allocated_minor": _safe_balance(row["allocated_minor"]),
             "allocations_by_account": _reserve_pairs(
@@ -462,6 +472,31 @@ def _payment_fact_sync_entity(
         "id": str(row["id"]), "entity_revision": int(row["entity_revision"]),
         "kind": kind, "data": data,
     }
+
+
+def _mandatory_reserve_plan(payload: Mapping[str, Any], opened_on: date) -> tuple[date, int, int, str, int | None]:
+    """Validate the exact first due date and original day-of-month anchor."""
+    from calendar import monthrange
+
+    first_due = _date(payload["first_due_on"])
+    period = _integer(payload["period_months"], 1, 60)
+    due_day = _integer(payload["due_day"], 1, 31)
+    if first_due < opened_on:
+        raise _reject("Первая оплата раньше открытия резерва")
+    elapsed_months = (first_due.year - opened_on.year) * 12 + first_due.month - opened_on.month
+    if elapsed_months > period or first_due.day != min(
+        due_day, monthrange(first_due.year, first_due.month)[1]
+    ):
+        raise _reject("Дата оплаты не соответствует периоду или дню месяца")
+    mode = payload["contribution_mode"]
+    if mode not in ("auto", "fixed") or type(mode) is not str:
+        raise _reject("Неизвестный способ накопления")
+    fixed = payload.get("fixed_monthly_minor")
+    if mode == "fixed":
+        fixed = _integer(fixed, 1, MAX_MINOR)
+    elif fixed is not None:
+        raise _reject("Автоматический взнос не имеет фиксированной суммы")
+    return first_due, period, due_day, mode, fixed
 
 
 def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any],
@@ -802,6 +837,127 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
                 session, p, fact_id, settlement=is_settlement,
             )},
         ))
+    elif action == "reserve.create":
+        allowed = {
+            "id", "obligation_id", "account_id", "title", "opened_on",
+            "first_due_on", "period_months", "due_day", "contribution_mode",
+            "fixed_monthly_minor", "target_minor", "opening_reserved_minor",
+        }
+        _shape(payload, allowed, allowed - {"fixed_monthly_minor"})
+        target = _uuid(payload["id"])
+        obligation_id, account_id = _uuid(payload["obligation_id"]), _uuid(payload["account_id"])
+        name = payload["title"]
+        if not isinstance(name, str) or not name.strip() or len(name) > 160:
+            raise _reject("Некорректное название резерва")
+        opened = _date(payload["opened_on"])
+        due, period, due_day, mode, fixed = _mandatory_reserve_plan(payload, opened)
+        amount = _integer(payload["target_minor"], 1, MAX_MINOR)
+        opening = _integer(payload["opening_reserved_minor"], 0, MAX_MINOR)
+        if opening > amount:
+            raise _reject("Первоначальный резерв превышает цель")
+        account = _account(session, p, account_id, versions)
+        obligation = session.execute(text("""
+            SELECT entity_revision,direction,deleted_at FROM obligations
+            WHERE profile_id=:p AND id=:id FOR UPDATE
+        """), {"p": p, "id": obligation_id}).mappings().one_or_none()
+        if (obligation is None or obligation["deleted_at"] is not None
+            or obligation["direction"] != "expense"):
+            raise FinanceCommandError("semantic_conflict", "Обязательство недоступно", 409)
+        _require_revision(versions, obligation_id, obligation["entity_revision"])
+        if opening > _account_sync_entity(session, p, account_id)["data"]["available_minor"]:
+            raise FinanceCommandError("semantic_conflict", "Недостаточно незарезервированных средств", 409)
+        session.execute(text("""
+            INSERT INTO reserves
+                (profile_id,id,title,target_minor,target_on,obligation_id,account_id,
+                 opened_on,first_due_on,period_months,due_day,contribution_mode,
+                 fixed_monthly_minor)
+            VALUES (:p,:id,:title,:target,:due,:obligation,:account,
+                    :opened,:due,:period,:day,:mode,:fixed)
+        """), {
+            "p": p, "id": target, "title": name.strip(), "target": amount,
+            "due": due, "obligation": obligation_id, "account": account_id,
+            "opened": opened, "period": period, "day": due_day,
+            "mode": mode, "fixed": fixed,
+        })
+        if opening:
+            session.execute(text("""
+                INSERT INTO reserve_allocations
+                    (profile_id,id,reserve_id,account_id,delta_minor)
+                VALUES (:p,:id,:reserve,:account,:amount)
+            """), {
+                "p": p, "id": uuid4(), "reserve": target,
+                "account": account_id, "amount": opening,
+            })
+            session.execute(text("""
+                UPDATE accounts SET entity_revision=entity_revision+1,updated_at=now()
+                WHERE profile_id=:p AND id=:id
+            """), {"p": p, "id": account_id})
+            extra_changes.append((
+                "upsert", account_id, int(account["entity_revision"]) + 1,
+                {"entity": _account_sync_entity(session, p, account_id)},
+            ))
+        affected_revision = 1
+        change_payload = {"entity": _reserve_sync_entity(session, p, target)}
+    elif action == "reserve.update":
+        allowed = {
+            "reserve_id", "title", "target_minor", "first_due_on",
+            "period_months", "due_day", "contribution_mode", "fixed_monthly_minor",
+        }
+        _shape(payload, allowed, allowed - {"fixed_monthly_minor"})
+        target = _uuid(payload["reserve_id"])
+        old = session.execute(text("""
+            SELECT entity_revision,opened_on,archived_at FROM reserves
+            WHERE profile_id=:p AND id=:id FOR UPDATE
+        """), {"p": p, "id": target}).mappings().one_or_none()
+        if old is None or old["archived_at"] is not None or old["opened_on"] is None:
+            raise FinanceCommandError("semantic_conflict", "План резерва недоступен", 409)
+        _require_revision(versions, target, old["entity_revision"])
+        name = payload["title"]
+        if not isinstance(name, str) or not name.strip() or len(name) > 160:
+            raise _reject("Некорректное название резерва")
+        due, period, due_day, mode, fixed = _mandatory_reserve_plan(payload, old["opened_on"])
+        amount = _integer(payload["target_minor"], 1, MAX_MINOR)
+        allocated = _safe_balance(session.execute(text("""
+            SELECT COALESCE(SUM(delta_minor),0) FROM reserve_allocations
+            WHERE profile_id=:p AND reserve_id=:id
+        """), {"p": p, "id": target}).scalar_one())
+        if allocated < 0 or allocated > amount:
+            raise FinanceCommandError("semantic_conflict", "Новая цель меньше выделенных средств", 409)
+        session.execute(text("""
+            UPDATE reserves SET title=:title,target_minor=:amount,target_on=:due,
+                first_due_on=:due,period_months=:period,due_day=:day,
+                contribution_mode=:mode,fixed_monthly_minor=:fixed,
+                entity_revision=entity_revision+1,updated_at=now()
+            WHERE profile_id=:p AND id=:id
+        """), {
+            "p": p, "id": target, "title": name.strip(), "amount": amount,
+            "due": due, "period": period, "day": due_day,
+            "mode": mode, "fixed": fixed,
+        })
+        affected_revision = int(old["entity_revision"]) + 1
+        change_payload = {"entity": _reserve_sync_entity(session, p, target)}
+    elif action == "reserve.archive":
+        _shape(payload, {"reserve_id"}, {"reserve_id"})
+        target = _uuid(payload["reserve_id"])
+        old = session.execute(text("""
+            SELECT entity_revision,archived_at FROM reserves
+            WHERE profile_id=:p AND id=:id FOR UPDATE
+        """), {"p": p, "id": target}).mappings().one_or_none()
+        if old is None or old["archived_at"] is not None:
+            raise FinanceCommandError("semantic_conflict", "Резерв уже недоступен", 409)
+        _require_revision(versions, target, old["entity_revision"])
+        allocated = _safe_balance(session.execute(text("""
+            SELECT COALESCE(SUM(delta_minor),0) FROM reserve_allocations
+            WHERE profile_id=:p AND reserve_id=:id
+        """), {"p": p, "id": target}).scalar_one())
+        if allocated != 0:
+            raise FinanceCommandError("semantic_conflict", "Сначала освободите резерв", 409)
+        session.execute(text("""
+            UPDATE reserves SET archived_at=now(),entity_revision=entity_revision+1,
+                updated_at=now() WHERE profile_id=:p AND id=:id
+        """), {"p": p, "id": target})
+        affected_revision = int(old["entity_revision"]) + 1
+        change_payload = {"entity": _reserve_sync_entity(session, p, target)}
     elif action == "reserve.allocate":
         required = {"reserve_id", "account_id", "delta_minor"}
         _shape(payload, required, required)
