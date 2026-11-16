@@ -13,6 +13,9 @@ test('legacy PWA clears finance and dialogs before redirecting on cross-tab logo
   const identity=await currentUser(page);
   expect(identity?.id).toMatch(/^[a-f0-9]{32}$/);
   await addEntry(page,'PRIVATE_LEGACY_CROSS_TAB',{amount:'129.99'});
+  // The overview intentionally lists only upcoming dates. The entry fixture
+  // is dated 2026-11-15, so verify it in the obligations ledger instead.
+  await page.locator('.sidebar-nav [data-view="obligations"]').click();
   await expect(page.locator('#main')).toContainText('PRIVATE_LEGACY_CROSS_TAB');
 
   const served=await request.get('/app.js');
