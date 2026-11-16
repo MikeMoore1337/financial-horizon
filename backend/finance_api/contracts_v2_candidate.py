@@ -180,13 +180,6 @@ class ReserveCreateV2(ReservePlanFields):
     def opening_date(cls, value: str) -> str:
         return _date(value)
 
-    @model_validator(mode="after")
-    def opening_not_greater_than_target(self):
-        if self.opening_reserved_minor > self.target_minor:
-            raise ValueError("Opening allocation exceeds target")
-        return self
-
-
 class ReserveUpdateV2(ReservePlanFields):
     reserve_id: str = Field(pattern=UUID_PATTERN)
 
