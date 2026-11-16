@@ -1015,6 +1015,14 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             WHERE profile_id=:p AND linked_transaction_id=:tx
               AND reverses_allocation_id IS NULL
         """), {"p": p, "tx": original_id}).mappings().one_or_none()
+        payment_event = session.execute(text("""
+            SELECT id,reserve_id,cycle_number FROM reserve_events
+            WHERE profile_id=:p AND transaction_id=:tx AND kind='payment'
+        """), {"p": p, "tx": original_id}).mappings().one_or_none()
+        if (payment_event is None) != (release is None):
+            raise FinanceCommandError(
+                "semantic_conflict", "Событие оплаты и резерв не согласованы", 409,
+            )
         release_plan = None
         if release is not None:
             if not is_settlement or payload.get("reserve_id") is None:
@@ -1022,13 +1030,19 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             reserve_id = _uuid(payload["reserve_id"])
             if release["reserve_id"] != reserve_id or release["account_id"] != acc_id:
                 raise FinanceCommandError("semantic_conflict", "Счёт или резерв не совпадает", 409)
+            if payment_event["reserve_id"] != reserve_id:
+                raise FinanceCommandError("semantic_conflict", "Событие оплаты относится к другому резерву", 409)
             release_plan = session.execute(text("""
-                SELECT entity_revision FROM reserves
+                SELECT entity_revision,cycle_number FROM reserves
                 WHERE profile_id=:p AND id=:reserve FOR UPDATE
             """), {"p": p, "reserve": reserve_id}).mappings().one_or_none()
             if release_plan is None:
                 raise FinanceCommandError("semantic_conflict", "Резерв оплаты недоступен", 409)
             _require_revision(versions, reserve_id, release_plan["entity_revision"])
+            if int(release_plan["cycle_number"]) != int(payment_event["cycle_number"]):
+                raise FinanceCommandError(
+                    "semantic_conflict", "Сначала отмените закрытие последующего цикла", 409,
+                )
         elif payload.get("reserve_id") is not None:
             raise _reject("Исходная оплата не связана с резервом")
 
@@ -1087,6 +1101,20 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
                 WHERE profile_id=:p AND id=:reserve
             """), {"p": p, "reserve": release["reserve_id"]})
             change_payload["restored_reserved_minor"] = restore_minor
+            history_on = datetime.now(timezone.utc).date()
+            last_event = session.execute(text("""
+                SELECT occurred_on FROM reserve_events
+                WHERE profile_id=:p AND reserve_id=:reserve
+                ORDER BY revision DESC LIMIT 1
+            """), {"p": p, "reserve": release["reserve_id"]}).scalar_one_or_none()
+            if last_event is not None and history_on < last_event:
+                history_on = last_event
+            void_event_id = _reserve_append_event(
+                session, p, release["reserve_id"], kind="void", on=history_on,
+                cycle=int(release_plan["cycle_number"]), revision=new_revision,
+                target_event_id=payment_event["id"], transaction_id=target,
+            )
+            change_payload["reserve_void_event_id"] = str(void_event_id)
             extra_changes.append((
                 "upsert", release["reserve_id"], int(release_plan["entity_revision"]) + 1,
                 {"entity": _reserve_sync_entity(session, p, release["reserve_id"])},
