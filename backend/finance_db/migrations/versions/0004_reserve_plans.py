@@ -49,7 +49,12 @@ def upgrade() -> None:
           )
     """)
     op.execute("""
-        GRANT UPDATE (period_months,due_day,contribution_mode,
+        CREATE UNIQUE INDEX reserves_one_active_per_obligation
+        ON finance.reserves (profile_id,obligation_id)
+        WHERE obligation_id IS NOT NULL AND archived_at IS NULL
+    """)
+    op.execute("""
+        GRANT UPDATE (first_due_on,period_months,due_day,contribution_mode,
                       fixed_monthly_minor)
         ON finance.reserves TO fh_finance_runtime
     """)
