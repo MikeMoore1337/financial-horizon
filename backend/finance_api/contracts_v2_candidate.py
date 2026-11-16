@@ -1,8 +1,9 @@
-"""Unpublished account-command v2 proposal for #33/#67.
+"""Validated account and reserve-plan command v2 proposal for #33/#6/#67.
 
-This module has NO HTTP route, runtime integration or storage side effects.
-Accepted finance v1 remains unchanged. Human approval of a versioned API,
-the linked-payment void contract and all release gates are still mandatory.
+The existing v2 router handles transport and verified sessions; these
+validators have no standalone storage side effects. Reserve CRUD/allocation
+is not a complete #6 release: linked cash payment, void, cycles, migrations
+and approved UI still require independent acceptance.
 """
 from __future__ import annotations
 
