@@ -10,6 +10,7 @@ from backend.finance_api.contracts_v2_candidate import (
     ACTIONS, ACCOUNT_KINDS, AccountV2Candidate, AccountCreateV2,
     AccountUpdateV2, AccountArchiveV2, TransactionRecordV2,
     SettlementPaymentRecordV2, LoanPaymentRecordV2, PaymentVoidV2,
+    ReserveCreateV2, ReserveUpdateV2, ReserveArchiveV2, ReserveAllocationV2,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -26,6 +27,10 @@ PAYLOADS = {
     "loan.payment.record": ("LoanPaymentRecordV2", LoanPaymentRecordV2),
     "settlement.payment.void": ("PaymentVoidV2", PaymentVoidV2),
     "loan.payment.void": ("PaymentVoidV2", PaymentVoidV2),
+    "reserve.create": ("ReserveCreateV2", ReserveCreateV2),
+    "reserve.update": ("ReserveUpdateV2", ReserveUpdateV2),
+    "reserve.archive": ("ReserveArchiveV2", ReserveArchiveV2),
+    "reserve.allocate": ("ReserveAllocationV2", ReserveAllocationV2),
 }
 
 
@@ -51,7 +56,7 @@ def test_candidate_is_not_public_and_leaves_v1_contract_untouched():
     assert v2["components"]["securitySchemes"]["financeV2Cookie"]["x-cookie-path"] == "/api/finance/v2"
 
 
-def test_v2_command_schema_matches_exact_five_backend_candidate_actions():
+def test_v2_command_schema_matches_exact_validated_backend_candidate_actions():
     v2, _ = read()
     schemas = v2["components"]["schemas"]
     cmd = schemas["AccountV2Candidate"]
