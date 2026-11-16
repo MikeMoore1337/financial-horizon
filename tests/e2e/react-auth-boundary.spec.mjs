@@ -3,7 +3,7 @@ import {
  observe,logoutViaUi,loginViaUi,visitGuest,view,addEntry,scopedState,currentUser,
 } from './helpers.mjs';
 
-test('React calendar honors account logout, guest isolation and subsequent re-login',async({page,context,request})=>{
+test('React calendar honors account logout, guest isolation and subsequent re-login',async({page,context})=>{
  const watcher=await observe(context,page);
  const title='E2E account-only React calendar entry';
  // Real browser HttpOnly cookie + real auth app, but do not consume the
