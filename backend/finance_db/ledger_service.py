@@ -41,6 +41,7 @@ _PUBLIC_V2_ACCOUNT_ACTIONS = frozenset((
     "transaction.record", "settlement.payment.record", "loan.payment.record",
     "settlement.payment.void", "loan.payment.void",
     "reserve.create", "reserve.update", "reserve.archive", "reserve.allocate",
+    "reserve.skip", "reserve.cycle.close",
 ))
 
 
@@ -622,6 +623,20 @@ def _reserve_paid_this_cycle(
     return _safe_balance(total)
 
 
+
+def _next_reserve_due(first_due: date, period_months: int, anchor_day: int, cycle: int) -> date:
+    """Every new cycle uses the ORIGINAL anchor, not a clamped February date."""
+    from calendar import monthrange
+
+    index = (first_due.year - 1) * 12 + first_due.month - 1 + cycle * period_months
+    if index >= 9999 * 12 or index < 0:
+        raise FinanceCommandError("semantic_conflict", "Дата следующего платежа вне диапазона", 409)
+    year, month = divmod(index, 12)
+    year += 1
+    month += 1
+    return date(year, month, min(anchor_day, monthrange(year, month)[1]))
+
+
 def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any],
            versions: Mapping[str, int], new_revision: int) -> dict[str, Any]:
     p = scope.profile_id
@@ -1151,7 +1166,8 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         _shape(payload, allowed, allowed - {"fixed_monthly_minor", "occurred_on"})
         target = _uuid(payload["reserve_id"])
         old = session.execute(text("""
-            SELECT entity_revision,opened_on,archived_at,target_minor,cycle_number FROM reserves
+            SELECT entity_revision,opened_on,archived_at,target_minor,cycle_number,
+                   first_due_on,period_months,due_day FROM reserves
             WHERE profile_id=:p AND id=:id FOR UPDATE
         """), {"p": p, "id": target}).mappings().one_or_none()
         if old is None or old["archived_at"] is not None or old["opened_on"] is None:
@@ -1161,6 +1177,13 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         if not isinstance(name, str) or not name.strip() or len(name) > 160:
             raise _reject("Некорректное название резерва")
         due, period, due_day, mode, fixed = _mandatory_reserve_plan(payload, old["opened_on"])
+        if int(old["cycle_number"]) != 1 and (
+            due != old["first_due_on"] or period != old["period_months"]
+            or due_day != old["due_day"]
+        ):
+            raise FinanceCommandError(
+                "semantic_conflict", "Период и день оплаты нельзя менять после закрытого цикла", 409,
+            )
         amount = _integer(payload["target_minor"], 1, MAX_MINOR)
         allocated = _safe_balance(session.execute(text("""
             SELECT COALESCE(SUM(delta_minor),0) FROM reserve_allocations
@@ -1177,7 +1200,8 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
                 cycle=int(old["cycle_number"]), revision=new_revision, target_minor=amount,
             )
         session.execute(text("""
-            UPDATE reserves SET title=:title,target_minor=:amount,target_on=:due,
+            UPDATE reserves SET title=:title,target_minor=:amount,
+                target_on=CASE WHEN cycle_number=1 THEN :due ELSE target_on END,
                 first_due_on=:due,period_months=:period,due_day=:day,
                 contribution_mode=:mode,fixed_monthly_minor=:fixed,
                 entity_revision=entity_revision+1,updated_at=now()
@@ -1189,6 +1213,108 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         })
         affected_revision = int(old["entity_revision"]) + 1
         change_payload = {"entity": _reserve_sync_entity(session, p, target)}
+    elif action == "reserve.skip":
+        _shape(payload, {"reserve_id", "slot_on", "occurred_on"},
+               {"reserve_id", "slot_on", "occurred_on"})
+        target = _uuid(payload["reserve_id"])
+        slot = _date(payload["slot_on"])
+        when = _date(payload["occurred_on"])
+        reserve = session.execute(text("""
+            SELECT entity_revision,opened_on,target_on,due_day,cycle_number,archived_at
+            FROM reserves WHERE profile_id=:p AND id=:id FOR UPDATE
+        """), {"p": p, "id": target}).mappings().one_or_none()
+        if (reserve is None or reserve["archived_at"] is not None
+            or reserve["opened_on"] is None):
+            raise FinanceCommandError("semantic_conflict", "План резерва недоступен", 409)
+        _require_revision(versions, target, reserve["entity_revision"])
+        from calendar import monthrange
+
+        expected_day = min(int(reserve["due_day"]), monthrange(slot.year, slot.month)[1])
+        start = reserve["opened_on"]
+        cycle = int(reserve["cycle_number"])
+        if cycle > 1:
+            previous = session.execute(text("""
+                SELECT occurred_on FROM reserve_events
+                WHERE profile_id=:p AND reserve_id=:reserve
+                  AND kind='cycle_close' AND cycle_number=:old
+                ORDER BY revision DESC LIMIT 1
+            """), {"p": p, "reserve": target, "old": cycle - 1}).scalar_one_or_none()
+            if previous is None:
+                raise FinanceCommandError("service_unavailable", "История циклов неполная", 503)
+            start = previous
+        if not (start < slot <= reserve["target_on"] and slot.day == expected_day
+                and slot <= when):
+            raise _reject("Пропущенный взнос не соответствует графику")
+        existing_skip = session.execute(text("""
+            SELECT 1 FROM reserve_events e
+            WHERE e.profile_id=:p AND e.reserve_id=:reserve
+              AND e.kind='skip' AND e.cycle_number=:cycle AND e.slot_on=:slot
+              AND NOT EXISTS (
+                SELECT 1 FROM reserve_events v
+                WHERE v.profile_id=e.profile_id AND v.target_event_id=e.id
+                  AND v.kind='void'
+              )
+        """), {
+            "p": p, "reserve": target, "cycle": cycle, "slot": slot,
+        }).first()
+        if existing_skip:
+            raise FinanceCommandError("semantic_conflict", "Взнос уже отмечен пропущенным", 409)
+        event_id = _reserve_append_event(
+            session, p, target, kind="skip", on=when,
+            cycle=cycle, revision=new_revision, slot_on=slot,
+        )
+        session.execute(text("""
+            UPDATE reserves SET entity_revision=entity_revision+1,updated_at=now()
+            WHERE profile_id=:p AND id=:reserve
+        """), {"p": p, "reserve": target})
+        affected_revision = int(reserve["entity_revision"]) + 1
+        change_payload = {
+            "event_id": str(event_id), "entity": _reserve_sync_entity(session, p, target),
+        }
+    elif action == "reserve.cycle.close":
+        _shape(payload, {"reserve_id", "occurred_on"}, {"reserve_id", "occurred_on"})
+        target = _uuid(payload["reserve_id"])
+        when = _date(payload["occurred_on"])
+        reserve = session.execute(text("""
+            SELECT entity_revision,opened_on,first_due_on,period_months,
+                   due_day,target_minor,cycle_number,archived_at
+            FROM reserves WHERE profile_id=:p AND id=:id FOR UPDATE
+        """), {"p": p, "id": target}).mappings().one_or_none()
+        if (reserve is None or reserve["archived_at"] is not None
+            or reserve["opened_on"] is None):
+            raise FinanceCommandError("semantic_conflict", "План резерва недоступен", 409)
+        _require_revision(versions, target, reserve["entity_revision"])
+        cycle = int(reserve["cycle_number"])
+        if cycle >= 10_000:
+            raise FinanceCommandError("semantic_conflict", "Лимит циклов накопления", 409)
+        if when < reserve["opened_on"]:
+            raise _reject("Завершение цикла раньше открытия")
+        paid = _reserve_paid_this_cycle(session, p, target, cycle)
+        if paid != int(reserve["target_minor"]):
+            raise FinanceCommandError(
+                "semantic_conflict", "Цикл можно закрыть только после полной оплаты", 409,
+            )
+        next_on = _next_reserve_due(
+            reserve["first_due_on"], int(reserve["period_months"]),
+            int(reserve["due_day"]), cycle,
+        )
+        event_id = _reserve_append_event(
+            session, p, target, kind="cycle_close", on=when,
+            cycle=cycle, revision=new_revision,
+        )
+        session.execute(text("""
+            UPDATE reserves SET cycle_number=:next_cycle,target_on=:next_on,
+                                entity_revision=entity_revision+1,updated_at=now()
+            WHERE profile_id=:p AND id=:reserve
+        """), {
+            "p": p, "reserve": target, "next_cycle": cycle + 1,
+            "next_on": next_on,
+        })
+        affected_revision = int(reserve["entity_revision"]) + 1
+        change_payload = {
+            "event_id": str(event_id), "next_due_on": next_on.isoformat(),
+            "entity": _reserve_sync_entity(session, p, target),
+        }
     elif action == "reserve.archive":
         _shape(payload, {"reserve_id"}, {"reserve_id"})
         target = _uuid(payload["reserve_id"])

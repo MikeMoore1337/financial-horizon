@@ -371,7 +371,9 @@
               "reserve.create",
               "reserve.update",
               "reserve.archive",
-              "reserve.allocate"
+              "reserve.allocate",
+              "reserve.skip",
+              "reserve.cycle.close"
             ]
           },
           "expected_entity_revisions": {
@@ -596,6 +598,38 @@
               "properties": {
                 "payload": {
                   "$ref": "#/components/schemas/ReserveAllocationV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "reserve.skip"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/ReserveSkipV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "reserve.cycle.close"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/ReserveCycleCloseV2"
                 }
               }
             }
@@ -1019,6 +1053,47 @@
               }
             ],
             "default": null
+          }
+        }
+      },
+      "ReserveSkipV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reserve_id",
+          "slot_on",
+          "occurred_on"
+        ],
+        "properties": {
+          "reserve_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "slot_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "occurred_on": {
+            "type": "string",
+            "format": "date"
+          }
+        }
+      },
+      "ReserveCycleCloseV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reserve_id",
+          "occurred_on"
+        ],
+        "properties": {
+          "reserve_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "occurred_on": {
+            "type": "string",
+            "format": "date"
           }
         }
       }

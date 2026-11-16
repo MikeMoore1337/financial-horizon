@@ -109,6 +109,7 @@ def upgrade() -> None:
         )
     """)
     op.execute("GRANT SELECT,INSERT ON finance.reserve_events TO fh_finance_runtime")
+    op.execute("GRANT UPDATE (cycle_number) ON finance.reserves TO fh_finance_runtime")
     op.execute("""
         CREATE TRIGGER protect_reserve_events
         BEFORE UPDATE OR DELETE ON finance.reserve_events

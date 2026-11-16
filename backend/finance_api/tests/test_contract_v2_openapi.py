@@ -11,6 +11,7 @@ from backend.finance_api.contracts_v2_candidate import (
     AccountUpdateV2, AccountArchiveV2, TransactionRecordV2,
     SettlementPaymentRecordV2, LoanPaymentRecordV2, PaymentVoidV2,
     ReserveCreateV2, ReserveUpdateV2, ReserveArchiveV2, ReserveAllocationV2,
+    ReserveSkipV2, ReserveCycleCloseV2,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -31,6 +32,8 @@ PAYLOADS = {
     "reserve.update": ("ReserveUpdateV2", ReserveUpdateV2),
     "reserve.archive": ("ReserveArchiveV2", ReserveArchiveV2),
     "reserve.allocate": ("ReserveAllocationV2", ReserveAllocationV2),
+    "reserve.skip": ("ReserveSkipV2", ReserveSkipV2),
+    "reserve.cycle.close": ("ReserveCycleCloseV2", ReserveCycleCloseV2),
 }
 
 

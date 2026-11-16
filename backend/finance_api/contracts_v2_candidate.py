@@ -28,6 +28,7 @@ ACTIONS = (
     "settlement.payment.record", "loan.payment.record",
     "settlement.payment.void", "loan.payment.void",
     "reserve.create", "reserve.update", "reserve.archive", "reserve.allocate",
+    "reserve.skip", "reserve.cycle.close",
 )
 
 
@@ -224,6 +225,28 @@ class ReserveAllocationV2(Wire):
         return value
 
 
+
+class ReserveSkipV2(Wire):
+    reserve_id: str = Field(pattern=UUID_PATTERN)
+    slot_on: str
+    occurred_on: str
+
+    @field_validator("slot_on", "occurred_on")
+    @classmethod
+    def check_dates(cls, value: str) -> str:
+        return _date(value)
+
+
+class ReserveCycleCloseV2(Wire):
+    reserve_id: str = Field(pattern=UUID_PATTERN)
+    occurred_on: str
+
+    @field_validator("occurred_on")
+    @classmethod
+    def check_date(cls, value: str) -> str:
+        return _date(value)
+
+
 _PAYLOADS = {
     "account.create": AccountCreateV2,
     "account.update": AccountUpdateV2,
@@ -238,6 +261,8 @@ _PAYLOADS = {
     "reserve.update": ReserveUpdateV2,
     "reserve.archive": ReserveArchiveV2,
     "reserve.allocate": ReserveAllocationV2,
+    "reserve.skip": ReserveSkipV2,
+    "reserve.cycle.close": ReserveCycleCloseV2,
 }
 
 
@@ -251,6 +276,7 @@ class AccountV2Candidate(Wire):
         "settlement.payment.record", "loan.payment.record",
         "settlement.payment.void", "loan.payment.void",
         "reserve.create", "reserve.update", "reserve.archive", "reserve.allocate",
+        "reserve.skip", "reserve.cycle.close",
     ]
     expected_entity_revisions: dict[str, StrictInt]
     payload: dict[str, Any]
@@ -297,7 +323,8 @@ def validate_v2_account_candidate(
         required = {payload.account_id, payload.obligation_id}
     elif candidate.action == "reserve.allocate":
         required = {payload.account_id, payload.reserve_id}
-    elif candidate.action in ("reserve.update", "reserve.archive"):
+    elif candidate.action in ("reserve.update", "reserve.archive",
+                                   "reserve.skip", "reserve.cycle.close"):
         required = {payload.reserve_id}
     elif candidate.action == "settlement.payment.record":
         required = {payload.account_id, payload.obligation_id}
