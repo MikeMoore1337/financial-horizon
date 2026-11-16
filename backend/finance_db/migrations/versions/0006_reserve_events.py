@@ -38,6 +38,7 @@ def upgrade() -> None:
           reserved_used_minor bigint CHECK (reserved_used_minor BETWEEN 0 AND 1000000000000),
           target_minor bigint CHECK (target_minor BETWEEN 1 AND 1000000000000),
           slot_on date,
+          note varchar(500),
           target_event_id uuid,
           allocation_id uuid,
           transaction_id uuid,

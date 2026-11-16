@@ -28,7 +28,7 @@ ACTIONS = (
     "settlement.payment.record", "loan.payment.record",
     "settlement.payment.void", "loan.payment.void",
     "reserve.create", "reserve.update", "reserve.archive", "reserve.allocate",
-    "reserve.skip", "reserve.cycle.close",
+    "reserve.skip", "reserve.cycle.close", "reserve.event.void",
 )
 
 
@@ -247,6 +247,27 @@ class ReserveCycleCloseV2(Wire):
         return _date(value)
 
 
+
+class ReserveEventVoidV2(Wire):
+    reserve_id: str = Field(pattern=UUID_PATTERN)
+    account_id: str = Field(pattern=UUID_PATTERN)
+    target_event_id: str = Field(pattern=UUID_PATTERN)
+    occurred_on: str
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("occurred_on")
+    @classmethod
+    def check_date(cls, value: str) -> str:
+        return _date(value)
+
+    @field_validator("reason")
+    @classmethod
+    def meaningful_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Reason must not be blank")
+        return value
+
+
 _PAYLOADS = {
     "account.create": AccountCreateV2,
     "account.update": AccountUpdateV2,
@@ -263,6 +284,7 @@ _PAYLOADS = {
     "reserve.allocate": ReserveAllocationV2,
     "reserve.skip": ReserveSkipV2,
     "reserve.cycle.close": ReserveCycleCloseV2,
+    "reserve.event.void": ReserveEventVoidV2,
 }
 
 
@@ -276,7 +298,7 @@ class AccountV2Candidate(Wire):
         "settlement.payment.record", "loan.payment.record",
         "settlement.payment.void", "loan.payment.void",
         "reserve.create", "reserve.update", "reserve.archive", "reserve.allocate",
-        "reserve.skip", "reserve.cycle.close",
+        "reserve.skip", "reserve.cycle.close", "reserve.event.void",
     ]
     expected_entity_revisions: dict[str, StrictInt]
     payload: dict[str, Any]
@@ -321,7 +343,7 @@ def validate_v2_account_candidate(
         required = set()
     elif candidate.action == "reserve.create":
         required = {payload.account_id, payload.obligation_id}
-    elif candidate.action == "reserve.allocate":
+    elif candidate.action in ("reserve.allocate", "reserve.event.void"):
         required = {payload.account_id, payload.reserve_id}
     elif candidate.action in ("reserve.update", "reserve.archive",
                                    "reserve.skip", "reserve.cycle.close"):

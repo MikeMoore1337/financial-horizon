@@ -277,6 +277,7 @@ class ReserveEvent(ProfileEntity, Base):
     reserved_used_minor: Mapped[int | None] = mapped_column(BigInteger)
     target_minor: Mapped[int | None] = mapped_column(BigInteger)
     slot_on: Mapped[date | None] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(String(500))
     target_event_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
     allocation_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
     transaction_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
