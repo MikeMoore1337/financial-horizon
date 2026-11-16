@@ -639,7 +639,7 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             "transaction_id", "fact_id", "account_id", "amount_minor",
             "paid_on", "loan_id", "strategy",
         })
-        _shape(payload, required, required)
+        _shape(payload, required | ({"reserve_id", "reserved_used_minor"} if is_settlement else set()), required)
         target = _uuid(payload["transaction_id"])
         fact_id = _uuid(payload["fact_id"])
         acc = _uuid(payload["account_id"])
@@ -721,6 +721,43 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
                     },
                 },
             }
+        # Reserve release and real bank debit must be one SQL COMMIT.
+        # Link to the server-minted payment transaction with a DEFERRED FK.
+        reserve_payment = None
+        if is_settlement and "reserve_id" in payload:
+            if source["direction"] != "expense" or "reserved_used_minor" not in payload:
+                raise _reject("Накопления доступны только для расходов")
+            reserve_id = _uuid(payload["reserve_id"])
+            used_minor = _integer(payload["reserved_used_minor"], 1, amount)
+            plan = session.execute(text("""
+                SELECT entity_revision,obligation_id,account_id,archived_at,period_months
+                FROM reserves WHERE profile_id=:p AND id=:id FOR UPDATE
+            """), {"p": p, "id": reserve_id}).mappings().one_or_none()
+            if (plan is None or plan["archived_at"] is not None
+                or plan["period_months"] is None
+                or plan["obligation_id"] != fact_source or plan["account_id"] != acc):
+                raise FinanceCommandError("semantic_conflict", "Резерв не связан с этим платежом", 409)
+            _require_revision(versions, reserve_id, plan["entity_revision"])
+            available = _safe_balance(session.execute(text("""
+                SELECT COALESCE(SUM(delta_minor),0) FROM reserve_allocations
+                WHERE profile_id=:p AND reserve_id=:reserve AND account_id=:account
+            """), {"p": p, "reserve": reserve_id, "account": acc}).scalar_one())
+            if available < used_minor:
+                raise FinanceCommandError("semantic_conflict", "Недостаточно накоплено для оплаты", 409)
+            allocation_id = uuid4()
+            session.execute(text("""
+                INSERT INTO reserve_allocations
+                  (profile_id,id,reserve_id,account_id,delta_minor,linked_transaction_id)
+                VALUES (:p,:id,:reserve,:account,:delta,:transaction)
+            """), {
+                "p": p, "id": allocation_id, "reserve": reserve_id,
+                "account": acc, "delta": -used_minor, "transaction": target,
+            })
+            session.execute(text("""
+                UPDATE reserves SET entity_revision=entity_revision+1,updated_at=now()
+                WHERE profile_id=:p AND id=:id
+            """), {"p": p, "id": reserve_id})
+            reserve_payment = (reserve_id, int(plan["entity_revision"]) + 1, used_minor)
         _post(session, p, target, "payment", scope.user_id, paid_on,
               [(acc, signed)])
         # Both fact types have their own profile-scoped unique constraints;
@@ -743,6 +780,13 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             link_field: str(fact_id),
         }
         extra_changes.append(("upsert", fact_id, 1, fact_payload))
+        if reserve_payment is not None:
+            res_id, res_rev, released = reserve_payment
+            change_payload["reserved_used_minor"] = released
+            extra_changes.append((
+                "upsert", res_id, res_rev,
+                {"entity": _reserve_sync_entity(session, p, res_id)},
+            ))
     elif action in ("settlement.payment.void", "loan.payment.void"):
         # A payment fact and its cash movement cannot be cancelled in separate
         # commits. The new Alembic 0002 deferred SQL triggers reject either
