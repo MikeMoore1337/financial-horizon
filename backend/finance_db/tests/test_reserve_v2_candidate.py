@@ -257,3 +257,130 @@ def test_invalid_plan_rejected_before_sql(financial_context):
             submit(engine, scope, "reserve.create", payload, [account_id, obligation_id])
         assert exc.value.code == "invalid_command"
     assert snapshot(engine, scope).body["revision"] == before.body["revision"]
+
+
+
+def test_reserved_payment_and_void_are_one_cash_write_each(financial_context):
+    from backend.finance_db.snapshot import get_finance_delta
+
+    engine, scope, account_id, obligation_id = financial_context
+    plan = reserve_input(account_id, obligation_id, opening=9000)
+    assert submit(
+        engine, scope, "reserve.create", plan, [account_id, obligation_id],
+    ).status == 201
+    before = snapshot(engine, scope)
+    payment = submit(engine, scope, "settlement.payment.record", {
+        "account_id": account_id, "obligation_id": obligation_id,
+        "amount_minor": 6000, "occurrence_on": "2027-11-16",
+        "paid_on": "2027-11-16", "reserve_id": plan["id"],
+        "reserved_used_minor": 6000,
+    }, [account_id, obligation_id, plan["id"]])
+    assert payment.status == 201
+    assert len(payment.body["changes"]) == 3
+    transaction_id = payment.body["changes"][0]["entity_id"]
+    fact_id = payment.body["changes"][1]["entity_id"]
+    payment_link = entities(engine, scope)[transaction_id]["data"]["reserve_allocation"]
+    assert payment_link["delta_minor"] == -6000
+    assert payment_link["reserve_id"] == plan["id"]
+    assert payment_link["reverses_allocation_id"] is None
+    after = entities(engine, scope)
+    assert after[account_id]["data"]["balance_minor"] == 4000
+    assert after[account_id]["data"]["reserved_minor"] == 3000
+    assert after[account_id]["data"]["available_minor"] == 1000
+    assert after[plan["id"]]["data"]["allocated_minor"] == 3000
+
+    delta = get_finance_delta(
+        engine, scope=scope, since_revision=before.body["revision"], page_revisions=1,
+    )
+    assert delta.body["next_since_revision"] == payment.body["revision"]
+    assert [change["ordinal"] for change in delta.body["changes"]] == [0, 1, 2]
+    assert delta.body["changes"][0]["payload"]["entity"] == after[transaction_id]
+    assert delta.body["changes"][2]["payload"]["entity"] == after[plan["id"]]
+
+    original = snapshot(engine, scope)
+    reason = "Тестовая отмена ошибочной оплаты"
+    void = submit(engine, scope, "settlement.payment.void", {
+        "transaction_id": transaction_id, "fact_id": fact_id,
+        "account_id": account_id, "reserve_id": plan["id"], "reason": reason,
+    }, [transaction_id, fact_id, account_id, plan["id"]])
+    assert void.status == 201
+    assert len(void.body["changes"]) == 3
+    reversal_id = void.body["changes"][0]["entity_id"]
+    reversed_link = entities(engine, scope)[reversal_id]["data"]["reserve_allocation"]
+    assert reversed_link["delta_minor"] == 6000
+    assert reversed_link["reverses_allocation_id"] == payment_link["id"]
+    state = entities(engine, scope)
+    assert state[account_id]["data"]["balance_minor"] == 10_000
+    assert state[account_id]["data"]["reserved_minor"] == 9_000
+    assert state[account_id]["data"]["available_minor"] == 1_000
+    assert state[plan["id"]]["data"]["allocated_minor"] == 9_000
+    assert state[fact_id]["data"]["voided_at"] is not None
+    assert get_finance_delta(
+        engine, scope=scope, since_revision=original.body["revision"], page_revisions=1,
+    ).body["changes"][0]["payload"]["entity"] == state[reversal_id]
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        assert session.execute(text("SELECT count(*) FROM ledger_transactions")).scalar_one() == 2
+        assert sorted(session.execute(text("""
+            SELECT signed_minor FROM ledger_postings
+        """)).scalars().all()) == [-6000, 6000]
+        assert sorted(session.execute(text("""
+            SELECT delta_minor FROM reserve_allocations
+        """)).scalars().all()) == [-6000, 6000, 9000]
+    with pytest.raises(FinanceCommandError) as exc:
+        submit(engine, scope, "settlement.payment.void", {
+            "transaction_id": transaction_id, "fact_id": fact_id,
+            "account_id": account_id, "reserve_id": plan["id"],
+            "reason": "Повторная отмена",
+        }, [transaction_id, fact_id, account_id, plan["id"]])
+    assert exc.value.code == "semantic_conflict"
+
+
+def test_reserved_payment_rejects_partial_release_if_cash_would_be_overreserved(financial_context):
+    engine, scope, account_id, obligation_id = financial_context
+    plan = reserve_input(account_id, obligation_id, opening=9000)
+    submit(engine, scope, "reserve.create", plan, [account_id, obligation_id])
+    before = snapshot(engine, scope)
+    for amount, used, code in (
+        (6000, 9000, "invalid_command"),
+        (6000, 3000, "semantic_conflict"),
+    ):
+        with pytest.raises(FinanceCommandError) as exc:
+            submit(engine, scope, "settlement.payment.record", {
+                "account_id": account_id, "obligation_id": obligation_id,
+                "amount_minor": amount, "occurrence_on": "2027-11-16",
+                "paid_on": "2027-11-16", "reserve_id": plan["id"],
+                "reserved_used_minor": used,
+            }, [account_id, obligation_id, plan["id"]])
+        assert exc.value.code == code
+        assert snapshot(engine, scope).body["revision"] == before.body["revision"]
+    a = entities(engine, scope)[account_id]["data"]
+    assert a["balance_minor"] == 10_000 and a["reserved_minor"] == 9000
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        assert session.execute(text("SELECT count(*) FROM ledger_transactions")).scalar_one() == 0
+        assert session.execute(text("SELECT count(*) FROM settlements")).scalar_one() == 0
+        assert session.execute(text("SELECT count(*) FROM reserve_allocations")).scalar_one() == 1
+
+
+def test_direct_orphan_reserved_payment_fails_at_sql_commit(financial_context):
+    from sqlalchemy.exc import DBAPIError
+
+    engine, scope, account_id, obligation_id = financial_context
+    plan = reserve_input(account_id, obligation_id, opening=3000)
+    submit(engine, scope, "reserve.create", plan, [account_id, obligation_id])
+    before = snapshot(engine, scope)
+    with pytest.raises(DBAPIError):
+        with finance_transaction(
+            engine, verified_user_id=scope.user_id, profile_id=scope.profile_id,
+        ) as session:
+            session.execute(text("""
+                INSERT INTO reserve_allocations
+                  (profile_id,id,reserve_id,account_id,delta_minor,linked_transaction_id)
+                VALUES (:p,:id,:reserve,:account,-1000,:missing)
+            """), {
+                "p": scope.profile_id, "id": uuid4(), "reserve": plan["id"],
+                "account": account_id, "missing": uuid4(),
+            })
+    assert snapshot(engine, scope).body["revision"] == before.body["revision"]
+    assert entities(engine, scope)[account_id]["data"]["reserved_minor"] == 3000
