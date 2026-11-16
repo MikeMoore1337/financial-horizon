@@ -1,13 +1,18 @@
 import {test,expect} from '@playwright/test';
 import {
- observe,registerViaUi,logoutViaUi,loginViaUi,visitGuest,view,addEntry,scopedState,currentUser,
+ observe,logoutViaUi,loginViaUi,visitGuest,view,addEntry,scopedState,currentUser,
 } from './helpers.mjs';
 
-test('React calendar honors account logout, guest isolation and subsequent re-login',async({page,context,request})=>{
+test('React calendar honors account logout, guest isolation and subsequent re-login',async({page,context})=>{
  const watcher=await observe(context,page);
- const email='react-calendar-'+test.info().project.name.replace(/[^a-z0-9]/gi,'')+'-'+Date.now()+'@test.invalid';
  const title='E2E account-only React calendar entry';
- await registerViaUi(page,request,email);
+ // Real browser HttpOnly cookie + real auth app, but do not consume the
+ // shared hourly public-registration quota tested independently in auth.spec.
+ const session=await context.request.post('/__e2e__/personal-session');
+ expect(session.status()).toBe(200);
+ const email=(await session.json()).user.email;
+ await page.goto('/');
+ await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
  const user=await currentUser(page);
  expect(user.id).toMatch(/^[0-9a-f]{32}$/);
  await addEntry(page,title,{kind:'income',amount:'777.20'});

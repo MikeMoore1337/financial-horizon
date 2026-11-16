@@ -19,6 +19,9 @@ test('React Overview: ledger data and navigation survive repeated screen transit
 });
 
 test('React Overview: money action uses the existing one-shot ledger mutation',async({page,context})=>{
+ // The synthetic entry is scheduled for Nov 15. Fix browser time before
+ // navigation so the upcoming-events filter is deterministic on any CI date.
+ await page.clock.setFixedTime(new Date('2026-11-14T12:00:00.000Z'));
  const watch=await observe(context,page);
  await visitGuest(page);
  await addEntry(page,'E2E Overview settled',{amount:'499.50'});
