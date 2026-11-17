@@ -115,7 +115,7 @@ function decodeReserves(
   const obligations: ReserveObligationOption[] = [];
   const transactions = new Map<string, string>();
   for (const item of entities) {
-    if (Object.hasOwn(revisions, item.id) && revisions[item.id] !== item.revision) {
+    if (Object.hasOwn(revisions, item.id)) {
       throw new ReservesFinanceError('error');
     }
     revisions[item.id] = item.revision;
