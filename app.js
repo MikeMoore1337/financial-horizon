@@ -40,7 +40,10 @@ let lastStorageContext=null;
 function revokeDisplayedLedger(){
  revokeStateScope(); // invalidate pending IDB reads/writes before clearing the UI
  state=null;
- ui.reserveSuggestions=[];ui.focusReserveId=null;ui.obligationsSection='payments';
+
+ if(typeof ui!=='undefined'){
+  ui.reserveSuggestions=[];ui.focusReserveId=null;ui.obligationsSection='payments';
+ }
  restoreFile=null;verifyBackupFile=null;cloudImportFile=null;pendingCloudImport=null;cloudImportController?.abort();cloudImportController=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
  if(navRoots){navRoots.unmount();navRoots=null;}
