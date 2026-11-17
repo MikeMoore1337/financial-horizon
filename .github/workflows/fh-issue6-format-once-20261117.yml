@@ -1,0 +1,70 @@
+name: "Issue 6 one-time scoped prettier"
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/fh-issue6-format-once-20261117.yml"
+permissions:
+  contents: write
+jobs:
+  format-approved-ui:
+    if: >-
+      github.repository == 'MikeMoore1337/financial-horizon' &&
+      github.event.pull_request.number == 188 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'feat/issue-6-approved-reserves-ui-20261117'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Format exactly two reviewed React files
+        run: npx --no-install prettier --write src/react/Reserves.tsx tests/react/navigation.test.tsx
+      - name: Commit files atomically after a pinned-HEAD check
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('node:fs');
+            const {owner, repo} = context.repo;
+            const branch = 'feat/issue-6-approved-reserves-ui-20261117';
+            const pinned = context.payload.pull_request.head.sha;
+            const head = await github.rest.repos.getBranch({owner, repo, branch});
+            if (head.data.commit.sha !== pinned) {
+              core.setFailed('PR HEAD changed; no formatter write');
+              return;
+            }
+            const paths = ['src/react/Reserves.tsx', 'tests/react/navigation.test.tsx'];
+            const entries = [];
+            for (const path of paths) {
+              const original = await github.rest.repos.getContent({owner,repo,path,ref:branch});
+              if (Array.isArray(original.data) || original.data.type !== 'file') throw Error('Not file: '+path);
+              const actual = Buffer.from(original.data.content,'base64').toString('utf8');
+              const desired = fs.readFileSync(path,'utf8');
+              if (actual !== desired) entries.push({path, mode:'100644', type:'blob', content:desired});
+            }
+            if (!entries.length) {
+              core.info('ALREADY_FORMATTED=YES'); return;
+            }
+            const fresh = await github.rest.repos.getBranch({owner,repo,branch});
+            if (fresh.data.commit.sha !== pinned) {
+              core.setFailed('HEAD changed before commit; no write');return;
+            }
+            const commit = await github.rest.git.getCommit({owner,repo,commit_sha:pinned});
+            const tree = await github.rest.git.createTree({
+              owner,repo,base_tree:commit.data.tree.sha,tree:entries,
+            });
+            const update = await github.rest.git.createCommit({
+              owner,repo,message:'style(#6): Prettier exact React files',tree:tree.data.sha,parents:[pinned],
+            });
+            await github.rest.git.updateRef({
+              owner,repo,ref:'heads/'+branch,sha:update.data.sha,force:false,
+            });
+            core.info('EXACT_SCOPED_FORMAT=PASS '+update.data.sha);
