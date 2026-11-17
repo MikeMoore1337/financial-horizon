@@ -38,10 +38,23 @@ docker exec "$name" psql -v ON_ERROR_STOP=1 -U postgres -d fh_restore \
   -c 'CREATE ROLE fh_finance_runtime LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE NOCREATEDB NOINHERIT' >/dev/null
 gpg --homedir "$FH_FINANCE_GPG_HOME" --batch --no-tty --decrypt "$1" \
   | docker exec -i "$name" pg_restore -U postgres --exit-on-error -d fh_restore
+# Derive expected schema only from the restored, versioned Alembic head.
+# Old encrypted owner backups (15 tables) remain restorable after #6 adds a table.
+version="$(docker exec "$name" psql -X -v ON_ERROR_STOP=1 -U postgres -d fh_restore -Atc \
+  'SELECT version_num FROM finance.alembic_version')"
+case "$version" in
+  0001_initial|0002_linked_void|0003_import_source|0004_reserve_plans|0005_reserved_payment)
+    expected_tables=15 ;;
+  0006_reserve_events)
+    expected_tables=16 ;;
+  *)
+    echo "Unsupported finance migration version in backup" >&2
+    exit 1 ;;
+esac
 # No financial values or identifiers enter public logs.
 count="$(docker exec "$name" psql -U postgres -d fh_restore -Atc \
   "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname='finance' AND tablename <> 'alembic_version'")"
-test "$count" -eq 15
+test "$count" -eq "$expected_tables"
 # The schema must belong to the unprivileged migrator, not the restoring
 # superuser; otherwise the next Alembic upgrade would fail after disaster
 # recovery even if read-only smoke tests appeared healthy.
@@ -50,7 +63,7 @@ test "$(docker exec "$name" psql -U postgres -d fh_restore -Atc \
 test "$(docker exec "$name" psql -U postgres -d fh_restore -Atc \
   "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON c.relnamespace=n.oid
      WHERE n.nspname='finance' AND c.relkind='r' AND c.relname<>'alembic_version'
-       AND pg_get_userbyid(c.relowner)='fh_finance_migrator'")" = "15"
+       AND pg_get_userbyid(c.relowner)='fh_finance_migrator'")" = "$expected_tables"
 # The restored ACL and FORCE RLS must permit only scoped data access.
 # Confirm actual source grant survives backup/restore; local trust is safe only
 # in this isolated disposable --network none container.
@@ -64,7 +77,7 @@ test "$(docker exec "$name" psql -U postgres -d fh_restore -Atc \
   "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
    WHERE n.nspname='finance' AND c.relkind='r'
      AND c.relname<>'alembic_version'
-     AND c.relrowsecurity AND c.relforcerowsecurity")" = "15"
+     AND c.relrowsecurity AND c.relforcerowsecurity")" = "$expected_tables"
 # pg_amcheck requires amcheck in the target DB. Install in disposable restore DB,
 # never in source or production data.
 docker exec "$name" psql -v ON_ERROR_STOP=1 -U postgres -d fh_restore \

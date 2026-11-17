@@ -1,8 +1,9 @@
-"""Unpublished account-command v2 proposal for #33/#67.
+"""Validated account and reserve-plan command v2 proposal for #33/#6/#67.
 
-This module has NO HTTP route, runtime integration or storage side effects.
-Accepted finance v1 remains unchanged. Human approval of a versioned API,
-the linked-payment void contract and all release gates are still mandatory.
+The existing v2 router handles transport and verified sessions; these
+validators have no standalone storage side effects. Reserve CRUD/allocation
+is not a complete #6 release: linked cash payment, void, cycles, migrations
+and approved UI still require independent acceptance.
 """
 from __future__ import annotations
 
@@ -26,6 +27,9 @@ ACTIONS = (
     "account.unarchive", "transaction.record",
     "settlement.payment.record", "loan.payment.record",
     "settlement.payment.void", "loan.payment.void",
+    "reserve.create", "reserve.update", "reserve.archive", "reserve.allocate",
+    "reserve.skip", "reserve.cycle.close", "reserve.cycle.void",
+    "reserve.event.void",
 )
 
 
@@ -104,6 +108,16 @@ class SettlementPaymentRecordV2(Wire):
     amount_minor: StrictInt = Field(ge=1, le=MAX_MINOR)
     paid_on: str
     occurrence_on: str
+    reserve_id: str | None = Field(default=None, pattern=UUID_PATTERN)
+    reserved_used_minor: StrictInt | None = Field(default=None, ge=0, le=MAX_MINOR)
+
+    @model_validator(mode="after")
+    def reserve_link(self):
+        if (self.reserve_id is None) != (self.reserved_used_minor is None):
+            raise ValueError("Linked reserve and amount must be supplied together")
+        if self.reserved_used_minor is not None and self.reserved_used_minor > self.amount_minor:
+            raise ValueError("Reserved amount exceeds paid amount")
+        return self
 
     @field_validator("paid_on", "occurrence_on")
     @classmethod
@@ -129,12 +143,148 @@ class PaymentVoidV2(Wire):
     fact_id: str = Field(pattern=UUID_PATTERN)
     account_id: str = Field(pattern=UUID_PATTERN)
     reason: str = Field(min_length=1, max_length=500)
+    reserve_id: str | None = Field(default=None, pattern=UUID_PATTERN)
 
     @field_validator("reason")
     @classmethod
     def nonblank_reason(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("Reason cannot be blank")
+        return value
+
+
+class ReservePlanFields(Wire):
+    title: str = Field(min_length=1, max_length=160)
+    target_minor: StrictInt = Field(ge=1, le=MAX_MINOR)
+    first_due_on: str
+    period_months: StrictInt = Field(ge=1, le=60)
+    due_day: StrictInt = Field(ge=1, le=31)
+    contribution_mode: Literal["auto", "fixed"]
+    fixed_monthly_minor: StrictInt | None = Field(default=None, ge=1, le=MAX_MINOR)
+
+    @field_validator("title")
+    @classmethod
+    def reserve_title(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Reserve title cannot be blank")
+        return value
+
+    @field_validator("first_due_on")
+    @classmethod
+    def due_date(cls, value: str) -> str:
+        return _date(value)
+
+    @model_validator(mode="after")
+    def check_fixed_amount(self):
+        if (self.contribution_mode == "fixed") != (self.fixed_monthly_minor is not None):
+            raise ValueError("Fixed contributions require exactly one fixed amount")
+        return self
+
+
+class ReserveCreateV2(ReservePlanFields):
+    id: str = Field(pattern=UUID_PATTERN)
+    obligation_id: str = Field(pattern=UUID_PATTERN)
+    account_id: str = Field(pattern=UUID_PATTERN)
+    opened_on: str
+    opening_reserved_minor: StrictInt = Field(ge=0, le=MAX_MINOR)
+
+    @field_validator("opened_on")
+    @classmethod
+    def opening_date(cls, value: str) -> str:
+        return _date(value)
+
+class ReserveUpdateV2(ReservePlanFields):
+    reserve_id: str = Field(pattern=UUID_PATTERN)
+    occurred_on: str | None = None
+
+    @field_validator("occurred_on")
+    @classmethod
+    def validate_change_date(cls, value: str | None) -> str | None:
+        return _date(value) if value is not None else None
+
+
+class ReserveArchiveV2(Wire):
+    reserve_id: str = Field(pattern=UUID_PATTERN)
+
+
+class ReserveAllocationV2(Wire):
+    reserve_id: str = Field(pattern=UUID_PATTERN)
+    account_id: str = Field(pattern=UUID_PATTERN)
+    delta_minor: StrictInt = Field(ge=-MAX_MINOR, le=MAX_MINOR)
+    occurred_on: str | None = None
+
+    @field_validator("occurred_on")
+    @classmethod
+    def validate_allocation_date(cls, value: str | None) -> str | None:
+        return _date(value) if value is not None else None
+
+    @field_validator("delta_minor")
+    @classmethod
+    def reject_zero(cls, value: int) -> int:
+        if value == 0:
+            raise ValueError("Reserve change must be nonzero")
+        return value
+
+
+
+class ReserveSkipV2(Wire):
+    reserve_id: str = Field(pattern=UUID_PATTERN)
+    slot_on: str
+    occurred_on: str
+
+    @field_validator("slot_on", "occurred_on")
+    @classmethod
+    def check_dates(cls, value: str) -> str:
+        return _date(value)
+
+
+class ReserveCycleCloseV2(Wire):
+    reserve_id: str = Field(pattern=UUID_PATTERN)
+    occurred_on: str
+
+    @field_validator("occurred_on")
+    @classmethod
+    def check_date(cls, value: str) -> str:
+        return _date(value)
+
+
+
+
+class ReserveCycleVoidV2(Wire):
+    reserve_id: str = Field(pattern=UUID_PATTERN)
+    occurred_on: str
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("occurred_on")
+    @classmethod
+    def check_date(cls, value: str) -> str:
+        return _date(value)
+
+    @field_validator("reason")
+    @classmethod
+    def meaningful_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Reason must not be blank")
+        return value
+
+
+class ReserveEventVoidV2(Wire):
+    reserve_id: str = Field(pattern=UUID_PATTERN)
+    account_id: str = Field(pattern=UUID_PATTERN)
+    target_event_id: str = Field(pattern=UUID_PATTERN)
+    occurred_on: str
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("occurred_on")
+    @classmethod
+    def check_date(cls, value: str) -> str:
+        return _date(value)
+
+    @field_validator("reason")
+    @classmethod
+    def meaningful_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Reason must not be blank")
         return value
 
 
@@ -148,6 +298,14 @@ _PAYLOADS = {
     "loan.payment.record": LoanPaymentRecordV2,
     "settlement.payment.void": PaymentVoidV2,
     "loan.payment.void": PaymentVoidV2,
+    "reserve.create": ReserveCreateV2,
+    "reserve.update": ReserveUpdateV2,
+    "reserve.archive": ReserveArchiveV2,
+    "reserve.allocate": ReserveAllocationV2,
+    "reserve.skip": ReserveSkipV2,
+    "reserve.cycle.close": ReserveCycleCloseV2,
+    "reserve.cycle.void": ReserveCycleVoidV2,
+    "reserve.event.void": ReserveEventVoidV2,
 }
 
 
@@ -160,6 +318,9 @@ class AccountV2Candidate(Wire):
         "account.unarchive", "transaction.record",
         "settlement.payment.record", "loan.payment.record",
         "settlement.payment.void", "loan.payment.void",
+        "reserve.create", "reserve.update", "reserve.archive", "reserve.allocate",
+        "reserve.skip", "reserve.cycle.close", "reserve.cycle.void",
+        "reserve.event.void",
     ]
     expected_entity_revisions: dict[str, StrictInt]
     payload: dict[str, Any]
@@ -202,12 +363,24 @@ def validate_v2_account_candidate(
     payload = _PAYLOADS[candidate.action].model_validate(candidate.payload)
     if candidate.action == "account.create":
         required = set()
+    elif candidate.action == "reserve.create":
+        required = {payload.account_id, payload.obligation_id}
+    elif candidate.action in ("reserve.allocate", "reserve.event.void"):
+        required = {payload.account_id, payload.reserve_id}
+    elif candidate.action in ("reserve.update", "reserve.archive",
+                                   "reserve.skip", "reserve.cycle.close",
+                                   "reserve.cycle.void"):
+        required = {payload.reserve_id}
     elif candidate.action == "settlement.payment.record":
         required = {payload.account_id, payload.obligation_id}
+        if payload.reserve_id is not None:
+            required.add(payload.reserve_id)
     elif candidate.action == "loan.payment.record":
         required = {payload.account_id, payload.loan_id}
     elif candidate.action.endswith(".payment.void"):
         required = {payload.account_id, payload.transaction_id, payload.fact_id}
+        if payload.reserve_id is not None:
+            required.add(payload.reserve_id)
     else:
         required = {payload.account_id}
     if set(candidate.expected_entity_revisions) != required:
