@@ -13,6 +13,7 @@ import { type ReserveProjection } from '../domain/reserves/index.ts';
 import {
   encodeReserveV2, type ReserveV2Action,
 } from '../domain/reserves/v2-wire.ts';
+import { verifyReservePostcondition } from './reserve-commit-proof.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const ACTOR = /^[0-9a-f]{32}$/;
@@ -488,7 +489,8 @@ export class ReservesFinanceGateway {
       }
       const after = await this.load(actor, asOfDate, undefined, true);
       if (epoch !== this.generation ||
-          after.revision !== response.body.revision || this.etag !== response.etag) {
+          after.revision !== response.body.revision || this.etag !== response.etag ||
+          !verifyReservePostcondition(before, after, action, payload)) {
         throw new ReservesFinanceError('conflict');
       }
       this.uncertain = false;
