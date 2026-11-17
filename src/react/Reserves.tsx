@@ -803,6 +803,9 @@ export function ConnectedReserves({
               visibleReserves.map((reserve) => {
                 const p = reserve.projection;
                 const done = p.fundingGapCents <= 0;
+                let pillStatus = 'Осталось: ' + rubles(p.fundingGapCents);
+                if (done) pillStatus = 'Накоплено';
+                if (p.cyclePaid) pillStatus = 'Оплачено';
                 return (
                   <article key={reserve.id} className="surface fh-reserve-card">
                     <div className="fh-reserve-card-head">
@@ -818,7 +821,7 @@ export function ConnectedReserves({
                         </div>
                       </div>
                       <span className="fh-reserve-pill">
-                        {p.cyclePaid ? 'Оплачено' : done ? 'Накоплено' : 'Осталось: ' + rubles(p.fundingGapCents)}
+                        {pillStatus}
                       </span>
                     </div>
                     <div
