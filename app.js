@@ -23,6 +23,7 @@ const titles={overview:'Обзор',calendar:'Календарь',obligations:'�
 // FastAPI authentication and profile scoping remain the sole authorization boundary.
 const financeAccountsEnabled=document.querySelector('meta[name="fh-finance-accounts"]')?.content==='enabled';
 const financeImportEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-import"]')?.content==='enabled';
+const financeReservesEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-reserves"]')?.content==='enabled';
 let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null,obligationsSection:'payments',focusReserveId:null,reserveSuggestions:[]},passwordMode='export',restoreFile=null,verifyBackupFile=null,cloudImportFile=null,pendingCloudImport=null,cloudImportController=null,cloudImportBusy=false,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
 const emailSession=createEmailSession();
 let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
@@ -100,7 +101,7 @@ function render(){
    screenRoot.render({view:'accounts-connected',props:{verifiedActorUserId:emailSession.userId||null,onBack:()=>navigation('overview')}});
   }else if(ui.view==='calendar'){
    const events=monthEvents(),totals=monthTotals(events);
-   screenRoot.render({view:'calendar',props:{events,month:ui.month,selectedDate:ui.selectedDate,currentDate:today(),monthTitle:monthLabel(ui.month),netPlanCents:totals.netPlanCents,netFactCents:totals.netFactCents,formatDate,rubles,financeEnabled:financeAccountsEnabled&&!guestMode&&emailSession.userId===activeUserId,verifiedActorUserId:emailSession.userId||null}});
+   screenRoot.render({view:'calendar',props:{events,month:ui.month,selectedDate:ui.selectedDate,currentDate:today(),monthTitle:monthLabel(ui.month),netPlanCents:totals.netPlanCents,netFactCents:totals.netFactCents,formatDate,rubles,financeEnabled:financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId,verifiedActorUserId:emailSession.userId||null}});
   }else if(ui.view==='overview'){
    const currentDate=today(),events=monthEvents(),totals=monthTotals(events);
    const upcoming=events.filter(event=>event.date>=currentDate).slice(0,4);
@@ -114,7 +115,7 @@ function render(){
    const snapshot=loan?loanLedger(loan,state.loanPayments):null;
    const loanSummary=loan?{id:loan.id,title:loan.title,outstandingCents:snapshot.outstandingCents,monthlyCents:snapshot.monthlyCents,months:snapshot.months,
     percent:Math.max(0,Math.min(100,Math.round((1-snapshot.outstandingCents/loan.openingCents)*100)))}:null;
-   screenRoot.render({view:'overview',props:{currentDate,monthTitle:monthLabel(ui.month),hasData:hasData(),totals,categories,upcoming,loan:loanSummary,rubles,formatDate,financeEnabled:financeAccountsEnabled&&!guestMode&&emailSession.userId===activeUserId,verifiedActorUserId:emailSession.userId||null}});
+   screenRoot.render({view:'overview',props:{currentDate,monthTitle:monthLabel(ui.month),hasData:hasData(),totals,categories,upcoming,loan:loanSummary,rubles,formatDate,financeEnabled:financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId,verifiedActorUserId:emailSession.userId||null}});
   }else if(ui.view==='obligations'){
    const items=state.entries.filter(isActive)
     .filter(e=>ui.filter==='all'||(ui.filter==='regular'&&e.recurrence!=='once')||
@@ -131,7 +132,7 @@ function render(){
    screenRoot.render({view:'obligations',props:{rows,month:ui.month,monthTitle:monthLabel(ui.month),
     filter:ui.filter,expandedEntry:ui.expandedEntry,currentDate:today(),
     expenseCents:totals.expenseCents,expensePaidCents:totals.expensePaidCents,rubles,formatDate,
-    financeEnabled:financeAccountsEnabled&&!guestMode&&emailSession.userId===activeUserId,
+    financeEnabled:financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId,
     verifiedActorUserId:emailSession.userId||null,reserveSection:ui.obligationsSection,
     focusReserveId:ui.focusReserveId,importSuggestions:ui.reserveSuggestions,onReserveSectionChange:next=>{
      ui.obligationsSection=next;ui.focusReserveId=null;render();
@@ -825,7 +826,7 @@ function bindEvents(){
   const actionEl=event.target.closest('[data-action]');if(actionEl){
    event.preventDefault();
    if(actionEl.dataset.action==='open-reserves'){
-    if(financeAccountsEnabled&&!guestMode&&emailSession.userId===activeUserId){
+    if(financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId){
      ui.obligationsSection='reserves';ui.focusReserveId=actionEl.dataset.id||null;
      navigation('obligations');
     }
