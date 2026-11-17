@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { EventRow, Icon, type CalendarEvent, type CalendarProps } from './Calendar';
+import { ReserveHighlights } from './ReserveHighlights';
 
 export interface OverviewTotals {
   netPlanCents: number;
@@ -31,6 +32,8 @@ export interface OverviewProps {
   loan: OverviewLoan | null;
   rubles: CalendarProps['rubles'];
   formatDate: CalendarProps['formatDate'];
+  financeEnabled?: boolean;
+  verifiedActorUserId?: string | null;
 }
 
 function PageHeader({
@@ -68,6 +71,8 @@ export function Overview({
   loan,
   rubles,
   formatDate,
+  financeEnabled = false,
+  verifiedActorUserId = null,
 }: OverviewProps) {
   if (!hasData) {
     return (
@@ -97,6 +102,9 @@ export function Overview({
             </button>
           </div>
         </div>
+        {financeEnabled && verifiedActorUserId ? (
+          <ReserveHighlights verifiedActorUserId={verifiedActorUserId} currentDate={currentDate} />
+        ) : null}
       </>
     );
   }
@@ -215,6 +223,9 @@ export function Overview({
           </div>
         </div>
       </div>
+      {financeEnabled && verifiedActorUserId ? (
+        <ReserveHighlights verifiedActorUserId={verifiedActorUserId} currentDate={currentDate} />
+      ) : null}
     </>
   );
 }
