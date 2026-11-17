@@ -3,6 +3,7 @@ import {readState,updateState,replaceState,askPersistentStorage,storageStatus,se
 import {encryptBackup,decryptBackup} from './backup.js';
 import {parseSchedule} from './schedule.js';
 import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.js';
+import {previewXlsxReserves} from './src/domain/reserves/xlsx-preview.ts';
 import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
 import {createScreenRoot} from './src/react/ScreenRoot.tsx';
@@ -22,7 +23,7 @@ const titles={overview:'Обзор',calendar:'Календарь',obligations:'�
 // FastAPI authentication and profile scoping remain the sole authorization boundary.
 const financeAccountsEnabled=document.querySelector('meta[name="fh-finance-accounts"]')?.content==='enabled';
 const financeImportEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-import"]')?.content==='enabled';
-let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null,obligationsSection:'payments',focusReserveId:null},passwordMode='export',restoreFile=null,verifyBackupFile=null,cloudImportFile=null,pendingCloudImport=null,cloudImportController=null,cloudImportBusy=false,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
+let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null,obligationsSection:'payments',focusReserveId:null,reserveSuggestions:[]},passwordMode='export',restoreFile=null,verifyBackupFile=null,cloudImportFile=null,pendingCloudImport=null,cloudImportController=null,cloudImportBusy=false,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
 const emailSession=createEmailSession();
 let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
 const GUEST_MODE_KEY='fh-guest-session-v2';
@@ -131,7 +132,7 @@ function render(){
     expenseCents:totals.expenseCents,expensePaidCents:totals.expensePaidCents,rubles,formatDate,
     financeEnabled:financeAccountsEnabled&&!guestMode&&emailSession.userId===activeUserId,
     verifiedActorUserId:emailSession.userId||null,reserveSection:ui.obligationsSection,
-    focusReserveId:ui.focusReserveId,onReserveSectionChange:next=>{
+    focusReserveId:ui.focusReserveId,importSuggestions:ui.reserveSuggestions,onReserveSectionChange:next=>{
      ui.obligationsSection=next;ui.focusReserveId=null;render();
     }}});
   }else if(ui.view==='loans'){
@@ -503,7 +504,12 @@ async function handleAction(button){
    for(const row of diff.loans){const {source,...value}=row;s.loans.push({...value,id:uuid()});}
    audit(s,'excel-import','Добавлены записи из Excel: '+diff.entries.length+' платежей, '+diff.loans.length+' кредитов');
   },'Данные из Excel добавлены локально');
-  $('#excel-import-dialog').close();pendingExcelImport=null;ui.view='overview';render();return;
+  ui.reserveSuggestions=data.reservePreviews.filter(preview=>preview.status==='suggestion');
+  $('#excel-import-dialog').close();pendingExcelImport=null;ui.view='overview';render();
+  if(ui.reserveSuggestions.length){
+   toast('Импорт завершён. Найдены предложения по накоплениям ('+ui.reserveSuggestions.length+'). Откройте раздел «Накопления» для ручного подтверждения.');
+  }
+  return;
  }
  if(type==='install'){if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;}else toast('iPhone: Safari → Поделиться → На экран «Домой». Mac: Safari → Добавить в Dock.');return;}
  if(type==='sample'){
@@ -563,7 +569,10 @@ async function previewExcelImport(file){
  const data=await readXlsxRows(await file.arrayBuffer());
  const parsed=parseBudgetRows(data.rows,today());
  const diff=previewImportChanges(parsed,state);
- pendingExcelImport={parsed,name:file.name.slice(0,120)};
+ const reservePreviews=previewXlsxReserves(data.rows,diff.entries.map(entry=>({
+  source:entry.source,title:entry.title,kind:entry.kind,amountCents:entry.amountCents
+ })));
+ pendingExcelImport={parsed,name:file.name.slice(0,120),reservePreviews};
  const summary=$('#excel-import-summary'),items=$('#excel-import-items'),warnings=$('#excel-import-warnings');
  summary.replaceChildren();items.replaceChildren();warnings.replaceChildren();
  const paragraph=document.createElement('p');
@@ -572,6 +581,15 @@ async function previewExcelImport(file){
  const totals=document.createElement('p');
  totals.textContent='Плановые доходы: '+rubles(diff.incomeCents)+'. Плановые расходы: '+rubles(diff.expenseCents)+' (без обязательных платежей по кредитам).';
  summary.append(totals);
+ if(reservePreviews.length){
+  const notice=document.createElement('p');notice.className='small-hint';
+  const suggested=reservePreviews.filter(preview=>preview.status==='suggestion').length;
+  const invalid=reservePreviews.length-suggested;
+  notice.textContent='Периодические расходы в XLSX: '+suggested+' возможных накоплений'+
+   (invalid?' · '+invalid+' неоднозначных подсказок требуют проверки':'')+
+   '. Предложения не создаются автоматически. После локального импорта нужно отдельно подтвердить резерв, счёт и обработку прежнего расхода.';
+  summary.append(notice);
+ }
  const itemsList=document.createElement('ul');
  for(const record of [...diff.entries,...diff.loans].slice(0,50)){
   const li=document.createElement('li');
