@@ -121,3 +121,37 @@
 @media(prefers-reduced-motion:reduce){
  .fh-reserve-track span{transition:none}
 }
+
+/* Approved Obligations segmented view and explicit XLSX/planning confirmations. */
+.fh-reserve-tabs{display:flex;width:max-content;max-width:100%;border:1px solid var(--line);margin:0 0 20px;background:var(--surface);padding:3px;border-radius:13px;gap:3px}
+.fh-reserve-tabs button{min-width:126px;min-height:44px;padding:0 16px;border-radius:10px;font-weight:700}
+.fh-reserve-tabs button.selected{background:var(--accent);color:var(--onaccent);box-shadow:0 2px 8px #0066ff26}
+.fh-reserve-tabs button:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+.fh-reserve-plan-create{border-top:1px solid var(--line);padding-top:13px;margin:0 0 18px}
+.fh-reserve-plan-create summary{min-height:44px;display:flex;align-items:center;cursor:pointer;color:var(--accent-deep);font-size:13px;font-weight:650}
+.fh-reserve-plan-create .fh-reserve-form{padding:8px 0 4px}
+.fh-reserve-plan-consent{display:flex;align-items:flex-start;gap:10px;font-size:12px;line-height:1.55;font-weight:450}
+.fh-reserve-plan-consent input{accent-color:var(--accent);margin:3px 0 0;flex:none}
+.fh-reserve-import-hints{display:grid;gap:10px;padding:16px;margin-bottom:14px;border-radius:14px}
+.fh-reserve-import-hints h3{font-size:15px;margin:0}
+.fh-reserve-import-hints button{min-height:44px;text-align:left;justify-content:start;white-space:normal}
+.fh-reserve-import-choice{display:grid;gap:10px;border:1px solid var(--line);background:var(--soft);padding:13px;border-radius:12px;margin-bottom:15px;font-size:12px}
+.fh-reserve-import-choice strong{font-size:13px}
+.fh-reserve-highlights{margin-top:22px}
+.fh-reserve-highlights-list{display:grid;border-radius:16px;overflow:hidden;padding:0 14px}
+.fh-reserve-highlight-row{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0;padding:14px 0;border:0;border-bottom:1px solid var(--line);background:none;text-align:left;color:var(--ink);min-height:60px}
+.fh-reserve-highlight-row:last-child{border-bottom:0}
+.fh-reserve-highlight-row:focus-visible{outline:3px solid var(--accent);outline-offset:-3px}
+.fh-reserve-highlight-title,.fh-reserve-highlight-numbers{display:grid;gap:5px;min-width:0}
+.fh-reserve-highlight-title strong{overflow-wrap:anywhere}
+.fh-reserve-highlight-numbers{text-align:right;font-variant-numeric:tabular-nums}
+.fh-reserve-highlight-title small,.fh-reserve-highlight-numbers small{font-size:11px;color:var(--sub);overflow-wrap:anywhere}
+.fh-reserve-highlight-error,.fh-reserve-highlight-loading{padding:13px 16px;font-size:12px;color:var(--sub)}
+@media(max-width:760px){
+ .fh-reserve-tabs{width:100%;margin-bottom:14px}
+ .fh-reserve-tabs button{flex:1;min-width:0}
+ .fh-reserve-desktop-create{display:none}
+ .fh-reserve-highlights-list{padding:0 10px}
+ .fh-reserve-highlight-row{gap:8px}
+ .fh-reserve-highlight-title,.fh-reserve-highlight-numbers{font-size:12px}
+}
