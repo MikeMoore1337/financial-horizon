@@ -820,9 +820,7 @@ export function ConnectedReserves({
                           </p>
                         </div>
                       </div>
-                      <span className="fh-reserve-pill">
-                        {pillStatus}
-                      </span>
+                      <span className="fh-reserve-pill">{pillStatus}</span>
                     </div>
                     <div
                       className="fh-reserve-track"
