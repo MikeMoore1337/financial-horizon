@@ -12,6 +12,9 @@ import {
 } from '../domain/reserves/index.ts';
 import { previewReservePaymentImpact } from '../domain/reserves/payment-impact.ts';
 import {
+  confirmXlsxReservePreview, type XlsxReservePreview,
+} from '../domain/reserves/xlsx-preview.ts';
+import {
   ReservesFinanceError, ReservesFinanceGateway,
   type ReserveViewRow, type ReservesServerView,
 } from './reserves-finance-gateway';
@@ -22,6 +25,7 @@ export interface ConnectedReservesProps {
   readonly verifiedActorUserId: string | null;
   readonly currentDate: string;
   readonly focusReserveId?: string | null;
+  readonly importSuggestions?: readonly XlsxReservePreview[];
 }
 
 type Status = 'loading' | 'ready' | 'locked' | 'offline' | 'conflict' | 'error';
@@ -117,7 +121,7 @@ function TrapDialog({
 }
 
 export function ConnectedReserves({
-  verifiedActorUserId, currentDate, focusReserveId,
+  verifiedActorUserId, currentDate, focusReserveId, importSuggestions = [],
 }: ConnectedReservesProps) {
   const gateway = useMemo(() => new ReservesFinanceGateway(), [verifiedActorUserId]);
   const [view, setView] = useState<ReservesServerView | null>(null);
@@ -131,6 +135,8 @@ export function ConnectedReserves({
   const [feedback, setFeedback] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogSelection>(null);
   const [createMobile, setCreateMobile] = useState(false);
+  const [importPreview, setImportPreview] = useState<XlsxReservePreview | null>(null);
+  const [importConsent, setImportConsent] = useState(false);
   const createAside = useRef<HTMLElement>(null);
   const createOpener = useRef<HTMLButtonElement>(null);
 
@@ -362,7 +368,7 @@ export function ConnectedReserves({
       setError('Недостаточно свободных средств либо резерв этого обязательства уже существует.');
       return;
     }
-    const payload: Record<string, unknown> = {
+    let payload: Record<string, unknown> = {
       id: crypto.randomUUID(), account_id: chosenAccount.id,
       obligation_id: chosenObligation.id, title: chosenObligation.title,
       target_minor: creationForecast.targetCents,
@@ -371,7 +377,26 @@ export function ConnectedReserves({
       contribution_mode: contributionMode, opening_reserved_minor: openingMinor,
       ...(contributionMode === 'fixed' ? { fixed_monthly_minor: parseRubMinor(fixed) } : {}),
     };
-    await write('reserve.create', payload, 'Резерв создан');
+    if (importPreview?.status === 'suggestion') {
+      if (!importConsent || Number(months) !== importPreview.periodMonths) {
+        setError('Подтвердите сохранение исходной записи и периодичность XLSX.');
+        return;
+      }
+      const confirmed = confirmXlsxReservePreview(importPreview, {
+        obligationId: chosenObligation.id,
+        accountId: chosenAccount.id,
+        reserveId: String(payload.id), openedOn: currentDate,
+        firstDueOn: firstDue, dueDay: Number(firstDue.slice(8)),
+        targetCents: creationForecast.targetCents,
+        openingReservedCents: openingMinor, contributionMode,
+        ...(contributionMode === 'fixed' ?
+          { fixedMonthlyCents: parseRubMinor(fixed) } : {}),
+        confirmed: true, sourceHandling: 'keep-original-unchanged',
+      });
+      payload = Object.fromEntries(Object.entries(confirmed.payload).filter(([, val]) => val !== null));
+    }
+    const saved = await write('reserve.create', payload, 'Резерв создан');
+    if (saved) { setImportPreview(null); setImportConsent(false); }
   }
 
   async function onEdit(event: FormEvent<HTMLFormElement>) {
@@ -550,6 +575,29 @@ export function ConnectedReserves({
               </div>
             </div>
           </div>
+          {importSuggestions.some((hint) => hint.status === 'suggestion') ? (
+            <div className="surface fh-reserve-import-hints">
+              <h3>Предложения из последнего XLSX</h3>
+              <p className="small-hint">Исходные расходы остаются без изменений.
+                Создание накопления требует отдельного подтверждения.</p>
+              {importSuggestions.filter((hint) => hint.status === 'suggestion').map((hint) => (
+                <button key={hint.source} type="button" className="button-secondary"
+                  disabled={blocked || busy} onClick={() => {
+                    if (hint.status !== 'suggestion') return;
+                    setImportPreview(hint);
+                    setImportConsent(false);
+                    setTarget(String(hint.importedAmountCents / 100));
+                    setMonths(String(hint.periodMonths));
+                    setFirstDue(addReserveMonths(currentDate, hint.periodMonths));
+                    setOpening('0');
+                    if (window.matchMedia('(max-width:760px)').matches) setCreateMobile(true);
+                    else createAside.current?.querySelector<HTMLElement>('select')?.focus();
+                  }}>
+                  {hint.title} · раз в {hint.periodMonths} мес. · Подтвердить
+                </button>
+              ))}
+            </div>
+          ) : null}
           <button
             ref={createOpener} type="button"
             className="button-primary fh-reserve-mobile-create"
@@ -701,6 +749,22 @@ export function ConnectedReserves({
               }>Создать обязательство</button>
             </form>
           </details>
+          {importPreview?.status === 'suggestion' ? (
+            <div className="fh-reserve-import-choice" role="status">
+              <strong>Из XLSX: {importPreview.title}</strong>
+              <span>Период: каждые {importPreview.periodMonths} мес.
+                Выберите соответствующее серверное обязательство и подтвердите сумму.</span>
+              <label className="fh-reserve-plan-consent">
+                <input type="checkbox" checked={importConsent}
+                  onChange={(event) => setImportConsent(event.target.checked)} />
+                <span>Подтверждаю: исходный импортированный расход оставить без изменений.
+                  Накопление будет отдельной записью, без повторного расхода.</span>
+              </label>
+              <button type="button" className="button-text" onClick={() => {
+                setImportPreview(null); setImportConsent(false);
+              }}>Отменить предложение XLSX</button>
+            </div>
+          ) : null}
           <form onSubmit={(event) => { void onCreate(event).catch((failure) =>
             setError(actionError(failure))); }} className="fh-reserve-form">
             <label>Обязательство
@@ -731,7 +795,7 @@ export function ConnectedReserves({
                 placeholder="Например, 9000" onChange={(event) => setTarget(event.target.value)} />
             </label>
             <label>Периодичность
-              <select value={months} onChange={(event) => {
+              <select disabled={importPreview?.status === 'suggestion'} value={months} onChange={(event) => {
                 setMonths(event.target.value);
                 setFirstDue(addReserveMonths(currentDate, Number(event.target.value)));
               }}>
@@ -783,7 +847,8 @@ export function ConnectedReserves({
                 Локальные записи не подменяют серверные.</p>
             ) : null}
             <button type="submit" className="button-primary" disabled={
-              blocked || busy || !creationForecast || !accounts.length || !obligations.length
+              blocked || busy || !creationForecast || !accounts.length || !obligations.length ||
+              (importPreview?.status === 'suggestion' && !importConsent)
             }>Создать</button>
           </form>
           {error ? <p className="fh-reserve-error" role="alert">{error}</p> : null}
