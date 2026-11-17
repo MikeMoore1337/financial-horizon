@@ -275,9 +275,9 @@ export function Obligations({
           <div className="eyebrow">{formatDate(currentDate)} · Личные финансы</div>
           <h1>Обязательства</h1>
           <p className="subtitle">
-            {reserveSection === 'reserves' ?
-              'Резервы для регулярных обязательств и подтверждённые остатки' :
-              'Доходы и расходы. Полный учёт запланированных и фактических сумм'}
+            {reserveSection === 'reserves'
+              ? 'Резервы для регулярных обязательств и подтверждённые остатки'
+              : 'Доходы и расходы. Полный учёт запланированных и фактических сумм'}
           </p>
         </div>
         <div className="header-tools">
@@ -286,30 +286,48 @@ export function Obligations({
               <Icon name="plus" /> Добавить
             </button>
           ) : (
-            <button type="button" className="button-primary fh-reserve-desktop-create"
+            <button
+              type="button"
+              className="button-primary fh-reserve-desktop-create"
               onClick={() => {
-                const mobile = document.querySelector<HTMLButtonElement>('.fh-reserve-mobile-create');
+                const mobile = document.querySelector<HTMLButtonElement>(
+                  '.fh-reserve-mobile-create',
+                );
                 if (window.matchMedia('(max-width:760px)').matches) mobile?.click();
                 else document.querySelector<HTMLElement>('.fh-reserve-editor select')?.focus();
-              }}>
+              }}
+            >
               <Icon name="plus" /> Создать резерв
             </button>
           )}
         </div>
       </header>
       <div className="segment fh-reserve-tabs" role="group" aria-label="Разделы обязательств">
-        <button type="button" className={reserveSection === 'payments' ? 'selected' : ''}
+        <button
+          type="button"
+          className={reserveSection === 'payments' ? 'selected' : ''}
           aria-pressed={reserveSection === 'payments'}
-          onClick={() => onReserveSectionChange?.('payments')}>Платежи</button>
-        <button type="button" className={reserveSection === 'reserves' ? 'selected' : ''}
+          onClick={() => onReserveSectionChange?.('payments')}
+        >
+          Платежи
+        </button>
+        <button
+          type="button"
+          className={reserveSection === 'reserves' ? 'selected' : ''}
           aria-pressed={reserveSection === 'reserves'}
-          onClick={() => onReserveSectionChange?.('reserves')}>Накопления</button>
+          onClick={() => onReserveSectionChange?.('reserves')}
+        >
+          Накопления
+        </button>
       </div>
       {reserveSection === 'reserves' ? (
         financeEnabled ? (
-          <ConnectedReserves verifiedActorUserId={verifiedActorUserId}
-            currentDate={currentDate} focusReserveId={focusReserveId}
-            importSuggestions={importSuggestions} />
+          <ConnectedReserves
+            verifiedActorUserId={verifiedActorUserId}
+            currentDate={currentDate}
+            focusReserveId={focusReserveId}
+            importSuggestions={importSuggestions}
+          />
         ) : (
           <div className="surface fh-reserve-empty" role="status">
             <h2>Накопления недоступны</h2>
@@ -318,91 +336,91 @@ export function Obligations({
         )
       ) : (
         <>
-      <div className="kpi-grid" style={{ maxWidth: 760, margin: '0 0 20px' }}>
-        <div className="surface kpi">
-          <div className="kpi-label">Расходы по плану</div>
-          <div className="kpi-num">{rubles(expenseCents)}</div>
-        </div>
-        <div className="surface kpi">
-          <div className="kpi-label">Оплачено фактически</div>
-          <div className="kpi-num pos">{rubles(expensePaidCents)}</div>
-        </div>
-      </div>
-      <div className="filter-bar">
-        <div className="segment">
-          {filters.map((option) => (
-            <button
-              key={option.key}
-              className={filter === option.key ? 'selected' : ''}
-              data-action="filter"
-              data-filter={option.key}
-              aria-pressed={filter === option.key}
-            >
-              {option.title}
-            </button>
-          ))}
-        </div>
-        <span className="small-hint">
-          {rows.length} записей · {monthTitle}
-        </span>
-      </div>
-      <div className="surface">
-        {rows.length ? (
-          <>
-            <table className="records-table">
-              <thead>
-                <tr>
-                  <th>Название</th>
-                  <th>Дата</th>
-                  <th>Состояние</th>
-                  <th style={{ textAlign: 'right' }}>Сумма</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <DesktopRow
-                    key={row.id}
-                    row={row}
-                    month={month}
-                    expandedEntry={expandedEntry}
-                    rubles={rubles}
-                    formatDate={formatDate}
-                  />
-                ))}
-              </tbody>
-            </table>
-            <div className="records-mobile">
-              {rows.map((row) => (
-                <MobileRow
-                  key={row.id}
-                  row={row}
-                  month={month}
-                  expandedEntry={expandedEntry}
-                  rubles={rubles}
-                  formatDate={formatDate}
-                />
+          <div className="kpi-grid" style={{ maxWidth: 760, margin: '0 0 20px' }}>
+            <div className="surface kpi">
+              <div className="kpi-label">Расходы по плану</div>
+              <div className="kpi-num">{rubles(expenseCents)}</div>
+            </div>
+            <div className="surface kpi">
+              <div className="kpi-label">Оплачено фактически</div>
+              <div className="kpi-num pos">{rubles(expensePaidCents)}</div>
+            </div>
+          </div>
+          <div className="filter-bar">
+            <div className="segment">
+              {filters.map((option) => (
+                <button
+                  key={option.key}
+                  className={filter === option.key ? 'selected' : ''}
+                  data-action="filter"
+                  data-filter={option.key}
+                  aria-pressed={filter === option.key}
+                >
+                  {option.title}
+                </button>
               ))}
             </div>
-          </>
-        ) : (
-          <div className="empty-panel">
-            <Icon name="list" />
-            <h3>Здесь пока нет записей</h3>
-            <p>
-              Добавляйте регулярные платежи, зарплату или разовые расходы. Их можно изменять и
-              архивировать.
-            </p>
-            <button className="button-primary" data-action="new-entry">
-              Добавить запись
-            </button>
+            <span className="small-hint">
+              {rows.length} записей · {monthTitle}
+            </span>
           </div>
-        )}
-      </div>
-      <p className="small-hint" style={{ marginTop: 13 }}>
-        Кредиты учитываются в общем финансовом плане и на странице «Кредиты». Архивирование
-        сохраняет историю.
-      </p>
+          <div className="surface">
+            {rows.length ? (
+              <>
+                <table className="records-table">
+                  <thead>
+                    <tr>
+                      <th>Название</th>
+                      <th>Дата</th>
+                      <th>Состояние</th>
+                      <th style={{ textAlign: 'right' }}>Сумма</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => (
+                      <DesktopRow
+                        key={row.id}
+                        row={row}
+                        month={month}
+                        expandedEntry={expandedEntry}
+                        rubles={rubles}
+                        formatDate={formatDate}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+                <div className="records-mobile">
+                  {rows.map((row) => (
+                    <MobileRow
+                      key={row.id}
+                      row={row}
+                      month={month}
+                      expandedEntry={expandedEntry}
+                      rubles={rubles}
+                      formatDate={formatDate}
+                    />
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="empty-panel">
+                <Icon name="list" />
+                <h3>Здесь пока нет записей</h3>
+                <p>
+                  Добавляйте регулярные платежи, зарплату или разовые расходы. Их можно изменять и
+                  архивировать.
+                </p>
+                <button className="button-primary" data-action="new-entry">
+                  Добавить запись
+                </button>
+              </div>
+            )}
+          </div>
+          <p className="small-hint" style={{ marginTop: 13 }}>
+            Кредиты учитываются в общем финансовом плане и на странице «Кредиты». Архивирование
+            сохраняет историю.
+          </p>
         </>
       )}
     </>
