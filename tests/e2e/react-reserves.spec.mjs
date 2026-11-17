@@ -40,7 +40,7 @@ test('#6 new reserves route requires separately activated production API even fo
  await page.getByRole('button',{name:'Накопления',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Накопления недоступны'})).toBeVisible();
  await view(page,'calendar');
- await expect(page.locator('#toolbar-title')).toHaveText('Календарь платежей');
+ await expect(page.locator('#toolbar-title')).toHaveText('Календарь');
  expect(financeCalls).toEqual([]);
  watch.assertClean();
 });
