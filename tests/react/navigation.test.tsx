@@ -24,8 +24,8 @@ describe('React navigation shell and auth boundary', () => {
     expect(screen.getByRole('button', { name: 'Обязательства' })).toBeTruthy();
     cleanup();
     render(<Navigation variant="bottom" view="settings" />);
-    expect(screen.getByRole('button', { name: 'Ещё' }).getAttribute('aria-current')).toBe('page');
-    expect(screen.getByRole('button', { name: 'Платежи' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Настройки' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('button', { name: 'Обязательства' })).toBeTruthy();
   });
   it('uses a single delegated action per click across both React-owned navigation hosts', () => {
     const sidebar = document.createElement('nav'),
