@@ -142,6 +142,11 @@ export function ConnectedReserves({
   const [contributionMode, setContributionMode] = useState<'auto' | 'fixed'>('auto');
   const [fixed, setFixed] = useState('');
   const [opening, setOpening] = useState('0');
+  const [newTitle, setNewTitle] = useState('');
+  const [newAmount, setNewAmount] = useState('');
+  const [newStartsOn, setNewStartsOn] = useState(addReserveMonths(currentDate, 1));
+  const [newEvery, setNewEvery] = useState('12');
+  const [newPlanConsent, setNewPlanConsent] = useState(false);
 
   const [amount, setAmount] = useState('');
   const [reservedUsed, setReservedUsed] = useState('');
@@ -234,6 +239,16 @@ export function ConnectedReserves({
   const chosenObligation = obligations.find((obligation) => obligation.id === obligationId) ??
     obligations[0];
 
+  useEffect(() => {
+    if (!view) return;
+    const firstAccount = view.accounts.find((item) => !item.archived);
+    const firstObligation = view.obligations.find((item) => !item.archived);
+    setAccountId((previous) => previous || firstAccount?.id || '');
+    setObligationId((previous) => previous || firstObligation?.id || '');
+    setTarget((previous) => previous || (firstObligation ?
+      String(firstObligation.amountMinor / 100) : ''));
+  }, [view]);
+
   const creationForecast = useMemo(() => {
     try {
       const amountMinor = parseRubMinor(target);
@@ -291,6 +306,47 @@ export function ConnectedReserves({
     }
     setDialog({ kind, id: reserve.id });
     setError(null);
+  }
+
+  async function onCreatePlanning(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (inFlight.current || !view || blocked || !newPlanConsent || !newTitle.trim() ||
+        !isValidLedgerDate(newStartsOn)) {
+      setError('Нужно явно подтвердить создание серверного обязательства.');
+      return;
+    }
+    const minor = parseRubMinor(newAmount);
+    const every = Number(newEvery);
+    if (minor <= 0 || !Number.isSafeInteger(every) || every < 1 || every > 60 ||
+        view.obligations.some((item) => !item.archived &&
+          item.title.trim().toLowerCase() === newTitle.trim().toLowerCase())) {
+      setError('Проверьте сумму, период и отсутствие существующего обязательства.');
+      return;
+    }
+    inFlight.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      const created = await gateway.createPlanningObligation({
+        title: newTitle.trim(), amountMinor: minor, startsOn: newStartsOn,
+        recurrenceUnit: 'month', recurrenceEvery: every, timezone,
+      }, currentDate);
+      setView(created.view);
+      setBlocked(gateway.writeBlocked);
+      setStatus('ready');
+      setObligationId(created.obligationId);
+      setTarget(newAmount);
+      setMonths(newEvery);
+      setFirstDue(newStartsOn);
+      setFeedback('Серверное обязательство создано. Проверьте параметры резерва.');
+      setNewPlanConsent(false);
+    } catch (failure) {
+      onFailure(failure);
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
   }
 
   async function onCreate(event: FormEvent<HTMLFormElement>) {
@@ -609,6 +665,42 @@ export function ConnectedReserves({
             <button type="button" className="button-text fh-reserve-create-close"
               onClick={() => setCreateMobile(false)}>Закрыть</button>
           </div>
+          <details className="fh-reserve-plan-create">
+            <summary>Нет нужного обязательства? Добавить на сервер</summary>
+            <p className="small-hint">
+              Это плановая запись на финансовом сервере, не списание денег.
+              Существующая локальная запись останется без изменений.
+            </p>
+            <form className="fh-reserve-form" onSubmit={(event) => {
+              void onCreatePlanning(event).catch((failure) => setError(actionError(failure)));
+            }}>
+              <label>Название обязательства
+                <input required maxLength={160} value={newTitle}
+                  onChange={(event) => setNewTitle(event.target.value)} />
+              </label>
+              <label>Сумма обязательства, ₽
+                <input required inputMode="decimal" value={newAmount}
+                  onChange={(event) => setNewAmount(event.target.value)} />
+              </label>
+              <label>Ближайшая дата оплаты
+                <input type="date" required min={currentDate} value={newStartsOn}
+                  onChange={(event) => setNewStartsOn(event.target.value)} />
+              </label>
+              <label>Повторять раз в N месяцев
+                <input type="number" min={1} max={60} step={1} required value={newEvery}
+                  onChange={(event) => setNewEvery(event.target.value)} />
+              </label>
+              <label className="fh-reserve-plan-consent">
+                <input type="checkbox" checked={newPlanConsent}
+                  onChange={(event) => setNewPlanConsent(event.target.checked)} />
+                <span>Подтверждаю создание отдельного серверного обязательства.
+                  Локальные платежи не изменяются.</span>
+              </label>
+              <button className="button-secondary" type="submit" disabled={
+                busy || blocked || !newPlanConsent
+              }>Создать обязательство</button>
+            </form>
+          </details>
           <form onSubmit={(event) => { void onCreate(event).catch((failure) =>
             setError(actionError(failure))); }} className="fh-reserve-form">
             <label>Обязательство
@@ -639,7 +731,10 @@ export function ConnectedReserves({
                 placeholder="Например, 9000" onChange={(event) => setTarget(event.target.value)} />
             </label>
             <label>Периодичность
-              <select value={months} onChange={(event) => setMonths(event.target.value)}>
+              <select value={months} onChange={(event) => {
+                setMonths(event.target.value);
+                setFirstDue(addReserveMonths(currentDate, Number(event.target.value)));
+              }}>
                 {[1, 2, 3, 6, 12, 24, 36, 60].map((count) => (
                   <option value={count} key={count}>Раз в {count} мес.</option>
                 ))}
@@ -691,6 +786,7 @@ export function ConnectedReserves({
               blocked || busy || !creationForecast || !accounts.length || !obligations.length
             }>Создать</button>
           </form>
+          {error ? <p className="fh-reserve-error" role="alert">{error}</p> : null}
         </aside>
       </div>
       {dialog && selected ? (
