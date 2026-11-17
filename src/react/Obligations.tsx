@@ -1,5 +1,6 @@
 import { Fragment } from 'react';
 import { Icon, type CalendarProps } from './Calendar';
+import { ConnectedReserves } from './Reserves';
 
 export type ObligationFilter = 'all' | 'regular' | 'once' | 'income';
 export interface ObligationPayment {
@@ -29,6 +30,11 @@ export interface ObligationsProps {
   expensePaidCents: number;
   rubles: CalendarProps['rubles'];
   formatDate: CalendarProps['formatDate'];
+  financeEnabled?: boolean;
+  verifiedActorUserId?: string | null;
+  reserveSection?: 'payments' | 'reserves';
+  focusReserveId?: string | null;
+  onReserveSectionChange?: (next: 'payments' | 'reserves') => void;
 }
 
 function Recurrence({ value }: { value: ObligationItem['recurrence'] }) {
@@ -253,6 +259,11 @@ export function Obligations({
   expensePaidCents,
   rubles,
   formatDate,
+  financeEnabled = false,
+  verifiedActorUserId = null,
+  reserveSection = 'payments',
+  focusReserveId = null,
+  onReserveSectionChange,
 }: ObligationsProps) {
   return (
     <>
@@ -261,15 +272,48 @@ export function Obligations({
           <div className="eyebrow">{formatDate(currentDate)} · Личные финансы</div>
           <h1>Обязательства</h1>
           <p className="subtitle">
-            Доходы и расходы. Полный учёт запланированных и фактических сумм
+            {reserveSection === 'reserves' ?
+              'Резервы для регулярных обязательств и подтверждённые остатки' :
+              'Доходы и расходы. Полный учёт запланированных и фактических сумм'}
           </p>
         </div>
         <div className="header-tools">
-          <button className="button-primary" data-action="new-entry">
-            <Icon name="plus" /> Добавить
-          </button>
+          {reserveSection === 'payments' ? (
+            <button className="button-primary" data-action="new-entry">
+              <Icon name="plus" /> Добавить
+            </button>
+          ) : (
+            <button type="button" className="button-primary fh-reserve-desktop-create"
+              onClick={() => {
+                const mobile = document.querySelector<HTMLButtonElement>('.fh-reserve-mobile-create');
+                if (window.matchMedia('(max-width:760px)').matches) mobile?.click();
+                else document.querySelector<HTMLElement>('.fh-reserve-editor select')?.focus();
+              }}>
+              <Icon name="plus" /> Создать резерв
+            </button>
+          )}
         </div>
       </header>
+      <div className="segment fh-reserve-tabs" role="group" aria-label="Разделы обязательств">
+        <button type="button" className={reserveSection === 'payments' ? 'selected' : ''}
+          aria-pressed={reserveSection === 'payments'}
+          onClick={() => onReserveSectionChange?.('payments')}>Платежи</button>
+        <button type="button" className={reserveSection === 'reserves' ? 'selected' : ''}
+          aria-pressed={reserveSection === 'reserves'}
+          onClick={() => onReserveSectionChange?.('reserves')}>Накопления</button>
+      </div>
+      {reserveSection === 'reserves' ? (
+        financeEnabled ? (
+          <ConnectedReserves verifiedActorUserId={verifiedActorUserId}
+            currentDate={currentDate} focusReserveId={focusReserveId} />
+        ) : (
+          <div className="surface fh-reserve-empty" role="status">
+            <h2>Накопления недоступны</h2>
+            <p>Для работы с накоплениями необходим подтверждённый финансовый аккаунт.</p>
+          </div>
+        )
+      ) : (
+        <>
       <div className="kpi-grid" style={{ maxWidth: 760, margin: '0 0 20px' }}>
         <div className="surface kpi">
           <div className="kpi-label">Расходы по плану</div>
@@ -355,6 +399,8 @@ export function Obligations({
         Кредиты учитываются в общем финансовом плане и на странице «Кредиты». Архивирование
         сохраняет историю.
       </p>
+        </>
+      )}
     </>
   );
 }
