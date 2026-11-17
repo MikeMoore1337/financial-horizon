@@ -257,23 +257,25 @@ def local_app(directory):
         target = (base / resource).resolve()
         if not target.is_relative_to(base.resolve()) or not target.is_file():
             raise HTTPException(404)
-        if resource == "index.html" and request.query_params.get("fh_reserves_e2e") == "1":
-            # Test-only one-page opt-in; the committed production flag stays off.
+        if resource == "index.html":
+            # The localhost fixture deliberately starts in reserve-feature OFF
+            # for all legacy coverage. Exact opt-in exercises the live v2 UI.
+            # Production serves dist/index.html unchanged and does NOT use this.
             contents = target.read_text(encoding="utf-8")
-            flag = '<meta name="fh-finance-reserves" content="disabled">'
-            if contents.count(flag) != 1:
+            on_flag = '<meta name="fh-finance-reserves" content="enabled">'
+            off_flag = '<meta name="fh-finance-reserves" content="disabled">'
+            if contents.count(on_flag) + contents.count(off_flag) != 1:
                 raise HTTPException(503)
-            return Response(
-                contents.replace(flag, '<meta name="fh-finance-reserves" content="enabled">'),
-                media_type="text/html", headers={"Cache-Control": "no-store"},
+            if real_finance and (
+                contents.count('<meta name="fh-finance-accounts" content="enabled">') != 1
+                or contents.count('<meta name="fh-finance-import" content="enabled">') != 1
+            ):
+                raise HTTPException(503)
+            active = request.query_params.get("fh_reserves_e2e") == "1"
+            contents = contents.replace(
+                off_flag if active else on_flag,
+                on_flag if active else off_flag,
             )
-        if real_finance and resource == "index.html":
-            # Real-FH/SQL E2E must exercise the same reviewed accounts entry
-            # as production, never a silently rewritten feature flag.
-            contents = target.read_text(encoding="utf-8")
-            if (contents.count('<meta name="fh-finance-accounts" content="enabled">') != 1
-                or contents.count('<meta name="fh-finance-import" content="enabled">') != 1):
-                raise HTTPException(503)
             return Response(
                 contents, media_type="text/html",
                 headers={"Cache-Control": "no-store"},
