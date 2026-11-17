@@ -25,10 +25,10 @@ def submit_account_v2_candidate(
 ) -> FinanceResult:
     """Validate the exact scoped v2 candidate before a single SQL transaction.
 
-    Unlike the internal compatibility mode, this entrypoint NEVER enables
-    unapproved reserve/loan mutation internals. It supports only the
-    strictly validated account and linked-payment v2 proposal. The core enforces the same whitelist even
-    if a later caller erroneously bypasses this transport validator.
+    Unlike the internal compatibility mode, this entrypoint exposes only
+    strictly validated account, linked-payment and mandatory reserve-plan v2
+    actions. Loan/reserve internal-only actions remain unavailable. The SQL
+    core enforces the same whitelist if transport validation is bypassed.
     """
     try:
         validated = validate_v2_account_candidate(

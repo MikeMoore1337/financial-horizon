@@ -469,3 +469,103 @@ def test_v2_candidate_linked_payment_cannot_be_voided_by_other_user(v2_env):
     assert denied.status_code == 409
     assert balance(v2_env, uid, account_id) == 11_100
     assert snapshot(other).json()["entities"] == []
+
+
+
+def test_v2_reserve_full_http_atomic_payment_and_replay(v2_env):
+    """Two real TestClient devices, owner session, strict ETag, SQL ledger & history."""
+    from sqlalchemy import text
+    from backend.finance_db.db import finance_transaction
+
+    user_id, token = v2_env["first"]
+    c1 = v2_env["v2_client"](token)
+    c2 = v2_env["v2_client"](token)
+    account_id = v2_env["account"](user_id, opening=20_000)
+    obligation_id = str(uuid4())
+    scope = v2_env["scope"](user_id)
+    with finance_transaction(
+        v2_env["engine"], verified_user_id=user_id, profile_id=scope.profile_id,
+    ) as db:
+        db.execute(text("""
+            INSERT INTO obligations
+              (profile_id,id,title,direction,amount_minor,starts_on)
+            VALUES (:p,:id,'Synthetic yearly bill','expense',9000,'2027-11-16')
+        """), {"p": scope.profile_id, "id": obligation_id})
+
+    original = snapshot(c1)
+    reserve_id = str(uuid4())
+    cmd = request(original, "reserve.create", {
+        "id": reserve_id, "obligation_id": obligation_id, "account_id": account_id,
+        "title": "Синтетическое страхование", "opened_on": "2026-11-16",
+        "first_due_on": "2027-11-16", "period_months": 12, "due_day": 16,
+        "target_minor": 9000, "opening_reserved_minor": 3000,
+        "contribution_mode": "auto",
+    }, revisions(original, account_id, obligation_id))
+    created = post(c1, original, cmd)
+    assert created.status_code == 201, created.text
+    assert created.headers["cache-control"] == "private, no-store"
+    assert len(created.json()["changes"]) == 2
+    replay = post(c1, original, cmd)
+    assert replay.status_code == 200 and replay.json()["replayed"] is True
+    duplicate = request(original, "reserve.create", {
+        **cmd["payload"], "id": str(uuid4()),
+    }, revisions(original, account_id, obligation_id))
+    stale = post(c1, original, duplicate)
+    assert stale.status_code == 412
+
+    open_state = snapshot(c2)
+    reserve = next(e for e in open_state.json()["entities"] if e["id"] == reserve_id)
+    account = next(e for e in open_state.json()["entities"] if e["id"] == account_id)
+    assert reserve["data"]["allocated_minor"] == 3000
+    assert reserve["data"]["opening_reserved_minor"] == 3000
+    assert reserve["data"]["opening_target_minor"] == 9000
+    assert reserve["data"]["event_log"] == []
+    assert (account["data"]["balance_minor"], account["data"]["reserved_minor"],
+            account["data"]["available_minor"]) == (20_000, 3000, 17_000)
+
+    pay = request(open_state, "settlement.payment.record", {
+        "account_id": account_id, "obligation_id": obligation_id,
+        "amount_minor": 2000, "paid_on": "2027-11-16",
+        "occurrence_on": "2027-11-16", "reserve_id": reserve_id,
+        "reserved_used_minor": 1000,
+    }, revisions(open_state, account_id, obligation_id, reserve_id))
+    recorded = post(c1, open_state, pay)
+    assert recorded.status_code == 201, recorded.text
+    assert len(recorded.json()["changes"]) == 3
+    tx_id = recorded.json()["changes"][0]["entity_id"]
+    fact_id = recorded.json()["changes"][1]["entity_id"]
+    assert post(c1, open_state, pay).status_code == 200
+    after = snapshot(c2)
+    a = next(e for e in after.json()["entities"] if e["id"] == account_id)["data"]
+    r = next(e for e in after.json()["entities"] if e["id"] == reserve_id)["data"]
+    assert (a["balance_minor"], a["reserved_minor"], a["available_minor"]) == (
+        18_000, 2_000, 16_000,
+    )
+    assert r["allocated_minor"] == 2000
+    assert len(r["event_log"]) == 1
+    assert r["event_log"][0]["kind"] == "payment"
+    assert r["event_log"][0]["reserved_used_minor"] == 1000
+    assert r["event_log"][0]["transaction_id"] == tx_id
+    audit = c2.get("/api/finance/v1/changes", params={
+        "since_revision": open_state.json()["revision"], "limit_revisions": 1,
+    })
+    assert audit.status_code == 200, audit.text
+    assert audit.json()["changes"] == recorded.json()["changes"]
+
+    cancel = request(after, "settlement.payment.void", {
+        "transaction_id": tx_id, "fact_id": fact_id, "account_id": account_id,
+        "reserve_id": reserve_id, "reason": "Синтетическая отмена",
+    }, revisions(after, tx_id, fact_id, account_id, reserve_id))
+    void = post(c2, after, cancel)
+    assert void.status_code == 201, void.text
+    assert len(void.json()["changes"]) == 3
+    assert post(c2, after, cancel).status_code == 200
+    finished = snapshot(c1)
+    a = next(e for e in finished.json()["entities"] if e["id"] == account_id)["data"]
+    r = next(e for e in finished.json()["entities"] if e["id"] == reserve_id)["data"]
+    assert (a["balance_minor"], a["reserved_minor"], a["available_minor"]) == (
+        20_000, 3000, 17_000,
+    )
+    assert [e["kind"] for e in r["event_log"]] == ["payment", "void"]
+    assert r["event_log"][1]["target_event_id"] == r["event_log"][0]["id"]
+    assert balance(v2_env, user_id, account_id) == 20_000

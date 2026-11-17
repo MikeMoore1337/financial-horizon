@@ -94,10 +94,33 @@ class Loan(ProfileEntity, Revisable, Base):
 
 class Reserve(ProfileEntity, Revisable, Base):
     __tablename__ = "reserves"
-    __table_args__ = (profile_fk(),)
+    __table_args__ = (
+        profile_fk(),
+        ForeignKeyConstraint(
+            ["profile_id", "obligation_id"],
+            ["finance.obligations.profile_id", "finance.obligations.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["profile_id", "account_id"],
+            ["finance.accounts.profile_id", "finance.accounts.id"],
+            ondelete="RESTRICT",
+        ),
+    )
     title: Mapped[str] = mapped_column(String(160))
     target_minor: Mapped[int] = mapped_column(BigInteger)
     target_on: Mapped[date | None] = mapped_column(Date)
+    opening_reserved_minor: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
+    opening_target_minor: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
+    cycle_number: Mapped[int] = mapped_column(Integer, server_default=text("1"))
+    obligation_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
+    account_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
+    opened_on: Mapped[date | None] = mapped_column(Date)
+    first_due_on: Mapped[date | None] = mapped_column(Date)
+    period_months: Mapped[int | None] = mapped_column(SmallInteger)
+    due_day: Mapped[int | None] = mapped_column(SmallInteger)
+    contribution_mode: Mapped[str | None] = mapped_column(String(8))
+    fixed_monthly_minor: Mapped[int | None] = mapped_column(BigInteger)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
@@ -220,7 +243,46 @@ class ReserveAllocation(ProfileEntity, Base):
     reserve_id: Mapped[Uuid] = mapped_column(UUID(as_uuid=True))
     account_id: Mapped[Uuid] = mapped_column(UUID(as_uuid=True))
     delta_minor: Mapped[int] = mapped_column(BigInteger)
+    linked_transaction_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
+    reverses_allocation_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class ReserveEvent(ProfileEntity, Base):
+    __tablename__ = "reserve_events"
+    __table_args__ = (
+        profile_fk(),
+        ForeignKeyConstraint(
+            ["profile_id", "reserve_id"], ["finance.reserves.profile_id", "finance.reserves.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["profile_id", "target_event_id"],
+            ["finance.reserve_events.profile_id", "finance.reserve_events.id"],
+        ),
+        ForeignKeyConstraint(
+            ["profile_id", "allocation_id"],
+            ["finance.reserve_allocations.profile_id", "finance.reserve_allocations.id"],
+        ),
+        ForeignKeyConstraint(
+            ["profile_id", "transaction_id"],
+            ["finance.ledger_transactions.profile_id", "finance.ledger_transactions.id"],
+        ),
+    )
+    reserve_id: Mapped[Uuid] = mapped_column(UUID(as_uuid=True))
+    kind: Mapped[str] = mapped_column(String(20))
+    occurred_on: Mapped[date] = mapped_column(Date)
+    cycle_number: Mapped[int] = mapped_column(Integer)
+    revision: Mapped[int] = mapped_column(BigInteger)
+    amount_minor: Mapped[int | None] = mapped_column(BigInteger)
+    reserved_used_minor: Mapped[int | None] = mapped_column(BigInteger)
+    target_minor: Mapped[int | None] = mapped_column(BigInteger)
+    slot_on: Mapped[date | None] = mapped_column(Date)
+    note: Mapped[str | None] = mapped_column(String(500))
+    target_event_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
+    allocation_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
+    transaction_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
 
 
 class CommandReceipt(Base):

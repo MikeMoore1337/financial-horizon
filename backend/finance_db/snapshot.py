@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from .db import finance_transaction
 from .ledger_service import (
     FinanceCommandError, FinanceResult, VerifiedFinanceScope, _opaque_etag,
-    _safe_balance, _reserve_pairs,
+    _safe_balance, _reserve_pairs, _reserve_history,
 )
 
 _MAX_PER_ENTITY = 5_000
@@ -35,6 +35,9 @@ _ENTITY_FIELDS = {
     )),
     "reserves": ("reserve", (
         "title", "target_minor", "target_on", "archived_at", "allocated_minor",
+        "obligation_id", "account_id", "opened_on", "first_due_on",
+        "period_months", "due_day", "contribution_mode", "fixed_monthly_minor",
+        "opening_reserved_minor", "opening_target_minor", "cycle_number",
     )),
     "ledger_transactions": ("transaction", (
         "kind", "occurred_on", "note", "posted_at", "reversed_transaction_id",
@@ -62,6 +65,9 @@ _ENTITY_QUERIES = {
     ),
     "reserves": text(
         "SELECT r.id,r.entity_revision,r.title,r.target_minor,r.target_on,r.archived_at, "
+        "r.obligation_id,r.account_id,r.opened_on,r.first_due_on,r.period_months,"
+        "r.due_day,r.contribution_mode,r.fixed_monthly_minor, "
+        "r.opening_reserved_minor,r.opening_target_minor,r.cycle_number, "
         "COALESCE((SELECT SUM(a.delta_minor) FROM reserve_allocations a "
         "WHERE a.profile_id=r.profile_id AND a.reserve_id=r.id),0) AS allocated_minor "
         "FROM reserves r WHERE r.profile_id=:p AND r.id>:after ORDER BY r.id LIMIT :n"
@@ -226,6 +232,7 @@ def get_finance_snapshot(
             for item in entities if item["kind"] == "reserve"
         }
         allocations = _reserve_pairs(session, scope.profile_id, list(reserves))
+        event_logs = _reserve_history(session, scope.profile_id, list(reserves))
         for reserve_id, item in reserves.items():
             pairs = allocations[reserve_id]
             if sum(pair["allocated_minor"] for pair in pairs) != item["data"]["allocated_minor"]:
@@ -233,6 +240,7 @@ def get_finance_snapshot(
                     "service_unavailable", "Неполное распределение резерва", 503
                 )
             item["data"]["allocations_by_account"] = pairs
+            item["data"]["event_log"] = event_logs[reserve_id]
 
         # Only fetch postings and links for the transactions in this page,
         # not every historical transaction. This remains bounded at page_size*2.
@@ -266,6 +274,24 @@ def get_finance_snapshot(
                 tx["data"]["payment_link"] = {
                     "settlement_id": _as_json(link["settlement_id"]),
                     "loan_payment_id": _as_json(link["loan_payment_id"]),
+                }
+            reserve_payments = session.execute(text("""
+                SELECT id,reserve_id,account_id,delta_minor,
+                       linked_transaction_id,reverses_allocation_id
+                FROM reserve_allocations
+                WHERE profile_id=:p AND linked_transaction_id=ANY(:ids)
+                ORDER BY linked_transaction_id
+            """), {"p": scope.profile_id, "ids": transaction_ids}).mappings().all()
+            for allocation in reserve_payments:
+                tx = transactions.get(str(allocation["linked_transaction_id"]))
+                if tx is None or "reserve_allocation" in tx["data"]:
+                    raise FinanceCommandError("service_unavailable", "Повреждён журнал резерва", 503)
+                tx["data"]["reserve_allocation"] = {
+                    "id": str(allocation["id"]),
+                    "reserve_id": str(allocation["reserve_id"]),
+                    "account_id": str(allocation["account_id"]),
+                    "delta_minor": int(allocation["delta_minor"]),
+                    "reverses_allocation_id": _as_json(allocation["reverses_allocation_id"]),
                 }
 
         body = {
