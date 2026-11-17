@@ -3,7 +3,6 @@
  * Planned balances stay separate from authoritative bank-account balances.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { Icon } from './Calendar';
 import { formatRubMinor } from './accounts-view-model';
 import {
   ReservesFinanceGateway, type ReserveViewRow, type ReservesServerView,
@@ -64,7 +63,7 @@ export function ReserveHighlights({ verifiedActorUserId, currentDate, month }: R
       <div className="section-title">
         <h2>{month ? 'Накопления в этом месяце' : 'Накопления к обязательствам'}</h2>
         <button type="button" className="button-text" data-action="open-reserves">
-          Все накопления <Icon name="chevron" />
+          Все накопления <svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ico-chevron" /></svg>
         </button>
       </div>
       <div className="surface fh-reserve-highlights-list">
