@@ -120,6 +120,7 @@ def local_app(directory):
             finance_requests[user["id"]] = {"session": 0, "state": 0}
         if enable_reserves_stub:
             reserves_stub.activate(user["id"])
+            finance_requests[user["id"]]["commands"] = 0
         return {"authenticated": True, "user": user}
 
 
@@ -177,6 +178,8 @@ def local_app(directory):
             user["id"], command, request.headers.get("if-match", ""),
             request.headers.get("idempotency-key", ""),
         )
+        if status == 201:
+            finance_requests[user["id"]]["commands"] += 1
         headers = {"Cache-Control": "private, no-store"}
         if etag:
             headers["ETag"] = etag
