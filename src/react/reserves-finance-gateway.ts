@@ -5,7 +5,7 @@
  * revision-aligned, complete finance snapshot have been verified.
  */
 import { decodeCompleteFinanceState } from '../domain/accounts/server-snapshot.ts';
-import { deriveAccountsView, type AccountViewRow } from './accounts-view-model';
+import { deriveAccountsView, type AccountViewRow } from './accounts-view-model.ts';
 import {
   decodeServerReserve, projectServerReserve, type ReserveServerRecord,
 } from '../domain/reserves/server-snapshot.ts';
