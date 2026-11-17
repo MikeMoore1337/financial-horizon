@@ -43,6 +43,14 @@ export function parseReservePeriodHint(note: unknown): ReservePeriodHint | null 
     return { status: 'invalid', reason: 'oversized', confirmationRequired: true };
   }
 
+  // A frequency boundary is not a deterministic billing interval.
+  // Reject it before interpreting the exact-looking "раз в N месяцев" fragment.
+  const impreciseFrequency =
+    /(?:^|[^\\p{L}\\p{N}])не\\s+(?:чаще|реже)\\s*,?\\s*(?:чем\\s+)?(?:раз\\s+в|каждые|каждый)(?!\\p{L})|(?:^|[^\\p{L}\\p{N}])(?:или|либо)\\s+(?:чаще|реже)(?!\\p{L})/u;
+  if (impreciseFrequency.test(normalized)) {
+    return { status: 'invalid', reason: 'unsupported', confirmationRequired: true };
+  }
+
   // Do not silently ignore an explicitly stated but unsupported frequency.
   // Such spreadsheet rows must be reviewed rather than converted to a monthly bill.
   const frequencyMarker = /(?:^|[^\p{L}\p{N}])(?:раз\s+в|каждые|каждый)\s+/gu;
@@ -54,6 +62,9 @@ export function parseReservePeriodHint(note: unknown): ReservePeriodHint | null 
   // competing interval (e.g. "ежегодно (год оплаты 2026) или 1 квартал").
   const trailingCountedPeriod = /^\s*\(?\s*(?:(или|либо|и|\/|\+|,)\s*)?(?:[-+]?\d+(?:[.,]\d+)?|один|одна|одно|два|две|три|четыре|пять)\s*(?:мес(?:\.|яц(?:ев|а)?)?|год(?:а|ов)?|лет|квартал(?:а|ов)?|полгода|недел(?:я|и|ь|ю)|дн(?:я|ей|и)|день)(?!\p{L})/u;
   const trailingNamedAlternative = /^\s*\(?\s*(или|либо|и|\/|\+)\s*(?:месяц|год|полгода|квартал)(?!\p{L})/u;
+  // Unsupported adverbial periods must not disappear after an alternative.
+  const trailingAdverbAlternative =
+    /^\\s*\\(?\\s*(или|либо|и|\\/|\\+|,)\\s*(?:ежеквартально|еженедельно|ежедневно|ежеполугодично|ежеполугодно)(?!\\p{L})/u;
   // A range such as "или 3–6 месяцев" is not one deterministic interval.
   const trailingRangedPeriod = /^\s*\(?\s*(?:(или|либо|и|\/|\+|,)\s*)?(?:от\s+)?\d+\s*(?:[-–—]|до)\s*\d+\s*(?:мес(?:\.|яц(?:ев|а)?)?|год(?:а|ов)?|лет|квартал(?:а|ов)?|недел(?:я|и|ь|ю)|дн(?:я|ей|и)|день)(?!\p{L})/u;
   // Explanatory payment-year/month metadata may precede an actual competing
@@ -63,11 +74,11 @@ export function parseReservePeriodHint(note: unknown): ReservePeriodHint | null 
   const laterConnector = /(?<![\p{L}\p{N}])(?:или|либо|и|\/|\+)(?!\p{L})/gu;
   const invalidContinuation = (rest: string): ReservePeriodHint | null => {
     const immediate = rest.replace(explanatoryPrefix, '');
-    let tail = trailingCountedPeriod.exec(immediate) ?? trailingRangedPeriod.exec(immediate) ?? trailingNamedAlternative.exec(immediate);
+    let tail = trailingCountedPeriod.exec(immediate) ?? trailingRangedPeriod.exec(immediate) ?? trailingNamedAlternative.exec(immediate) ?? trailingAdverbAlternative.exec(immediate);
     if (!tail) {
       for (const connector of immediate.matchAll(laterConnector)) {
         const afterConnector = immediate.slice(connector.index ?? 0);
-        tail = trailingCountedPeriod.exec(afterConnector) ?? trailingRangedPeriod.exec(afterConnector) ?? trailingNamedAlternative.exec(afterConnector);
+        tail = trailingCountedPeriod.exec(afterConnector) ?? trailingRangedPeriod.exec(afterConnector) ?? trailingNamedAlternative.exec(afterConnector) ?? trailingAdverbAlternative.exec(afterConnector);
         if (tail) break;
       }
     }
