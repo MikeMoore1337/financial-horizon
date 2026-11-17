@@ -1,6 +1,7 @@
 import { Fragment } from 'react';
 import { Icon, type CalendarProps } from './Calendar';
 import { ConnectedReserves } from './Reserves';
+import type { XlsxReservePreview } from '../domain/reserves/xlsx-preview.ts';
 
 export type ObligationFilter = 'all' | 'regular' | 'once' | 'income';
 export interface ObligationPayment {
@@ -34,6 +35,7 @@ export interface ObligationsProps {
   verifiedActorUserId?: string | null;
   reserveSection?: 'payments' | 'reserves';
   focusReserveId?: string | null;
+  importSuggestions?: readonly XlsxReservePreview[];
   onReserveSectionChange?: (next: 'payments' | 'reserves') => void;
 }
 
@@ -263,6 +265,7 @@ export function Obligations({
   verifiedActorUserId = null,
   reserveSection = 'payments',
   focusReserveId = null,
+  importSuggestions = [],
   onReserveSectionChange,
 }: ObligationsProps) {
   return (
@@ -305,7 +308,8 @@ export function Obligations({
       {reserveSection === 'reserves' ? (
         financeEnabled ? (
           <ConnectedReserves verifiedActorUserId={verifiedActorUserId}
-            currentDate={currentDate} focusReserveId={focusReserveId} />
+            currentDate={currentDate} focusReserveId={focusReserveId}
+            importSuggestions={importSuggestions} />
         ) : (
           <div className="surface fh-reserve-empty" role="status">
             <h2>Накопления недоступны</h2>
