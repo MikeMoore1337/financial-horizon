@@ -15,7 +15,7 @@ test('#6 Payments and Reserves remain isolated for guests, with original payment
  await page.getByRole('button',{name:'Накопления',exact:true}).click();
  await expect(page.getByRole('heading',{name:'Накопления недоступны'})).toBeVisible();
  await expect(page.locator('.fh-reserve-stat')).toHaveCount(0);
- await page.getByRole('button',{name:'Платежи',exact:true}).click();
+ await page.locator('.fh-reserve-tabs').getByRole('button',{name:'Платежи',exact:true}).click();
  await expect(page.locator('.records-table')).toContainText('Синтетический хостинг');
  expect(await nativeDb(page)).toEqual(before);
  expect(reserveCalls).toEqual([]);
