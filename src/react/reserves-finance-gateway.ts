@@ -364,6 +364,81 @@ export class ReservesFinanceGateway {
     return view;
   }
 
+  /** Deliberate planning-only server obligation, never a cash posting or
+   * invisible copy of an existing IndexedDB expense.
+   * v1 owns obligation.create; v2 intentionally does not expose it.
+   */
+  async createPlanningObligation(
+    input: {
+      title: string; amountMinor: number; startsOn: string;
+      recurrenceUnit: 'none' | 'month' | 'year'; recurrenceEvery: number;
+      timezone: string;
+    },
+    asOfDate: string,
+  ): Promise<{ view: ReservesServerView; obligationId: string }> {
+    const before = this.view;
+    const etag = this.etag;
+    const actor = this.actor;
+    const epoch = this.generation;
+    if (!before || !etag || !actor || this.writeBlocked) {
+      throw new ReservesFinanceError('conflict');
+    }
+    if (input.title.trim().length === 0 || input.title.length > 160 ||
+        !Number.isSafeInteger(input.amountMinor) || input.amountMinor < 1 ||
+        input.amountMinor > 1_000_000_000_000 ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(input.startsOn) ||
+        !['none', 'month', 'year'].includes(input.recurrenceUnit) ||
+        !Number.isInteger(input.recurrenceEvery) || input.recurrenceEvery < 1 ||
+        input.recurrenceEvery > 120 ||
+        typeof input.timezone !== 'string' || input.timezone.length > 64 ||
+        input.timezone.length === 0) throw new ReservesFinanceError('error');
+    const mutationId = this.makeId();
+    this.reads += 1;
+    this.writing = true;
+    this.uncertain = true;
+    try {
+      const response = await this.request('/api/finance/v1/commands', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json', 'If-Match': etag,
+          'Idempotency-Key': mutationId,
+        },
+        body: JSON.stringify({
+          schema_version: 1, client_mutation_id: mutationId,
+          base_revision: before.revision, action: 'obligation.create',
+          expected_entity_revisions: {},
+          payload: {
+            title: input.title.trim(), direction: 'expense', amount_minor: input.amountMinor,
+            starts_on: input.startsOn, timezone: input.timezone,
+            recurrence_unit: input.recurrenceUnit, recurrence_every: input.recurrenceEvery,
+          },
+        }),
+      });
+      if (epoch !== this.generation || response.status !== 201 ||
+          !object(response.body) || response.body.schema_version !== 1 ||
+          response.body.replayed !== false ||
+          response.body.client_mutation_id !== mutationId ||
+          response.body.revision !== before.revision + 1 ||
+          !Array.isArray(response.body.changes) || !response.body.changes.length ||
+          !response.etag || !ETAG.test(response.etag)) {
+        throw new ReservesFinanceError('conflict');
+      }
+      const after = await this.load(actor, asOfDate, undefined, true);
+      if (epoch !== this.generation || after.revision !== response.body.revision ||
+          this.etag !== response.etag) throw new ReservesFinanceError('conflict');
+      const oldIds = new Set(before.obligations.map((item) => item.id));
+      const created = after.obligations.filter((item) => !oldIds.has(item.id));
+      if (created.length !== 1 || created[0]?.title !== input.title.trim() ||
+          created[0].amountMinor !== input.amountMinor) {
+        throw new ReservesFinanceError('conflict');
+      }
+      this.uncertain = false;
+      return { view: after, obligationId: created[0].id };
+    } finally {
+      this.writing = false;
+    }
+  }
+
   async execute(
     action: ReserveV2Action, payload: Record<string, unknown>, asOfDate: string,
   ): Promise<ReservesServerView> {
