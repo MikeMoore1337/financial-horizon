@@ -178,3 +178,29 @@ test('#6 fail closed on truncated snapshot, wrong profile, anonymous and disable
   assert.equal(gateway.writeBlocked,true);
   assert.equal(fetcher.calls.length,3);
 });
+
+
+test('#6 a valid receipt and advanced ETag do NOT prove a missing reserve allocation',async()=>{
+  const receipt={
+    schema_version:2,client_mutation_id:MUTATION,revision:2,
+    replayed:false,changes:[{entity_id:RESERVE,revision:2}],
+  };
+  const fake={...snapshot(),revision:2}; // Profile changed, funds did not.
+  const fetcher=transport(
+    json({ok:true,profile_id:PROFILE}),json(snapshot()),
+    json(receipt,201,'"fh.1.2.example"'),
+    json(fake,200,'"fh.1.2.example"'),
+    json(fake,200,'"fh.1.2.example"'),
+  );
+  const gateway=new ReservesFinanceGateway(fetcher,'https://fh.example',()=>MUTATION);
+  await gateway.open(ACTOR,DATE);
+  await assert.rejects(
+    ()=>gateway.execute('reserve.allocate',{
+      reserve_id:RESERVE,account_id:ACCOUNT,delta_minor:2000,occurred_on:DATE,
+    },DATE),
+    {kind:'conflict'},
+  );
+  await gateway.refresh(ACTOR,DATE);
+  assert.equal(gateway.writeBlocked,true);
+  assert.equal(fetcher.calls.length,5);
+});
