@@ -1,3 +1,4 @@
+import { ReserveHighlights } from './ReserveHighlights';
 export interface CalendarEvent {
   id: string;
   title: string;
@@ -19,6 +20,8 @@ export interface CalendarProps {
   netFactCents: number;
   formatDate: (date: string) => string;
   rubles: (cents: number) => string;
+  financeEnabled?: boolean;
+  verifiedActorUserId?: string | null;
 }
 
 export function Icon({ name }: { name: string }) {
@@ -89,6 +92,8 @@ export function Calendar({
   netFactCents,
   formatDate,
   rubles,
+  financeEnabled = false,
+  verifiedActorUserId = null,
 }: CalendarProps) {
   const [year, monthNumber] = month.split('-').map(Number);
   const blanks = (new Date(year!, monthNumber! - 1, 1, 12).getDay() + 6) % 7;
@@ -223,6 +228,10 @@ export function Calendar({
           </div>
         </div>
       </div>
+      {financeEnabled && verifiedActorUserId ? (
+        <ReserveHighlights verifiedActorUserId={verifiedActorUserId}
+          currentDate={currentDate} month={month} />
+      ) : null}
     </>
   );
 }
