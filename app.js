@@ -39,6 +39,7 @@ let lastStorageContext=null;
 function revokeDisplayedLedger(){
  revokeStateScope(); // invalidate pending IDB reads/writes before clearing the UI
  state=null;
+ ui.reserveSuggestions=[];ui.focusReserveId=null;ui.obligationsSection='payments';
  restoreFile=null;verifyBackupFile=null;cloudImportFile=null;pendingCloudImport=null;cloudImportController?.abort();cloudImportController=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
  if(navRoots){navRoots.unmount();navRoots=null;}
@@ -569,9 +570,17 @@ async function previewExcelImport(file){
  const data=await readXlsxRows(await file.arrayBuffer());
  const parsed=parseBudgetRows(data.rows,today());
  const diff=previewImportChanges(parsed,state);
- const reservePreviews=previewXlsxReserves(data.rows,diff.entries.map(entry=>({
-  source:entry.source,title:entry.title,kind:entry.kind,amountCents:entry.amountCents
- })));
+ let reservePreviews=[];
+ let reserveHintWarning=null;
+ try{
+  reservePreviews=previewXlsxReserves(data.rows,diff.entries.map(entry=>({
+   source:entry.source,title:entry.title,kind:entry.kind,amountCents:entry.amountCents
+  })));
+ }catch{
+  // Suggestions are optional. Invalid spreadsheet metadata MUST NOT block
+  // the existing expense import or silently reinterpret its recurrence.
+  reserveHintWarning='Не удалось однозначно распознать накопления. Стандартный импорт сохранён без изменений.';
+ }
  pendingExcelImport={parsed,name:file.name.slice(0,120),reservePreviews};
  const summary=$('#excel-import-summary'),items=$('#excel-import-items'),warnings=$('#excel-import-warnings');
  summary.replaceChildren();items.replaceChildren();warnings.replaceChildren();
@@ -581,6 +590,10 @@ async function previewExcelImport(file){
  const totals=document.createElement('p');
  totals.textContent='Плановые доходы: '+rubles(diff.incomeCents)+'. Плановые расходы: '+rubles(diff.expenseCents)+' (без обязательных платежей по кредитам).';
  summary.append(totals);
+ if(reserveHintWarning){
+  const warning=document.createElement('p');warning.className='small-hint';
+  warning.textContent=reserveHintWarning;summary.append(warning);
+ }
  if(reservePreviews.length){
   const notice=document.createElement('p');notice.className='small-hint';
   const suggested=reservePreviews.filter(preview=>preview.status==='suggestion').length;
