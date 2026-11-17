@@ -18,6 +18,7 @@ from fh_email_auth.app import create_app
 from fh_email_auth.config import Settings
 from fh_email_auth.store import AuthStore
 from fh_email_auth import SESSION_COOKIE
+from reserves_stub import ReserveStub
 
 ORIGIN = "http://127.0.0.1:8791"
 PUBLIC_FILES = {
@@ -94,12 +95,16 @@ def local_app(directory):
     # synthetic finance stub. The ordinary local auth/test suite remains OFF.
     finance_stub_users = set()
     finance_requests = {}
+    reserves_stub = ReserveStub()
 
     @app.post("/__e2e__/personal-session")
-    def synthetic_personal_session(response: Response, enable_finance_stub: bool = False):
+    def synthetic_personal_session(response: Response, enable_finance_stub: bool = False,
+                                   enable_reserves_stub: bool = False):
         # This route exists only in the isolated localhost E2E ASGI app.
         # Create a genuine revocable FH session without consuming the shared
         # public registration rate quota or exposing a raw token in JSON.
+        if enable_reserves_stub and not enable_finance_stub:
+            raise HTTPException(422)
         email = "personal-" + uuid4().hex + "@example.invalid"
         token = store.create_account(email)
         if not token:
@@ -113,6 +118,8 @@ def local_app(directory):
         if enable_finance_stub:
             finance_stub_users.add(user["id"])
             finance_requests[user["id"]] = {"session": 0, "state": 0}
+        if enable_reserves_stub:
+            reserves_stub.activate(user["id"])
         return {"authenticated": True, "user": user}
 
 
@@ -129,6 +136,11 @@ def local_app(directory):
             path="/api/finance/v1", httponly=True, secure=False, samesite="strict",
         )
         response.headers["Cache-Control"] = "private, no-store"
+        if reserves_stub.exists(user["id"]):
+            response.set_cookie(
+                "fh_finance_session", request.cookies.get(SESSION_COOKIE),
+                path="/api/finance/v2", httponly=True, secure=False, samesite="strict",
+            )
         finance_requests[user["id"]]["session"] += 1
         return {"ok": True, "profile_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}
 
@@ -140,6 +152,11 @@ def local_app(directory):
                 request.query_params.get("limit_entities") != "5000"):
             raise HTTPException(404)
         finance_requests[user["id"]]["state"] += 1
+        if reserves_stub.exists(user["id"]):
+            body, etag = reserves_stub.snapshot(user["id"])
+            return JSONResponse(body, headers={
+                "ETag": etag, "Cache-Control": "private, no-store",
+            })
         return JSONResponse({
             "schema_version": 1,
             "profile_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -147,6 +164,23 @@ def local_app(directory):
             "server_at": "2026-11-12T12:00:00+00:00",
         }, headers={"ETag": '"fh.1.0.synthetic"',
                     "Cache-Control": "private, no-store"})
+
+    @app.post("/api/finance/v2/commands")
+    async def synthetic_reserve_commands(request: Request):
+        user = store.current(request.cookies.get("fh_finance_session"))
+        if not user or not reserves_stub.exists(user["id"]) or real_finance:
+            raise HTTPException(404)
+        if request.headers.get("origin") != ORIGIN:
+            raise HTTPException(403)
+        command = await request.json()
+        status, result, etag = reserves_stub.execute(
+            user["id"], command, request.headers.get("if-match", ""),
+            request.headers.get("idempotency-key", ""),
+        )
+        headers = {"Cache-Control": "private, no-store"}
+        if etag:
+            headers["ETag"] = etag
+        return JSONResponse(result, status_code=status, headers=headers)
 
     @app.get("/__e2e__/finance-stub/receipt")
     def finance_stub_receipt(user_id: str):
@@ -200,7 +234,7 @@ def local_app(directory):
         )
 
     @app.get("/{resource:path}")
-    def static_frontend(resource: str):
+    def static_frontend(resource: str, request: Request):
         resource = resource or "index.html"
         allowed = (
             resource in PUBLIC_FILES
@@ -220,6 +254,16 @@ def local_app(directory):
         target = (base / resource).resolve()
         if not target.is_relative_to(base.resolve()) or not target.is_file():
             raise HTTPException(404)
+        if resource == "index.html" and request.query_params.get("fh_reserves_e2e") == "1":
+            # Test-only one-page opt-in; the committed production flag stays off.
+            contents = target.read_text(encoding="utf-8")
+            flag = '<meta name="fh-finance-reserves" content="disabled">'
+            if contents.count(flag) != 1:
+                raise HTTPException(503)
+            return Response(
+                contents.replace(flag, '<meta name="fh-finance-reserves" content="enabled">'),
+                media_type="text/html", headers={"Cache-Control": "no-store"},
+            )
         if real_finance and resource == "index.html":
             # Real-FH/SQL E2E must exercise the same reviewed accounts entry
             # as production, never a silently rewritten feature flag.
