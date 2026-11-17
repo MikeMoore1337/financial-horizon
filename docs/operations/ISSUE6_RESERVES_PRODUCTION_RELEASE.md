@@ -12,6 +12,53 @@ FH_FINANCE_IMPORT_RUNTIME=on, штатное окно #69 нужно **пред�
 задействованный импорт посреди операции. Существующий backend upgrade
 проверяет именно import=off и правильно останавливается при import=on.
 
+## 0. Закрыть прежнее окно импорта, прежде чем менять checkout
+
+На проверенной owner-VPS 17.11.2026 получено:
+GIT_TREE=CLEAN, IMPORT_RUNTIME=on, ALEMBIC=0003_import_source,
+RLS_TABLES=15, auth/finance/backup.timer/Caddy=active.
+Текущий checkout: ad5675ace0f7ab926a58fe3715f59a9505004255.
+
+Файл scripts/fh_finance_personal_import_window.py на этом SHA совпадает
+по blob SHA с действующим main. Из сохранённой истории #69 установлено:
+импортное окно включали именно на SHA ad5675ace0f7ab926a58fe3715f59a9505004255.
+В режиме DISABLE его оператор не требует актуального GitHub main, но
+строго сверяет два исходных root-only backup и побайтово проверяет Caddy/runtime
+перед их восстановлением. Нельзя запускать обычный --preflight с этим
+старым SHA: он требует актуального main и откажет.
+
+**Если перенос #69 ещё выполняется или его сетевой исход не выяснен,
+не выключать endpoint до урегулирования операции.** После завершения
+или осознанной приостановки импорта выполнить ниже. Это закрывает
+только HTTP-write окно, не удаляет и не восстанавливает пользовательские данные.
+
+~~~bash
+sudo -i
+set -Eeuo pipefail
+umask 077
+cd /opt/financial-horizon-ops
+test "$(id -u)" -eq 0
+test "$(git rev-parse HEAD)" = ad5675ace0f7ab926a58fe3715f59a9505004255
+test -z "$(git status --porcelain)"
+test "$(awk -F= '$1=="FH_FINANCE_IMPORT_RUNTIME"{print $2}' \
+ /etc/financial-horizon/finance/runtime.env)" = on
+FH_PERSONAL_IMPORT_WINDOW=DISABLE \
+  python3 scripts/fh_finance_personal_import_window.py \
+  --sha ad5675ace0f7ab926a58fe3715f59a9505004255 --disable
+test "$(awk -F= '$1=="FH_FINANCE_IMPORT_RUNTIME"{print $2}' \
+ /etc/financial-horizon/finance/runtime.env)" = off
+test "$(systemctl is-active fh-email-auth.service)" = active
+echo FH6_IMPORT_WINDOW_CLOSED=PASS
+~~~
+
+Требуются отдельные строки:
+FH_IMPORT_WINDOW_BACKEND=DISABLED,
+FH_IMPORT_PUBLIC_ROUTES=REMOVED,
+FH_IMPORT_USER_FINANCIAL_DATA_UNCHANGED_BY_TOGGLE=YES.
+Любой NO_GO/FAILED - прекратить работу и сохранить код ошибки.
+Если SSH-сессия оборвалась, сначала проверить состояние чтением,
+не повторять --disable автоматически.
+
 ## 1. Обновить исходники и сделать preflight
 
 ~~~bash
