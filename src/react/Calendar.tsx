@@ -229,8 +229,11 @@ export function Calendar({
         </div>
       </div>
       {financeEnabled && verifiedActorUserId ? (
-        <ReserveHighlights verifiedActorUserId={verifiedActorUserId}
-          currentDate={currentDate} month={month} />
+        <ReserveHighlights
+          verifiedActorUserId={verifiedActorUserId}
+          currentDate={currentDate}
+          month={month}
+        />
       ) : null}
     </>
   );
