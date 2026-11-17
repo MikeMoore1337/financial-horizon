@@ -129,8 +129,7 @@ class ReserveStub:
                 return 409, {"code": "semantic_conflict"}, None
             action = request.get("action")
             reserve = next((row for row in state["reserves"]
-                            if row["id"] == payload.get("reserve_id") or
-                            row["id"] == payload.get("reserve_id")), None)
+                            if row["id"] == payload.get("reserve_id")), None)
             if action in ("reserve.allocate", "settlement.payment.record", "reserve.cycle.close"):
                 if action == "settlement.payment.record":
                     reserve = next((row for row in state["reserves"]
@@ -170,6 +169,8 @@ class ReserveStub:
                     return 422, {"code": "invalid_command"}, None
                 reserve["data"]["allocated_minor"] -= used
                 reserve["data"]["allocations_by_account"][0]["allocated_minor"] -= used
+                if reserve["data"]["allocated_minor"] == 0:
+                    reserve["data"]["allocations_by_account"] = []
                 state["balance"] -= amount
                 state["account_revision"] += 1
                 reserve["entity_revision"] += 1
