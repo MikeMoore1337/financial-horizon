@@ -352,7 +352,7 @@ export function ConnectedReserves({
       setEditTitle(reserve.source.definition.title);
       setEditTarget(String(reserve.projection.targetCents / 100));
       setEditMonths(String(reserve.source.definition.periodMonths));
-      setEditDue(reserve.projection.dueDate);
+      setEditDue(reserve.source.definition.firstDueDate);
       setEditMode(reserve.source.definition.contributionMode);
       setEditFixed(String((reserve.source.definition.fixedMonthlyCents ?? 0) / 100));
     }
@@ -818,7 +818,7 @@ export function ConnectedReserves({
                         </div>
                       </div>
                       <span className="fh-reserve-pill">
-                        {done ? 'Накоплено' : 'Осталось: ' + rubles(p.fundingGapCents)}
+                        {p.cyclePaid ? 'Оплачено' : done ? 'Накоплено' : 'Осталось: ' + rubles(p.fundingGapCents)}
                       </span>
                     </div>
                     <div
@@ -1380,7 +1380,7 @@ export function ConnectedReserves({
                 />
               </label>
               <label>
-                Следующая дата оплаты
+                Опорная дата первого платежа
                 <input
                   type="date"
                   required
