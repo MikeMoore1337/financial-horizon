@@ -1090,7 +1090,7 @@ export function ConnectedReserves({
                   setFirstDue(addReserveMonths(currentDate, Number(event.target.value)));
                 }}
               >
-                {[1, 2, 3, 6, 12, 24, 36, 60].map((count) => (
+                {Array.from({ length: 60 }, (_, index) => index + 1).map((count) => (
                   <option value={count} key={count}>
                     Раз в {count} мес.
                   </option>
