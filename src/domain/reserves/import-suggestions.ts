@@ -46,7 +46,7 @@ export function parseReservePeriodHint(note: unknown): ReservePeriodHint | null 
   // A frequency boundary is not a deterministic billing interval.
   // Reject it before interpreting the exact-looking "раз в N месяцев" fragment.
   const impreciseFrequency =
-    /(?:^|[^\\p{L}\\p{N}])не\\s+(?:чаще|реже)\\s*,?\\s*(?:чем\\s+)?(?:раз\\s+в|каждые|каждый)(?!\\p{L})|(?:^|[^\\p{L}\\p{N}])(?:или|либо)\\s+(?:чаще|реже)(?!\\p{L})/u;
+    /(?:^|[^\p{L}\p{N}])не\s+(?:чаще|реже)\s*,?\s*(?:чем\s+)?(?:раз\s+в|каждые|каждый)(?!\p{L})|(?:^|[^\p{L}\p{N}])(?:или|либо)\s+(?:чаще|реже)(?!\p{L})/u;
   if (impreciseFrequency.test(normalized)) {
     return { status: 'invalid', reason: 'unsupported', confirmationRequired: true };
   }
@@ -64,7 +64,7 @@ export function parseReservePeriodHint(note: unknown): ReservePeriodHint | null 
   const trailingNamedAlternative = /^\s*\(?\s*(или|либо|и|\/|\+)\s*(?:месяц|год|полгода|квартал)(?!\p{L})/u;
   // Unsupported adverbial periods must not disappear after an alternative.
   const trailingAdverbAlternative =
-    /^\\s*\\(?\\s*(или|либо|и|\\/|\\+|,)\\s*(?:ежеквартально|еженедельно|ежедневно|ежеполугодично|ежеполугодно)(?!\\p{L})/u;
+    /^\s*\(?\s*(или|либо|и|\/|\+|,)\s*(?:ежеквартально|еженедельно|ежедневно|ежеполугодично|ежеполугодно)(?!\p{L})/u;
   // A range such as "или 3–6 месяцев" is not one deterministic interval.
   const trailingRangedPeriod = /^\s*\(?\s*(?:(или|либо|и|\/|\+|,)\s*)?(?:от\s+)?\d+\s*(?:[-–—]|до)\s*\d+\s*(?:мес(?:\.|яц(?:ев|а)?)?|год(?:а|ов)?|лет|квартал(?:а|ов)?|недел(?:я|и|ь|ю)|дн(?:я|ей|и)|день)(?!\p{L})/u;
   // Explanatory payment-year/month metadata may precede an actual competing
