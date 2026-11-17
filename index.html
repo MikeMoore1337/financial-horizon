@@ -11,6 +11,7 @@
 <meta name="color-scheme" content="light dark">
 <meta name="fh-email-auth" content="disabled">
 <meta name="fh-finance-accounts" content="enabled">
+<meta name="fh-finance-reserves" content="disabled">
 <meta name="fh-finance-import" content="enabled">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" sizes="180x180" href="./assets/brand/apple-touch-icon-180.png">
@@ -25,6 +26,7 @@
  <symbol id="ico-home" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1zM9 21v-8h6v8"/></symbol>
  <symbol id="ico-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18"/></symbol>
  <symbol id="ico-list" viewBox="0 0 24 24"><path d="M9 6h12M9 12h12M9 18h12M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></symbol>
+ <symbol id="ico-layers" viewBox="0 0 24 24"><path d="m12 2 9 5-9 5-9-5 9-5zM3 12l9 5 9-5M3 17l9 5 9-5"/></symbol>
  <symbol id="ico-credit" viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="3"/><path d="M3 10h18M7 15h4"/></symbol>
  <symbol id="ico-settings" viewBox="0 0 24 24"><path d="M10.2 2.8h3.6l.6 2.3c.6.2 1.2.5 1.7.9l2.2-.8 1.8 3.1-1.8 1.5c.1.7.1 1.4 0 2.1l1.8 1.5-1.8 3.1-2.2-.8c-.5.4-1.1.7-1.7.9l-.6 2.3h-3.6l-.6-2.3c-.6-.2-1.2-.5-1.7-.9l-2.2.8-1.8-3.1 1.8-1.5c-.1-.7-.1-1.4 0-2.1l-1.8-1.5 1.8-3.1 2.2.8c.5-.4 1.1-.7 1.7-.9z"/><circle cx="12" cy="10.85" r="2.65"/></symbol>
  <symbol id="ico-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
@@ -52,7 +54,7 @@
     <nav class="sidebar-nav" aria-label="Разделы">
       <button class="nav-item active" data-view="overview"><svg><use href="#ico-home"/></svg><span>Обзор</span></button>
       <button class="nav-item" data-view="calendar"><svg><use href="#ico-calendar"/></svg><span>Календарь</span></button>
-      <button class="nav-item" data-view="obligations"><svg><use href="#ico-list"/></svg><span>Обязательства</span></button>
+      <button class="nav-item" data-view="obligations"><svg><use href="#ico-layers"/></svg><span>Обязательства</span></button>
       <button class="nav-item" data-view="loans"><svg><use href="#ico-credit"/></svg><span>Кредиты</span></button>
       <button class="nav-item" data-view="settings"><svg><use href="#ico-settings"/></svg><span>Настройки</span></button>
     </nav>
@@ -70,9 +72,9 @@
 <nav class="bottom-nav" aria-label="Основные разделы">
   <button data-view="overview" class="active"><svg><use href="#ico-home"/></svg><span>Обзор</span></button>
   <button data-view="calendar"><svg><use href="#ico-calendar"/></svg><span>Календарь</span></button>
-  <button data-view="obligations"><svg><use href="#ico-list"/></svg><span>Платежи</span></button>
+  <button data-view="obligations"><svg><use href="#ico-layers"/></svg><span>Обязательства</span></button>
   <button data-view="loans"><svg><use href="#ico-credit"/></svg><span>Кредиты</span></button>
-  <button data-view="settings"><svg><use href="#ico-settings"/></svg><span>Ещё</span></button>
+  <button data-view="settings"><svg><use href="#ico-settings"/></svg><span>Настройки</span></button>
 </nav>
 <dialog class="dialog" id="entry-dialog" aria-labelledby="entry-heading"><form method="dialog" id="entry-form" class="dialog-body" novalidate>
   <div class="dialog-head"><div><span class="eyebrow">Доход или расход</span><h2 id="entry-heading">Новая запись</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-close"/></svg></button></div>

@@ -12,9 +12,9 @@ type NavigationItem = {
 const items: readonly NavigationItem[] = [
   { view: 'overview', title: 'Обзор', shortTitle: 'Обзор', icon: 'home' },
   { view: 'calendar', title: 'Календарь', shortTitle: 'Календарь', icon: 'calendar' },
-  { view: 'obligations', title: 'Обязательства', shortTitle: 'Платежи', icon: 'list' },
+  { view: 'obligations', title: 'Обязательства', shortTitle: 'Обязательства', icon: 'layers' },
   { view: 'loans', title: 'Кредиты', shortTitle: 'Кредиты', icon: 'credit' },
-  { view: 'settings', title: 'Настройки', shortTitle: 'Ещё', icon: 'settings' },
+  { view: 'settings', title: 'Настройки', shortTitle: 'Настройки', icon: 'settings' },
 ];
 
 export function Navigation({ view, variant }: { view: FinanceView; variant: NavigationVariant }) {

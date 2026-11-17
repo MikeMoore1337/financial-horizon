@@ -3,6 +3,7 @@ import {readState,updateState,replaceState,askPersistentStorage,storageStatus,se
 import {encryptBackup,decryptBackup} from './backup.js';
 import {parseSchedule} from './schedule.js';
 import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.js';
+import {previewXlsxReserves} from './src/domain/reserves/xlsx-preview.ts';
 import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
 import {createScreenRoot} from './src/react/ScreenRoot.tsx';
@@ -22,7 +23,8 @@ const titles={overview:'Обзор',calendar:'Календарь',obligations:'�
 // FastAPI authentication and profile scoping remain the sole authorization boundary.
 const financeAccountsEnabled=document.querySelector('meta[name="fh-finance-accounts"]')?.content==='enabled';
 const financeImportEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-import"]')?.content==='enabled';
-let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null},passwordMode='export',restoreFile=null,verifyBackupFile=null,cloudImportFile=null,pendingCloudImport=null,cloudImportController=null,cloudImportBusy=false,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
+const financeReservesEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-reserves"]')?.content==='enabled';
+let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null,obligationsSection:'payments',focusReserveId:null,reserveSuggestions:[]},passwordMode='export',restoreFile=null,verifyBackupFile=null,cloudImportFile=null,pendingCloudImport=null,cloudImportController=null,cloudImportBusy=false,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
 const emailSession=createEmailSession();
 let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
 const GUEST_MODE_KEY='fh-guest-session-v2';
@@ -38,6 +40,10 @@ let lastStorageContext=null;
 function revokeDisplayedLedger(){
  revokeStateScope(); // invalidate pending IDB reads/writes before clearing the UI
  state=null;
+
+ if(typeof ui!=='undefined'){
+  ui.reserveSuggestions=[];ui.focusReserveId=null;ui.obligationsSection='payments';
+ }
  restoreFile=null;verifyBackupFile=null;cloudImportFile=null;pendingCloudImport=null;cloudImportController?.abort();cloudImportController=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
  if(navRoots){navRoots.unmount();navRoots=null;}
@@ -98,7 +104,7 @@ function render(){
    screenRoot.render({view:'accounts-connected',props:{verifiedActorUserId:emailSession.userId||null,onBack:()=>navigation('overview')}});
   }else if(ui.view==='calendar'){
    const events=monthEvents(),totals=monthTotals(events);
-   screenRoot.render({view:'calendar',props:{events,month:ui.month,selectedDate:ui.selectedDate,currentDate:today(),monthTitle:monthLabel(ui.month),netPlanCents:totals.netPlanCents,netFactCents:totals.netFactCents,formatDate,rubles}});
+   screenRoot.render({view:'calendar',props:{events,month:ui.month,selectedDate:ui.selectedDate,currentDate:today(),monthTitle:monthLabel(ui.month),netPlanCents:totals.netPlanCents,netFactCents:totals.netFactCents,formatDate,rubles,financeEnabled:financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId,verifiedActorUserId:emailSession.userId||null}});
   }else if(ui.view==='overview'){
    const currentDate=today(),events=monthEvents(),totals=monthTotals(events);
    const upcoming=events.filter(event=>event.date>=currentDate).slice(0,4);
@@ -112,7 +118,7 @@ function render(){
    const snapshot=loan?loanLedger(loan,state.loanPayments):null;
    const loanSummary=loan?{id:loan.id,title:loan.title,outstandingCents:snapshot.outstandingCents,monthlyCents:snapshot.monthlyCents,months:snapshot.months,
     percent:Math.max(0,Math.min(100,Math.round((1-snapshot.outstandingCents/loan.openingCents)*100)))}:null;
-   screenRoot.render({view:'overview',props:{currentDate,monthTitle:monthLabel(ui.month),hasData:hasData(),totals,categories,upcoming,loan:loanSummary,rubles,formatDate}});
+   screenRoot.render({view:'overview',props:{currentDate,monthTitle:monthLabel(ui.month),hasData:hasData(),totals,categories,upcoming,loan:loanSummary,rubles,formatDate,financeEnabled:financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId,verifiedActorUserId:emailSession.userId||null}});
   }else if(ui.view==='obligations'){
    const items=state.entries.filter(isActive)
     .filter(e=>ui.filter==='all'||(ui.filter==='regular'&&e.recurrence!=='once')||
@@ -128,7 +134,12 @@ function render(){
    const totals=monthTotals(monthEvents());
    screenRoot.render({view:'obligations',props:{rows,month:ui.month,monthTitle:monthLabel(ui.month),
     filter:ui.filter,expandedEntry:ui.expandedEntry,currentDate:today(),
-    expenseCents:totals.expenseCents,expensePaidCents:totals.expensePaidCents,rubles,formatDate}});
+    expenseCents:totals.expenseCents,expensePaidCents:totals.expensePaidCents,rubles,formatDate,
+    financeEnabled:financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId,
+    verifiedActorUserId:emailSession.userId||null,reserveSection:ui.obligationsSection,
+    focusReserveId:ui.focusReserveId,importSuggestions:ui.reserveSuggestions,onReserveSectionChange:next=>{
+     ui.obligationsSection=next;ui.focusReserveId=null;render();
+    }}});
   }else if(ui.view==='loans'){
    const loans=state.loans.filter(isActive);
    if(!loans.find(loan=>loan.id===ui.selectedLoan))ui.selectedLoan=loans[0]?.id||null;
@@ -498,7 +509,12 @@ async function handleAction(button){
    for(const row of diff.loans){const {source,...value}=row;s.loans.push({...value,id:uuid()});}
    audit(s,'excel-import','Добавлены записи из Excel: '+diff.entries.length+' платежей, '+diff.loans.length+' кредитов');
   },'Данные из Excel добавлены локально');
-  $('#excel-import-dialog').close();pendingExcelImport=null;ui.view='overview';render();return;
+  ui.reserveSuggestions=data.reservePreviews.filter(preview=>preview.status==='suggestion');
+  $('#excel-import-dialog').close();pendingExcelImport=null;ui.view='overview';render();
+  if(ui.reserveSuggestions.length){
+   toast('Импорт завершён. Найдены предложения по накоплениям ('+ui.reserveSuggestions.length+'). Откройте раздел «Накопления» для ручного подтверждения.');
+  }
+  return;
  }
  if(type==='install'){if(installPrompt){installPrompt.prompt();await installPrompt.userChoice;installPrompt=null;}else toast('iPhone: Safari → Поделиться → На экран «Домой». Mac: Safari → Добавить в Dock.');return;}
  if(type==='sample'){
@@ -558,7 +574,18 @@ async function previewExcelImport(file){
  const data=await readXlsxRows(await file.arrayBuffer());
  const parsed=parseBudgetRows(data.rows,today());
  const diff=previewImportChanges(parsed,state);
- pendingExcelImport={parsed,name:file.name.slice(0,120)};
+ let reservePreviews=[];
+ let reserveHintWarning=null;
+ try{
+  reservePreviews=previewXlsxReserves(data.rows,diff.entries.map(entry=>({
+   source:entry.source,title:entry.title,kind:entry.kind,amountCents:entry.amountCents
+  })));
+ }catch{
+  // Suggestions are optional. Invalid spreadsheet metadata MUST NOT block
+  // the existing expense import or silently reinterpret its recurrence.
+  reserveHintWarning='Не удалось однозначно распознать накопления. Стандартный импорт сохранён без изменений.';
+ }
+ pendingExcelImport={parsed,name:file.name.slice(0,120),reservePreviews};
  const summary=$('#excel-import-summary'),items=$('#excel-import-items'),warnings=$('#excel-import-warnings');
  summary.replaceChildren();items.replaceChildren();warnings.replaceChildren();
  const paragraph=document.createElement('p');
@@ -567,6 +594,19 @@ async function previewExcelImport(file){
  const totals=document.createElement('p');
  totals.textContent='Плановые доходы: '+rubles(diff.incomeCents)+'. Плановые расходы: '+rubles(diff.expenseCents)+' (без обязательных платежей по кредитам).';
  summary.append(totals);
+ if(reserveHintWarning){
+  const warning=document.createElement('p');warning.className='small-hint';
+  warning.textContent=reserveHintWarning;summary.append(warning);
+ }
+ if(reservePreviews.length){
+  const notice=document.createElement('p');notice.className='small-hint';
+  const suggested=reservePreviews.filter(preview=>preview.status==='suggestion').length;
+  const invalid=reservePreviews.length-suggested;
+  notice.textContent='Периодические расходы в XLSX: '+suggested+' возможных накоплений'+
+   (invalid?' · '+invalid+' неоднозначных подсказок требуют проверки':'')+
+   '. Предложения не создаются автоматически. После локального импорта нужно отдельно подтвердить резерв, счёт и обработку прежнего расхода.';
+  summary.append(notice);
+ }
  const itemsList=document.createElement('ul');
  for(const record of [...diff.entries,...diff.loans].slice(0,50)){
   const li=document.createElement('li');
@@ -786,7 +826,17 @@ function bindEvents(){
  },true);
  document.addEventListener('click',async event=>{
   const nav=event.target.closest('[data-view]');if(nav){event.preventDefault();navigation(nav.dataset.view);return;}
-  const actionEl=event.target.closest('[data-action]');if(actionEl){event.preventDefault();try{await handleAction(actionEl);}catch(e){fail(e);}return;}
+  const actionEl=event.target.closest('[data-action]');if(actionEl){
+   event.preventDefault();
+   if(actionEl.dataset.action==='open-reserves'){
+    if(financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId){
+     ui.obligationsSection='reserves';ui.focusReserveId=actionEl.dataset.id||null;
+     navigation('obligations');
+    }
+    return;
+   }
+   try{await handleAction(actionEl);}catch(e){fail(e);}return;
+  }
  });
  document.addEventListener('submit',onFormSubmit);
  $('#theme-toggle').addEventListener('click',()=>{themeSet(document.body.dataset.theme==='dark'?'light':'dark');render();});
