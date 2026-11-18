@@ -3,7 +3,15 @@ import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { Icon } from './Calendar';
 
-function FormHeader({ subject, titleId, title }: { subject: string; titleId: string; title: string }) {
+function FormHeader({
+  subject,
+  titleId,
+  title,
+}: {
+  subject: string;
+  titleId: string;
+  title: string;
+}) {
   return (
     <div className="dialog-head">
       <div>
@@ -85,7 +93,11 @@ export function EntryDialogForm() {
 export function LoanDialogForm() {
   return (
     <form method="dialog" id="loan-form" className="dialog-body" noValidate>
-      <FormHeader subject="Кредитные обязательства" titleId="loan-heading" title="Добавить кредит" />
+      <FormHeader
+        subject="Кредитные обязательства"
+        titleId="loan-heading"
+        title="Добавить кредит"
+      />
       <input type="hidden" name="id" />
       <label className="field">
         <span>Название</span>
@@ -122,8 +134,8 @@ export function LoanDialogForm() {
         </label>
       </div>
       <p className="form-note">
-        Изменение исходных условий пересчитает прогноз всех сохранённых платежей. История операций
-        останется.
+        Изменение исходных условий пересчитает прогноз всех сохранённых платежей. История
+        операций останется.
       </p>
       <FormActions text="Сохранить кредит" />
     </form>
@@ -133,7 +145,11 @@ export function LoanDialogForm() {
 export function PaymentDialogForm() {
   return (
     <form method="dialog" id="payment-form" className="dialog-body" noValidate>
-      <FormHeader subject="Фактическая оплата" titleId="payment-heading" title="Внести платёж" />
+      <FormHeader
+        subject="Фактическая оплата"
+        titleId="payment-heading"
+        title="Внести платёж"
+      />
       <input name="paymentId" type="hidden" />
       <label className="field">
         <span>Кредит</span>
@@ -164,8 +180,8 @@ export function PaymentDialogForm() {
         Введите сумму для расчёта.
       </div>
       <p className="form-note">
-        Это приблизительный аннуитетный прогноз, а не официальный график банка. Проценты начисляются
-        помесячно; особые условия банка и штрафы не учтены.
+        Это приблизительный аннуитетный прогноз, а не официальный график банка. Проценты
+        начисляются помесячно; особые условия банка и штрафы не учтены.
       </p>
       <FormActions text="Подтвердить оплату" />
     </form>
