@@ -67,7 +67,7 @@ test('signed-in ledger exposes accessible logout controls with a vendored Lucide
  assert.doesNotMatch(app,/id="account-logout-settings" data-action="account-logout"/);
  assert.match(app,/await logoutEmailAccount\(\)/);
  const toolbar=get('src/react/Toolbar.tsx');
- assert.match(app,/signedIn:Boolean\(emailSession\.userId\)/);
+ assert.match(app,/const signedIn=Boolean\(emailSession\.userId\)/);
  assert.match(toolbar,/id="account-logout-toolbar"/);
  assert.match(toolbar,/id="account-entry-toolbar"/);
  assert.match(toolbar,/hidden=\{!signedIn\}/);

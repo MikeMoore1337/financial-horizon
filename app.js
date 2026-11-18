@@ -187,10 +187,11 @@ function render(){
 }
 function syncAccountControls(){
  if(!state)return;
+ const signedIn=Boolean(emailSession.userId);
  if(!navRoots)navRoots=createAppShellRoots($('.sidebar-nav'),$('.bottom-nav'),$('.toolbar'));
  navRoots.render(ui.view==='accounts-connected'?'settings':ui.view,{
   title:titles[ui.view],theme:document.body.dataset.theme==='dark'?'dark':'light',
-  signedIn:Boolean(emailSession.userId),busy:Boolean(emailSession.busy),
+  signedIn,busy:Boolean(emailSession.busy),
   serverAccounts:lastStorageContext===true,
  });
 }
