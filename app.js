@@ -8,6 +8,7 @@ import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
 import {createScreenRoot} from './src/react/ScreenRoot.tsx';
 import {createAppShellRoots} from './src/react/AppShell.tsx';
+import {createCategoryDialogController} from './src/react/CategoryDialog.tsx';
 import {sameFinancialJSON} from './src/security/protected-staging.ts';
 import {prepareLivePersonalImportCandidate,executeConfirmedPersonalImportCandidate} from './src/cloud/personal-import-transport-candidate.mjs';
 import {verifySavedFinancialBackupReadOnly} from './src/cloud/read-only-backup-verification.mjs';
@@ -30,6 +31,7 @@ let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,
 const GUEST_MODE_KEY='fh-guest-session-v2';
 let screenRoot=null;
 let navRoots=null;
+let categoryDialogController=null;
 function getAuthAccess(){
  if(guestMode)return {kind:'guest'};
  return {kind:'account',accountId:activeUserId||'',verifiedUserId:emailSession.userId||null,sessionValid:Boolean(emailSession.userId)};
@@ -47,6 +49,7 @@ function revokeDisplayedLedger(){
  restoreFile=null;verifyBackupFile=null;cloudImportFile=null;pendingCloudImport=null;cloudImportController?.abort();cloudImportController=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
  if(navRoots){navRoots.unmount();navRoots=null;}
+ if(typeof categoryDialogController!=='undefined'&&categoryDialogController){categoryDialogController.dispose();categoryDialogController=null;}
  $('#main').replaceChildren();
  // Modal forms and previews live OUTSIDE #main; reset alone can retain
  // programmatically inserted finance titles, choices and payment schedules.
@@ -542,7 +545,13 @@ async function handleAction(button){
   if(!await requireConfirm('Отменить фактическую оплату?',`Сумма ${rubles(record.amountCents)} перестанет участвовать в расчёте. Запись об отмене останется в истории.`))return;
   await mutate(s=>{s[key].find(x=>x.id===id).voidedAt=new Date().toISOString();audit(s,'void',`Отменена оплата ${rubles(record.amountCents)}`);},'Операция отменена, прогноз обновлён',originalRevision);return;
  }
- if(type==='edit-category'){const cat=button.dataset.category;const form=$('#rename-category-form');form.elements.old.value=cat;form.elements.newName.value=cat;openDialog('#category-dialog');return;}
+ if(type==='edit-category'){
+  const cat=button.dataset.category;
+  if(!categoryDialogController)categoryDialogController=createCategoryDialogController($('#category-dialog'));
+  categoryDialogController.render();
+  const form=$('#rename-category-form');form.elements.old.value=cat;form.elements.newName.value=cat;
+  openDialog('#category-dialog');return;
+ }
  if(type==='clear-schedule'){if(!await requireConfirm('Удалить импортированный график?', 'Изменится только справочный график банка. Фактические платежи и параметры кредита сохранятся.'))return;await mutate(s=>{const l=s.loans.find(x=>x.id===id);l.schedule=[];delete l.scheduleSource;audit(s,'schedule-remove',`Удалён график кредита: ${l.title}`);},'График удалён');return;}
  if(type==='delete-category'){
   const cat=button.dataset.category;
