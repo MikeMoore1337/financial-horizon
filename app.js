@@ -8,6 +8,7 @@ import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
 import {createScreenRoot} from './src/react/ScreenRoot.tsx';
 import {createAppShellRoots} from './src/react/AppShell.tsx';
+import {createFinanceFormRoots} from './src/react/FinanceForms.tsx';
 import {sameFinancialJSON} from './src/security/protected-staging.ts';
 import {prepareLivePersonalImportCandidate,executeConfirmedPersonalImportCandidate} from './src/cloud/personal-import-transport-candidate.mjs';
 import {verifySavedFinancialBackupReadOnly} from './src/cloud/read-only-backup-verification.mjs';
@@ -30,6 +31,7 @@ let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,
 const GUEST_MODE_KEY='fh-guest-session-v2';
 let screenRoot=null;
 let navRoots=null;
+let financeFormRoots=null;
 function getAuthAccess(){
  if(guestMode)return {kind:'guest'};
  return {kind:'account',accountId:activeUserId||'',verifiedUserId:emailSession.userId||null,sessionValid:Boolean(emailSession.userId)};
@@ -47,6 +49,7 @@ function revokeDisplayedLedger(){
  restoreFile=null;verifyBackupFile=null;cloudImportFile=null;pendingCloudImport=null;cloudImportController?.abort();cloudImportController=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
  if(navRoots){navRoots.unmount();navRoots=null;}
+ if(typeof financeFormRoots!=='undefined'&&financeFormRoots){financeFormRoots.dispose();financeFormRoots=null;}
  $('#main').replaceChildren();
  // Modal forms and previews live OUTSIDE #main; reset alone can retain
  // programmatically inserted finance titles, choices and payment schedules.
@@ -900,6 +903,14 @@ function bindEvents(){
 }
 async function init(){
  try{themeSet(localStorage.getItem('fh-theme')||((window.matchMedia?.('(prefers-color-scheme: dark)').matches)?'dark':'light'));}catch{themeSet('light');}
+ // Install the existing native forms before legacy listeners bind to their fields.
+ if(!financeFormRoots&&typeof createFinanceFormRoots==='function'&&$('#entry-dialog')){
+  financeFormRoots=createFinanceFormRoots({
+   entry:$('#entry-dialog'),loan:$('#loan-dialog'),payment:$('#payment-dialog'),
+   settlement:$('#settlement-dialog'),password:$('#password-dialog'),
+  });
+  financeFormRoots.mount();
+ }
  bindEvents();
  if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(()=>{});
  try{
