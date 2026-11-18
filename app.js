@@ -49,7 +49,7 @@ function revokeDisplayedLedger(){
  restoreFile=null;verifyBackupFile=null;cloudImportFile=null;pendingCloudImport=null;cloudImportController?.abort();cloudImportController=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
  if(navRoots){navRoots.unmount();navRoots=null;}
- if(confirmationController){confirmationController.dispose();confirmationController=null;}
+ if(typeof confirmationController!=='undefined'&&confirmationController){confirmationController.dispose();confirmationController=null;}
  $('#main').replaceChildren();
  // Modal forms and previews live OUTSIDE #main; reset alone can retain
  // programmatically inserted finance titles, choices and payment schedules.
