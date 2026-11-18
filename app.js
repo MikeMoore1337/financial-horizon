@@ -7,6 +7,7 @@ import {previewXlsxReserves} from './src/domain/reserves/xlsx-preview.ts';
 import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
 import {createScreenRoot} from './src/react/ScreenRoot.tsx';
+import {projectOverviewCategories,projectOverviewLoan} from './src/react/OverviewModels.tsx';
 import {createAppShellRoots} from './src/react/AppShell.tsx';
 import {sameFinancialJSON} from './src/security/protected-staging.ts';
 import {prepareLivePersonalImportCandidate,executeConfirmedPersonalImportCandidate} from './src/cloud/personal-import-transport-candidate.mjs';
@@ -108,16 +109,10 @@ function render(){
   }else if(ui.view==='overview'){
    const currentDate=today(),events=monthEvents(),totals=monthTotals(events);
    const upcoming=events.filter(event=>event.date>=currentDate).slice(0,4);
-   const groups=new Map();
-   for(const event of events.filter(event=>event.kind!=='income'))
-    groups.set(event.category,(groups.get(event.category)||0)+event.plannedCents);
-   const ordered=[...groups.entries()].sort((a,b)=>b[1]-a[1]).slice(0,5);
-   const highest=Math.max(...ordered.map(([_,sum])=>sum),1);
-   const categories=ordered.map(([name,amountCents])=>({name,amountCents,percent:Math.max(2,Math.round(amountCents/highest*100))}));
+   const categories=projectOverviewCategories(events);
    const loan=state.loans.find(isActive)||null;
    const snapshot=loan?loanLedger(loan,state.loanPayments):null;
-   const loanSummary=loan?{id:loan.id,title:loan.title,outstandingCents:snapshot.outstandingCents,monthlyCents:snapshot.monthlyCents,months:snapshot.months,
-    percent:Math.max(0,Math.min(100,Math.round((1-snapshot.outstandingCents/loan.openingCents)*100)))}:null;
+   const loanSummary=projectOverviewLoan(loan,snapshot);
    screenRoot.render({view:'overview',props:{currentDate,monthTitle:monthLabel(ui.month),hasData:hasData(),totals,categories,upcoming,loan:loanSummary,rubles,formatDate,financeEnabled:financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId,verifiedActorUserId:emailSession.userId||null}});
   }else if(ui.view==='obligations'){
    const items=state.entries.filter(isActive)
