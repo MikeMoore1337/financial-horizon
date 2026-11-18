@@ -134,8 +134,8 @@ export function LoanDialogForm() {
         </label>
       </div>
       <p className="form-note">
-        Изменение исходных условий пересчитает прогноз всех сохранённых платежей. История
-        операций останется.
+        Изменение исходных условий пересчитает прогноз всех сохранённых платежей. История операций
+        останется.
       </p>
       <FormActions text="Сохранить кредит" />
     </form>
@@ -145,11 +145,7 @@ export function LoanDialogForm() {
 export function PaymentDialogForm() {
   return (
     <form method="dialog" id="payment-form" className="dialog-body" noValidate>
-      <FormHeader
-        subject="Фактическая оплата"
-        titleId="payment-heading"
-        title="Внести платёж"
-      />
+      <FormHeader subject="Фактическая оплата" titleId="payment-heading" title="Внести платёж" />
       <input name="paymentId" type="hidden" />
       <label className="field">
         <span>Кредит</span>
@@ -180,8 +176,8 @@ export function PaymentDialogForm() {
         Введите сумму для расчёта.
       </div>
       <p className="form-note">
-        Это приблизительный аннуитетный прогноз, а не официальный график банка. Проценты
-        начисляются помесячно; особые условия банка и штрафы не учтены.
+        Это приблизительный аннуитетный прогноз, а не официальный график банка. Проценты начисляются
+        помесячно; особые условия банка и штрафы не учтены.
       </p>
       <FormActions text="Подтвердить оплату" />
     </form>
