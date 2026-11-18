@@ -9,13 +9,7 @@ describe('React toolbar presentation and delegated actions', () => {
   it('hides account actions from guests and disables logout during a request', () => {
     const { rerender } = render(
       <StrictMode>
-        <Toolbar
-          title="Обзор"
-          theme="light"
-          signedIn={false}
-          busy={false}
-          serverAccounts={false}
-        />
+        <Toolbar title="Обзор" theme="light" signedIn={false} busy={false} serverAccounts={false} />
       </StrictMode>,
     );
     const account = document.getElementById('account-entry-toolbar') as HTMLAnchorElement;
@@ -42,13 +36,7 @@ describe('React toolbar presentation and delegated actions', () => {
 
     rerender(
       <StrictMode>
-        <Toolbar
-          title="Настройки"
-          theme="dark"
-          signedIn
-          busy={false}
-          serverAccounts={false}
-        />
+        <Toolbar title="Настройки" theme="dark" signedIn busy={false} serverAccounts={false} />
       </StrictMode>,
     );
     expect(screen.getByText('Настройки')).toBeTruthy();
@@ -71,13 +59,7 @@ describe('React toolbar presentation and delegated actions', () => {
     try {
       render(
         <StrictMode>
-          <Toolbar
-            title="Календарь"
-            theme="light"
-            signedIn
-            busy={false}
-            serverAccounts={false}
-          />
+          <Toolbar title="Календарь" theme="light" signedIn busy={false} serverAccounts={false} />
         </StrictMode>,
       );
       fireEvent.click(screen.getByRole('button', { name: 'Добавить запись' }));
