@@ -15,7 +15,7 @@
     "lint": "eslint .",
     "format:check": "prettier --check vite.config.mjs eslint.config.mjs tsconfig.json .prettierrc.json state-migrations.ts src/types/*.ts scripts/verify-build.mjs playwright.config.mjs src/react/*.tsx tests/react/*.tsx vitest.config.mts",
     "test:build": "node scripts/verify-build.mjs",
-    "audit:deps": "npm audit --audit-level=high",
+    "audit:deps": "node scripts/audit-dependencies.mjs",
     "test:component": "vitest run --config vitest.config.mts"
   },
   "devDependencies": {
