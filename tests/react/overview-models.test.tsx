@@ -26,13 +26,17 @@ describe('Pure typed overview presentation adapter', () => {
     expect(result[4]?.percent).toBe(2);
     expect(events).toEqual(before);
     expect(projectOverviewCategories([])).toEqual([]);
-    expect(projectOverviewCategories([{ kind: 'income', category: 'Только доход', plannedCents: 1 }])).toEqual([]);
+    expect(
+      projectOverviewCategories([{ kind: 'income', category: 'Только доход', plannedCents: 1 }]),
+    ).toEqual([]);
   });
 
   it('keeps the exact legacy loan projection and clamps percentage', () => {
     const loan = { id: 'synthetic-loan', title: 'Ипотека', openingCents: 100000 };
     expect(projectOverviewLoan(null, null)).toBeNull();
-    expect(projectOverviewLoan(loan, { outstandingCents: 50000, monthlyCents: 1000, months: 10 })).toEqual({
+    expect(
+      projectOverviewLoan(loan, { outstandingCents: 50000, monthlyCents: 1000, months: 10 }),
+    ).toEqual({
       id: 'synthetic-loan',
       title: 'Ипотека',
       outstandingCents: 50000,
@@ -40,8 +44,13 @@ describe('Pure typed overview presentation adapter', () => {
       months: 10,
       percent: 50,
     });
-    expect(projectOverviewLoan(loan, { outstandingCents: 120000, monthlyCents: 1000, months: null })?.percent).toBe(0);
-    expect(projectOverviewLoan(loan, { outstandingCents: 0, monthlyCents: 0, months: 0 })?.percent).toBe(100);
+    expect(
+      projectOverviewLoan(loan, { outstandingCents: 120000, monthlyCents: 1000, months: null })
+        ?.percent,
+    ).toBe(0);
+    expect(
+      projectOverviewLoan(loan, { outstandingCents: 0, monthlyCents: 0, months: 0 })?.percent,
+    ).toBe(100);
     expect(() => projectOverviewLoan(loan, null)).toThrow('Missing calculated loan ledger');
   });
 });
