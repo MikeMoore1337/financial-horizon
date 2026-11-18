@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, screen } from '@testing-library/react';
-import {
-  createConfirmationDialogController,
-  type ConfirmationDialogProps,
-} from '../../src/react/ConfirmationDialog';
+import { createConfirmationDialogController } from '../../src/react/ConfirmationDialog';
 
 afterEach(() => {
   cleanup();
