@@ -22,6 +22,10 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
+      - name: Show exact Prettier diff for #72 (temporary diagnostics, no writes)
+        run: |
+          npm exec -- prettier src/react/AuxiliaryDialogs.tsx > "$RUNNER_TEMP/fh-pretty.tsx"
+          diff -u src/react/AuxiliaryDialogs.tsx "$RUNNER_TEMP/fh-pretty.tsx" || true
       - run: npm run format:check
       - run: npm run build
       - run: npm run test:build
