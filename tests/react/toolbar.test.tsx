@@ -72,12 +72,12 @@ describe('React toolbar presentation and delegated actions', () => {
       render(
         <StrictMode>
           <Toolbar
-          title="Календарь"
-          theme="light"
-          signedIn
-          busy={false}
-          serverAccounts={false}
-        />
+            title="Календарь"
+            theme="light"
+            signedIn
+            busy={false}
+            serverAccounts={false}
+          />
         </StrictMode>,
       );
       fireEvent.click(screen.getByRole('button', { name: 'Добавить запись' }));

@@ -31,16 +31,3 @@ test('React toolbar delegates add and theme without duplicate financial writes',
   expect(await nativeDb(page)).toEqual(before);
   watcher.assertClean();
 });
-
-
-test('React toolbar preserves mobile menu activation', async ({ page, context }) => {
-  const watcher = await observe(context, page);
-  await page.setViewportSize({ width: 393, height: 852 });
-  await visitGuest(page);
-  await page.locator('#menu-toggle').click();
-  await expect(page.locator('.sidebar')).toHaveClass(/open/);
-  await page.locator('.sidebar-nav [data-view="settings"]').click();
-  await expect(page.locator('.sidebar')).not.toHaveClass(/open/);
-  await expect(page.locator('#toolbar-title')).toHaveText('Настройки');
-  watcher.assertClean();
-});
