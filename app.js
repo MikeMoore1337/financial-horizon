@@ -8,6 +8,7 @@ import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
 import {createScreenRoot} from './src/react/ScreenRoot.tsx';
 import {createAppShellRoots} from './src/react/AppShell.tsx';
+import {createConfirmationDialogController} from './src/react/ConfirmationDialog.tsx';
 import {sameFinancialJSON} from './src/security/protected-staging.ts';
 import {prepareLivePersonalImportCandidate,executeConfirmedPersonalImportCandidate} from './src/cloud/personal-import-transport-candidate.mjs';
 import {verifySavedFinancialBackupReadOnly} from './src/cloud/read-only-backup-verification.mjs';
@@ -30,6 +31,7 @@ let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,
 const GUEST_MODE_KEY='fh-guest-session-v2';
 let screenRoot=null;
 let navRoots=null;
+let confirmationController=null;
 function getAuthAccess(){
  if(guestMode)return {kind:'guest'};
  return {kind:'account',accountId:activeUserId||'',verifiedUserId:emailSession.userId||null,sessionValid:Boolean(emailSession.userId)};
@@ -47,6 +49,7 @@ function revokeDisplayedLedger(){
  restoreFile=null;verifyBackupFile=null;cloudImportFile=null;pendingCloudImport=null;cloudImportController?.abort();cloudImportController=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
  if(navRoots){navRoots.unmount();navRoots=null;}
+ if(confirmationController){confirmationController.dispose();confirmationController=null;}
  $('#main').replaceChildren();
  // Modal forms and previews live OUTSIDE #main; reset alone can retain
  // programmatically inserted finance titles, choices and payment schedules.
@@ -430,15 +433,14 @@ function openSettlement(entryId,occurrence=ui.month,paymentId=null){
  $('#settlement-description').textContent=`${entry.title}. План: ${rubles(entry.amountCents)}. Уже внесено: ${rubles(paid)}. Можно внести часть суммы.`;
  openDialog('#settlement-dialog');
 }
-function requireConfirm(title,text){return new Promise(resolve=>{
- const dialog=$('#confirmation-dialog');$('#confirmation-title').textContent=title;$('#confirmation-text').textContent=text;
- let done=false;
- const finish=value=>{if(done)return;done=true;dialog.close();resolve(value);};
- const yes=$('#confirm-yes'),no=$('#confirm-cancel');
- yes.onclick=()=>finish(true);no.onclick=()=>finish(false);
- dialog.oncancel=e=>{e.preventDefault();finish(false);};
- dialog.showModal();
- });}
+function requireConfirm(title,text){
+ if(!confirmationController){
+  const dialog=$('#confirmation-dialog');
+  if(!dialog)throw Error('Диалог подтверждения недоступен');
+  confirmationController=createConfirmationDialogController(dialog);
+ }
+ return confirmationController.confirm(title,text);
+}
 async function handleAction(button){
  const type=button.dataset.action,id=button.dataset.id;
  if(type==='account-logout'){await logoutEmailAccount();return;}
