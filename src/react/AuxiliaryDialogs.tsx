@@ -58,8 +58,8 @@ export function PaymentMethodsDialog() {
             />
           </label>
           <p className="form-note">
-            Файл остаётся в вашей финансовой базе и зашифрованных резервных копиях. При
-            изменении можно оставить старое изображение.
+            Файл остаётся в вашей финансовой базе и зашифрованных резервных копиях. При изменении
+            можно оставить старое изображение.
           </p>
         </div>
         <label className="field">
@@ -68,15 +68,11 @@ export function PaymentMethodsDialog() {
           </span>
         </label>
         <p className="form-note">
-          Не сохраняйте пароли, CVV, коды подтверждения и токены. Внешняя оплата не отмечает
-          расход как оплаченный.
+          Не сохраняйте пароли, CVV, коды подтверждения и токены. Внешняя оплата не отмечает расход
+          как оплаченный.
         </p>
         <div className="dialog-actions">
-          <button
-            type="button"
-            className="button-secondary"
-            data-action="reset-payment-method"
-          >
+          <button type="button" className="button-secondary" data-action="reset-payment-method">
             Отменить правку
           </button>
           <button type="submit" className="button-primary">
@@ -175,20 +171,20 @@ export function CloudImportDialog() {
       <p id="cloud-import-summary" className="form-note" role="status" aria-live="polite" />
       <label className="field" id="cloud-import-preserve-row" hidden>
         <span>
-          <input type="checkbox" id="cloud-import-preserve-zero-account" /> Я отдельно
-          подтверждаю сохранение существующего пустого счёта на сервере. Он не будет удалён
-          или объединён с локальными суммами.
+          <input type="checkbox" id="cloud-import-preserve-zero-account" /> Я отдельно подтверждаю
+          сохранение существующего пустого счёта на сервере. Он не будет удалён или объединён с
+          локальными суммами.
         </span>
       </label>
       <label className="field">
         <span>
-          <input type="checkbox" id="cloud-import-final-consent" /> Я сохранил зашифрованную
-          копию вне браузера, проверил данные и разрешаю однократный перенос в свой аккаунт.
+          <input type="checkbox" id="cloud-import-final-consent" /> Я сохранил зашифрованную копию
+          вне браузера, проверил данные и разрешаю однократный перенос в свой аккаунт.
         </span>
       </label>
       <p className="form-note">
-        Если импорт прервётся после подтверждения, не запускайте его повторно, пока не
-        проверите результат на сервере. Автоматического удаления локальной базы нет.
+        Если импорт прервётся после подтверждения, не запускайте его повторно, пока не проверите
+        результат на сервере. Автоматического удаления локальной базы нет.
       </p>
       <div className="dialog-actions">
         <button type="button" className="button-secondary" data-action="cancel-cloud-import">
