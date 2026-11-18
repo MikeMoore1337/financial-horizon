@@ -9,6 +9,7 @@ import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './led
 import {createScreenRoot} from './src/react/ScreenRoot.tsx';
 import {createAppShellRoots} from './src/react/AppShell.tsx';
 import {createCategoryDialogController} from './src/react/CategoryDialog.tsx';
+import {createConfirmationDialogController} from './src/react/ConfirmationDialog.tsx';
 import {sameFinancialJSON} from './src/security/protected-staging.ts';
 import {prepareLivePersonalImportCandidate,executeConfirmedPersonalImportCandidate} from './src/cloud/personal-import-transport-candidate.mjs';
 import {verifySavedFinancialBackupReadOnly} from './src/cloud/read-only-backup-verification.mjs';
@@ -32,6 +33,7 @@ const GUEST_MODE_KEY='fh-guest-session-v2';
 let screenRoot=null;
 let navRoots=null;
 let categoryDialogController=null;
+let confirmationController=null;
 function getAuthAccess(){
  if(guestMode)return {kind:'guest'};
  return {kind:'account',accountId:activeUserId||'',verifiedUserId:emailSession.userId||null,sessionValid:Boolean(emailSession.userId)};
@@ -50,6 +52,7 @@ function revokeDisplayedLedger(){
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
  if(navRoots){navRoots.unmount();navRoots=null;}
  if(typeof categoryDialogController!=='undefined'&&categoryDialogController){categoryDialogController.dispose();categoryDialogController=null;}
+ if(typeof confirmationController!=='undefined'&&confirmationController){confirmationController.dispose();confirmationController=null;}
  $('#main').replaceChildren();
  // Modal forms and previews live OUTSIDE #main; reset alone can retain
  // programmatically inserted finance titles, choices and payment schedules.
@@ -69,7 +72,7 @@ async function mutate(change,msg='Сохранено на устройстве',
 }
 function stampFormRevision(form){form.dataset.stateRevision=String(state.revision);}
 function revisionForForm(form){const revision=Number(form.dataset.stateRevision);if(!Number.isSafeInteger(revision)||revision<0)throw Error('Не удалось определить версию записи. Откройте форму повторно.');return revision;}
-function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#172336':'#ffffff';$('#theme-toggle').innerHTML=svg(mode==='dark'?'sun':'moon');$('#theme-toggle').setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}
+function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#172336':'#ffffff';if(!navRoots){const toggle=$('#theme-toggle');if(toggle){toggle.innerHTML=svg(mode==='dark'?'sun':'moon');toggle.setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}}}
 function syncStorageContext(){
  const serverAccounts=ui.view==='accounts-connected'&&financeAccountsEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId;
  const labels=[
@@ -80,12 +83,12 @@ function syncStorageContext(){
  ];
  for(const [id,value] of labels){
   const element=document.getElementById(id);
-  if(element)element.textContent=value;
+  if(element&&(!navRoots||id!=='storage-context-chip'))element.textContent=value;
  }
  // The global Add action edits the local planner, not a server account.
  // Accounts has its own explicit "Новый счёт" button.
  const globalAdd=$('#top-add');
- if(globalAdd)globalAdd.hidden=serverAccounts;
+ if(!navRoots&&globalAdd)globalAdd.hidden=serverAccounts;
  if(lastStorageContext!==serverAccounts){
   $('#save-indicator').textContent=serverAccounts?'Серверный раздел':'Локальная база готова';
   lastStorageContext=serverAccounts;
@@ -97,9 +100,6 @@ function navigation(view){
 function render(){
  if(!state)return;
  syncStorageContext();
- $('#toolbar-title').textContent=titles[ui.view];
- if(!navRoots)navRoots=createAppShellRoots($('.sidebar-nav'),$('.bottom-nav'));
- navRoots.render(ui.view==='accounts-connected'?'settings':ui.view);
  const main=$('#main');
  if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'||ui.view==='settings'||ui.view==='accounts-connected'){
   if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main,getAuthAccess);}
@@ -192,11 +192,14 @@ function render(){
  syncAccountControls();
 }
 function syncAccountControls(){
+ if(!state)return;
  const signedIn=Boolean(emailSession.userId);
- const toolbarButton=$('#account-logout-toolbar');
- toolbarButton.hidden=!signedIn;
- toolbarButton.disabled=emailSession.busy;
- $('#account-entry-toolbar').hidden=!signedIn;
+ if(!navRoots)navRoots=createAppShellRoots($('.sidebar-nav'),$('.bottom-nav'),$('.toolbar'));
+ navRoots.render(ui.view==='accounts-connected'?'settings':ui.view,{
+  title:titles[ui.view],theme:document.body.dataset.theme==='dark'?'dark':'light',
+  signedIn,busy:Boolean(emailSession.busy),
+  serverAccounts:lastStorageContext===true,
+ });
 }
 async function refreshEmailSession(){
  if(guestMode||!activeUserId||emailSession.busy)return true;
@@ -433,15 +436,14 @@ function openSettlement(entryId,occurrence=ui.month,paymentId=null){
  $('#settlement-description').textContent=`${entry.title}. План: ${rubles(entry.amountCents)}. Уже внесено: ${rubles(paid)}. Можно внести часть суммы.`;
  openDialog('#settlement-dialog');
 }
-function requireConfirm(title,text){return new Promise(resolve=>{
- const dialog=$('#confirmation-dialog');$('#confirmation-title').textContent=title;$('#confirmation-text').textContent=text;
- let done=false;
- const finish=value=>{if(done)return;done=true;dialog.close();resolve(value);};
- const yes=$('#confirm-yes'),no=$('#confirm-cancel');
- yes.onclick=()=>finish(true);no.onclick=()=>finish(false);
- dialog.oncancel=e=>{e.preventDefault();finish(false);};
- dialog.showModal();
- });}
+function requireConfirm(title,text){
+ if(!confirmationController){
+  const dialog=$('#confirmation-dialog');
+  if(!dialog)throw Error('Диалог подтверждения недоступен');
+  confirmationController=createConfirmationDialogController(dialog);
+ }
+ return confirmationController.confirm(title,text);
+}
 async function handleAction(button){
  const type=button.dataset.action,id=button.dataset.id;
  if(type==='account-logout'){await logoutEmailAccount();return;}
@@ -834,6 +836,15 @@ function bindEvents(){
   if(button)lastDialogActivator=button;
  },true);
  document.addEventListener('click',async event=>{
+   if(event.target.closest('#menu-toggle')){
+    event.preventDefault();$('.sidebar')?.classList.toggle('open');return;
+   }
+   if(event.target.closest('#theme-toggle')){
+    event.preventDefault();themeSet(document.body.dataset.theme==='dark'?'light':'dark');render();return;
+   }
+   if(event.target.closest('#top-add')){
+    event.preventDefault();if(lastStorageContext!==true)openEntry();return;
+   }
   const nav=event.target.closest('[data-view]');if(nav){event.preventDefault();navigation(nav.dataset.view);return;}
   const actionEl=event.target.closest('[data-action]');if(actionEl){
    event.preventDefault();
@@ -848,8 +859,6 @@ function bindEvents(){
   }
  });
  document.addEventListener('submit',onFormSubmit);
- $('#theme-toggle').addEventListener('click',()=>{themeSet(document.body.dataset.theme==='dark'?'light':'dark');render();});
- $('#top-add').addEventListener('click',()=>openEntry());
  $('#entry-form').addEventListener('change',syncEntryPaymentAccess);
  $('#payment-method-type').addEventListener('change',updateMethodType);
  $('#payment-form').addEventListener('input',updatePaymentPreview);
