@@ -17,9 +17,11 @@ function createDialog() {
   dialog.showModal = vi.fn(() => {
     if (isOpen) throw new Error('Already open');
     isOpen = true;
+    dialog.setAttribute('open', '');
   });
   dialog.close = vi.fn(() => {
     isOpen = false;
+    dialog.removeAttribute('open');
     dialog.dispatchEvent(new Event('close'));
   });
   return dialog;
