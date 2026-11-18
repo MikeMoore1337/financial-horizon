@@ -26,7 +26,7 @@ function createDialog() {
 }
 
 describe('React confirmation dialog', () => {
-  it('accepts once, refuses another pending confirmation, then cancels without leaked state', async () => {
+  it('accepts once and cancels without stale state', async () => {
     const dialog = createDialog();
     const controller = createConfirmationDialogController(dialog);
     const accepted = controller.confirm('Удалить запись?', 'Только синтетическая запись');
@@ -64,7 +64,10 @@ describe('React confirmation dialog', () => {
   it('renders user-provided text as plain text, not executable markup', async () => {
     const dialog = createDialog();
     const controller = createConfirmationDialogController(dialog);
-    const response = controller.confirm('<img src=x onerror=alert(1)>', '<script>alert(1)</script>');
+    const response = controller.confirm(
+      '<img src=x onerror=alert(1)>',
+      '<script>alert(1)</script>',
+    );
     expect(dialog.querySelector('script')).toBeNull();
     expect(dialog.querySelector('img')).toBeNull();
     expect(dialog.querySelector('#confirmation-title')?.textContent).toContain('<img');
