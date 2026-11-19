@@ -200,18 +200,18 @@ jobs:
                           print('HAS_CF_SCRIPT='+str(b'cdn-cgi/' in body))
                           difference=next((i for i,(x,y) in enumerate(zip(body,expected)) if x!=y),None)
                           print('FIRST_DIFFERING_BYTE='+str(difference))
-          if difference is not None:
-              suffix_match=0
-              while (suffix_match < min(len(body),len(expected))-difference
-                     and body[-suffix_match-1]==expected[-suffix_match-1]):
-                  suffix_match+=1
-              injected=body[difference:len(body)-suffix_match if suffix_match else len(body)]
-              replaced=expected[difference:len(expected)-suffix_match if suffix_match else len(expected)]
-              print('INSERTED_BYTES='+str(len(injected))+' REPLACED_BYTES='+str(len(replaced)))
-              print('INSERTION_HEAD_80='+repr(injected[:80]))
-              print('CF_WEB_ANALYTICS='+str(b'Cloudflare Web Analytics' in injected))
-              print('CF_BEACON='+str(b'static.cloudflareinsights.com/beacon.min.js' in injected))
-              print('CF_TAIL_DOMAINS='+repr(sorted(set(re.findall(rb'https://([A-Za-z0-9.-]+)/',injected)))))
+                          if difference is not None:
+                              suffix_match=0
+                              while (suffix_match < min(len(body),len(expected))-difference
+                                     and body[-suffix_match-1]==expected[-suffix_match-1]):
+                                  suffix_match+=1
+                              injected=body[difference:len(body)-suffix_match if suffix_match else len(body)]
+                              replaced=expected[difference:len(expected)-suffix_match if suffix_match else len(expected)]
+                              print('INSERTED_BYTES='+str(len(injected))+' REPLACED_BYTES='+str(len(replaced)))
+                              print('INSERTION_HEAD_80='+repr(injected[:80]))
+                              print('CF_WEB_ANALYTICS='+str(b'Cloudflare Web Analytics' in injected))
+                              print('CF_BEACON='+str(b'static.cloudflareinsights.com/beacon.min.js' in injected))
+                              print('CF_TAIL_DOMAINS='+repr(sorted(set(re.findall(rb'https://([A-Za-z0-9.-]+)/',injected)))))
                       if path=='/index.html': print('INDEX_MATCH='+str(body==expected_index))
                       if path=='/__release.json': print('MANIFEST_MATCH='+str(json.loads(body)==manifest))
               except Exception as error:
