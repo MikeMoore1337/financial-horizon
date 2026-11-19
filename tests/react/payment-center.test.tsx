@@ -8,36 +8,40 @@ import type { ReminderResult } from '../../src/domain/cashflow/in-app-reminders'
 afterEach(cleanup);
 
 const result: ReminderResult = {
-  duePayments: [{
-    key: 'entry-internet-2026-11',
-    source: 'entry',
-    recordId: 'internet',
-    occurrence: '2026-11',
-    title: '<script>alert(1)</script>',
-    dueDate: '2026-11-20',
-    plannedCents: 10000,
-    paidCents: 6000,
-    remainingCents: 4000,
-    daysUntilDue: 1,
-    partial: true,
-    status: 'upcoming',
-  }],
-  alerts: [{
-    id: 'scoped-payment',
-    kind: 'payment',
-    source: 'entry',
-    recordId: 'internet',
-    occurrence: '2026-11',
-    title: '<script>alert(1)</script>',
-    dueDate: '2026-11-20',
-    plannedCents: 10000,
-    paidCents: 6000,
-    remainingCents: 4000,
-    daysUntilDue: 1,
-    trigger: 'advance',
-    intervalDays: 1,
-    partial: true,
-  }],
+  duePayments: [
+    {
+      key: 'entry-internet-2026-11',
+      source: 'entry',
+      recordId: 'internet',
+      occurrence: '2026-11',
+      title: '<script>alert(1)</script>',
+      dueDate: '2026-11-20',
+      plannedCents: 10000,
+      paidCents: 6000,
+      remainingCents: 4000,
+      daysUntilDue: 1,
+      partial: true,
+      status: 'upcoming',
+    },
+  ],
+  alerts: [
+    {
+      id: 'scoped-payment',
+      kind: 'payment',
+      source: 'entry',
+      recordId: 'internet',
+      occurrence: '2026-11',
+      title: '<script>alert(1)</script>',
+      dueDate: '2026-11-20',
+      plannedCents: 10000,
+      paidCents: 6000,
+      remainingCents: 4000,
+      daysUntilDue: 1,
+      trigger: 'advance',
+      intervalDays: 1,
+      partial: true,
+    },
+  ],
   totalAlerts: 1,
   hiddenAlerts: 0,
 };
@@ -55,7 +59,11 @@ const base = {
 
 describe('#40 approved payment center', () => {
   it('shows exact remaining amount and existing finance action, not duplicate finance ledger', () => {
-    render(<StrictMode><PaymentCenter {...base} /></StrictMode>);
+    render(
+      <StrictMode>
+        <PaymentCenter {...base} />
+      </StrictMode>,
+    );
     expect(screen.getByText('40.00 ₽')).toBeTruthy();
     expect(screen.getByText('60.00 ₽', { exact: false })).toBeTruthy();
     expect(screen.getByText('<script>alert(1)</script>')).toBeTruthy();
@@ -70,10 +78,15 @@ describe('#40 approved payment center', () => {
       ...base,
       onSettingsChange: pay,
       paymentMethods: {
-        internet: [{
-          id: 'url', type: 'payment_url' as const, label: 'ЛК',
-          primary: true, value: 'https://billing.example/pay',
-        }],
+        internet: [
+          {
+            id: 'url',
+            type: 'payment_url' as const,
+            label: 'ЛК',
+            primary: true,
+            value: 'https://billing.example/pay',
+          },
+        ],
       },
     };
     render(<PaymentCenter {...props} />);
