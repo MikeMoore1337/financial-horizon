@@ -166,6 +166,20 @@ function validatedSettings(settings: ReminderSettings): Set<number> {
   return leads;
 }
 
+/** Optional, backward-compatible settings stored inside the scoped finance state. */
+export function readReminderSettings(raw: unknown): ReminderSettings {
+  if (raw === undefined) return DEFAULT_REMINDER_SETTINGS;
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new TypeError('Некорректные сохранённые настройки напоминаний');
+  }
+  const settings = raw as Partial<ReminderSettings>;
+  const leads = validatedSettings(settings as ReminderSettings);
+  return {
+    enabled: settings.enabled as boolean,
+    daysBefore: [...leads].sort((a, b) => a - b) as ReminderLead[],
+  };
+}
+
 /** Calendar date in a selected IANA timezone, safe around midnight and DST. */
 export function localCalendarDate(instant: Date, timeZone?: string): string {
   if (!(instant instanceof Date) || !Number.isFinite(instant.getTime())) {
