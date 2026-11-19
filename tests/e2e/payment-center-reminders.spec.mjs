@@ -140,7 +140,7 @@ test('#40 actual authenticated reserve snapshot warns at 3 days and refreshes af
   await notice.getByRole('button', { name: 'Открыть резерв' }).click();
   const detail = page.getByRole('dialog', { name: 'Хостинг' });
   await expect(detail).toBeVisible();
-  await detail.getByRole('button', { name: 'Закрыть' }).click();
+  await detail.getByRole('button', { name: 'Закрыть', exact: true }).click();
   await expect(detail).toHaveCount(0);
   const hosting = page.locator('.fh-reserve-card').filter({ hasText: 'Хостинг' });
   await expect(hosting).toBeVisible();
