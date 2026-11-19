@@ -25,6 +25,8 @@ export interface ConfirmedMonthOccurrence {
   readonly id: string;
   readonly title: string;
   readonly kind: 'income' | 'expense';
+  /** Used to exclude one-time expenses from the regular-payment MVP. */
+  readonly recurrence?: 'once' | 'monthly' | 'yearly';
   readonly date: string;
   readonly plannedCents: number;
   readonly paidCents: number;
@@ -209,7 +211,7 @@ export function buildInAppReminders(input: ReminderInput): ReminderResult {
     if (row.kind !== 'expense' && row.kind !== 'income') {
       throw new RangeError('Неизвестное направление операции');
     }
-    if (row.kind === 'income') continue;
+    if (row.kind === 'income' || (row.source === 'entry' && row.recurrence === 'once')) continue;
     identifier(row.id, 'Платёж');
     if (typeof row.title !== 'string' || !row.title.trim()) {
       throw new RangeError('У платежа нет названия');
