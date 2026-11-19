@@ -151,3 +151,57 @@ jobs:
         run: |
           python -m compileall -q backend/finance_db
           bash -n deploy/postgres/init/10-roles.sh deploy/postgres/scripts/*.sh
+
+  diagnostic-public-html:
+    if: github.event_name == 'pull_request' && github.head_ref == 'diag/72-public-account-html-20261119'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Download previously deployed immutable archive (read-only)
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          run-id: 44494631378
+          repository: MikeMoore1337/financial-horizon
+          github-token: ${{ github.token }}
+          name: fh-static-release
+          path: ${{ runner.temp }}/release
+      - name: Compare sanitized public account.html delivery against exact released archive
+        shell: bash
+        env:
+          RELEASE_SHA: 9689d95f2f6616aa5c62dcf0082c96b5e683ef59
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, re, tarfile, urllib.request
+          from pathlib import Path
+          archive=Path(os.environ['RUNNER_TEMP'])/'release/fh-static.tar.gz'
+          with tarfile.open(archive,'r:gz') as z:
+              expected=z.extractfile('dist/account.html').read()
+              manifest=json.loads(z.extractfile('dist/__release.json').read())
+              expected_index=z.extractfile('dist/index.html').read()
+          def digest(payload): return hashlib.sha256(payload).hexdigest()
+          print('EXPECTED_SOURCE_SHA='+str(manifest.get('source_sha')))
+          print('EXPECTED_ACCOUNT_HASH='+digest(expected))
+          print('EXPECTED_ACCOUNT_BYTES='+str(len(expected)))
+          print('EXPECTED_ACCOUNT_ASSETS='+str(re.findall(rb'assets/built/[A-Za-z0-9_.-]+',expected)[:8]))
+          for path in ['/__release.json','/account.html','/account.html?sha='+os.environ['RELEASE_SHA'],'/account.html?cachebust=20261119-2','/index.html']:
+              req=urllib.request.Request('https://fin-horizon.mikemoore.top'+path, headers={'Cache-Control':'no-cache','Pragma':'no-cache'})
+              try:
+                  with urllib.request.urlopen(req,timeout=18) as response:
+                      body=response.read(2500000)
+                      print('PATH='+path+' HTTP='+str(response.status)+' HASH='+digest(body)+' BYTES='+str(len(body)))
+                      print('HEADERS='+json.dumps({k:response.headers.get(k) for k in ['Cache-Control','CF-Cache-Status','Age','ETag','Content-Encoding','Content-Type']},sort_keys=True))
+                      if path.startswith('/account.html'):
+                          print('MATCHES_RELEASE='+str(body==expected))
+                          print('ACTUAL_ACCOUNT_ASSETS='+str(re.findall(rb'assets/built/[A-Za-z0-9_.-]+',body)[:8]))
+                          print('HAS_CF_SCRIPT='+str(b'cdn-cgi/' in body))
+                          difference=next((i for i,(x,y) in enumerate(zip(body,expected)) if x!=y),None)
+                          print('FIRST_DIFFERING_BYTE='+str(difference))
+                      if path=='/index.html': print('INDEX_MATCH='+str(body==expected_index))
+                      if path=='/__release.json': print('MANIFEST_MATCH='+str(json.loads(body)==manifest))
+              except Exception as error:
+                  print('FETCH_FAILED='+path+':'+type(error).__name__+':'+str(error)[:120])
+          PY
