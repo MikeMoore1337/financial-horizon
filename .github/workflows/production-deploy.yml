@@ -270,10 +270,12 @@ jobs:
                   return False
               if not (200 <= len(inserted) <= 600):
                   return False
-              if not inserted.startswith(b'<script ') or not inserted.endswith(b'</script>'):
+              # Verified Cloudflare inserts one LF after </script>. The pinned
+              # digest covers the whole fragment including this final LF.
+              if not inserted.startswith(b'<script ') or not inserted.endswith(b'</script>\\n'):
                   return False
               try:
-                  fragment = inserted.decode('utf-8')
+                  fragment = inserted[:-1].decode('utf-8')
               except UnicodeDecodeError:
                   return False
           
