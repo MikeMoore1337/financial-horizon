@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { PaymentCenter } from '../../src/react/PaymentCenter';
-import { DEFAULT_REMINDER_SETTINGS } from '../../src/domain/cashflow/in-app-reminders';
-import type { ReminderResult } from '../../src/domain/cashflow/in-app-reminders';
+import {
+  DEFAULT_REMINDER_SETTINGS,
+  type ReminderResult,
+} from '../../src/domain/cashflow/in-app-reminders';
 
 afterEach(cleanup);
 
