@@ -78,8 +78,8 @@ describe('Typed obligations presentation adapter', () => {
   it('matches old filters, dates, settlement totals and does not mutate source', () => {
     const originalEntries = structuredClone(entries);
     const originalPayments = structuredClone(settlements);
-    const dayInMonth = vi.fn((month: string, day: number) =>
-      month + '-' + String(Math.min(28, day)).padStart(2, '0'),
+    const dayInMonth = vi.fn(
+      (month: string, day: number) => month + '-' + String(Math.min(28, day)).padStart(2, '0'),
     );
     const result = projectObligationRows(entries, settlements, '2026-02', 'all', dayInMonth);
     expect(result.map((row) => row.id)).toEqual(['salary', 'monthly', 'single']);
