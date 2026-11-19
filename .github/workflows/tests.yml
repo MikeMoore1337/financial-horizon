@@ -277,6 +277,23 @@ jobs:
                           print('AUTH_JSON_KEYS='+repr(sorted(obj.keys()))+' ENABLED_TYPE='+type(obj.get('enabled')).__name__+' EMAIL_ONLY='+str(obj.get('email_only')))
               except urllib.error.HTTPError as error:
                   print('AUTH_CASE='+label+' HTTP='+str(error.code)+' TYPE='+str(error.headers.get('Content-Type'))+' SERVER='+str(error.headers.get('Server'))+' CF_MITIGATED='+str(error.headers.get('CF-Mitigated'))+' WWW_AUTH='+str(bool(error.headers.get('WWW-Authenticate'))))
+                  body=error.read(800)
+                  print('AUTH_ERROR_LENGTH='+str(len(body))+' SHA256='+__import__('hashlib').sha256(body).hexdigest())
+                  print('AUTH_ERROR_CLASS='+str('Forbidden' if body.strip()==b'Forbidden' else 'Blocked' if b'block' in body.lower() else 'Cloudflare' if b'cloudflare' in body.lower() else 'Other'))
+                  print('AUTH_RESPONSE_CF_RAY_PRESENT='+str(bool(error.headers.get('CF-Ray'))))
               except Exception as error:
                   print('AUTH_CASE='+label+' ERROR='+type(error).__name__)
+          PY
+      - name: Compare anonymous public finance API status (no financial response body)
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import urllib.request, urllib.error
+          url='https://fin-horizon.mikemoore.top/api/finance/v2/state'
+          req=urllib.request.Request(url,headers={'Accept':'application/json','Cache-Control':'no-cache'})
+          try:
+              with urllib.request.urlopen(req,timeout=12) as response:
+                  print('PUBLIC_FINANCE_ANON_STATUS='+str(response.status)+' CONTENT_TYPE='+str(response.headers.get('Content-Type')))
+          except urllib.error.HTTPError as err:
+              print('PUBLIC_FINANCE_ANON_STATUS='+str(err.code)+' CONTENT_TYPE='+str(err.headers.get('Content-Type'))+' CF_RAY_PRESENT='+str(bool(err.headers.get('CF-Ray'))))
           PY
