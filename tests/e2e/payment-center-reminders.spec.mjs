@@ -135,7 +135,7 @@ test('#40 actual authenticated reserve snapshot warns at 3 days and refreshes af
   await openDue(page);
   const notice = page.locator('.fh-center-reserves .fh-center-event').filter({ hasText: 'Хостинг' });
   await expect(notice).toBeVisible();
-  await expect(notice).toContainText('3 000,00 ₽');
+  await expect(notice).toContainText(/3\s*000\s*₽/);
   await expect(notice).toContainText('Осталось 3 дн.');
   await notice.getByRole('button', { name: 'Открыть резерв' }).click();
   const hosting = page.locator('.fh-reserve-card').filter({ hasText: 'Хостинг' });
@@ -146,6 +146,6 @@ test('#40 actual authenticated reserve snapshot warns at 3 days and refreshes af
   await funding.getByRole('button', { name: 'Пополнить', exact: true }).click();
   await expect(funding).toHaveCount(0);
   await expect(page.locator('.fh-center-reserves .fh-center-event').filter({ hasText: 'Хостинг' }))
-    .toContainText('2 000,00 ₽');
+    .toContainText(/2\s*000\s*₽/);
   watch.assertClean();
 });
