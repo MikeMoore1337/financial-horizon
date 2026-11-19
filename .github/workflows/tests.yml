@@ -194,6 +194,15 @@ jobs:
                       body=response.read(2500000)
                       print('PATH='+path+' HTTP='+str(response.status)+' HASH='+digest(body)+' BYTES='+str(len(body)))
                       print('HEADERS='+json.dumps({k:response.headers.get(k) for k in ['Cache-Control','CF-Cache-Status','Age','ETag','Content-Encoding','Content-Type']},sort_keys=True))
+                      if path in ['/account.html','/index.html']:
+                          doc = expected if path=='/account.html' else expected_index
+                          if doc.count(b'</body>')==1:
+                              before,tail=doc.split(b'</body>',1)
+                              suffix=b'</body>'+tail
+                              if body.startswith(before) and body.endswith(suffix):
+                                  insertion=body[len(before):len(body)-len(suffix)]
+                                  print('EDGE_SCRIPT_SHA256='+digest(insertion)+' EDGE_SCRIPT_BYTES='+str(len(insertion)))
+                          print('PUBLIC_CSP='+repr(response.headers.get('Content-Security-Policy')))
                       if path.startswith('/account.html'):
                           print('MATCHES_RELEASE='+str(body==expected))
                           print('ACTUAL_ACCOUNT_ASSETS='+str(re.findall(rb'assets/built/[A-Za-z0-9_.-]+',body)[:8]))
