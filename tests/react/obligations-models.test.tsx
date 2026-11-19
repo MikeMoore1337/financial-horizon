@@ -93,8 +93,14 @@ describe('Typed obligations presentation adapter', () => {
       ['once', 1],
       ['regular', 2],
     ] as const) {
-      expect(projectObligationRows(entries, settlements, '2026-02', filter, dayInMonth))
-        .toHaveLength(count);
+      const filteredRows = projectObligationRows(
+        entries,
+        settlements,
+        '2026-02',
+        filter,
+        dayInMonth,
+      );
+      expect(filteredRows).toHaveLength(count);
     }
     expect(entries).toEqual(originalEntries);
     expect(settlements).toEqual(originalPayments);
