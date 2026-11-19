@@ -272,7 +272,7 @@ jobs:
                   return False
               # Verified Cloudflare inserts one LF after </script>. The pinned
               # digest covers the whole fragment including this final LF.
-              if not inserted.startswith(b'<script ') or not inserted.endswith(b'</script>\\n'):
+              if not inserted.startswith(b'<script ') or not inserted.endswith(b'</script>\n'):
                   return False
               try:
                   fragment = inserted[:-1].decode('utf-8')
