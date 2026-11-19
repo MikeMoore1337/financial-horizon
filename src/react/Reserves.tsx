@@ -251,6 +251,7 @@ export function ConnectedReserves({
       try {
         const after = await gateway.execute(action, payload, currentDate);
         setView(after);
+        window.dispatchEvent(new Event('fh-reserves-updated'));
         setBlocked(gateway.writeBlocked);
         setStatus('ready');
         setFeedback(confirmation + '. Подтверждено сервером.');
@@ -405,6 +406,7 @@ export function ConnectedReserves({
         currentDate,
       );
       setView(created.view);
+      window.dispatchEvent(new Event('fh-reserves-updated'));
       setBlocked(gateway.writeBlocked);
       setStatus('ready');
       setObligationId(created.obligationId);

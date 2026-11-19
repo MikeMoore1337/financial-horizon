@@ -231,6 +231,17 @@ export function validateState(s){
     !Array.isArray(s.loans)||!Array.isArray(s.settlements)||
     !Array.isArray(s.loanPayments)||!Array.isArray(s.categories)||
     !Array.isArray(s.audit))throw Error('Неподдерживаемая версия или повреждённые финансовые данные');
+ // #40: optional account-scoped preference; older encrypted backups lack this field.
+ // Strict validation prevents a malformed preference from silently corrupting UI behavior.
+ if(s.settings?.paymentReminders!==undefined){
+  const settings=s.settings.paymentReminders;
+  if(!settings||typeof settings!=='object'||Array.isArray(settings)||
+     typeof settings.enabled!=='boolean'||!Array.isArray(settings.daysBefore)||
+     settings.daysBefore.length>3||
+     new Set(settings.daysBefore).size!==settings.daysBefore.length||
+     settings.daysBefore.some(x=>![1,3,7].includes(x)))
+   throw Error('Повреждены настройки напоминаний');
+ }
  if(s.version===2&&(!Number.isSafeInteger(s.revision)||s.revision<0))
   throw Error('Повреждён счётчик изменений финансовой базы');
  if(s.entries.length>50000||s.loans.length>1000||

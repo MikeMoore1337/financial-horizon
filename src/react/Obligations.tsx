@@ -1,6 +1,13 @@
 import { Fragment } from 'react';
 import { Icon, type CalendarProps } from './Calendar';
 import { ConnectedReserves } from './Reserves';
+import { PaymentCenter, ReserveAlerts } from './PaymentCenter';
+import {
+  DEFAULT_REMINDER_SETTINGS,
+  type ReminderResult,
+  type ReminderSettings,
+} from '../domain/cashflow/in-app-reminders.ts';
+import type { PaymentMethod } from '../types/finance';
 import type { XlsxReservePreview } from '../domain/reserves/xlsx-preview.ts';
 
 export type ObligationFilter = 'all' | 'regular' | 'once' | 'income';
@@ -33,10 +40,16 @@ export interface ObligationsProps {
   formatDate: CalendarProps['formatDate'];
   financeEnabled?: boolean;
   verifiedActorUserId?: string | null;
-  reserveSection?: 'payments' | 'reserves';
+  reserveSection?: 'payments' | 'due' | 'reserves';
+  reminderResult?: ReminderResult | null;
+  reminderError?: string | null;
+  reminderSettings?: ReminderSettings;
+  reminderScopeKey?: string;
+  paymentMethods?: Readonly<Record<string, readonly PaymentMethod[]>>;
+  onReminderSettingsChange?: (next: ReminderSettings) => Promise<void>;
   focusReserveId?: string | null;
   importSuggestions?: readonly XlsxReservePreview[];
-  onReserveSectionChange?: (next: 'payments' | 'reserves') => void;
+  onReserveSectionChange?: (next: 'payments' | 'due' | 'reserves') => void;
 }
 
 function Recurrence({ value }: { value: ObligationItem['recurrence'] }) {
@@ -264,6 +277,12 @@ export function Obligations({
   financeEnabled = false,
   verifiedActorUserId = null,
   reserveSection = 'payments',
+  reminderResult = null,
+  reminderError = null,
+  reminderSettings = DEFAULT_REMINDER_SETTINGS,
+  reminderScopeKey = 'guest-state-v2',
+  paymentMethods = {},
+  onReminderSettingsChange = async () => {},
   focusReserveId = null,
   importSuggestions = [],
   onReserveSectionChange,
@@ -273,11 +292,13 @@ export function Obligations({
       <header className="page-header">
         <div>
           <div className="eyebrow">{formatDate(currentDate)} · Личные финансы</div>
-          <h1>Обязательства</h1>
+          <h1>{reserveSection === 'due' ? 'Центр оплат' : 'Обязательства'}</h1>
           <p className="subtitle">
             {reserveSection === 'reserves'
               ? 'Резервы для регулярных обязательств и подтверждённые остатки'
-              : 'Доходы и расходы. Полный учёт запланированных и фактических сумм'}
+              : reserveSection === 'due'
+                ? 'Ближайшие платежи, напоминания и резервы'
+                : 'Доходы и расходы. Полный учёт запланированных и фактических сумм'}
           </p>
         </div>
         <div className="header-tools">
@@ -313,6 +334,22 @@ export function Obligations({
         </button>
         <button
           type="button"
+          className={reserveSection === 'due' ? 'selected' : ''}
+          aria-pressed={reserveSection === 'due'}
+          onClick={() => onReserveSectionChange?.('due')}
+        >
+          К оплате
+          {reminderResult?.totalAlerts ? (
+            <span
+              className="fh-center-count"
+              aria-label={`Напоминаний: ${reminderResult.totalAlerts}`}
+            >
+              {reminderResult.totalAlerts}
+            </span>
+          ) : null}
+        </button>
+        <button
+          type="button"
           className={reserveSection === 'reserves' ? 'selected' : ''}
           aria-pressed={reserveSection === 'reserves'}
           onClick={() => onReserveSectionChange?.('reserves')}
@@ -320,14 +357,38 @@ export function Obligations({
           Накопления
         </button>
       </div>
-      {reserveSection === 'reserves' ? (
+      {reserveSection === 'due' ? (
+        <PaymentCenter
+          result={reminderResult}
+          error={reminderError}
+          settings={reminderSettings}
+          currentDate={currentDate}
+          scopeKey={reminderScopeKey}
+          verifiedActorUserId={verifiedActorUserId}
+          financeEnabled={financeEnabled}
+          paymentMethods={paymentMethods}
+          rubles={rubles}
+          formatDate={formatDate}
+          onSettingsChange={onReminderSettingsChange}
+        />
+      ) : reserveSection === 'reserves' ? (
         financeEnabled ? (
-          <ConnectedReserves
-            verifiedActorUserId={verifiedActorUserId}
-            currentDate={currentDate}
-            focusReserveId={focusReserveId}
-            importSuggestions={importSuggestions}
-          />
+          <>
+            <ReserveAlerts
+              actor={verifiedActorUserId}
+              currentDate={currentDate}
+              scopeKey={reminderScopeKey}
+              settings={reminderSettings}
+              rubles={rubles}
+              formatDate={formatDate}
+            />
+            <ConnectedReserves
+              verifiedActorUserId={verifiedActorUserId}
+              currentDate={currentDate}
+              focusReserveId={focusReserveId}
+              importSuggestions={importSuggestions}
+            />
+          </>
         ) : (
           <div className="surface fh-reserve-empty" role="status">
             <h2>Накопления недоступны</h2>

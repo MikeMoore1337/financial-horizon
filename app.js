@@ -9,6 +9,7 @@ import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './led
 import {createScreenRoot} from './src/react/ScreenRoot.tsx';
 import {projectOverviewCategories,projectOverviewLoan} from './src/react/OverviewModels.tsx';
 import {projectObligationRows} from './src/react/ObligationsModels.tsx';
+import {buildInAppReminders,readReminderSettings} from './src/domain/cashflow/in-app-reminders.ts';
 import {createAppShellRoots} from './src/react/AppShell.tsx';
 import {createAuxiliaryDialogRoots} from './src/react/AuxiliaryDialogs.tsx';
 import {createFinanceFormRoots} from './src/react/FinanceForms.tsx';
@@ -72,6 +73,21 @@ function revokeDisplayedLedger(){
 }
 const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
 const monthEvents=()=>getMonthEvents(state,ui.month);
+// Read-only: reuse the same monthly event oracle as Calendar, including confirmed
+// settlements and loan payments. Do not create a duplicate payment ledger.
+function currentPaymentReminders(currentDate){
+ const baseMonth=monthKey(currentDate),payments=[];
+ for(let step=-12;step<=1;step++){
+  for(const item of getMonthEvents(state,shiftMonth(baseMonth,step))){
+   if(item.kind==='expense')payments.push(item);
+  }
+ }
+ return buildInAppReminders({
+  scopeKey:guestMode?'guest-state-v2':'account-state-v2:'+activeUserId,
+  currentDate,settings:readReminderSettings(state.settings?.paymentReminders),
+  payments,maxAlerts:100,
+ });
+}
 function toast(message,kind='success'){$('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('visible'),3800);$('#save-indicator').textContent=kind==='error'?'Ошибка':'Сохранено на устройстве';}
 function fail(error){console.error(error);toast(error?.message||'Не удалось выполнить действие','error');}
 async function mutate(change,msg='Сохранено на устройстве',expectedRevision=state?.revision){
@@ -126,12 +142,26 @@ function render(){
    screenRoot.render({view:'overview',props:{currentDate,monthTitle:monthLabel(ui.month),hasData:hasData(),totals,categories,upcoming,loan:loanSummary,rubles,formatDate,financeEnabled:financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId,verifiedActorUserId:emailSession.userId||null}});
   }else if(ui.view==='obligations'){
    const rows=projectObligationRows(state.entries,state.settlements,ui.month,ui.filter,dayInMonth);
-   const totals=monthTotals(monthEvents());
+   const totals=monthTotals(monthEvents()),currentDate=today();
+   let reminderResult=null,reminderError=null;
+   try{reminderResult=currentPaymentReminders(currentDate);}
+   catch{reminderError='Не удалось проверить напоминания';}
+   const reminderSettings=readReminderSettings(state.settings?.paymentReminders);
+   const paymentMethods=Object.fromEntries(state.entries.filter(isActive)
+    .map(entry=>[entry.id,entry.paymentMethods||[]]));
    screenRoot.render({view:'obligations',props:{rows,month:ui.month,monthTitle:monthLabel(ui.month),
-    filter:ui.filter,expandedEntry:ui.expandedEntry,currentDate:today(),
+    filter:ui.filter,expandedEntry:ui.expandedEntry,currentDate,
     expenseCents:totals.expenseCents,expensePaidCents:totals.expensePaidCents,rubles,formatDate,
     financeEnabled:financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId,
     verifiedActorUserId:emailSession.userId||null,reserveSection:ui.obligationsSection,
+    reminderResult,reminderError,reminderSettings,paymentMethods,
+    reminderScopeKey:guestMode?'guest-state-v2':'account-state-v2:'+activeUserId,
+    onReminderSettingsChange:async next=>{
+     await mutate(s=>{
+      s.settings.paymentReminders={enabled:next.enabled,daysBefore:[...next.daysBefore]};
+      audit(s,'reminder-settings','Изменены локальные настройки напоминаний');
+     },'Настройки напоминаний сохранены');
+    },
     focusReserveId:ui.focusReserveId,importSuggestions:ui.reserveSuggestions,onReserveSectionChange:next=>{
      ui.obligationsSection=next;ui.focusReserveId=null;render();
     }}});
@@ -440,6 +470,16 @@ async function handleAction(button){
  const type=button.dataset.action,id=button.dataset.id;
  if(type==='account-logout'){await logoutEmailAccount();return;}
  if(type==='new-entry'){openEntry(null,button.dataset.kind||'expense');return;}
+ if(type==='copy-payment-requisites'){
+  const entry=state.entries.find(row=>row.id===id&&isActive(row));
+  const method=entry?.paymentMethods?.find(row=>row.id===button.dataset.methodId);
+  if(!method||method.type!=='requisites'||typeof method.value!=='string')
+   throw Error('Реквизиты недоступны');
+  if(!navigator.clipboard?.writeText)throw Error('Буфер обмена недоступен в этом браузере');
+  await navigator.clipboard.writeText(method.value);
+  toast('Реквизиты скопированы, оплата ещё не подтверждена');
+  return;
+ }
  if(type==='new-loan'){openLoan();return;}
  if(type==='edit-entry'){openEntry(id);return;}
  if(type==='open-payment-methods'){openPaymentMethods();return;}
@@ -891,8 +931,29 @@ function bindEvents(){
  window.addEventListener('storage',e=>{if(e.key==='fh-theme'&&e.newValue&&['light','dark'].includes(e.newValue)){themeSet(e.newValue);render();}});
  // Revoked sessions on other devices become invalid when this tab is revisited.
  // Concurrent focus/visibility checks share the same request.
- window.addEventListener('focus',()=>{if(!guestMode&&activeUserId)void refreshEmailSession();});
- document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&!guestMode&&activeUserId)void refreshEmailSession();});
+ // Account validation remains mandatory BEFORE another read of scoped finance data.
+ // Guest and verified account views both refresh on return from offline/other tab.
+ let reminderRefresh=null;
+ const refreshVisibleLedger=()=>{
+  if(reminderRefresh||!state||document.visibilityState!=='visible')return;
+  const actor=activeUserId;
+  const pending=(async()=>{
+   if(!guestMode&&actor&&!await refreshEmailSession())return;
+   if(!state||actor!==activeUserId)return;
+   const updated=await readState(); // scopeEpoch protects logout and account switch
+   if(!state||actor!==activeUserId)return;
+   state=updated;render();
+  })();
+  reminderRefresh=pending;
+  void pending.catch(error=>{if(state)fail(error);}).finally(()=>{
+   if(reminderRefresh===pending)reminderRefresh=null;
+  });
+ };
+ window.addEventListener('focus',refreshVisibleLedger);
+ window.addEventListener('online',refreshVisibleLedger);
+ document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible')refreshVisibleLedger();
+ });
  window.addEventListener('pageshow',event=>{
   if(!event.persisted||guestMode||!activeUserId)return;
   // A restored page from back/forward cache must re-validate authorization
