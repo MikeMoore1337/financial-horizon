@@ -8,6 +8,7 @@ import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
 import {createScreenRoot} from './src/react/ScreenRoot.tsx';
 import {createAppShellRoots} from './src/react/AppShell.tsx';
+import {createAuxiliaryDialogRoots} from './src/react/AuxiliaryDialogs.tsx';
 import {createFinanceFormRoots} from './src/react/FinanceForms.tsx';
 import {createCategoryDialogController} from './src/react/CategoryDialog.tsx';
 import {createConfirmationDialogController} from './src/react/ConfirmationDialog.tsx';
@@ -33,6 +34,7 @@ let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,
 const GUEST_MODE_KEY='fh-guest-session-v2';
 let screenRoot=null;
 let navRoots=null;
+let auxiliaryDialogRoots=null;
 let financeFormRoots=null;
 let categoryDialogController=null;
 let confirmationController=null;
@@ -53,6 +55,7 @@ function revokeDisplayedLedger(){
  restoreFile=null;verifyBackupFile=null;cloudImportFile=null;pendingCloudImport=null;cloudImportController?.abort();cloudImportController=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
  if(navRoots){navRoots.unmount();navRoots=null;}
+ if(typeof auxiliaryDialogRoots!=='undefined'&&auxiliaryDialogRoots){auxiliaryDialogRoots.dispose();auxiliaryDialogRoots=null;}
  if(typeof financeFormRoots!=='undefined'&&financeFormRoots){financeFormRoots.dispose();financeFormRoots=null;}
  if(typeof categoryDialogController!=='undefined'&&categoryDialogController){categoryDialogController.dispose();categoryDialogController=null;}
  if(typeof confirmationController!=='undefined'&&confirmationController){confirmationController.dispose();confirmationController=null;}
@@ -928,6 +931,15 @@ async function init(){
    settlement:$('#settlement-dialog'),password:$('#password-dialog'),
   });
   financeFormRoots.mount();
+ }
+ // Render the native-compatible auxiliary dialogs before binding delegated listeners.
+ if(!auxiliaryDialogRoots&&typeof createAuxiliaryDialogRoots==='function'&&$('#payment-methods-dialog')){
+  auxiliaryDialogRoots=createAuxiliaryDialogRoots({
+   paymentMethods:$('#payment-methods-dialog'),
+   excelImport:$('#excel-import-dialog'),
+   cloudImport:$('#cloud-import-dialog'),
+  });
+  auxiliaryDialogRoots.mount();
  }
  bindEvents();
  if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(()=>{});
