@@ -297,3 +297,35 @@ jobs:
           except urllib.error.HTTPError as err:
               print('PUBLIC_FINANCE_ANON_STATUS='+str(err.code)+' CONTENT_TYPE='+str(err.headers.get('Content-Type'))+' CF_RAY_PRESENT='+str(bool(err.headers.get('CF-Ray'))))
           PY
+      - name: Inspect anonymous public OAuth and finance access policies (no cookies)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from urllib.request import Request, urlopen
+          from urllib.error import HTTPError, URLError
+          base='https://fin-horizon.mikemoore.top'
+          cases=['/api/auth/providers','/api/auth/email/me','/api/auth/email/config','/api/finance/v1/state','/api/finance/v1/changes']
+          for path in cases:
+              request=Request(base+path, headers={'Accept':'application/json','Cache-Control':'no-store'})
+              try:
+                  with urlopen(request,timeout=15) as resp:
+                      code=resp.status
+                      body=resp.read(4097)
+                      ctype=resp.headers.get('Content-Type','')
+                      print('PUBLIC_PATH='+path+' STATUS='+str(code)+' JSON='+str('application/json' in ctype)+' CF_RAY='+str(bool(resp.headers.get('CF-Ray'))))
+                      if code==200 and 'application/json' in ctype and len(body)<=4096:
+                          doc=json.loads(body)
+                          if path.endswith('/providers'):
+                              print('OAUTH_PROVIDERS_ENABLED='+str(doc.get('enabled'))+' COUNT='+str(len(doc.get('providers',[]))))
+                          if path.endswith('/me'):
+                              print('ANONYMOUS_SESSION='+str(doc.get('authenticated')))
+                          if path.endswith('/config'):
+                              print('PUBLIC_EMAIL_CONFIG_ENABLED_TYPE='+type(doc.get('enabled')).__name__+' EMAIL_ONLY='+str(doc.get('email_only')))
+              except HTTPError as error:
+                  body=error.read(32)
+                  print('PUBLIC_PATH='+path+' STATUS='+str(error.code)+' BODY_FORBIDDEN='+str(body==b'Forbidden')+' TYPE='+str(error.headers.get('Content-Type'))+' CF_RAY='+str(bool(error.headers.get('CF-Ray'))))
+              except URLError as error:
+                  print('PUBLIC_PATH='+path+' NETWORK_UNAVAILABLE='+type(error.reason).__name__)
+          PY
