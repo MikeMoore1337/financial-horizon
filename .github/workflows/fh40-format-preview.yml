@@ -1,0 +1,34 @@
+# Temporary, read-only formatter receipt for #40 feature branch; remove before merge.
+name: fh40-ephemeral-format-preview
+on:
+  pull_request:
+    paths:
+      - 'src/react/PaymentCenter.tsx'
+      - 'src/react/Obligations.tsx'
+      - 'tests/react/payment-center.test.tsx'
+      - '.github/workflows/fh40-format-preview.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  format-preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - name: Read-only Prettier output (no push, no secrets)
+        shell: bash
+        run: |
+          npm exec -- prettier --write src/react/PaymentCenter.tsx src/react/Obligations.tsx tests/react/payment-center.test.tsx
+          for path in src/react/PaymentCenter.tsx src/react/Obligations.tsx tests/react/payment-center.test.tsx; do
+            printf 'FH40_BEGIN:%s\\n' "$path"
+            base64 -w0 "$path"
+            printf '\\nFH40_END:%s\\n' "$path"
+          done
