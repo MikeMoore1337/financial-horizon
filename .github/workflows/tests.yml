@@ -163,7 +163,7 @@ jobs:
       - name: Download previously deployed immutable archive (read-only)
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          run-id: 44494631378
+          run-id: 44501892556
           repository: MikeMoore1337/financial-horizon
           github-token: ${{ github.token }}
           name: fh-static-release
@@ -171,7 +171,7 @@ jobs:
       - name: Compare sanitized public account.html delivery against exact released archive
         shell: bash
         env:
-          RELEASE_SHA: 9689d95f2f6616aa5c62dcf0082c96b5e683ef59
+          RELEASE_SHA: a3fb00572c591e2e4a1b04cce831134df3b3e5bd
         run: |
           set -euo pipefail
           python3 - <<'PY'
@@ -202,6 +202,9 @@ jobs:
                               if body.startswith(before) and body.endswith(suffix):
                                   insertion=body[len(before):len(body)-len(suffix)]
                                   print('EDGE_SCRIPT_SHA256='+digest(insertion)+' EDGE_SCRIPT_BYTES='+str(len(insertion)))
+                                  print('EDGE_SHIFTED_SHA256='+digest(insertion[1:]+b'<'))
+                                  print('EDGE_FIRST_AND_LAST='+repr(insertion[:1])+','+repr(insertion[-1:]))
+                                  print('EDGE_BEACON_PRESENT='+str(b'static.cloudflareinsights.com/beacon.min.js' in insertion))
                           print('PUBLIC_CSP='+repr(response.headers.get('Content-Security-Policy')))
                       if path.startswith('/account.html'):
                           print('MATCHES_RELEASE='+str(body==expected))
