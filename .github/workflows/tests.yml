@@ -223,7 +223,7 @@ jobs:
                                       if data:
                                           try: print('CF_BEACON_JSON_KEYS='+repr(sorted(json.loads(data).keys())))
                                           except ValueError: print('CF_BEACON_JSON_INVALID=True')
-                              InspectScript().feed(injected.decode('utf-8',errors='replace'))
+                              InspectScript().feed('<'+injected.decode('utf-8',errors='replace'))
                       if path=='/index.html': print('INDEX_MATCH='+str(body==expected_index))
                       if path=='/__release.json': print('MANIFEST_MATCH='+str(json.loads(body)==manifest))
               except Exception as error:
