@@ -10,6 +10,10 @@ import {createScreenRoot} from './src/react/ScreenRoot.tsx';
 import {projectOverviewCategories,projectOverviewLoan} from './src/react/OverviewModels.tsx';
 import {projectObligationRows} from './src/react/ObligationsModels.tsx';
 import {createAppShellRoots} from './src/react/AppShell.tsx';
+import {createAuxiliaryDialogRoots} from './src/react/AuxiliaryDialogs.tsx';
+import {createFinanceFormRoots} from './src/react/FinanceForms.tsx';
+import {createCategoryDialogController} from './src/react/CategoryDialog.tsx';
+import {createConfirmationDialogController} from './src/react/ConfirmationDialog.tsx';
 import {sameFinancialJSON} from './src/security/protected-staging.ts';
 import {prepareLivePersonalImportCandidate,executeConfirmedPersonalImportCandidate} from './src/cloud/personal-import-transport-candidate.mjs';
 import {verifySavedFinancialBackupReadOnly} from './src/cloud/read-only-backup-verification.mjs';
@@ -32,6 +36,10 @@ let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,
 const GUEST_MODE_KEY='fh-guest-session-v2';
 let screenRoot=null;
 let navRoots=null;
+let auxiliaryDialogRoots=null;
+let financeFormRoots=null;
+let categoryDialogController=null;
+let confirmationController=null;
 function getAuthAccess(){
  if(guestMode)return {kind:'guest'};
  return {kind:'account',accountId:activeUserId||'',verifiedUserId:emailSession.userId||null,sessionValid:Boolean(emailSession.userId)};
@@ -49,6 +57,10 @@ function revokeDisplayedLedger(){
  restoreFile=null;verifyBackupFile=null;cloudImportFile=null;pendingCloudImport=null;cloudImportController?.abort();cloudImportController=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
  if(navRoots){navRoots.unmount();navRoots=null;}
+ if(typeof auxiliaryDialogRoots!=='undefined'&&auxiliaryDialogRoots){auxiliaryDialogRoots.dispose();auxiliaryDialogRoots=null;}
+ if(typeof financeFormRoots!=='undefined'&&financeFormRoots){financeFormRoots.dispose();financeFormRoots=null;}
+ if(typeof categoryDialogController!=='undefined'&&categoryDialogController){categoryDialogController.dispose();categoryDialogController=null;}
+ if(typeof confirmationController!=='undefined'&&confirmationController){confirmationController.dispose();confirmationController=null;}
  $('#main').replaceChildren();
  // Modal forms and previews live OUTSIDE #main; reset alone can retain
  // programmatically inserted finance titles, choices and payment schedules.
@@ -68,7 +80,7 @@ async function mutate(change,msg='Сохранено на устройстве',
 }
 function stampFormRevision(form){form.dataset.stateRevision=String(state.revision);}
 function revisionForForm(form){const revision=Number(form.dataset.stateRevision);if(!Number.isSafeInteger(revision)||revision<0)throw Error('Не удалось определить версию записи. Откройте форму повторно.');return revision;}
-function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#172336':'#ffffff';$('#theme-toggle').innerHTML=svg(mode==='dark'?'sun':'moon');$('#theme-toggle').setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}
+function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#172336':'#ffffff';if(!navRoots){const toggle=$('#theme-toggle');if(toggle){toggle.innerHTML=svg(mode==='dark'?'sun':'moon');toggle.setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}}}
 function syncStorageContext(){
  const serverAccounts=ui.view==='accounts-connected'&&financeAccountsEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId;
  const labels=[
@@ -79,12 +91,12 @@ function syncStorageContext(){
  ];
  for(const [id,value] of labels){
   const element=document.getElementById(id);
-  if(element)element.textContent=value;
+  if(element&&(!navRoots||id!=='storage-context-chip'))element.textContent=value;
  }
  // The global Add action edits the local planner, not a server account.
  // Accounts has its own explicit "Новый счёт" button.
  const globalAdd=$('#top-add');
- if(globalAdd)globalAdd.hidden=serverAccounts;
+ if(!navRoots&&globalAdd)globalAdd.hidden=serverAccounts;
  if(lastStorageContext!==serverAccounts){
   $('#save-indicator').textContent=serverAccounts?'Серверный раздел':'Локальная база готова';
   lastStorageContext=serverAccounts;
@@ -96,9 +108,6 @@ function navigation(view){
 function render(){
  if(!state)return;
  syncStorageContext();
- $('#toolbar-title').textContent=titles[ui.view];
- if(!navRoots)navRoots=createAppShellRoots($('.sidebar-nav'),$('.bottom-nav'));
- navRoots.render(ui.view==='accounts-connected'?'settings':ui.view);
  const main=$('#main');
  if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'||ui.view==='settings'||ui.view==='accounts-connected'){
   if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main,getAuthAccess);}
@@ -175,11 +184,14 @@ function render(){
  syncAccountControls();
 }
 function syncAccountControls(){
+ if(!state)return;
  const signedIn=Boolean(emailSession.userId);
- const toolbarButton=$('#account-logout-toolbar');
- toolbarButton.hidden=!signedIn;
- toolbarButton.disabled=emailSession.busy;
- $('#account-entry-toolbar').hidden=!signedIn;
+ if(!navRoots)navRoots=createAppShellRoots($('.sidebar-nav'),$('.bottom-nav'),$('.toolbar'));
+ navRoots.render(ui.view==='accounts-connected'?'settings':ui.view,{
+  title:titles[ui.view],theme:document.body.dataset.theme==='dark'?'dark':'light',
+  signedIn,busy:Boolean(emailSession.busy),
+  serverAccounts:lastStorageContext===true,
+ });
 }
 async function refreshEmailSession(){
  if(guestMode||!activeUserId||emailSession.busy)return true;
@@ -416,15 +428,14 @@ function openSettlement(entryId,occurrence=ui.month,paymentId=null){
  $('#settlement-description').textContent=`${entry.title}. План: ${rubles(entry.amountCents)}. Уже внесено: ${rubles(paid)}. Можно внести часть суммы.`;
  openDialog('#settlement-dialog');
 }
-function requireConfirm(title,text){return new Promise(resolve=>{
- const dialog=$('#confirmation-dialog');$('#confirmation-title').textContent=title;$('#confirmation-text').textContent=text;
- let done=false;
- const finish=value=>{if(done)return;done=true;dialog.close();resolve(value);};
- const yes=$('#confirm-yes'),no=$('#confirm-cancel');
- yes.onclick=()=>finish(true);no.onclick=()=>finish(false);
- dialog.oncancel=e=>{e.preventDefault();finish(false);};
- dialog.showModal();
- });}
+function requireConfirm(title,text){
+ if(!confirmationController){
+  const dialog=$('#confirmation-dialog');
+  if(!dialog)throw Error('Диалог подтверждения недоступен');
+  confirmationController=createConfirmationDialogController(dialog);
+ }
+ return confirmationController.confirm(title,text);
+}
 async function handleAction(button){
  const type=button.dataset.action,id=button.dataset.id;
  if(type==='account-logout'){await logoutEmailAccount();return;}
@@ -528,7 +539,13 @@ async function handleAction(button){
   if(!await requireConfirm('Отменить фактическую оплату?',`Сумма ${rubles(record.amountCents)} перестанет участвовать в расчёте. Запись об отмене останется в истории.`))return;
   await mutate(s=>{s[key].find(x=>x.id===id).voidedAt=new Date().toISOString();audit(s,'void',`Отменена оплата ${rubles(record.amountCents)}`);},'Операция отменена, прогноз обновлён',originalRevision);return;
  }
- if(type==='edit-category'){const cat=button.dataset.category;const form=$('#rename-category-form');form.elements.old.value=cat;form.elements.newName.value=cat;openDialog('#category-dialog');return;}
+ if(type==='edit-category'){
+  const cat=button.dataset.category;
+  if(!categoryDialogController)categoryDialogController=createCategoryDialogController($('#category-dialog'));
+  categoryDialogController.render();
+  const form=$('#rename-category-form');form.elements.old.value=cat;form.elements.newName.value=cat;
+  openDialog('#category-dialog');return;
+ }
  if(type==='clear-schedule'){if(!await requireConfirm('Удалить импортированный график?', 'Изменится только справочный график банка. Фактические платежи и параметры кредита сохранятся.'))return;await mutate(s=>{const l=s.loans.find(x=>x.id===id);l.schedule=[];delete l.scheduleSource;audit(s,'schedule-remove',`Удалён график кредита: ${l.title}`);},'График удалён');return;}
  if(type==='delete-category'){
   const cat=button.dataset.category;
@@ -811,6 +828,15 @@ function bindEvents(){
   if(button)lastDialogActivator=button;
  },true);
  document.addEventListener('click',async event=>{
+   if(event.target.closest('#menu-toggle')){
+    event.preventDefault();$('.sidebar')?.classList.toggle('open');return;
+   }
+   if(event.target.closest('#theme-toggle')){
+    event.preventDefault();themeSet(document.body.dataset.theme==='dark'?'light':'dark');render();return;
+   }
+   if(event.target.closest('#top-add')){
+    event.preventDefault();if(lastStorageContext!==true)openEntry();return;
+   }
   const nav=event.target.closest('[data-view]');if(nav){event.preventDefault();navigation(nav.dataset.view);return;}
   const actionEl=event.target.closest('[data-action]');if(actionEl){
    event.preventDefault();
@@ -825,8 +851,6 @@ function bindEvents(){
   }
  });
  document.addEventListener('submit',onFormSubmit);
- $('#theme-toggle').addEventListener('click',()=>{themeSet(document.body.dataset.theme==='dark'?'light':'dark');render();});
- $('#top-add').addEventListener('click',()=>openEntry());
  $('#entry-form').addEventListener('change',syncEntryPaymentAccess);
  $('#payment-method-type').addEventListener('change',updateMethodType);
  $('#payment-form').addEventListener('input',updatePaymentPreview);
@@ -886,6 +910,23 @@ function bindEvents(){
 }
 async function init(){
  try{themeSet(localStorage.getItem('fh-theme')||((window.matchMedia?.('(prefers-color-scheme: dark)').matches)?'dark':'light'));}catch{themeSet('light');}
+ // Install native forms before attaching the unchanged delegated listeners.
+ if(!financeFormRoots&&typeof createFinanceFormRoots==='function'&&$('#entry-dialog')){
+  financeFormRoots=createFinanceFormRoots({
+   entry:$('#entry-dialog'),loan:$('#loan-dialog'),payment:$('#payment-dialog'),
+   settlement:$('#settlement-dialog'),password:$('#password-dialog'),
+  });
+  financeFormRoots.mount();
+ }
+ // Render the native-compatible auxiliary dialogs before binding delegated listeners.
+ if(!auxiliaryDialogRoots&&typeof createAuxiliaryDialogRoots==='function'&&$('#payment-methods-dialog')){
+  auxiliaryDialogRoots=createAuxiliaryDialogRoots({
+   paymentMethods:$('#payment-methods-dialog'),
+   excelImport:$('#excel-import-dialog'),
+   cloudImport:$('#cloud-import-dialog'),
+  });
+  auxiliaryDialogRoots.mount();
+ }
  bindEvents();
  if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(()=>{});
  try{
