@@ -65,7 +65,7 @@ function PaymentMethodAction({
     );
   }
   if (method.type === 'payment_url' || method.type === 'sbp_link') {
-    let url: URL;
+    let url: { href: string; hostname: string };
     try {
       url = safePaymentUrl(method.value);
     } catch {
