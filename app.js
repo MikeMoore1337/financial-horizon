@@ -8,6 +8,7 @@ import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
 import {createScreenRoot} from './src/react/ScreenRoot.tsx';
 import {projectOverviewCategories,projectOverviewLoan} from './src/react/OverviewModels.tsx';
+import {projectObligationRows} from './src/react/ObligationsModels.tsx';
 import {createAppShellRoots} from './src/react/AppShell.tsx';
 import {sameFinancialJSON} from './src/security/protected-staging.ts';
 import {prepareLivePersonalImportCandidate,executeConfirmedPersonalImportCandidate} from './src/cloud/personal-import-transport-candidate.mjs';
@@ -115,17 +116,7 @@ function render(){
    const loanSummary=projectOverviewLoan(loan,snapshot);
    screenRoot.render({view:'overview',props:{currentDate,monthTitle:monthLabel(ui.month),hasData:hasData(),totals,categories,upcoming,loan:loanSummary,rubles,formatDate,financeEnabled:financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId,verifiedActorUserId:emailSession.userId||null}});
   }else if(ui.view==='obligations'){
-   const items=state.entries.filter(isActive)
-    .filter(e=>ui.filter==='all'||(ui.filter==='regular'&&e.recurrence!=='once')||
-     (ui.filter==='once'&&e.recurrence==='once')||(ui.filter==='income'&&e.kind==='income'))
-    .sort((a,b)=>a.date.localeCompare(b.date));
-   const rows=items.map(entry=>{
-    const payments=state.settlements.filter(s=>s.entryId===entry.id&&s.occurrence===ui.month&&!s.voidedAt);
-    return {id:entry.id,title:entry.title,kind:entry.kind,category:entry.category,
-     recurrence:entry.recurrence,amountCents:entry.amountCents,
-     date:entry.recurrence==='once'?entry.date:dayInMonth(ui.month,Number(entry.date.slice(-2))),
-     payments,paidCents:payments.reduce((sum,p)=>sum+p.amountCents,0)};
-   });
+   const rows=projectObligationRows(state.entries,state.settlements,ui.month,ui.filter,dayInMonth);
    const totals=monthTotals(monthEvents());
    screenRoot.render({view:'obligations',props:{rows,month:ui.month,monthTitle:monthLabel(ui.month),
     filter:ui.filter,expandedEntry:ui.expandedEntry,currentDate:today(),
