@@ -224,7 +224,20 @@ jobs:
                                           try: print('CF_BEACON_JSON_KEYS='+repr(sorted(json.loads(data).keys())))
                                           except ValueError: print('CF_BEACON_JSON_INVALID=True')
                               InspectScript().feed('<'+injected.decode('utf-8',errors='replace'))
-                      if path=='/index.html': print('INDEX_MATCH='+str(body==expected_index))
+                      if path=='/index.html':
+                          print('INDEX_MATCH='+str(body==expected_index)+' EXPECTED_BYTES='+str(len(expected_index)))
+                          pos=next((i for i,(x,y) in enumerate(zip(body,expected_index)) if x!=y),None)
+                          print('INDEX_FIRST_DIFF='+str(pos))
+                          if pos is not None:
+                              suffix=0
+                              while (suffix < min(len(body),len(expected_index))-pos
+                                     and body[-suffix-1]==expected_index[-suffix-1]):
+                                  suffix+=1
+                              added=body[pos:len(body)-suffix if suffix else len(body)]
+                              replaced=expected_index[pos:len(expected_index)-suffix if suffix else len(expected_index)]
+                              print('INDEX_INSERTED='+str(len(added))+' REPLACED='+str(len(replaced)))
+                              print('INDEX_INSERTION_HEAD_80='+repr(added[:80]))
+                              print('INDEX_CF_BEACON='+str(b'static.cloudflareinsights.com/beacon.min.js' in added))
                       if path=='/__release.json': print('MANIFEST_MATCH='+str(json.loads(body)==manifest))
               except Exception as error:
                   print('FETCH_FAILED='+path+':'+type(error).__name__+':'+str(error)[:120])
