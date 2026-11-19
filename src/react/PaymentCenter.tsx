@@ -318,6 +318,7 @@ export function ReserveAlerts({
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('focus', onFocus);
     window.addEventListener('online', onOnline);
+    window.addEventListener('fh-reserves-updated', reload);
     return () => {
       seq += 1;
       controller.abort();
@@ -325,6 +326,7 @@ export function ReserveAlerts({
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('focus', onFocus);
       window.removeEventListener('online', onOnline);
+      window.removeEventListener('fh-reserves-updated', reload);
     };
   }, [actor, gateway, currentDate]);
 
