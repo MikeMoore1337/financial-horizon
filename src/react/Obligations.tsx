@@ -340,7 +340,10 @@ export function Obligations({
         >
           К оплате
           {reminderResult?.totalAlerts ? (
-            <span className="fh-center-count" aria-label={`Напоминаний: ${reminderResult.totalAlerts}`}>
+            <span
+              className="fh-center-count"
+              aria-label={`Напоминаний: ${reminderResult.totalAlerts}`}
+            >
               {reminderResult.totalAlerts}
             </span>
           ) : null}
@@ -356,18 +359,29 @@ export function Obligations({
       </div>
       {reserveSection === 'due' ? (
         <PaymentCenter
-          result={reminderResult} error={reminderError} settings={reminderSettings}
-          currentDate={currentDate} scopeKey={reminderScopeKey}
-          verifiedActorUserId={verifiedActorUserId} financeEnabled={financeEnabled}
-          paymentMethods={paymentMethods} rubles={rubles} formatDate={formatDate}
+          result={reminderResult}
+          error={reminderError}
+          settings={reminderSettings}
+          currentDate={currentDate}
+          scopeKey={reminderScopeKey}
+          verifiedActorUserId={verifiedActorUserId}
+          financeEnabled={financeEnabled}
+          paymentMethods={paymentMethods}
+          rubles={rubles}
+          formatDate={formatDate}
           onSettingsChange={onReminderSettingsChange}
         />
       ) : reserveSection === 'reserves' ? (
         financeEnabled ? (
           <>
-            <ReserveAlerts actor={verifiedActorUserId} currentDate={currentDate}
-              scopeKey={reminderScopeKey} settings={reminderSettings}
-              rubles={rubles} formatDate={formatDate} />
+            <ReserveAlerts
+              actor={verifiedActorUserId}
+              currentDate={currentDate}
+              scopeKey={reminderScopeKey}
+              settings={reminderSettings}
+              rubles={rubles}
+              formatDate={formatDate}
+            />
             <ConnectedReserves
               verifiedActorUserId={verifiedActorUserId}
               currentDate={currentDate}
