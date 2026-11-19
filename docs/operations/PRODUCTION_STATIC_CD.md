@@ -31,9 +31,16 @@ SQLite, PostgreSQL, OAuth, FastAPI, секреты и финансовые ми�
    После PASS создаётся root-only квитанция в
    `/var/lib/fh-static-deploy/`. Данные пользователей не затрагиваются.
 
-Автоматический запуск **по умолчанию выключен**. Он разрешён только
-если repository variable `FH_STATIC_AUTO_DEPLOY_ENABLED=true` и оба
-CI успешны. До этого доступен ручной `workflow_dispatch` с точным SHA.
+С ноября 2026 года автоматическая статическая публикация запускается после
+`push` в `main` только при успешных `tests.yml` и `security-vault.yml`
+на **точном SHA**. Внешний `public-smoke` проверяет публичный release
+manifest, SHA-256 всех неизменённых файлов, строгую подтверждённую вставку
+Cloudflare в двух HTML, CSP, отсутствие публичного доступа к финансовым
+данным и маршруты авторизации. Для owner-only `/api/auth/email/config`
+штатный HTTP 403 с точным телом `Forbidden` означает **ограниченный доступ**,
+а не успешный тест реального email-входа. Реальную авторизацию владельца
+проверяют отдельно, без credentials в CI. Ручной `workflow_dispatch`
+сохраняется для контролируемого повторного выпуска.
 
 ## Реальная origin TLS-топология (проверена владельцем 09.11.2026)
 
@@ -166,9 +173,11 @@ Run workflow`, выбрать `main` и передать точный `release_s
 внешний HTTPS, `__release.json`, PWA, IndexedDB, логин, обе темы,
 Service Worker и возможность восстановить предыдущую версию.
 
-**Только после полноценной приёмки** включить repository variable
-`FH_STATIC_AUTO_DEPLOY_ENABLED=true` в Settings → Secrets and variables
-→ Actions → Variables.
+Автоматическая публикация уже включена кодом workflow и не требует
+устаревшей переменной `FH_STATIC_AUTO_DEPLOY_ENABLED`. Проверяйте,
+что `build`, `deploy` и `public-smoke` в одном запуске завершаются
+`success`; только квитанция `PRODUCTION_DEPLOYED=<sha>` подтверждает
+доставку, а `PUBLIC_RELEASE_SMOKE=PASS` - внешнюю read-only приёмку.
 
 ## Пределы
 

@@ -96,7 +96,13 @@ class TestProductionPublicSmoke(unittest.TestCase):
         self.assertIn('archive_manifest.get("source_sha") != sha', source)
         self.assertIn('public_manifest) != archive_manifest', source)
         self.assertIn('hashlib.sha256(public_data)', source)
-        self.assertIn('auth.get("email_only") is not True', source)
+        self.assertIn('config.get("email_only") is not True', source)
+        self.assertIn('validate_email_config_access(denial.code, denial.headers, denial.read(64))', source)
+        self.assertIn('get("/api/auth/providers")', source)
+        self.assertIn('get("/api/auth/email/me")', source)
+        self.assertIn('"/api/finance/v1/state", "/api/finance/v1/changes"', source)
+        self.assertIn('denial.code != 401', source)
+        self.assertIn("PUBLIC_FINANCE_ANONYMOUS_DENY=PASS", source)
 
     def test_main_exact_sha_and_required_workflows_remain_mandatory(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -158,6 +164,42 @@ class TestProductionPublicSmoke(unittest.TestCase):
             "script-src 'self'",
         ):
             self.assertFalse(guard(csp), csp)
+
+    def test_email_config_contract_recognizes_only_exact_owner_denial_or_valid_public_schema(self):
+        _, source = public_smoke_source()
+        tree = ast.parse(source)
+        nodes = [
+            item for item in tree.body
+            if isinstance(item, ast.FunctionDef) and item.name == "validate_email_config_access"
+        ]
+        self.assertEqual(len(nodes), 1)
+        scope = {"json": json}
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), str(WORKFLOW), "exec"), scope)
+        validate = scope["validate_email_config_access"]
+        headers = {"Content-Type": "text/plain; charset=utf-8", "CF-Ray": "synthetic-ray"}
+        self.assertEqual(validate(403, headers, b"Forbidden"), "OWNER_ONLY_DENIED_403")
+        self.assertEqual(
+            validate(200, {}, b'{"enabled":true,"email_only":true}'), "PUBLIC_SCHEMA_VALID"
+        )
+        self.assertEqual(
+            validate(200, {}, b'{"enabled":false,"email_only":true}'), "PUBLIC_SCHEMA_VALID"
+        )
+        for status, response_headers, body in (
+            (403, headers, b"Forbidden " ),
+            (403, {}, b"Forbidden"),
+            (403, {"Content-Type": "text/html", "CF-Ray": "synthetic-ray"}, b"Forbidden"),
+            (403, {"Content-Type": "text/plain; charset=utf-8"}, b"Forbidden"),
+            (403, {**headers, "WWW-Authenticate": 'Basic realm="test"'}, b"Forbidden"),
+            (401, headers, b"Forbidden"),
+            (404, headers, b"Forbidden"),
+            (500, headers, b"Forbidden"),
+            (200, {}, b'{"enabled":"yes","email_only":true}'),
+            (200, {}, b'{"enabled":true,"email_only":false}'),
+            (200, {}, b'not-json'),
+        ):
+            with self.subTest(status=status, body=body[:40]):
+                with self.assertRaises(SystemExit):
+                    validate(status, response_headers, body)
 
 
 if __name__ == "__main__":
