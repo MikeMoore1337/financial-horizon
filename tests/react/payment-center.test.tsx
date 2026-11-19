@@ -66,7 +66,7 @@ describe('#40 approved payment center', () => {
         <PaymentCenter {...base} />
       </StrictMode>,
     );
-    expect(screen.getByText('40.00 ₽')).toBeTruthy();
+    expect(screen.getAllByText('40.00 ₽')).toHaveLength(2);
     expect(screen.getByText('60.00 ₽', { exact: false })).toBeTruthy();
     expect(screen.getByText('<script>alert(1)</script>')).toBeTruthy();
     expect(document.querySelector('script')).toBeNull();
