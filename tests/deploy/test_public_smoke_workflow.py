@@ -64,7 +64,7 @@ def synthetic_beacon() -> bytes:
         + '" data-cf-beacon=\''
         + payload
         + '\' crossorigin="anonymous"></script>'
-    ).encode()
+    ).encode() + b"\n"
 
 
 def get_script_csp_guard():
@@ -111,6 +111,8 @@ class TestProductionPublicSmoke(unittest.TestCase):
         injected = html.replace(b"</body>", synthetic_beacon() + b"</body>")
         self.assertTrue(guard(html, html))
         self.assertTrue(guard(html, injected))
+        self.assertFalse(guard(html, injected[:-1]))
+        self.assertFalse(guard(html, injected + b"\n"))
         self.assertFalse(get_edge_html_guard()(html, injected))
         self.assertFalse(
             guard(
