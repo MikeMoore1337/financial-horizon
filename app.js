@@ -7,7 +7,10 @@ import {previewXlsxReserves} from './src/domain/reserves/xlsx-preview.ts';
 import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
 import {createScreenRoot} from './src/react/ScreenRoot.tsx';
+import {projectOverviewCategories,projectOverviewLoan} from './src/react/OverviewModels.tsx';
+import {projectObligationRows} from './src/react/ObligationsModels.tsx';
 import {createAppShellRoots} from './src/react/AppShell.tsx';
+import {createAuxiliaryDialogRoots} from './src/react/AuxiliaryDialogs.tsx';
 import {createFinanceFormRoots} from './src/react/FinanceForms.tsx';
 import {createCategoryDialogController} from './src/react/CategoryDialog.tsx';
 import {createConfirmationDialogController} from './src/react/ConfirmationDialog.tsx';
@@ -33,6 +36,7 @@ let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,
 const GUEST_MODE_KEY='fh-guest-session-v2';
 let screenRoot=null;
 let navRoots=null;
+let auxiliaryDialogRoots=null;
 let financeFormRoots=null;
 let categoryDialogController=null;
 let confirmationController=null;
@@ -53,6 +57,7 @@ function revokeDisplayedLedger(){
  restoreFile=null;verifyBackupFile=null;cloudImportFile=null;pendingCloudImport=null;cloudImportController?.abort();cloudImportController=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
  if(navRoots){navRoots.unmount();navRoots=null;}
+ if(typeof auxiliaryDialogRoots!=='undefined'&&auxiliaryDialogRoots){auxiliaryDialogRoots.dispose();auxiliaryDialogRoots=null;}
  if(typeof financeFormRoots!=='undefined'&&financeFormRoots){financeFormRoots.dispose();financeFormRoots=null;}
  if(typeof categoryDialogController!=='undefined'&&categoryDialogController){categoryDialogController.dispose();categoryDialogController=null;}
  if(typeof confirmationController!=='undefined'&&confirmationController){confirmationController.dispose();confirmationController=null;}
@@ -114,29 +119,13 @@ function render(){
   }else if(ui.view==='overview'){
    const currentDate=today(),events=monthEvents(),totals=monthTotals(events);
    const upcoming=events.filter(event=>event.date>=currentDate).slice(0,4);
-   const groups=new Map();
-   for(const event of events.filter(event=>event.kind!=='income'))
-    groups.set(event.category,(groups.get(event.category)||0)+event.plannedCents);
-   const ordered=[...groups.entries()].sort((a,b)=>b[1]-a[1]).slice(0,5);
-   const highest=Math.max(...ordered.map(([_,sum])=>sum),1);
-   const categories=ordered.map(([name,amountCents])=>({name,amountCents,percent:Math.max(2,Math.round(amountCents/highest*100))}));
+   const categories=projectOverviewCategories(events);
    const loan=state.loans.find(isActive)||null;
    const snapshot=loan?loanLedger(loan,state.loanPayments):null;
-   const loanSummary=loan?{id:loan.id,title:loan.title,outstandingCents:snapshot.outstandingCents,monthlyCents:snapshot.monthlyCents,months:snapshot.months,
-    percent:Math.max(0,Math.min(100,Math.round((1-snapshot.outstandingCents/loan.openingCents)*100)))}:null;
+   const loanSummary=projectOverviewLoan(loan,snapshot);
    screenRoot.render({view:'overview',props:{currentDate,monthTitle:monthLabel(ui.month),hasData:hasData(),totals,categories,upcoming,loan:loanSummary,rubles,formatDate,financeEnabled:financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId,verifiedActorUserId:emailSession.userId||null}});
   }else if(ui.view==='obligations'){
-   const items=state.entries.filter(isActive)
-    .filter(e=>ui.filter==='all'||(ui.filter==='regular'&&e.recurrence!=='once')||
-     (ui.filter==='once'&&e.recurrence==='once')||(ui.filter==='income'&&e.kind==='income'))
-    .sort((a,b)=>a.date.localeCompare(b.date));
-   const rows=items.map(entry=>{
-    const payments=state.settlements.filter(s=>s.entryId===entry.id&&s.occurrence===ui.month&&!s.voidedAt);
-    return {id:entry.id,title:entry.title,kind:entry.kind,category:entry.category,
-     recurrence:entry.recurrence,amountCents:entry.amountCents,
-     date:entry.recurrence==='once'?entry.date:dayInMonth(ui.month,Number(entry.date.slice(-2))),
-     payments,paidCents:payments.reduce((sum,p)=>sum+p.amountCents,0)};
-   });
+   const rows=projectObligationRows(state.entries,state.settlements,ui.month,ui.filter,dayInMonth);
    const totals=monthTotals(monthEvents());
    screenRoot.render({view:'obligations',props:{rows,month:ui.month,monthTitle:monthLabel(ui.month),
     filter:ui.filter,expandedEntry:ui.expandedEntry,currentDate:today(),
@@ -928,6 +917,15 @@ async function init(){
    settlement:$('#settlement-dialog'),password:$('#password-dialog'),
   });
   financeFormRoots.mount();
+ }
+ // Render the native-compatible auxiliary dialogs before binding delegated listeners.
+ if(!auxiliaryDialogRoots&&typeof createAuxiliaryDialogRoots==='function'&&$('#payment-methods-dialog')){
+  auxiliaryDialogRoots=createAuxiliaryDialogRoots({
+   paymentMethods:$('#payment-methods-dialog'),
+   excelImport:$('#excel-import-dialog'),
+   cloudImport:$('#cloud-import-dialog'),
+  });
+  auxiliaryDialogRoots.mount();
  }
  bindEvents();
  if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('./sw.js',{scope:'./'}).catch(()=>{});
