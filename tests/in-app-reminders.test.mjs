@@ -10,7 +10,8 @@ import {
 
 const entry = (overrides = {}) => ({
   source: 'entry', id: 'internet', title: 'Интернет', kind: 'expense',
-  date: '2027-01-01', plannedCents: 12000, paidCents: 0, ...overrides,
+  recurrence: 'monthly', date: '2027-01-01',
+  plannedCents: 12000, paidCents: 0, ...overrides,
 });
 const options = (currentDate, payments = [entry()], extra = {}) => ({
   scopeKey: 'guest-state-v2', currentDate, settings: DEFAULT_REMINDER_SETTINGS,
@@ -211,6 +212,8 @@ test('duplicate snapshots collapse deterministically but conflicting duplicates 
   assert.equal(projected('2026-12-29', duplicate).duePayments.length, 1);
   assert.throws(() => projected('2026-12-29',
     [entry(), entry({ paidCents: 1000 })]), /Противоречивые/);
+  assert.equal(projected('2026-12-29',
+    [entry({ recurrence: 'once' })]).alerts.length, 0);
   assert.equal(projected('2026-12-29',
     [entry({ kind: 'income' })]).alerts.length, 0);
   assert.equal(projected('2026-12-29', [entry({ paidCents: 12000 })]).alerts.length, 0);
