@@ -123,3 +123,29 @@ test('#40 no unwanted Notification API or push permission request, no overflow a
   expect(result.notifications).toBe(0);
   watch.assertClean();
 });
+
+test('#40 actual authenticated reserve snapshot warns at 3 days and refreshes after top-up', async ({ page, context }) => {
+  const watch = await observe(context, page);
+  await page.clock.setFixedTime(new Date('2026-12-09T12:00:00Z'));
+  const session = await context.request.post(
+    '/__e2e__/personal-session?enable_finance_stub=true&enable_reserves_stub=true',
+  );
+  expect(session.status()).toBe(200);
+  await page.goto('/?fh_reserves_e2e=1');
+  await openDue(page);
+  const notice = page.locator('.fh-center-reserves .fh-center-event').filter({ hasText: 'Хостинг' });
+  await expect(notice).toBeVisible();
+  await expect(notice).toContainText('3 000,00 ₽');
+  await expect(notice).toContainText('Осталось 3 дн.');
+  await notice.getByRole('button', { name: 'Открыть резерв' }).click();
+  const hosting = page.locator('.fh-reserve-card').filter({ hasText: 'Хостинг' });
+  await expect(hosting).toBeVisible();
+  await hosting.getByRole('button', { name: 'Пополнить' }).click();
+  const funding = page.getByRole('dialog', { name: 'Пополнить резерв' });
+  await funding.getByRole('textbox', { name: 'Сумма, ₽' }).fill('1000');
+  await funding.getByRole('button', { name: 'Пополнить', exact: true }).click();
+  await expect(funding).toHaveCount(0);
+  await expect(page.locator('.fh-center-reserves .fh-center-event').filter({ hasText: 'Хостинг' }))
+    .toContainText('2 000,00 ₽');
+  watch.assertClean();
+});
