@@ -176,6 +176,7 @@ jobs:
           python3 - <<'PY'
           import hashlib
           import json
+          from html.parser import HTMLParser
           import os
           from pathlib import Path, PurePosixPath
           import re
@@ -251,26 +252,134 @@ jobs:
                   or archive_manifest.get("repository") != repository):
               raise SystemExit("FAIL: publicly served source SHA/repository mismatched")
           
+          def matches_cloudflare_html(expected: bytes, delivered: bytes) -> bool:
+              """Only allow one known Cloudflare Web Analytics beacon inserted before </body>."""
+              if expected == delivered:
+                  return True
+              closing = b'</body>'
+              if expected.count(closing) != 1 or delivered.count(closing) != 1:
+                  return False
+              prefix, tail = expected.split(closing, 1)
+              suffix = closing + tail
+              if not delivered.startswith(prefix) or not delivered.endswith(suffix):
+                  return False
+              inserted = delivered[len(prefix):-len(suffix)]
+              if not (200 <= len(inserted) <= 600):
+                  return False
+              if not inserted.startswith(b'<script ') or not inserted.endswith(b'</script>'):
+                  return False
+              try:
+                  fragment = inserted.decode('utf-8')
+              except UnicodeDecodeError:
+                  return False
+          
+              class Beacon(HTMLParser):
+                  def __init__(self):
+                      super().__init__()
+                      self.start = None
+                      self.attrs = None
+                      self.ends = 0
+                      self.invalid = False
+          
+                  def handle_starttag(self, tag, attrs):
+                      if tag != 'script' or self.start is not None:
+                          self.invalid = True
+                          return
+                      self.start = self.get_starttag_text()
+                      self.attrs = attrs
+          
+                  def handle_endtag(self, tag):
+                      if tag != 'script' or self.start is None:
+                          self.invalid = True
+                      self.ends += 1
+          
+                  def handle_data(self, data):
+                      if data.strip():
+                          self.invalid = True
+          
+                  def handle_comment(self, data):
+                      self.invalid = True
+          
+                  def handle_entityref(self, name):
+                      self.invalid = True
+          
+                  def handle_charref(self, name):
+                      self.invalid = True
+          
+              parsed = Beacon()
+              parsed.feed(fragment)
+              parsed.close()
+              if parsed.invalid or parsed.start is None or parsed.ends != 1:
+                  return False
+              if fragment != parsed.start + '</script>':
+                  return False
+              if [name for name, _ in parsed.attrs] != [
+                  'type', 'src', 'integrity', 'data-cf-beacon', 'crossorigin'
+              ]:
+                  return False
+              attrs = dict(parsed.attrs)
+              if attrs['type'] != 'module' or attrs['crossorigin'] != 'anonymous':
+                  return False
+              if not re.fullmatch(
+                  r'https://static\.cloudflareinsights\.com/beacon\.min\.js/v[a-z0-9]{40,64}',
+                  attrs['src'] or '',
+              ):
+                  return False
+              if not re.fullmatch(r'sha512-[A-Za-z0-9+/=]{88}', attrs['integrity'] or ''):
+                  return False
+              try:
+                  beacon = json.loads(attrs['data-cf-beacon'])
+              except (TypeError, ValueError):
+                  return False
+              if not isinstance(beacon, dict) or set(beacon) != {'r', 'spa', 'token', 'version'}:
+                  return False
+              if not isinstance(beacon['token'], str) or not re.fullmatch(r'[0-9a-f]{32}', beacon['token']):
+                  return False
+              if not isinstance(beacon['version'], str) or not re.fullmatch(
+                  r'[0-9]+(?:\.[0-9]+){1,3}', beacon['version']
+              ):
+                  return False
+              if type(beacon['r']) not in (int, bool) or type(beacon['spa']) not in (int, bool):
+                  return False
+              return True
+          
+          exact_hashes = 0
+          normalized_html = 0
           for name, data in sorted(files.items()):
               public_data, headers = get("/" + name)
-              if hashlib.sha256(public_data).digest() != hashlib.sha256(data).digest():
-                  raise SystemExit("FAIL: public static asset SHA-256 mismatch: " + name)
+              exact = hashlib.sha256(public_data).digest() == hashlib.sha256(data).digest()
+              if exact:
+                  exact_hashes += 1
+              else:
+                  if name not in {"index.html", "account.html"}:
+                      raise SystemExit("FAIL: public static asset SHA-256 mismatch: " + name)
+                  if not matches_cloudflare_html(data, public_data):
+                      raise SystemExit("FAIL: unexpected public HTML alteration: " + name)
+                  if headers.get("CF-Cache-Status") != "DYNAMIC":
+                      raise SystemExit("FAIL: edge-transformed HTML had unexpected cache state")
+                  normalized_html += 1
+                  print("PUBLIC_HTML_EDGE_BEACON=" + name)
               if name in {"index.html", "account.html", "sw.js", "manifest.webmanifest"}:
                   cache_control = headers.get("Cache-Control", "")
                   if "no-store" not in cache_control and "no-cache" not in cache_control:
                       raise SystemExit("FAIL: unsafe HTML/SW cache policy: " + name)
               if name in {"index.html", "account.html"}:
-                  if "script-src 'self'" not in headers.get("Content-Security-Policy", ""):
-                      raise SystemExit("FAIL: missing CSP: " + name)
+                  csp = headers.get("Content-Security-Policy", "")
+                  if "script-src 'self'" not in csp or "static.cloudflareinsights.com" in csp:
+                      raise SystemExit("FAIL: external script permitted or missing CSP: " + name)
           
           index, headers = get("/")
-          if index != files["index.html"] or "script-src 'self'" not in headers.get("Content-Security-Policy", ""):
-              raise SystemExit("FAIL: root page differs from exact release or lacks CSP")
+          csp = headers.get("Content-Security-Policy", "")
+          if not matches_cloudflare_html(files["index.html"], index):
+              raise SystemExit("FAIL: root page differs beyond known Cloudflare beacon injection")
+          if "script-src 'self'" not in csp or "static.cloudflareinsights.com" in csp:
+              raise SystemExit("FAIL: root CSP permits third-party scripts or lacks restriction")
           auth_config, _ = get("/api/auth/email/config")
           auth = json.loads(auth_config)
           if type(auth.get("enabled")) is not bool or auth.get("email_only") is not True:
               raise SystemExit("FAIL: public authentication configuration invalid")
           print("PUBLIC_RELEASE_SHA=" + sha)
-          print("PUBLIC_STATIC_HASHES=" + str(len(files)) + "/" + str(len(files)))
+          print("PUBLIC_STATIC_SHA256_EXACT=" + str(exact_hashes) + "/" + str(len(files)))
+          print("PUBLIC_HTML_EDGE_NORMALIZED=" + str(normalized_html))
           print("PUBLIC_RELEASE_SMOKE=PASS")
           PY
