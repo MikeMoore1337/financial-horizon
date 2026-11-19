@@ -2,8 +2,11 @@ import { Fragment } from 'react';
 import { Icon, type CalendarProps } from './Calendar';
 import { ConnectedReserves } from './Reserves';
 import { PaymentCenter, ReserveAlerts } from './PaymentCenter';
-import { DEFAULT_REMINDER_SETTINGS } from '../domain/cashflow/in-app-reminders.ts';
-import type { ReminderResult, ReminderSettings } from '../domain/cashflow/in-app-reminders.ts';
+import {
+  DEFAULT_REMINDER_SETTINGS,
+  type ReminderResult,
+  type ReminderSettings,
+} from '../domain/cashflow/in-app-reminders.ts';
 import type { PaymentMethod } from '../types/finance';
 import type { XlsxReservePreview } from '../domain/reserves/xlsx-preview.ts';
 
