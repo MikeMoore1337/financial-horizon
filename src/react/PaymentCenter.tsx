@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { safePaymentUrl, validQrData } from '../../finance.js';
-import { buildInAppReminders } from '../domain/cashflow/in-app-reminders.ts';
-import type {
-  DuePayment, InAppReminder, PaymentReminder, ReminderResult, ReminderSettings,
-  ReserveReminder,
+import {
+  buildInAppReminders,
+  type DuePayment,
+  type PaymentReminder,
+  type ReminderResult,
+  type ReminderSettings,
+  type ReserveReminder,
 } from '../domain/cashflow/in-app-reminders.ts';
 import type { PaymentMethod } from '../types/finance';
 import { ReservesFinanceGateway } from './reserves-finance-gateway';
@@ -198,7 +201,7 @@ function SettingsPanel({
                   ? [...value.daysBefore, days].sort((a, b) => a - b) as (1 | 3 | 7)[]
                   : value.daysBefore.filter((lead) => lead !== days),
               })} />
-            За {days} {days === 1 ? 'день' : 'дня/дней'}
+            За {days} {days === 1 ? 'день' : days === 3 ? 'дня' : 'дней'}
           </label>
         ))}
       </div>
