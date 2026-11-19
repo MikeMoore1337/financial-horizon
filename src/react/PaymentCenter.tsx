@@ -202,16 +202,22 @@ function SettingsPanel({
   onChange: PaymentCenterProps['onSettingsChange'];
 }) {
   const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    if (!saving) setDraft(value);
+  }, [value, saving]);
   const [error, setError] = useState(false);
   const pending = useRef(false);
   const change = async (next: ReminderSettings) => {
     if (pending.current) return;
     pending.current = true;
+    setDraft(next);
     setSaving(true);
     setError(false);
     try {
       await onChange(next);
     } catch {
+      setDraft(value);
       setError(true);
     } finally {
       pending.current = false;
@@ -224,9 +230,9 @@ function SettingsPanel({
       <label className="fh-center-option">
         <input
           type="checkbox"
-          checked={value.enabled}
+          checked={draft.enabled}
           disabled={saving}
-          onChange={(e) => void change({ ...value, enabled: e.target.checked })}
+          onChange={(e) => void change({ ...draft, enabled: e.target.checked })}
         />
         Включить напоминания
       </label>
@@ -235,14 +241,14 @@ function SettingsPanel({
           <label className="fh-center-option" key={days}>
             <input
               type="checkbox"
-              checked={value.daysBefore.includes(days)}
-              disabled={!value.enabled || saving}
+              checked={draft.daysBefore.includes(days)}
+              disabled={!draft.enabled || saving}
               onChange={(e) =>
                 void change({
-                  ...value,
+                  ...draft,
                   daysBefore: e.target.checked
-                    ? ([...value.daysBefore, days].sort((a, b) => a - b) as (1 | 3 | 7)[])
-                    : value.daysBefore.filter((lead) => lead !== days),
+                    ? ([...draft.daysBefore, days].sort((a, b) => a - b) as (1 | 3 | 7)[])
+                    : draft.daysBefore.filter((lead) => lead !== days),
                 })
               }
             />
