@@ -252,6 +252,8 @@ jobs:
                   or archive_manifest.get("repository") != repository):
               raise SystemExit("FAIL: publicly served source SHA/repository mismatched")
           
+          TRUSTED_EDGE_BEACON_SHA256 = "72a643ee48d020de2a5325c806d05a85d319124b8cd0af7eeeeb63d3cdf2a027"
+          
           def matches_cloudflare_html(expected: bytes, delivered: bytes) -> bool:
               """Only allow one known Cloudflare Web Analytics beacon inserted before </body>."""
               if expected == delivered:
@@ -264,6 +266,8 @@ jobs:
               if not delivered.startswith(prefix) or not delivered.endswith(suffix):
                   return False
               inserted = delivered[len(prefix):-len(suffix)]
+              if hashlib.sha256(inserted).hexdigest() != TRUSTED_EDGE_BEACON_SHA256:
+                  return False
               if not (200 <= len(inserted) <= 600):
                   return False
               if not inserted.startswith(b'<script ') or not inserted.endswith(b'</script>'):
@@ -343,6 +347,34 @@ jobs:
                   return False
               return True
           
+          def restrictive_script_csp(csp: str) -> bool:
+              """Only allow the approved local scripts and explicitly trusted Turnstile origin."""
+              if not isinstance(csp, str):
+                  return False
+              directives = {}
+              for chunk in csp.split(';'):
+                  values = chunk.strip().split()
+                  if not values:
+                      continue
+                  name = values[0].lower()
+                  if name in directives:
+                      return False
+                  directives[name] = values[1:]
+              if directives.get('default-src') != ["'self'"]:
+                  return False
+              allowed = [
+                  {"'self'"},
+                  {"'self'", "https://challenges.cloudflare.com"},
+              ]
+              def is_safe(sources):
+                  return (len(sources) == len(set(sources))
+                          and set(sources) in allowed)
+              if 'script-src' not in directives or not is_safe(directives['script-src']):
+                  return False
+              if 'script-src-elem' in directives and not is_safe(directives['script-src-elem']):
+                  return False
+              return True
+          
           exact_hashes = 0
           normalized_html = 0
           for name, data in sorted(files.items()):
@@ -365,15 +397,21 @@ jobs:
                       raise SystemExit("FAIL: unsafe HTML/SW cache policy: " + name)
               if name in {"index.html", "account.html"}:
                   csp = headers.get("Content-Security-Policy", "")
-                  if "script-src 'self'" not in csp or "static.cloudflareinsights.com" in csp:
-                      raise SystemExit("FAIL: external script permitted or missing CSP: " + name)
+                  if not restrictive_script_csp(csp):
+                      raise SystemExit("FAIL: CSP permits untrusted script sources: " + name)
           
           index, headers = get("/")
           csp = headers.get("Content-Security-Policy", "")
+          root_exact = index == files["index.html"]
           if not matches_cloudflare_html(files["index.html"], index):
-              raise SystemExit("FAIL: root page differs beyond known Cloudflare beacon injection")
-          if "script-src 'self'" not in csp or "static.cloudflareinsights.com" in csp:
-              raise SystemExit("FAIL: root CSP permits third-party scripts or lacks restriction")
+              raise SystemExit("FAIL: root page differs beyond the pinned Cloudflare beacon")
+          if not root_exact and headers.get("CF-Cache-Status") != "DYNAMIC":
+              raise SystemExit("FAIL: transformed root unexpectedly cached")
+          cache_control = headers.get("Cache-Control", "")
+          if "no-store" not in cache_control and "no-cache" not in cache_control:
+              raise SystemExit("FAIL: unsafe root HTML cache policy")
+          if not restrictive_script_csp(csp):
+              raise SystemExit("FAIL: root CSP permits untrusted script sources")
           auth_config, _ = get("/api/auth/email/config")
           auth = json.loads(auth_config)
           if type(auth.get("enabled")) is not bool or auth.get("email_only") is not True:
