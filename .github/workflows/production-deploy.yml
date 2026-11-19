@@ -20,9 +20,9 @@ concurrency:
 
 jobs:
   build:
-    if: github.event_name == 'workflow_dispatch' || vars.FH_STATIC_AUTO_DEPLOY_ENABLED == 'true'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     outputs:
       source_sha: ${{ steps.gate.outputs.sha }}
       archive_sha256: ${{ steps.package.outputs.sha256 }}
@@ -49,13 +49,13 @@ jobs:
           [[ "$latest" == "$TARGET_SHA" ]] || { echo 'Superseded main' >&2; exit 1; }
           for workflow in tests.yml security-vault.yml; do
             confirmed=false
-            for attempt in $(seq 1 40); do
+            for attempt in $(seq 1 100); do
               status="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow/runs?head_sha=$TARGET_SHA&branch=main&event=push&per_page=10" --jq '.workflow_runs[0].conclusion // "pending"')"
               if [[ "$status" == success ]]; then confirmed=true; break; fi
               if [[ "$status" == failure || "$status" == cancelled || "$status" == timed_out || "$status" == action_required ]]; then
                 echo "$workflow blocked: $status" >&2; exit 1
               fi
-              [[ "$attempt" == 40 ]] || sleep 8
+              [[ "$attempt" == 100 ]] || sleep 8
             done
             [[ "$confirmed" == true ]] || { echo "$workflow not green for exact SHA" >&2; exit 1; }
           done
@@ -154,3 +154,31 @@ jobs:
             grep -Fxq "ALREADY_DEPLOYED=$TARGET_SHA" "$output" || {
               echo 'Valid production receipt missing' >&2; exit 1;
             }
+
+  public-smoke:
+    needs: [build, deploy]
+    if: needs.deploy.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact deployed main without credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.build.outputs.source_sha }}
+          persist-credentials: false
+      - name: Setup pinned build Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Verify full public HTTPS hashes, security headers, PWA and auth config
+        shell: bash
+        env:
+          TARGET_SHA: ${{ needs.build.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          npm ci
+          npm run build
+          node tests/e2e/production-smoke.mjs https://fin-horizon.mikemoore.top "$TARGET_SHA"
