@@ -194,15 +194,16 @@ export function BankImport({mode,verifiedActorUserId,guestLedger,guestRevision,
     try{
       const current=server;
       const page=await loadOlderSignedBankHistory(current);
+      // Validation must be pure: never set React error state from inside a
+      // state updater, which StrictMode can replay during concurrent rendering.
+      if(page.batches.some(batch=>
+        current.batches.some(existing=>existing.batch_id===batch.batch_id))){
+        throw Error('Повторная страница истории; обновите финансовую сверку.');
+      }
       setServer(previous=>{
         if(!previous||previous.revision!==current.revision||
           previous.etag!==current.etag||
           previous.historyNextCursor!==current.historyNextCursor)return previous;
-        if(page.batches.some(batch=>
-          previous.batches.some(existing=>existing.batch_id===batch.batch_id))){
-          setError('Повторная страница истории; обновите финансовую сверку.');
-          return previous;
-        }
         return {...previous,batches:[...previous.batches,...page.batches],
           historyNextCursor:page.historyNextCursor};
       });
