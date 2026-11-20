@@ -136,7 +136,7 @@ describe('#40 approved payment center', () => {
     const trigger = screen.getByRole('button', { name: 'Показать QR' });
     fireEvent.click(trigger);
     const viewer = screen.getByRole('region', { name: 'Просмотр QR-кода' });
-    expect(viewer).toBeTruthy();
+    expect(viewer.id).toBe(trigger.getAttribute('aria-controls'));
     expect(
       within(viewer).getByRole('link', { name: 'Перейти к оплате СБП' }).getAttribute('rel'),
     ).toContain('noreferrer');
@@ -147,6 +147,7 @@ describe('#40 approved payment center', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('region', { name: 'Просмотр QR-кода' })).toBeNull();
     expect(document.activeElement).toBe(trigger);
+    expect(trigger.hasAttribute('aria-controls')).toBe(false);
     fireEvent.click(screen.getByText('Другие способы оплаты (2)'));
     expect(screen.getByRole('link', { name: 'Перейти к оплате СБП' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Изменить' }).getAttribute('data-id')).toBe(
