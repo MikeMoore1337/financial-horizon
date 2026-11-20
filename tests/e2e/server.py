@@ -284,7 +284,8 @@ def local_app(directory):
             if contents.count(on_flag) + contents.count(off_flag) != 1:
                 raise HTTPException(503)
             if real_finance and (
-                contents.count('<meta name="fh-finance-accounts" content="enabled">') != 1
+                contents.count('<meta name="fh-finance-bank-import" content="disabled">') != 1
+                or contents.count('<meta name="fh-finance-accounts" content="enabled">') != 1
                 or contents.count('<meta name="fh-finance-import" content="enabled">') != 1
             ):
                 raise HTTPException(503)
@@ -293,6 +294,13 @@ def local_app(directory):
                 off_flag if active else on_flag,
                 on_flag if active else off_flag,
             )
+            # Test-only proof: signed #38 remains hidden in production until
+            # backend 0007, RLS and an owner-approved bank API release exist.
+            if real_finance:
+                contents = contents.replace(
+                    '<meta name="fh-finance-bank-import" content="disabled">',
+                    '<meta name="fh-finance-bank-import" content="enabled">',
+                )
             return Response(
                 contents, media_type="text/html",
                 headers={"Cache-Control": "no-store"},

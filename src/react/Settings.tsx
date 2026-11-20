@@ -20,6 +20,7 @@ export interface SettingsProps {
   formatDate: CalendarProps['formatDate'];
   showFinanceAccounts?: boolean;
   showFinanceImport?: boolean;
+  showBankStatementImport?: boolean;
 }
 
 function SettingsCard({
@@ -55,6 +56,7 @@ export function Settings({
   formatDate,
   showFinanceAccounts = false,
   showFinanceImport = false,
+  showBankStatementImport = false,
 }: SettingsProps) {
   return (
     <>
@@ -138,7 +140,8 @@ export function Settings({
             остатки.
           </p>
         </SettingsCard>
-        <SettingsCard id="bank-statement-import" icon="sheet">
+        {showBankStatementImport && (
+          <SettingsCard id="bank-statement-import" icon="sheet">
           <h2>Импорт банковской выписки</h2>
           <p>
             Загрузите CSV или XLSX, проверьте сопоставление колонок и исключите уже проведённые
@@ -149,7 +152,8 @@ export function Settings({
               <Icon name="upload" /> Импортировать выписку
             </button>
           </div>
-        </SettingsCard>
+          </SettingsCard>
+        )}
         <SettingsCard id="categories" icon="tag">
           <h2>Категории</h2>
           <p>

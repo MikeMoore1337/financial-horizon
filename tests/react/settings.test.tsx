@@ -10,6 +10,7 @@ const empty: SettingsProps = {
   audit: [],
   storageMessage: 'Постоянное хранение не подтверждено.',
   formatDate: (date) => date,
+  showBankStatementImport: true,
 };
 afterEach(cleanup);
 
@@ -117,4 +118,10 @@ it('personal cloud import requires independent accounts and import opt-ins', () 
   expect(action).not.toBeNull();
   expect(action?.textContent).toContain('Перенести данные');
   expect(document.querySelector('[data-action="account-logout"]')).toBeNull();
+});
+
+it('server bank import card requires explicit independent opt-in', () => {
+  render(<Settings {...empty} showFinanceAccounts showBankStatementImport={false} />);
+  expect(document.querySelector('[data-settings-card="bank-statement-import"]')).toBeNull();
+  expect(document.querySelector('[data-settings-card="finance-accounts"]')).not.toBeNull();
 });

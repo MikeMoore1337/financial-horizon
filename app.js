@@ -31,6 +31,8 @@ const titles={overview:'Обзор',calendar:'Календарь',obligations:'�
 // FastAPI authentication and profile scoping remain the sole authorization boundary.
 const financeAccountsEnabled=document.querySelector('meta[name="fh-finance-accounts"]')?.content==='enabled';
 const financeImportEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-import"]')?.content==='enabled';
+// #38 signed bank import needs an independently approved production backend.
+const bankImportEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-bank-import"]')?.content==='enabled';
 const financeReservesEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-reserves"]')?.content==='enabled';
 let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null,obligationsSection:'payments',focusReserveId:null,reserveSuggestions:[]},passwordMode='export',restoreFile=null,verifyBackupFile=null,cloudImportFile=null,pendingCloudImport=null,cloudImportController=null,cloudImportBusy=false,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
 const emailSession=createEmailSession();
@@ -121,6 +123,7 @@ function syncStorageContext(){
 }
 function navigation(view){
  if(view==='accounts-connected'&&(!financeAccountsEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId))return;
+ if(view==='bank-import'&&!guestMode&&(!bankImportEnabled||!activeUserId||emailSession.userId!==activeUserId))return;
  ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings'){void renderStorageStatus();if(!guestMode)void refreshEmailSession();}}
 function render(){
  if(!state)return;
@@ -230,6 +233,7 @@ function render(){
     currentDate:today(),categories:state.categories,archived,audit,storageMessage:storageStatusMessage,
     formatDate,showFinanceAccounts:financeAccountsEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId,
     showFinanceImport:financeImportEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId,
+    showBankStatementImport:guestMode||(bankImportEnabled&&Boolean(activeUserId)&&emailSession.userId===activeUserId),
    }});
   }
  }else{
