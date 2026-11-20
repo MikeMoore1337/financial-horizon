@@ -142,3 +142,49 @@ def test_bank_http_origin_scope_bad_payload_and_json_duplicates(bank_http):
     assert client.post(path,headers={**headers,"Content-Type":"text/csv"},
                        content=b"not a bank statement").status_code==415
     assert snapshot(client).json()["revision"]==before.json()["revision"]
+
+def test_bank_history_private_pagination_tracks_reversals(bank_http):
+    _,token=bank_http["first"]
+    client=bank_http["bank_client"](token)
+    current=snapshot(client)
+    account_id=str(uuid4())
+    create=request(current,"account.create",{
+        "id":account_id,"name":"History test account","kind":"bank",
+        "currency":"RUB","opening_minor":0,
+    })
+    assert post(client,current,create).status_code==201
+    before=snapshot(client)
+    first=_bank_body(before,account_id)
+    posted=_write(client,"commit",before,first)
+    assert posted.status_code==201
+    path="/api/finance/v2/bank-import/batches"
+    listed=client.get(path)
+    assert listed.status_code==200,listed.text
+    assert listed.headers["cache-control"]=="private, no-store"
+    data=listed.json()
+    assert data["revision"]==posted.json()["revision"]
+    assert data["has_more"] is False
+    assert data["next_cursor"] is None
+    assert len(data["batches"])==1
+    batch=data["batches"][0]
+    assert batch["batch_id"]==posted.json()["batch_id"]
+    assert batch["batch_key"]==first["batch_key"]
+    assert batch["status"]=="committed"
+    assert batch["operation_count"]==1
+    assert "file_digest" not in json.dumps(data)
+    assert "description" not in json.dumps(data)
+    invalid=client.get(path+"?limit=1000")
+    assert invalid.status_code==422
+    assert client.get(path+"?cursor=2&cursor=3").status_code==422
+    anonymous=TestClient(bank_http["bank_app"],base_url=ORIGIN,
+                         raise_server_exceptions=False)
+    assert anonymous.get(path).status_code==401
+    after=snapshot(client)
+    undo={"schema_version":1,"client_mutation_id":str(uuid4()),
+          "base_revision":after.json()["revision"],
+          "batch_key":first["batch_key"],"reason":"Synthetic history undo"}
+    assert _write(client,"undo",after,undo).status_code==201
+    after_undo=client.get(path)
+    assert after_undo.status_code==200
+    assert after_undo.json()["batches"][0]["status"]=="cancelled"
+    assert after_undo.json()["batches"][0]["cancelled_revision"]==after_undo.json()["revision"]

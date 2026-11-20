@@ -447,3 +447,52 @@ def undo_bank_import_candidate(
         _snapshot_barrier(session,scope,next_revision,batch_id,"cancel",len(rows))
         _receipt(session,scope,mutation,digest,next_revision,ack)
         return FinanceResult(201,ack,_opaque_etag(scope.profile_id,next_revision))
+
+
+def get_bank_import_history(
+    engine: Engine, *, scope: VerifiedFinanceScope,
+    before_revision: int | None = None, page_size: int = 50,
+) -> FinanceResult:
+    """Read-only private batch history for #38; no original bank file or notes."""
+    if type(page_size) is not int or not 1 <= page_size <= 100:
+        _invalid()
+    if before_revision is not None and (
+        type(before_revision) is not int or not 1 <= before_revision <= _MAX_REVISION
+    ):
+        _invalid()
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        current = session.execute(text("""
+            SELECT revision FROM finance_profiles WHERE id=:p FOR SHARE
+        """), {"p":scope.profile_id}).scalar_one_or_none()
+        if current is None:
+            raise FinanceCommandError("forbidden", "Нет доступа к финансовому профилю", 403)
+        rows = session.execute(text("""
+            SELECT id,batch_key,status,operation_count,committed_revision,
+                   cancelled_revision,committed_at
+            FROM bank_import_batches
+            WHERE profile_id=:p
+              AND (:before IS NULL OR committed_revision < :before)
+            ORDER BY committed_revision DESC LIMIT :limit
+        """), {"p":scope.profile_id,"before":before_revision,
+               "limit":page_size+1}).mappings().all()
+        has_more=len(rows)>page_size
+        entries=[{
+            "batch_id":str(row["id"]),
+            "batch_key":row["batch_key"].strip(),
+            "status":row["status"],
+            "operation_count":int(row["operation_count"]),
+            "committed_revision":int(row["committed_revision"]),
+            "cancelled_revision":(
+                int(row["cancelled_revision"])
+                if row["cancelled_revision"] is not None else None
+            ),
+            "committed_at":row["committed_at"].isoformat(),
+        } for row in rows[:page_size]]
+        return FinanceResult(200, {
+            "schema_version":1, "revision":int(current), "batches":entries,
+            "has_more":has_more,
+            "next_cursor":(
+                entries[-1]["committed_revision"] if has_more else None
+            ),
+        },_opaque_etag(scope.profile_id,int(current)))

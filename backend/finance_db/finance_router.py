@@ -453,6 +453,7 @@ def mount_finance_routes(
             from backend.finance_api.bank_import_http_candidate import parse_bank_import_body
             from backend.finance_db.bank_import_candidate import (
                 commit_bank_import_candidate, undo_bank_import_candidate,
+                get_bank_import_history,
             )
 
             async def _handle_bank_request(request: Request, *, undo: bool):
@@ -483,6 +484,28 @@ def mount_finance_routes(
                     log.error("bank_import_candidate_db_failed")
                     return _finance_error(FinanceCommandError(
                         "service_unavailable", "Импорт не подтверждён сервером", 503,
+                    ))
+
+            @v2.get("/bank-import/batches")
+            def bank_import_history(request: Request):
+                rate(request, "finance-read")
+                verified = scope(request)
+                try:
+                    if not set(request.query_params).issubset({"cursor", "limit"}):
+                        raise FinanceCommandError(
+                            "invalid_command", "Недопустимые параметры истории", 422
+                        )
+                    before = _query_integer(request, "cursor", None, 1, (1 << 53) - 1)
+                    limit = _query_integer(request, "limit", 50, 1, 100)
+                    return _finance_response(get_bank_import_history(
+                        engine, scope=verified, before_revision=before, page_size=limit,
+                    ))
+                except FinanceCommandError as exc:
+                    return _finance_error(exc)
+                except SQLAlchemyError:
+                    log.error("bank_import_history_db_failed")
+                    return _finance_error(FinanceCommandError(
+                        "service_unavailable", "История импорта недоступна", 503,
                     ))
 
             @v2.post("/bank-import/commit")
