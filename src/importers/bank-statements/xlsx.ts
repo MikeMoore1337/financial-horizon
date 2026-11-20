@@ -19,6 +19,7 @@ interface XlsxResult {
   rows: BankTableRow[];
   warnings: ImportWarning[];
   sheetName: string;
+  availableSheets: string[];
   dateSystem: '1900' | '1904';
   headerRowNumber: number;
 }
