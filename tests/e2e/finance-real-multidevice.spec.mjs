@@ -258,3 +258,95 @@ test('#68 true FH SQLite + PostgreSQL: two browser devices converge on money and
     await third.close();
   }
 });
+
+
+test('#38 real PostgreSQL + FH cookies: authenticated CSV bank import, replay and undo across devices', async ({page, context, browser}) => {
+  test.setTimeout(180_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  const second = await browser.newContext();
+  const secondPage = await second.newPage();
+  const observeFirst = await observe(context,page);
+  const observeSecond = await observe(second,secondPage);
+  try {
+    const created = await context.request.post('/__e2e__/personal-session');
+    expect(created.status()).toBe(200);
+    const owner = (await created.json()).user;
+    await page.goto('/');
+    await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
+    await bootstrap(context);
+    const accountA = randomUUID(), accountB = randomUUID();
+    let current = await state(context);
+    expect((await submit(context,current,'account.create',{
+      id: accountA,name:'Тестовая карта',kind:'bank',
+      currency:'RUB',opening_minor:30000,
+    })).status()).toBe(201);
+    current = await state(context);
+    expect((await submit(context,current,'account.create',{
+      id: accountB,name:'Копилка',kind:'savings',
+      currency:'RUB',opening_minor:10000,
+    })).status()).toBe(201);
+    const before = await state(context);
+    expect(before.revision).toBe(2);
+    await view(page,'settings');
+    await page.locator('[data-settings-card="bank-statement-import"] [data-view="bank-import"]').click();
+    await expect(page.locator('#toolbar-title')).toHaveText('Импорт выписки');
+    await expect(page.locator('.fh-bank-screen')).toBeVisible();
+    const csv = [
+      'Дата;Сумма;Описание;Счёт;Счёт назначения;Тип;ID',
+      '07.11.2026;125,00;Синтетический возврат;Тестовая карта;;доход;BANK-E2E-IN',
+      '08.11.2026;-25,50;Синтетическая покупка;Тестовая карта;;расход;BANK-E2E-OUT',
+      '09.11.2026;-80,00;Синтетический перевод;Тестовая карта;Копилка;перевод;BANK-E2E-TRANSFER',
+      '',
+    ].join('\n');
+    const synthetic = {
+      name:'bank-synthetic-#38.csv',mimeType:'text/csv',buffer:Buffer.from(csv,'utf8'),
+    };
+    await page.locator('.fh-bank-file input[type="file"]').setInputFiles(synthetic);
+    await expect(page.locator('.fh-bank-table tbody tr')).toHaveCount(3);
+    const send = page.getByRole('button',{name:/Подтвердить импорт 3 операций/});
+    await expect(send).toBeEnabled();
+    await send.click();
+    await expect(page.getByText('Импорт подтверждён: 3 операций')).toBeVisible();
+    const posted = await state(context);
+    expect(posted.revision).toBe(before.revision+1);
+    expect(entity(posted,accountA).data.balance_minor).toBe(31950);
+    expect(entity(posted,accountB).data.balance_minor).toBe(18000);
+    const tx = posted.body.entities.filter(e => e.kind === 'transaction');
+    expect(tx).toHaveLength(3);
+    const transfer = tx.find(t=>t.data.kind==='transfer');
+    expect(transfer.data.postings).toHaveLength(2);
+    expect(transfer.data.postings.reduce((sum,p)=>sum+p.signed_minor,0)).toBe(0);
+
+    // Another real browser with the same FH owner must see committed SQL money
+    // without a bank-file POST, a client-side fabricated balance or a duplicate.
+    await loginViaUi(secondPage,owner.email);
+    await bootstrap(second);
+    const other = await state(second);
+    expect(other.revision).toBe(posted.revision);
+    expect(entity(other,accountA).data.balance_minor).toBe(31950);
+    await view(secondPage,'settings');
+    await secondPage.locator('[data-settings-card="bank-statement-import"] [data-view="bank-import"]').click();
+    await secondPage.locator('.fh-bank-file input[type="file"]').setInputFiles(synthetic);
+    await expect(secondPage.locator('.fh-bank-table tbody tr')).toHaveCount(3);
+    await expect(secondPage.getByRole('button',{name:/Подтвердить импорт 0 операций/})).toBeDisabled();
+    expect((await state(second)).revision).toBe(posted.revision);
+
+    page.once('dialog',dialog=>dialog.accept());
+    const history = page.locator('#fh-bank-history');
+    await expect(history.getByRole('button',{name:'Отменить'})).toBeVisible();
+    await history.getByRole('button',{name:'Отменить'}).click();
+    await expect(page.getByText('Отмена партии подтверждена')).toBeVisible();
+    const reversed = await state(context);
+    expect(reversed.revision).toBe(posted.revision+1);
+    expect(entity(reversed,accountA).data.balance_minor).toBe(30000);
+    expect(entity(reversed,accountB).data.balance_minor).toBe(10000);
+    expect(reversed.body.entities.filter(e=>e.kind==='transaction')).toHaveLength(6);
+    await expect(page.locator('#fh-bank-history')).toContainText('Отменено');
+    const latest = await state(second);
+    expect(latest.revision).toBe(reversed.revision);
+    expect(entity(latest,accountB).data.balance_minor).toBe(10000);
+    observeFirst.assertClean();observeSecond.assertClean();
+  } finally {
+    await second.close();
+  }
+});
