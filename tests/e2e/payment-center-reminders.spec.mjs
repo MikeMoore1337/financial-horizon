@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { deflateSync } from 'node:zlib';
+import AxeBuilder from '@axe-core/playwright';
 import { observe, visitGuest, view, scopedState } from './helpers.mjs';
 
 function iso(date) {
@@ -218,6 +219,7 @@ test('#137 real browser: QR, other methods, focus, 320-1280 and unchanged settle
   for (const theme of ['light', 'dark']) {
     await page.evaluate((value) => localStorage.setItem('fh-theme', value), theme);
     await page.reload();
+    await expect(page.locator('body')).toHaveAttribute('data-theme', theme);
     await openDue(page);
     const payment = page.locator('.fh-center-event[data-payment-source="entry"]').filter({ hasText: title });
     const trigger = payment.getByRole('button', { name: 'Показать QR' });
@@ -228,6 +230,18 @@ test('#137 real browser: QR, other methods, focus, 320-1280 and unchanged settle
       .toHaveAttribute('rel', /noreferrer/);
     await expect(viewer.getByRole('button', { name: 'Скопировать реквизиты' })).toBeVisible();
     await expect(viewer.getByRole('button', { name: 'Закрыть QR' })).toBeFocused();
+    const axe = await new AxeBuilder({ page })
+      .include('.fh-center')
+      .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
+      .analyze();
+    expect(
+      axe.violations.map((violation) => ({
+        rule: violation.id,
+        impact: violation.impact,
+        elements: violation.nodes.map((node) => node.target),
+      })),
+      'Opened QR and alternatives must satisfy automated WCAG checks in ' + theme,
+    ).toEqual([]);
     for (const width of [320, 375, 393, 768, 1280]) {
       await page.setViewportSize({ width, height: 852 });
       const overflow = await page.evaluate(() =>
