@@ -4,6 +4,7 @@ import {
   BankCommitError, buildBankCommitRequest, buildBankUndoRequest,
   commitConfirmedBankBatch, undoConfirmedBankBatch,
 } from '../src/importers/bank-statements/save.ts';
+import { draftBankImportBatch } from '../src/importers/bank-statements/reconcile.ts';
 
 const hash = c => c.repeat(64);
 const account = '11111111-1111-4111-8111-111111111111';
@@ -35,6 +36,18 @@ test('confirmed request contains only normalized financial fields and reviewed s
   assert.throws(() => buildBankCommitRequest(
     plan,reconciled,hash('d'),{...context,accountEntityRevisions:{}}
   ),BankCommitError);
+});
+
+test('real frozen draftBankImportBatch is accepted despite deliberate operation cloning', async () => {
+  const frozen = await draftBankImportBatch(reconciled, [op.sourceKey], [op.sourceKey]);
+  assert.notEqual(frozen.operations[0], op);
+  assert.ok(Object.isFrozen(frozen.operations[0]));
+  const valid = buildBankCommitRequest(frozen, reconciled, hash('d'), context);
+  assert.equal(valid.operations[0].amount_minor, 1250);
+  assert.deepEqual(valid.operations[0].reviewed_transaction_ids, [movement]);
+  const altered = { ...frozen, operations: [{ ...frozen.operations[0], description: 'Different' }] };
+  assert.throws(() => buildBankCommitRequest(altered, reconciled, hash('d'), context),
+    BankCommitError);
 });
 
 test('no unapproved, modified or non-UUID possible duplicates are committed', () => {

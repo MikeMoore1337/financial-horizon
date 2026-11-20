@@ -127,7 +127,17 @@ export function buildBankCommitRequest(
     validateOperation(op);
     if (!selected.has(op.sourceKey)) invalid();
     const row = byKey.get(op.sourceKey);
-    if (!row || row.operation !== op || !['ready','possible-duplicate'].includes(row.status) ||
+    // draftBankImportBatch intentionally clones and freezes every operation.
+    // Compare every financial field, never the source object reference.
+    const original = row?.operation;
+    if (!row || !original || original.sourceRow !== op.sourceRow ||
+        original.sourceKey !== op.sourceKey || original.fingerprint !== op.fingerprint ||
+        original.externalId !== op.externalId || original.date !== op.date ||
+        original.amountCents !== op.amountCents || original.kind !== op.kind ||
+        original.description !== op.description || original.accountId !== op.accountId ||
+        original.targetAccountId !== op.targetAccountId ||
+        original.category !== op.category || original.currency !== op.currency ||
+        !['ready','possible-duplicate'].includes(row.status) ||
         row.warnings.some(warning => warning.severity === 'error')) invalid();
     for (const account of [op.accountId, op.targetAccountId]) {
       if (!account) continue;
