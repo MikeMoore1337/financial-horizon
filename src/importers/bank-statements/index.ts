@@ -10,6 +10,13 @@ export {
   reconcileBankStatement, draftBankImportBatch, draftBankImportUndo, projectAccountBalances,
 } from './reconcile.ts';
 export { summarizeBankImportAudit } from './audit.ts';
+export {
+  BankCommitError, buildBankCommitRequest, buildBankUndoRequest,
+  commitConfirmedBankBatch, undoConfirmedBankBatch,
+} from './save.ts';
+export type {
+  BankCommitContext, BankCommitRequest, BankUndoRequest, ConfirmedBankResult,
+} from './save.ts';
 export type * from './types.ts';
 
 export interface ReadStatementOptions {
