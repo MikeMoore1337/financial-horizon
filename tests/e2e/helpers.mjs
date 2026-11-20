@@ -64,6 +64,7 @@ export async function scopedState(page,key){
  return db.values[db.keys.indexOf(key)]??null;
 }
 export async function addEntry(page,title,{kind='expense',amount='1200.50'}={}){
+ await expect(page.locator('#save-indicator')).toHaveText(/^(Локальная база готова|Сохранено на устройстве)$/);
  await page.locator('#top-add').click();
  const form=page.locator('#entry-form');await expect(page.locator('#entry-dialog')).toBeVisible();
  await form.locator('[name="title"]').fill(title);
