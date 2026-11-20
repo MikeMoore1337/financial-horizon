@@ -132,7 +132,8 @@ export function buildBankCommitRequest(
     for (const account of [op.accountId, op.targetAccountId]) {
       if (!account) continue;
       const version = context.accountEntityRevisions[account];
-      if (!Number.isSafeInteger(version) || version < 1 || version > MAX_JS_INT) {
+      if (typeof version !== 'number' || !Number.isSafeInteger(version) ||
+          version < 1 || version > MAX_JS_INT) {
         invalid('Счёт недоступен в актуальном финансовом снимке');
       }
       versionMap[account] = version;
@@ -205,11 +206,15 @@ async function sendBankRequest(
   }
   const ack = body as Partial<ConfirmedBankResult> | null;
   const replyEtag = response.headers.get('etag') || '';
-  if (!ack || !ETAG.test(replyEtag) || !UUID.test(ack.batch_id || '') ||
-      !Number.isSafeInteger(ack.revision) || ack.revision! < 0 ||
+  if (!ack || (response.status !== 200 && response.status !== 201) ||
+      !ETAG.test(replyEtag) ||
+      typeof ack.batch_id !== 'string' || !UUID.test(ack.batch_id) ||
+      typeof ack.revision !== 'number' ||
+      !Number.isSafeInteger(ack.revision) || ack.revision < 0 ||
       typeof ack.replayed !== 'boolean' ||
       ack.status !== (action === 'commit' ? 'COMMITTED' : 'CANCELLED') ||
-      !Number.isSafeInteger(ack.new_operations) || ack.new_operations! < 0) {
+      typeof ack.new_operations !== 'number' ||
+      !Number.isSafeInteger(ack.new_operations) || ack.new_operations < 0) {
     throw new BankCommitError('Операция не подтверждена сервером', 'invalid_server_reply', response.status);
   }
   if (action === 'commit') {
