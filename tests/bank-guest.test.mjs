@@ -49,7 +49,7 @@ test('guest batch commit and whole undo preserve immutable financial facts',()=>
   assert.equal(s.bankStatements.operations.length,2);
   assert.ok(guestBankMovements(s.bankStatements).every(x=>x.voidedAt));
   assert.throws(()=>undoGuestBankBatch(s,plan.batchKey,4),/недоступна/);
-  assert.equal(validateState(structuredClone(s)),s);
+  assert.deepEqual(validateState(structuredClone(s)),s);
 });
 test('guest validation rejects corrupted backups, same source bank ID and bad sums',()=>{
   const s=opened();
