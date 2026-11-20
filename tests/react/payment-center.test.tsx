@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { PaymentCenter } from '../../src/react/PaymentCenter';
 import {
@@ -135,11 +135,12 @@ describe('#40 approved payment center', () => {
     render(<PaymentCenter {...props} />);
     const trigger = screen.getByRole('button', { name: 'Показать QR' });
     fireEvent.click(trigger);
-    expect(screen.getByRole('region', { name: 'Просмотр QR-кода' })).toBeTruthy();
+    const viewer = screen.getByRole('region', { name: 'Просмотр QR-кода' });
+    expect(viewer).toBeTruthy();
     expect(
-      screen.getByRole('link', { name: 'Перейти к оплате СБП' }).getAttribute('rel'),
+      within(viewer).getByRole('link', { name: 'Перейти к оплате СБП' }).getAttribute('rel'),
     ).toContain('noreferrer');
-    const copy = screen.getByRole('button', { name: 'Скопировать реквизиты' });
+    const copy = within(viewer).getByRole('button', { name: 'Скопировать реквизиты' });
     expect(copy.getAttribute('data-method-id')).toBe('requisites');
     const close = screen.getByRole('button', { name: 'Закрыть QR' });
     expect(document.activeElement).toBe(close);
