@@ -138,7 +138,7 @@ function PaymentMethodAction({
           type="button"
           className="button-secondary fh-center-action"
           aria-expanded={showQr}
-          aria-controls={contentId}
+          aria-controls={showQr ? contentId : undefined}
           onClick={() => {
             if (showQr) closeQr();
             else {
@@ -171,6 +171,7 @@ function PaymentMethodAction({
             {phoneAlternatives.length ? (
               <div
                 className="fh-center-qr-alternatives"
+                role="group"
                 aria-label="Способы оплаты с этого телефона"
               >
                 <p className="small-hint">Для оплаты с этого телефона:</p>
@@ -565,7 +566,6 @@ export function PaymentCenter({
     { key: 'today', title: 'Сегодня', rows: due.filter((row) => row.status === 'today') },
     { key: 'upcoming', title: 'Скоро', rows: due.filter((row) => row.status === 'upcoming') },
   ];
-  for (const group of dueGroups) group.rows.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
   const reminders =
     result?.alerts.filter((item): item is PaymentReminder => item.kind === 'payment') ?? [];
   const total = due.reduce((sum, row) => sum + row.remainingCents, 0);
