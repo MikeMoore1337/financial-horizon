@@ -106,7 +106,7 @@ describe('#40 approved payment center', () => {
     expect(save).toHaveBeenCalledWith({ enabled: true, daysBefore: [1, 7] });
     expect(screen.getByText(/Системные уведомления не запрашиваются/)).toBeTruthy();
   });
-}
+
   it('shows a saved primary QR with same-phone alternatives, accessible close and Escape focus restore', () => {
     const qr = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO++0QAAAABJRU5ErkJggg==';
     const props = {
@@ -187,6 +187,6 @@ describe('#40 approved payment center', () => {
     expect(screen.getAllByRole('heading', { level: 3 }).map((node) => node.textContent))
       .toEqual(['Просрочено', 'Сегодня', 'Скоро']);
     expect(screen.getAllByRole('button', { name: 'Отметить оплату' })).toHaveLength(3);
-    expect(screen.getByText('Полная сумма:', { exact: false })).toBeTruthy();
+    expect(screen.getAllByText(/Полная сумма:/)).toHaveLength(3);
   });
 });
