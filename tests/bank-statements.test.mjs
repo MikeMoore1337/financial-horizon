@@ -71,6 +71,31 @@ test('integer RUB cents for negatives, regional grouping and explicit type', asy
   assert.equal(operationAt(preview, 2).externalId, 'A3');
 });
 
+test('XLSX decimal money uses exact original numeric XML, not IEEE-754 cents', async () => {
+  const headers = ['Дата','Сумма','Описание','Счёт','Тип'];
+  const proposed = suggestColumnMapping(headers);
+  const table = {
+    format: 'xlsx', fileDigest: 'a'.repeat(64), filename: 'synthetic.xlsx',
+    headers, headerRowNumber: 1, warnings: [], dateSystem: '1900',
+    rows: [
+      { rowNumber: 2, cells: [46333, 0.29, 'Малый платёж', 'Основной', 'доход'],
+        rawNumbers: { 0: '46333', 1: '0.29' } },
+      { rowNumber: 3, cells: [46334, 9007199254.74, 'Точная сумма', 'Основной', 'доход'],
+        rawNumbers: { 0: '46334', 1: '9007199254.74' } },
+      { rowNumber: 4, cells: [46335, 1.005, 'Недопустимые доли копейки', 'Основной', 'доход'],
+        rawNumbers: { 0: '46335', 1: '1.005' } },
+    ],
+  };
+  const preview = await normalizeBankStatement(table, {
+    mapping: proposed.mapping, accounts,
+  });
+  assert.equal(preview.accepted, 2);
+  assert.equal(preview.rejected, 1);
+  assert.equal(preview.rows[0].operation.amountCents, 29);
+  assert.equal(preview.rows[1].operation.amountCents, 900719925474);
+  assert.ok(preview.rows[2].warnings.some(w => w.code === 'INVALID_AMOUNT'));
+});
+
 test('ambiguous dates and numbers fail closed until disambiguated', async () => {
   const raw = base + '02/03/2026;1,234;???;Основной;;доход;Зарплата;A1\n';
   const { preview: bad } = await previewOf(raw);

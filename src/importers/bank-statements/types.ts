@@ -18,6 +18,8 @@ export interface BankTableRow {
   /** Physical CSV line or one-based XLSX row, including the header. */
   rowNumber: number;
   cells: BankCell[];
+  /** Original numeric XML scalar for precise money conversion; xlsx only. */
+  rawNumbers?: Readonly<Record<number, string>>;
 }
 
 export interface BankStatementTable {

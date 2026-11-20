@@ -127,10 +127,10 @@ function parseMoney(value: BankCell | undefined, style: NumberFormat): {
   cents: number | null; negative: boolean; issue?: string;
 } {
   if (typeof value === 'number') {
-    const value100 = Math.abs(value) * 100, rounded = Math.round(value100);
-    if (!Number.isFinite(value100) || !Number.isSafeInteger(rounded) ||
-        rounded > MAX_OPERATION_CENTS || Math.abs(value100 - rounded) > 0.00001) return { cents: null, negative: false, issue: 'INVALID_AMOUNT' };
-    return { cents: rounded, negative: value < 0 };
+    // Some test callers still provide numbers. Use decimal digits, never
+    // float multiplication or rounding of currency; XLSX supplies rawNumbers.
+    return Number.isFinite(value) ? parseMoney(String(value), 'dot-decimal')
+      : { cents: null, negative: false, issue: 'INVALID_AMOUNT' };
   }
   let raw = text(value).replace(/(?:руб(?:лей|ля|ль)?|RUB|RUR|₽)\s*$/i, '')
     .trim().replace(/[\u00a0\u202f]/g, ' ');
@@ -218,6 +218,14 @@ export async function normalizeBankStatement(
     return col === undefined ? undefined : cells[col];
   };
   for (const source of table.rows) {
+    const getMoney = (field: 'amount' | 'income' | 'expense'): BankCell | undefined => {
+      const col = mapping[field];
+      // XLSX numeric money must be read from its original XML decimal scalar,
+      // not a parsed IEEE-754 Number; dates still use Excel numeric serials.
+      return col !== undefined && table.format === 'xlsx' &&
+        Object.prototype.hasOwnProperty.call(source.rawNumbers || {}, col)
+        ? source.rawNumbers?.[col] : get(source.cells, field);
+    };
     const row = source.rowNumber, issues: ImportWarning[] = [];
     const err = (code: string, message: string, field?: MappableField) =>
       issues.push(warn(code, message, 'error', row, field ? mapping[field] : undefined));
@@ -229,12 +237,12 @@ export async function normalizeBankStatement(
     if (!date.iso) err(date.issue || 'INVALID_DATE', 'Дата отсутствует или неоднозначна', 'date');
     let amountCents: number | null = null, isNegative = false;
     if (mapping.amount !== undefined) {
-      const n = parseMoney(get(source.cells, 'amount'), options.numberFormat || 'auto');
+      const n = parseMoney(getMoney('amount'), options.numberFormat || 'auto');
       amountCents = n.cents; isNegative = n.negative;
       if (n.issue) err(n.issue, 'Неверная или неоднозначная сумма', 'amount');
     } else {
-      const credit = parseMoney(get(source.cells, 'income'), options.numberFormat || 'auto');
-      const debit = parseMoney(get(source.cells, 'expense'), options.numberFormat || 'auto');
+      const credit = parseMoney(getMoney('income'), options.numberFormat || 'auto');
+      const debit = parseMoney(getMoney('expense'), options.numberFormat || 'auto');
       const inPresent = credit.issue !== 'EMPTY_AMOUNT';
       const outPresent = debit.issue !== 'EMPTY_AMOUNT';
       if (inPresent && credit.issue) err(credit.issue, 'Неверная сумма поступления', 'income');

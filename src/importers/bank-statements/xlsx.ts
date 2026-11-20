@@ -203,6 +203,7 @@ function sheetRows(doc: Document, strings: string[]): { rows: BankTableRow[]; wa
     if (seenRows.has(index)) bad('Повторяющаяся строка XLSX');
     seenRows.add(index);
     const values: (string | number | null)[] = [];
+    const rawNumbers: Record<number, string> = {};
     const assigned = new Set<number>();
     for (const cell of nodes(row, 'c')) {
       if (++cells > MAX_CELLS) bad('Слишком много ячеек XLSX');
@@ -225,9 +226,13 @@ function sheetRows(doc: Document, strings: string[]): { rows: BankTableRow[]; wa
       else if (type === 'str' || type === 'd') value = raw;
       else if (type === 'e') value = null;
       else if (raw !== '') {
+        if (raw.length > 64) bad('Слишком длинное числовое значение XLSX');
         const n = Number(raw);
+        // Keep the exact numeric XML decimal for money conversion, so the
+        // accountant never multiplies an IEEE-754 approximation by 100.
+        // Dates still use the finite numeric Excel serial.
+        if (Number.isFinite(n)) rawNumbers[column] = raw;
         // A bank's numeric transaction ID can exceed JS safe integer precision.
-        // Preserve its raw scalar text instead of collapsing two distinct IDs.
         value = !Number.isFinite(n) ? null
           : Number.isInteger(n) && !Number.isSafeInteger(n) ? raw : n;
       }
@@ -235,7 +240,8 @@ function sheetRows(doc: Document, strings: string[]): { rows: BankTableRow[]; wa
       values[column] = value;
     }
     if (values.some(x => x !== null && x !== undefined && x !== '')) {
-      rows.push({ rowNumber: index, cells: values });
+      rows.push({ rowNumber: index, cells: values,
+        ...(Object.keys(rawNumbers).length ? { rawNumbers } : {}) });
       if (rows.length > MAX_TABLE_ROWS + 1) bad('Слишком много строк XLSX');
     }
   }
