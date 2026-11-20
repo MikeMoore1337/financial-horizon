@@ -15,7 +15,7 @@ from backend.finance_db.ledger_service import (
 from backend.finance_db.bank_import_candidate import (
     commit_bank_import_candidate, undo_bank_import_candidate,
 )
-from backend.finance_db.tests.test_ledger_service import context, add_account
+from backend.finance_db.tests.test_ledger_service import context, add_account, make_command, call
 
 
 def digest(label):
@@ -180,3 +180,70 @@ def test_wrong_profile_and_invalid_minor_units_rejected_without_writes(context):
                 if_match=before.etag,idempotency_key=payload["client_mutation_id"])
         assert e.value.code=="invalid_command"
     assert _counts(engine,scope)["bank_import_rows"]==0
+
+def test_bank_reimport_cannot_duplicate_a_paid_loan_even_if_explicitly_reviewed(context):
+    engine,scope=context
+    account,_=add_account(engine,scope,opening=50000)
+    loan_id,payment_id,paid_txid=uuid4(),uuid4(),uuid4()
+    with finance_transaction(engine,verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        session.execute(text("""
+            INSERT INTO loans
+              (profile_id,id,title,opening_minor,payment_minor,apr_basis_points,
+               term_months,due_day,as_of_date)
+            VALUES (:p,:id,'Only synthetic loan',50000,5000,1200,24,15,'2026-11-08')
+        """), {"p":scope.profile_id,"id":loan_id})
+    before=get_account_snapshot(engine,scope=scope)
+    pay=make_command(before.body["revision"],"loan.payment.record",{
+        "transaction_id":str(paid_txid),"fact_id":str(payment_id),
+        "account_id":account,"loan_id":str(loan_id),"amount_minor":5000,
+        "paid_on":"2026-11-08","strategy":"term",
+    },{account:before.body["entities"][0]["entity_revision"],str(loan_id):1})
+    assert call(engine,scope,pay,before.etag).status==201
+    after=get_account_snapshot(engine,scope=scope)
+    versions={row["id"]:row["entity_revision"] for row in after.body["entities"]}
+    bank={ "source_key":digest("loan-statement-row"),
+           "fingerprint":digest("loan-statement-fingerprint"),
+           "external_id":"SYN-LOAN-DEBIT","account_id":account,
+           "target_account_id":None,"occurred_on":"2026-11-08",
+           "amount_minor":5000,"kind":"expense",
+           "description":"Different bank description","category":None,
+           "currency":"RUB","reviewed_transaction_ids":[str(paid_txid)] }
+    batch=request_for(scope,(account,versions),after.body["revision"],[bank])
+    counts=_counts(engine,scope)
+    with pytest.raises(FinanceCommandError) as error:
+        commit_bank_import_candidate(engine,scope=scope,request=batch,
+            if_match=after.etag,idempotency_key=batch["client_mutation_id"])
+    assert error.value.code=="semantic_conflict"
+    assert _counts(engine,scope)==counts
+    assert get_account_snapshot(engine,scope=scope).etag==after.etag
+
+
+def test_whole_batch_undo_rejects_later_financial_revision_without_partial_reversal(context):
+    engine,scope=context
+    account,_=add_account(engine,scope,opening=10000)
+    before=get_account_snapshot(engine,scope=scope)
+    versions={row["id"]:row["entity_revision"] for row in before.body["entities"]}
+    body=request_for(scope,(account,versions),before.body["revision"])
+    assert commit_bank_import_candidate(engine,scope=scope,request=body,
+        if_match=before.etag,idempotency_key=body["client_mutation_id"]).status==201
+    committed=get_account_snapshot(engine,scope=scope)
+    # Simulate another device changing the finance revision before undo.
+    add_account(engine,scope,opening=0,name="Other device synthetic account")
+    later=get_account_snapshot(engine,scope=scope)
+    attempted={
+        "schema_version":1,"client_mutation_id":str(uuid4()),
+        "base_revision":later.body["revision"],"batch_key":body["batch_key"],
+        "reason":"Attempted stale batch reversal",
+    }
+    original_counts=_counts(engine,scope)
+    with pytest.raises(FinanceCommandError) as error:
+        undo_bank_import_candidate(engine,scope=scope,request=attempted,
+            if_match=later.etag,idempotency_key=attempted["client_mutation_id"])
+    assert error.value.code=="semantic_conflict"
+    assert _counts(engine,scope)==original_counts
+    assert get_account_snapshot(engine,scope=scope).etag==later.etag
+    assert committed.body["revision"]+1==later.body["revision"]
+    with finance_transaction(engine,verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        assert session.execute(text("SELECT status FROM bank_import_batches")).scalar_one()=="committed"
