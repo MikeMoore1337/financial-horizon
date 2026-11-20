@@ -193,7 +193,9 @@ async function sendBankRequest(
   try {
     response = await fetcher('/api/finance/v2/bank-import/' + action, {
       method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
-      referrerPolicy: 'no-referrer',
+      // WebKit can send Origin:null for same-origin POST with no-referrer.
+      // Match the existing strict FH CSRF/Origin contract.
+      referrerPolicy: 'same-origin',
       headers: {
         'Content-Type': 'application/json', 'If-Match': etag,
         'Idempotency-Key': request.client_mutation_id,
