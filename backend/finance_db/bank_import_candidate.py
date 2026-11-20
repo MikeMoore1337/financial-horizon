@@ -472,7 +472,8 @@ def get_bank_import_history(
                    cancelled_revision,committed_at
             FROM bank_import_batches
             WHERE profile_id=:p
-              AND (:before IS NULL OR committed_revision < :before)
+              AND (CAST(:before AS bigint) IS NULL
+                   OR committed_revision < CAST(:before AS bigint))
             ORDER BY committed_revision DESC LIMIT :limit
         """), {"p":scope.profile_id,"before":before_revision,
                "limit":page_size+1}).mappings().all()
