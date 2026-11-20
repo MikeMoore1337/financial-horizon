@@ -144,6 +144,22 @@ def read_only_preflight(sha: str) -> tuple[bytes, int]:
         refuse("TRUSTED_NATIVE_ROOT_REQUIRED")
     backend.check_checkout(sha)
     source.active_services()
+    if finance.run(
+        ["systemctl", "is-active", "fh-finance-personal-backup.timer"],
+        error="BANK_BACKUP_TIMER_UNAVAILABLE",
+    ) != "active":
+        refuse("BANK_BACKUP_TIMER_NOT_ACTIVE")
+    if finance.run(
+        ["docker", "inspect", "-f", "{{.State.Health.Status}}",
+         "fh-finance-postgres"],
+        error="BANK_POSTGRES_HEALTH_UNAVAILABLE",
+    ) != "healthy":
+        refuse("BANK_POSTGRES_NOT_HEALTHY")
+    if finance.run(
+        ["docker", "port", "fh-finance-postgres", "5432/tcp"],
+        error="BANK_PRIVATE_PORT_UNAVAILABLE",
+    ) != "127.0.0.1:54329":
+        refuse("BANK_POSTGRES_NOT_LOOPBACK_ONLY")
     finance.load_runtime()  # strict legacy #69 off and personal finance v2 on
     current = legacy.current_source()
     if source.source_files(current) != source.source_files(source.REPO / "backend"):

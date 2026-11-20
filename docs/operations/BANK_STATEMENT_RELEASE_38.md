@@ -43,7 +43,7 @@ Hermes Docker sandbox, Codex CLI, публичный SQL или внешний �
 ## Этап A - обновить только checkout и подготовить backend без переключения
 
 ```bash
-sudo -i
+bash <<'FH38_PREP'
 set -Eeuo pipefail
 umask 077
 cd /opt/financial-horizon-ops
@@ -59,6 +59,7 @@ test "$(awk -F= '$1=="FH_FINANCE_IMPORT_RUNTIME"{print $2}'   /etc/financial-hor
 python3 scripts/fh_finance_active_backend_upgrade.py --sha "$sha" --preflight
 python3 scripts/fh_finance_active_backend_upgrade.py --sha "$sha" --stage
 echo FH38_BACKEND_STAGED_BEFORE_MIGRATION=PASS
+FH38_PREP
 ```
 
 При ошибке preflight/stage не перезапускать службы и не продолжать.
