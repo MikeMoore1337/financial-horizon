@@ -2,10 +2,15 @@
 
 ## Status
 
-This document describes an isolated parser and **proposal-only** workflow.
-It does NOT persist, post, delete, or cancel bank movements. The #33 financial
-accounts/ledger contract is not yet accepted. The new feature must remain
-unreachable from production navigation and must not be marked released.
+The browser CSV/XLSX parser, reconciliation and draft generation are read-only.
+The #38 branch now also contains **unpublished** SQL-atomic bank-import,
+compensating undo, private batch-history and v2 HTTP candidates. These do
+persist real ledger movements if explicitly wired, but are **not enabled by
+default, deployed to production, or connected to the application UI**.
+
+This is a Draft PR, not an accepted release. Neither CI nor a candidate
+module proves guest-mode integration, owner-approved mobile/desktop UI, full
+integration acceptance or production deployment.
 
 Existing domestic XLSX (excel-import.js) and loan schedule CSV (schedule.js)
 are deliberately left unchanged.
@@ -34,42 +39,65 @@ are deliberately left unchanged.
 7. After manual confirmation, draftBankImportBatch produces an immutable
    proposal with deterministic batchKey and sourceKeys.
 7a. summarizeBankImportAudit returns counts and error codes only (no account IDs,
-   notes, bank IDs, amounts, filenames or raw statements); persistence remains
-   the responsibility of an atomic #33/#67 commit/undo receipt.
+   notes, bank IDs, amounts, filenames or raw statements); persistence of
+   confirmed rows is handled by the unpublished PostgreSQL import candidate.
 8. projectAccountBalances checks each affected account with optional
    statement closing balances, without applying any movements.
-9. After successful posting by #33, draftBankImportUndo can propose a
-   fail-closed rollback only when *all* movements still belong to that batch
-   and their essential financial fields are unchanged. An existing payment
-   link also blocks an undo proposal. Actual rollback needs another atomic
-   #33 revision check and audit trail, and is not implemented here.
+9. An authenticated user may build a normalized v2 commit request from a
+   manually reviewed batch. The client uses the current finance account
+   revisions, a strong ETag, a stable mutation UUID and validated server receipt.
+   No original CSV/XLSX bytes or filenames are sent to the finance API.
+10. The unpublished PostgreSQL candidate commits all confirmed operations in
+    one transaction or rejects the entire batch. A source-key conflict,
+    conflicting bank ID, linked loan/obligation payment, unreviewed matching
+    movement, stale revision or foreign account blocks the write.
+11. An unpublished private batch-history endpoint lists committed and
+    cancelled batches. A later explicit undo creates linked append-only
+    compensating ledger transactions atomically. Undo is conservatively denied
+    if *any* later financial revision exists, even an unrelated change.
 
-## Required #33 integration contract (NOT IMPLEMENTED)
+## Implemented bank integration candidate (DISABLED BY DEFAULT)
 
-- Implement ledger and account IDs scoped to the active authenticated user
-  or guest. Never compare or import into another scope.
-- One database transaction: validate accounts/category/permissions, compare
-  revision, re-check sourceKey (unique per scope) and external bank identity
-  (at least account ID + external ID), check selected rows and confirmation
-  digest, post exactly one movement or transfer per operation, record batch
-  and audit, then commit. On any error roll back entirely.
-- An internal transfer is a paired debit/credit with one logical transfer ID
-  and no income/expense effect. Credit/loan settlements must never be posted
-  a second time as independent spending.
-- Cancellation must void the entire batch atomically with revision checks,
-  preserve an audit trail, and refuse if any member was modified or linked.
-  Never delete imported history silently.
-- Store only necessary financial metadata in the user's financial data
-  boundary. Avoid names/file bytes/raw statement lines in application logs.
-- Keep batchKey as batch identifier; sourceKey is a uniqueness key,
-  not an authentication/authorization token. Fingerprints are heuristic.
-- Re-query records at commit time: a preview is stale as soon as another
-  tab/device posts a movement.
-- Add a focused migration, cross-tab/remote idempotency tests, undo and
-  account-balance E2E only AFTER #33 defines its transaction contract.
-- Hide the new import in production until owner-approved UI design, browser
-  review, CI, release approval and verified rollback. Do not enable via
-  feature flags preemptively.
+- Schema: `backend/finance_db/migrations/versions/0007_bank_statements.py`.
+  Separate RLS-protected `bank_import_batches` and immutable
+  `bank_import_rows`; neither replaces legacy migration #69 data.
+- SQL core: `backend/finance_db/bank_import_candidate.py`, scoped by the
+  verified auth principal and `finance_profiles FOR UPDATE`. The candidate
+  uses integer minor units, journal receipts, ETag and current revisions.
+- Private HTTP: `backend/finance_api/bank_import_http_candidate.py` and
+  `backend/finance_db/finance_router.py`: POST `/api/finance/v2/bank-import/commit`,
+  POST `/undo`, GET `/batches`. All bank endpoints are **unmounted** unless
+  the host explicitly passes `enable_bank_import_candidate=True` with finance
+  v2 enabled. No production environment toggle enables it.
+- TypeScript: `src/importers/bank-statements/save.ts`; builds normalized
+  confirmed requests, sends same-origin credentials and checks authoritative
+  server results. The module is not mounted in production navigation.
+- PostgreSQL commit currently accepts up to **1,000 operations per atomic
+  batch** and 2 MB of JSON. The browser parser accepts up to 10,000 rows, so
+  a larger confirmed selection must fail clearly; **never split an import
+  without an explicit product decision**.
+- Reimport with the same committed `batch_key` and identical payload
+  acknowledges zero new movements. Partial overlap must be reconciled before
+  committing; a conflicting source key or external ID cannot be overwritten.
+- This is an owner-only personal-finance candidate, not a general bank API:
+  RUB only, no automatic FX, no bank scraping, no original statement storage.
+
+## Outstanding release gates
+
+- Design originals / UI workflow and explicit owner visual approval for both
+  mobile and desktop. No new bank import UI has been implemented.
+- Wire accepted UI state to the authenticated finance v2 snapshot and
+  reconciled bank history, and implement matching **atomic IndexedDB guest
+  storage/undo** without impacting existing offline PWA or encrypted export.
+- Reconcile the confirmed selection with all existing transactions and
+  already-posted obligation/loan payment facts in both device and server
+  scopes. Ensure proposed matches are resolved manually.
+- Complete real PostgreSQL, Chromium/WebKit, security, concurrency and offline
+  regression tests on the **final** exact HEAD; review migration, permissions,
+  credit/payment invariants and restore drill. Earlier green CI is insufficient.
+- No merge, production migration, server flag activation or Issue closure
+  until all gates are actually passed. Production must preserve existing
+  financial data and have a verified rollback procedure.
 
 ## Limits and threat boundaries
 
@@ -101,9 +129,10 @@ are deliberately left unchanged.
 - Compatibility: run the existing domestic Excel and loan schedule tests.
 - Before merge: Node 24 lint, strict tsc, build, unit, component, audit and
   Chromium/WebKit CI on the precise PR HEAD.
-- **Acceptance pending:** design approval; #33 financial ledger contract;
-  real persisted idempotency, cancellation, mobile/desktop UI and production
-  verification. Until then use a draft PR, no merge/deploy/Issue closure.
+- **Acceptance pending:** owner UI approval, guest IndexedDB atomic
+  commit/undo, released UI integration, full exact-HEAD review and verification
+  on the deployed production SHA. Until then leave this PR Draft and Issue #38
+  open; do not claim that passing isolated PostgreSQL CI is a production release.
 
 Additional parsing rules: a split credit/debit column determines transaction direction and a conflicting explicit kind blocks the row. For XLSX, sourceKey includes a stable sheet identity in addition to file digest and physical row, preventing cross-sheet collisions. Missing trailing optional XLSX cells are treated as blank (but surplus columns and malformed CSV widths remain invalid).
 
