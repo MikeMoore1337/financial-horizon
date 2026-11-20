@@ -283,8 +283,12 @@ def local_app(directory):
             off_flag = '<meta name="fh-finance-reserves" content="disabled">'
             if contents.count(on_flag) + contents.count(off_flag) != 1:
                 raise HTTPException(503)
+            bank_enabled = '<meta name="fh-finance-bank-import" content="enabled">'
+            bank_disabled = '<meta name="fh-finance-bank-import" content="disabled">'
+            if contents.count(bank_enabled) + contents.count(bank_disabled) != 1:
+                raise HTTPException(503)
             if real_finance and (
-                contents.count('<meta name="fh-finance-bank-import" content="disabled">') != 1
+                contents.count(bank_enabled) != 1
                 or contents.count('<meta name="fh-finance-accounts" content="enabled">') != 1
                 or contents.count('<meta name="fh-finance-import" content="enabled">') != 1
             ):
@@ -294,13 +298,12 @@ def local_app(directory):
                 off_flag if active else on_flag,
                 on_flag if active else off_flag,
             )
-            # Test-only proof: signed #38 remains hidden in production until
-            # backend 0007, RLS and an owner-approved bank API release exist.
-            if real_finance:
-                contents = contents.replace(
-                    '<meta name="fh-finance-bank-import" content="disabled">',
-                    '<meta name="fh-finance-bank-import" content="enabled">',
-                )
+            # Localhost-only isolation: existing synthetic auth coverage
+            # deliberately has NO live bank API. Even though the production
+            # static release is ON, signed UI is suppressed in this fixture.
+            # Real PostgreSQL browser tests retain the actual enabled flag.
+            if not real_finance:
+                contents = contents.replace(bank_enabled, bank_disabled)
             return Response(
                 contents, media_type="text/html",
                 headers={"Cache-Control": "no-store"},
