@@ -495,7 +495,10 @@ def mount_finance_routes(
                         raise FinanceCommandError(
                             "invalid_command", "Недопустимые параметры истории", 422
                         )
-                    before = _query_integer(request, "cursor", None, 1, (1 << 53) - 1)
+                    before = (
+                        _query_integer(request, "cursor", None, 1, (1 << 53) - 1)
+                        if "cursor" in request.query_params else None
+                    )
                     limit = _query_integer(request, "limit", 50, 1, 100)
                     return _finance_response(get_bank_import_history(
                         engine, scope=verified, before_revision=before, page_size=limit,
