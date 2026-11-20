@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { safePaymentUrl, validQrData } from '../../finance.js';
 import {
   buildInAppReminders,
@@ -62,6 +62,7 @@ function PaymentMethodAction({
 }) {
   const [showQr, setShowQr] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
+  const qrContentId = useId();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
@@ -129,7 +130,7 @@ function PaymentMethodAction({
         return false;
       }
     });
-    const contentId = 'fh-center-qr-' + id + '-' + method.id;
+    const contentId = 'fh-center-qr-' + qrContentId;
     return (
       <div className="fh-center-qr">
         <button
@@ -149,7 +150,12 @@ function PaymentMethodAction({
           {showQr ? 'Скрыть QR' : 'Показать QR'}
         </button>
         {showQr && (
-          <div id={contentId} className="fh-center-qr-content" role="region" aria-label="Просмотр QR-кода">
+          <div
+            id={contentId}
+            className="fh-center-qr-content"
+            role="region"
+            aria-label="Просмотр QR-кода"
+          >
             <button ref={closeRef} type="button" className="button-text" onClick={closeQr}>
               Закрыть QR
             </button>
@@ -163,7 +169,10 @@ function PaymentMethodAction({
               />
             )}
             {phoneAlternatives.length ? (
-              <div className="fh-center-qr-alternatives" aria-label="Способы оплаты с этого телефона">
+              <div
+                className="fh-center-qr-alternatives"
+                aria-label="Способы оплаты с этого телефона"
+              >
                 <p className="small-hint">Для оплаты с этого телефона:</p>
                 {phoneAlternatives.map((option) => (
                   <div className="fh-center-qr-option" key={option.id}>
@@ -174,7 +183,8 @@ function PaymentMethodAction({
               </div>
             ) : (
               <p className="small-hint">
-                Другой способ оплаты с этого телефона не настроен. Можно открыть QR на другом устройстве.
+                Другой способ оплаты с этого телефона не настроен. Можно открыть QR на другом
+                устройстве.
               </p>
             )}
           </div>
