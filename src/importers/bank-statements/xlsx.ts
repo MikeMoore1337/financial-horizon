@@ -259,6 +259,10 @@ export async function readBankXlsx(
   const relationships = await xmlPart(entries, 'xl/_rels/workbook.xml.rels');
   if (!workbook || !relationships) bad('Отсутствует структура книги XLSX');
   const allSheets = nodes(workbook, 'sheet');
+  const availableSheets = allSheets.filter(s =>
+    s.getAttribute('state') !== 'hidden' && s.getAttribute('state') !== 'veryHidden')
+    .map(s => s.getAttribute('name') || '')
+    .filter(Boolean);
   const sheet = options.sheetName
     ? allSheets.find(s => s.getAttribute('name') === options.sheetName)
     : allSheets.find(s => s.getAttribute('state') !== 'hidden' &&
@@ -304,7 +308,7 @@ export async function readBankXlsx(
   const date1904 = child(workbook, 'workbookPr')?.getAttribute('date1904');
   return {
     headers, rows, warnings, headerRowNumber: header.rowNumber,
-    sheetName: sheet.getAttribute('name') || 'Лист',
+    sheetName: sheet.getAttribute('name') || 'Лист', availableSheets,
     dateSystem: date1904 === '1' || date1904 === 'true' ? '1904' : '1900',
   };
 }

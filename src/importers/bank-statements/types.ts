@@ -33,6 +33,7 @@ export interface BankStatementTable {
   rows: BankTableRow[];
   warnings: ImportWarning[];
   sheetName?: string;
+  availableSheets?: readonly string[];
   dateSystem?: '1900' | '1904';
 }
 
