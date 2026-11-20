@@ -218,14 +218,20 @@ export async function normalizeBankStatement(
     return col === undefined ? undefined : cells[col];
   };
   for (const source of table.rows) {
+    const numericMoneyColumn = (field: 'amount' | 'income' | 'expense'): boolean => {
+      const col = mapping[field];
+      return col !== undefined && table.format === 'xlsx' &&
+        Object.prototype.hasOwnProperty.call(source.rawNumbers || {}, col);
+    };
     const getMoney = (field: 'amount' | 'income' | 'expense'): BankCell | undefined => {
       const col = mapping[field];
       // XLSX numeric money must be read from its original XML decimal scalar,
       // not a parsed IEEE-754 Number; dates still use Excel numeric serials.
-      return col !== undefined && table.format === 'xlsx' &&
-        Object.prototype.hasOwnProperty.call(source.rawNumbers || {}, col)
+      return numericMoneyColumn(field) && col !== undefined
         ? source.rawNumbers?.[col] : get(source.cells, field);
     };
+    const moneyFormat = (field: 'amount' | 'income' | 'expense'): NumberFormat =>
+      numericMoneyColumn(field) ? 'dot-decimal' : options.numberFormat || 'auto';
     const row = source.rowNumber, issues: ImportWarning[] = [];
     const err = (code: string, message: string, field?: MappableField) =>
       issues.push(warn(code, message, 'error', row, field ? mapping[field] : undefined));
@@ -237,12 +243,12 @@ export async function normalizeBankStatement(
     if (!date.iso) err(date.issue || 'INVALID_DATE', 'Дата отсутствует или неоднозначна', 'date');
     let amountCents: number | null = null, isNegative = false;
     if (mapping.amount !== undefined) {
-      const n = parseMoney(getMoney('amount'), options.numberFormat || 'auto');
+      const n = parseMoney(getMoney('amount'), moneyFormat('amount'));
       amountCents = n.cents; isNegative = n.negative;
       if (n.issue) err(n.issue, 'Неверная или неоднозначная сумма', 'amount');
     } else {
-      const credit = parseMoney(getMoney('income'), options.numberFormat || 'auto');
-      const debit = parseMoney(getMoney('expense'), options.numberFormat || 'auto');
+      const credit = parseMoney(getMoney('income'), moneyFormat('income'));
+      const debit = parseMoney(getMoney('expense'), moneyFormat('expense'));
       const inPresent = credit.issue !== 'EMPTY_AMOUNT';
       const outPresent = debit.issue !== 'EMPTY_AMOUNT';
       if (inPresent && credit.issue) err(credit.issue, 'Неверная сумма поступления', 'income');
