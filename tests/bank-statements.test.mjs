@@ -1038,3 +1038,31 @@ test('separate expense/income matching either transfer leg require manual review
     '07.11.2026;-100,00;Unrelated expense;Накопительный;;расход;Питание;OTHER-EXPENSE\n');
   assert.equal(reconcileBankStatement(unrelated.preview,[original]).ready,1);
 });
+
+
+test('linked payment review respects cash direction and never matches an opposite sign', async () => {
+  const incoming = await previewOf(base +
+    '07.11.2026;100,00;Bank incoming;Основной;;доход;Зарплата;PAYMENT-CREDIT\\n');
+  const oldExpense = {
+    id: 'existing-expense', linkedPaymentId: 'loan-payment-fact',
+    accountId: 'checking', date: '2026-11-07',
+    amountCents: 10000, kind: 'expense',
+    description: 'Loan payment with different note',
+  };
+  assert.equal(reconcileBankStatement(incoming.preview, [oldExpense]).ready, 1);
+  assert.deepEqual(reconcileBankStatement(incoming.preview, [oldExpense])
+    .rows[0].existingIds, []);
+
+  const outgoing = await previewOf(base +
+    '07.11.2026;-100,00;Bank outgoing;Основной;;расход;Питание;PAYMENT-DEBIT\\n');
+  const oldIncome = {
+    ...oldExpense, id: 'existing-income', kind: 'income',
+    description: 'Previous unrelated income',
+  };
+  const otherSide = reconcileBankStatement(outgoing.preview, [oldIncome]);
+  assert.equal(otherSide.ready, 1);
+  assert.deepEqual(otherSide.rows[0].existingIds, []);
+  const sameDirection = reconcileBankStatement(outgoing.preview, [oldExpense]);
+  assert.equal(sameDirection.possibleDuplicates, 1);
+  assert.deepEqual(sameDirection.rows[0].existingIds, [oldExpense.id]);
+});

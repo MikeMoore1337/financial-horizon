@@ -92,7 +92,8 @@ export function reconcileBankStatement(
     // matching linked payment facts to manual review, never an exact replay.
     if (movement.linkedPaymentId) {
       bucket(byLinkedPayment,
-        identity(movement.accountId, movement.date, movement.amountCents), movement);
+        identity(movement.accountId, movement.date, movement.amountCents,
+          movement.kind), movement);
     }
     if (movement.kind === 'transfer') {
       bucket(byTransferAccount,
@@ -179,7 +180,7 @@ export function reconcileBankStatement(
       }
       for (const candidate of cashMatches) candidates.add(candidate);
       for (const candidate of byLinkedPayment.get(
-        identity(op.accountId, op.date, op.amountCents)) || []) {
+        identity(op.accountId, op.date, op.amountCents, op.kind)) || []) {
         candidates.add(candidate);
       }
     }
