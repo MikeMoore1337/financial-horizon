@@ -16,6 +16,7 @@ import {createFinanceFormRoots} from './src/react/FinanceForms.tsx';
 import {createCategoryDialogController} from './src/react/CategoryDialog.tsx';
 import {createConfirmationDialogController} from './src/react/ConfirmationDialog.tsx';
 import {sameFinancialJSON} from './src/security/protected-staging.ts';
+import {addGuestBankAccount,commitGuestBankBatch,undoGuestBankBatch} from './src/importers/bank-statements/guest-ledger.js';
 import {prepareLivePersonalImportCandidate,executeConfirmedPersonalImportCandidate} from './src/cloud/personal-import-transport-candidate.mjs';
 import {verifySavedFinancialBackupReadOnly} from './src/cloud/read-only-backup-verification.mjs';
 
@@ -25,7 +26,7 @@ const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<
 const formatDate=date=>new Intl.DateTimeFormat('ru-RU',{day:'numeric',month:'short',year:'numeric'}).format(new Date(`${date}T12:00:00`));
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
 const uuid=()=>crypto.randomUUID();
-const titles={overview:'Обзор',calendar:'Календарь',obligations:'Обязательства',loans:'Кредиты',settings:'Настройки','accounts-connected':'Счета и кошельки'};
+const titles={overview:'Обзор',calendar:'Календарь',obligations:'Обязательства',loans:'Кредиты',settings:'Настройки','accounts-connected':'Счета и кошельки','bank-import':'Импорт выписки'};
 // Only an explicit reviewed release can present the optional server-backed accounts view.
 // FastAPI authentication and profile scoping remain the sole authorization boundary.
 const financeAccountsEnabled=document.querySelector('meta[name="fh-finance-accounts"]')?.content==='enabled';
@@ -98,7 +99,7 @@ function stampFormRevision(form){form.dataset.stateRevision=String(state.revisio
 function revisionForForm(form){const revision=Number(form.dataset.stateRevision);if(!Number.isSafeInteger(revision)||revision<0)throw Error('Не удалось определить версию записи. Откройте форму повторно.');return revision;}
 function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#172336':'#ffffff';if(!navRoots){const toggle=$('#theme-toggle');if(toggle){toggle.innerHTML=svg(mode==='dark'?'sun':'moon');toggle.setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}}}
 function syncStorageContext(){
- const serverAccounts=ui.view==='accounts-connected'&&financeAccountsEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId;
+ const serverAccounts=(ui.view==='accounts-connected'||ui.view==='bank-import')&&financeAccountsEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId;
  const labels=[
   ['storage-context-chip',serverAccounts?'На сервере':'Локально'],
   ['storage-context-title',serverAccounts?'Счета в аккаунте':'Хранится на устройстве'],
@@ -125,10 +126,34 @@ function render(){
  if(!state)return;
  syncStorageContext();
  const main=$('#main');
- if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'||ui.view==='settings'||ui.view==='accounts-connected'){
+ if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'||ui.view==='settings'||ui.view==='accounts-connected'||ui.view==='bank-import'){
   if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main,getAuthAccess);}
   if(ui.view==='accounts-connected'){
    screenRoot.render({view:'accounts-connected',props:{verifiedActorUserId:emailSession.userId||null,onBack:()=>navigation('overview')}});
+  }else if(ui.view==='bank-import'){
+   screenRoot.render({view:'bank-import',props:{
+    mode:guestMode?'guest':'account',
+    verifiedActorUserId:guestMode?null:(emailSession.userId===activeUserId?emailSession.userId:null),
+    guestLedger:guestMode?state.bankStatements||null:null,
+    guestRevision:state.revision,
+    onBack:()=>navigation(guestMode?'settings':'accounts-connected'),
+    onOpenAccounts:()=>navigation('accounts-connected'),
+    onGuestAddAccount:async(name,openingMinor,revision)=>{
+     if(!guestMode)throw Error('Локальная запись разрешена только гостю');
+     await mutate(s=>addGuestBankAccount(s,{id:uuid(),name,openingMinor},revision),
+      'Банковский счёт создан локально',revision);
+    },
+    onGuestCommit:async(plan,digest,revision)=>{
+     if(!guestMode)throw Error('Неверный финансовый профиль');
+     await mutate(s=>commitGuestBankBatch(s,plan,digest,revision),
+      'Банковская партия сохранена локально',revision);
+    },
+    onGuestUndo:async(key,revision)=>{
+     if(!guestMode)throw Error('Неверный финансовый профиль');
+     await mutate(s=>undoGuestBankBatch(s,key,revision),
+      'Партия отменена локально',revision);
+    },
+   }});
   }else if(ui.view==='calendar'){
    const events=monthEvents(),totals=monthTotals(events);
    screenRoot.render({view:'calendar',props:{events,month:ui.month,selectedDate:ui.selectedDate,currentDate:today(),monthTitle:monthLabel(ui.month),netPlanCents:totals.netPlanCents,netFactCents:totals.netFactCents,formatDate,rubles,financeEnabled:financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId,verifiedActorUserId:emailSession.userId||null}});
@@ -217,7 +242,7 @@ function syncAccountControls(){
  if(!state)return;
  const signedIn=Boolean(emailSession.userId);
  if(!navRoots)navRoots=createAppShellRoots($('.sidebar-nav'),$('.bottom-nav'),$('.toolbar'));
- navRoots.render(ui.view==='accounts-connected'?'settings':ui.view,{
+ navRoots.render(ui.view==='accounts-connected'||ui.view==='bank-import'?'settings':ui.view,{
   title:titles[ui.view],theme:document.body.dataset.theme==='dark'?'dark':'light',
   signedIn,busy:Boolean(emailSession.busy),
   serverAccounts:lastStorageContext===true,
