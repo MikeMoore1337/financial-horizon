@@ -172,3 +172,41 @@ test('invalid new identity fails closed instead of retaining the previous accoun
   assert.equal(session.selectedScope, null);
   await assert.rejects(() => session.encrypt(FINANCE, CONTEXT), /заблокирован/);
 });
+
+test('lifecycle fence increases on every lock, reselect and logout', async () => {
+  const {keyset} = await make(USER_A);
+  const session = new LocalBudgetSession();
+  const before = session.lifecycleVersion;
+  session.selectScope(USER_A);
+  assert.ok(session.lifecycleVersion > before);
+  const afterSelect = session.lifecycleVersion;
+  await session.unlock(keyset, {passphrase: PASSWORD});
+  assert.ok(session.lifecycleVersion > afterSelect);
+  const afterUnlock = session.lifecycleVersion;
+  session.lock();
+  assert.ok(session.lifecycleVersion > afterUnlock);
+  const afterLock = session.lifecycleVersion;
+  session.logout();
+  assert.ok(session.lifecycleVersion > afterLock);
+});
+
+
+test('lifecycle abort signal fires synchronously and re-arms after lock/account switch', async () => {
+  const session = new LocalBudgetSession();
+  session.selectScope(USER_A);
+  const first = session.lifecycleSignal;
+  let calls = 0;
+  first.addEventListener('abort', () => { calls++; });
+  session.lock();
+  assert.equal(calls, 1);
+  assert.equal(first.aborted, true);
+  assert.equal(session.lifecycleSignal.aborted, false);
+  const second = session.lifecycleSignal;
+  session.selectScope(USER_B);
+  assert.equal(second.aborted, true);
+  assert.equal(session.lifecycleSignal.aborted, false);
+  const third = session.lifecycleSignal;
+  session.logout();
+  assert.equal(third.aborted, true);
+  assert.equal(session.state, 'unselected');
+});

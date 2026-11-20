@@ -23,6 +23,7 @@ export class LocalBudgetSession {
   #scope: LocalScope | null = null;
   #vault: LocalVault | null = null;
   #generation = 0;
+  #lifecycleAbort = new AbortController();
 
   get state(): LocalBudgetLockState {
     if (this.#scope === null) return 'unselected';
@@ -30,6 +31,10 @@ export class LocalBudgetSession {
   }
 
   get selectedScope(): LocalScope | null { return this.#scope; }
+  /** Public fencing counter, not an auth credential. It changes on every lock/unlock. */
+  get lifecycleVersion(): number { return this.#generation; }
+  /** Signal of the CURRENT unlocked lifecycle, aborted synchronously on lock. */
+  get lifecycleSignal(): AbortSignal { return this.#lifecycleAbort.signal; }
 
   /** Must be called with a verified session user ID or an explicit guest scope. */
   selectScope(scope: LocalScope): void {
@@ -48,6 +53,10 @@ export class LocalBudgetSession {
   /** Drop the active key and invalidate all in-flight crypto operations. */
   lock(): void {
     this.#generation++;
+    // Notify cooperating native IDB transactions BEFORE any key/session can
+    // remain active after logout or a cross-account switch.
+    this.#lifecycleAbort.abort();
+    this.#lifecycleAbort = new AbortController();
     this.#vault?.lock();
     this.#vault = null;
   }

@@ -7,7 +7,7 @@ import { observe, visitGuest, scopedState } from './helpers.mjs';
 // This does not alter the production build, application, Service Worker or UI.
 test.use({ serviceWorkers: 'block' });
 
-const SOURCES = new Set(['index', 'engine', 'math', 'reconcile', 'types']);
+const SOURCES = new Set(['index', 'engine', 'math', 'reconcile', 'types', 'legacy-preview', 'read-only-comparison']);
 
 test('loan domain executes in Chromium and WebKit with exact cents and no IndexedDB mutation', async ({ page, context }) => {
   const watcher = await observe(context, page);
@@ -33,7 +33,7 @@ test('loan domain executes in Chromium and WebKit with exact cents and no Indexe
   await visitGuest(page);
   const before = await scopedState(page, 'state');
   const result = await page.evaluate(async () => {
-    const { calculateLoan, reconcileLoanSchedule } = await import('/fh-loan-qa/index.js');
+    const { calculateLoan, reconcileLoanSchedule, prepareLegacyLoanPreview, prepareReadOnlyLoanComparison } = await import('/fh-loan-qa/index.js');
     const terms = {
       principalCents: 1_000_000, startDate: '2026-01-01',
       firstDueDate: '2026-02-01', termMonths: 2,
@@ -57,6 +57,31 @@ test('loan domain executes in Chromium and WebKit with exact cents and no Indexe
       annualRateMicroPercent: 9_500_000, dayCount: 'ACT/ACT-ISDA',
     }, [], { mode: 'plan' });
     const benchmarkMs = performance.now() - started;
+    const legacy = {
+      openingCents: 90_000, paymentCents: 30_000, termMonths: 3,
+      dueDay: 31, asOfDate: '2026-02-01',
+    };
+    const unconfirmed = prepareLegacyLoanPreview(legacy);
+    const approved = prepareLegacyLoanPreview(legacy, {
+      agreementConfirmed: true, openingBalanceDateConfirmed: true,
+      firstDueDate: '2026-02-28', dueDayAnchor: 31,
+      annualRateMicroPercent: 0, dayCount: 'ACT/365F',
+      rounding: 'HALF_UP', scheduleType: 'annuity',
+      installmentBasis: 'fixed-contractual',
+    });
+    const viewModel = prepareReadOnlyLoanComparison({
+      openingCents: 1_000_000, paymentCents: 507_410, termMonths: 2,
+      dueDay: 31, asOfDate: '2026-01-01',
+    }, {
+      agreementConfirmed: true, openingBalanceDateConfirmed: true,
+      firstDueDate: '2026-02-01', dueDayAnchor: 1,
+      annualRateMicroPercent: 12_000_000, dayCount: 'ACT/365F',
+      rounding: 'HALF_UP', scheduleType: 'annuity',
+      installmentBasis: 'fixed-contractual',
+    }, expected);
+    const anchoredDates = approved.terms
+      ? calculateLoan(approved.terms, [], { mode: 'plan' }).rows.map(row => row.date)
+      : [];
     const amended = calculateLoan({ ...terms, principalCents: 100_000,
       annualRateMicroPercent: 0, termMonths: 4 }, [{
       id: 'amend-march', type: 'payment-change',
@@ -66,6 +91,14 @@ test('loan domain executes in Chromium and WebKit with exact cents and no Indexe
       amendedPlannedCents: amended.rows.map(row => row.plannedPaymentCents),
       amendedPaidCents: amended.rows.map(row => row.amountCents),
       dates: planned.rows.map(row => row.date),
+      previewStatus: viewModel.status,
+      previewBankParity: viewModel.bankParityVerified,
+      unconfirmed: unconfirmed.status,
+      unconfirmedTerms: unconfirmed.terms,
+      approvedStatus: approved.status,
+      approvedStoredDataChanged: approved.storedDataChanged,
+      approvedBankParity: approved.bankParityVerified,
+      anchoredDates,
       firstInterest: planned.rows[0].interestCents,
       secondInterest: planned.rows[1].interestCents,
       match: compare.exactMatch, complete: compare.comparisonComplete,
@@ -75,6 +108,14 @@ test('loan domain executes in Chromium and WebKit with exact cents and no Indexe
     };
   });
   expect(result.dates).toEqual(['2026-02-01', '2026-03-01']);
+  expect(result.unconfirmed).toBe('needs-confirmation');
+  expect(result.previewStatus).toBe('numerical-match');
+  expect(result.previewBankParity).toBe(false);
+  expect(result.unconfirmedTerms).toBeNull();
+  expect(result.approvedStatus).toBe('ready');
+  expect(result.approvedStoredDataChanged).toBe(false);
+  expect(result.approvedBankParity).toBe(false);
+  expect(result.anchoredDates).toEqual(['2026-02-28', '2026-03-31', '2026-04-30']);
   expect(result.firstInterest).toBe(10_192);
   expect(result.secondInterest).toBe(4_628);
   expect(result.match).toBe(true);

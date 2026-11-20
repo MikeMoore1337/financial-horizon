@@ -14,6 +14,11 @@ function validate(terms: LoanTerms, events: readonly LoanEvent[], options: LoanR
   assertRate(terms.annualRateMicroPercent);
   parseDate(terms.startDate);
   parseDate(terms.firstDueDate);
+  if (terms.dueDayAnchor !== undefined &&
+      (!Number.isInteger(terms.dueDayAnchor) ||
+        terms.dueDayAnchor < 1 || terms.dueDayAnchor > 31)) {
+    throw new RangeError('dueDayAnchor must be a calendar day 1-31');
+  }
   if (terms.firstDueDate <= terms.startDate || calendarDays(terms.startDate, terms.firstDueDate) > 366) {
     throw new RangeError('firstDueDate must be after startDate and no more than 366 days later');
   }
@@ -100,7 +105,10 @@ function validate(terms: LoanTerms, events: readonly LoanEvent[], options: LoanR
 function dueDatesFor(terms: LoanTerms, changes: readonly DueDateChangeEvent[]): string[] {
   const sorted = [...changes].sort((a, b) => a.date.localeCompare(b.date));
   const result: string[] = [];
-  let day = Number(terms.firstDueDate.slice(-2));
+  // A confirmed contractual day (e.g. 31) can differ from a clamped
+  // first installment (e.g. February 28). Existing callers retain the
+  // original firstDueDate-based behavior unless an anchor is supplied.
+  let day = terms.dueDayAnchor ?? Number(terms.firstDueDate.slice(-2));
   let changed = 0;
   const count = terms.termMonths + (terms.maxExtensionMonths ?? Math.min(240, 1200 - terms.termMonths));
   for (let i = 0; i < count; i++) {

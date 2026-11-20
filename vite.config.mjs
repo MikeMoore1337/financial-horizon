@@ -10,6 +10,8 @@ const OUTPUT = resolve(ROOT, 'dist');
 const LEGACY_FILES = [
   'app.js',
   'account.js',
+  'account-oauth.js',
+  'auth-ui.js',
   'account.css',
   'styles.css',
   'auth-session.js',

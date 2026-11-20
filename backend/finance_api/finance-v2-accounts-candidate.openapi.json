@@ -1,0 +1,1198 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Financial Horizon - Accounts and linked payment v2 candidate (NOT LIVE)",
+    "version": "2.0.0-candidate",
+    "description": "Unapproved feature-off #33/#67 proposal: account CRUD, actual cash movements, confirmed linked obligations/loans, one-step fact void + append-only cash reversal. No deployment. Source-owned server-generated payment fact/transaction UUIDs from owner-scoped mutation keys. #6 draft reserve-plan CRUD and non-ledger allocation are additive; payment/void and owner UI remain NOT_READY. Reserved settlement payments optionally use one owner-scoped reserve; the same transaction releases earmarked funds, and the void reverses cash and restores that reservation atomically."
+  },
+  "x-go-live": "NO_GO",
+  "x-account-v2-opt-in-default": false,
+  "x-approved": false,
+  "x-related-bootstrap": "/api/auth/email/finance/session",
+  "x-authoritative-read": "/api/finance/v1/state",
+  "x-supported-currency": "RUB",
+  "paths": {
+    "/api/finance/v2/commands": {
+      "post": {
+        "summary": "Account CRUD, actual cash, verified linked payment record or atomic fact void and cash compensation (unapproved candidate)",
+        "operationId": "accountV2CandidateCommands",
+        "x-feature-off": true,
+        "x-http-body-max-bytes": 32768,
+        "x-reject-duplicate-json-keys": true,
+        "x-verified-session-required": true,
+        "x-no-client-identity": true,
+        "security": [
+          {
+            "financeV2Cookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 256,
+              "pattern": "^\"[^\"\\r\\n]{1,254}\"$"
+            },
+            "description": "Strong server-issued ETag from authoritative /api/finance/v1/state"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            },
+            "description": "Must exactly match the body client_mutation_id; preserve both on network retries"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountV2Candidate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Idempotent replay of already committed operation; no new debit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandReceipt"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Newly committed single PostgreSQL transaction and durable receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommandReceipt"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request rejected without a new financial posting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "financeV2Cookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "fh_finance_session",
+        "description": "HttpOnly, Secure outside tests, SameSite=Strict, Path=/api/finance/v2. Issued only by explicit opt-in test-host bootstrap; SQLite FH session revocation is authoritative.",
+        "x-cookie-path": "/api/finance/v2"
+      }
+    },
+    "schemas": {
+      "AccountCreateV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "currency",
+          "opening_minor"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "\\S"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bank",
+              "card",
+              "cash",
+              "savings",
+              "other"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "const": "RUB"
+          },
+          "opening_minor": {
+            "type": "integer",
+            "minimum": -1000000000000,
+            "maximum": 1000000000000
+          }
+        }
+      },
+      "AccountUpdateV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "account_id",
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "\\S"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bank",
+              "card",
+              "cash",
+              "savings",
+              "other"
+            ]
+          }
+        }
+      },
+      "AccountArchiveV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "account_id"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          }
+        }
+      },
+      "AccountUnarchiveV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "account_id"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          }
+        }
+      },
+      "TransactionRecordV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "account_id",
+          "kind",
+          "signed_minor",
+          "occurred_on"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "account_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "income",
+              "expense",
+              "adjustment"
+            ]
+          },
+          "signed_minor": {
+            "type": "integer",
+            "minimum": -1000000000000,
+            "maximum": 1000000000000
+          },
+          "occurred_on": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 500
+          }
+        }
+      },
+      "AccountV2Candidate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "client_mutation_id",
+          "base_revision",
+          "action",
+          "expected_entity_revisions",
+          "payload"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 2
+          },
+          "client_mutation_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "base_revision": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "account.create",
+              "account.update",
+              "account.archive",
+              "account.unarchive",
+              "transaction.record",
+              "settlement.payment.record",
+              "loan.payment.record",
+              "settlement.payment.void",
+              "loan.payment.void",
+              "reserve.create",
+              "reserve.update",
+              "reserve.archive",
+              "reserve.allocate",
+              "reserve.skip",
+              "reserve.cycle.close",
+              "reserve.event.void",
+              "reserve.cycle.void"
+            ]
+          },
+          "expected_entity_revisions": {
+            "type": "object",
+            "maxProperties": 100,
+            "patternProperties": {
+              "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            },
+            "additionalProperties": false,
+            "description": "Exactly all required entity revisions. Create: empty. Account change/transaction: account ID. Payment record: funding account and obligation/loan. Payment void: original transaction, fact, funding account. Checked by strict server validator. Reserve create: account plus obligation; update/archive: reserve; allocation: reserve plus account."
+          },
+          "payload": {
+            "type": "object"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "account.create"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/AccountCreateV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "account.update"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/AccountUpdateV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "account.archive"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/AccountArchiveV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "account.unarchive"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/AccountUnarchiveV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "transaction.record"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/TransactionRecordV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "settlement.payment.record"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/SettlementPaymentRecordV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "loan.payment.record"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/LoanPaymentRecordV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "settlement.payment.void"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/PaymentVoidV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "loan.payment.void"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/PaymentVoidV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "reserve.create"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/ReserveCreateV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "reserve.update"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/ReserveUpdateV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "reserve.archive"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/ReserveArchiveV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "reserve.allocate"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/ReserveAllocationV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "reserve.skip"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/ReserveSkipV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "reserve.cycle.close"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/ReserveCycleCloseV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "reserve.event.void"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/ReserveEventVoidV2"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "reserve.cycle.void"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "payload": {
+                  "$ref": "#/components/schemas/ReserveCycleVoidV2"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "CommandReceipt": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "schema_version",
+          "client_mutation_id",
+          "revision",
+          "replayed",
+          "changes"
+        ],
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "const": 2
+          },
+          "client_mutation_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "FinanceError": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "unauthenticated",
+              "forbidden",
+              "invalid_command",
+              "idempotency_key_reuse",
+              "semantic_conflict",
+              "stale_revision",
+              "precondition_required",
+              "rate_limited",
+              "service_unavailable"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "server_revision": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "SettlementPaymentRecordV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "obligation_id",
+          "account_id",
+          "amount_minor",
+          "paid_on",
+          "occurrence_on"
+        ],
+        "properties": {
+          "obligation_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "account_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "amount_minor": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000000
+          },
+          "paid_on": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "occurrence_on": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "reserve_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "reserved_used_minor": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Exact amount removed from the selected reserve in the same SQL COMMIT as the settlement and bank debit"
+          }
+        }
+      },
+      "LoanPaymentRecordV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "loan_id",
+          "account_id",
+          "amount_minor",
+          "paid_on",
+          "strategy"
+        ],
+        "properties": {
+          "loan_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "account_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "amount_minor": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000000
+          },
+          "paid_on": {
+            "type": "string",
+            "format": "date",
+            "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+          },
+          "strategy": {
+            "type": "string",
+            "enum": [
+              "term",
+              "amount"
+            ]
+          }
+        }
+      },
+      "PaymentVoidV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "transaction_id",
+          "fact_id",
+          "account_id",
+          "reason"
+        ],
+        "properties": {
+          "transaction_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "fact_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "account_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "\\S"
+          },
+          "reserve_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        }
+      },
+      "ReserveCreateV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "target_minor",
+          "first_due_on",
+          "period_months",
+          "due_day",
+          "contribution_mode",
+          "id",
+          "obligation_id",
+          "account_id",
+          "opened_on",
+          "opening_reserved_minor"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "\\S"
+          },
+          "target_minor": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000000
+          },
+          "first_due_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "period_months": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 60
+          },
+          "due_day": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 31
+          },
+          "contribution_mode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "fixed"
+            ]
+          },
+          "fixed_monthly_minor": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000000000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "obligation_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "account_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "opened_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "opening_reserved_minor": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000000000
+          }
+        }
+      },
+      "ReserveUpdateV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "target_minor",
+          "first_due_on",
+          "period_months",
+          "due_day",
+          "contribution_mode",
+          "reserve_id"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160,
+            "pattern": "\\S"
+          },
+          "target_minor": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000000000000
+          },
+          "first_due_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "period_months": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 60
+          },
+          "due_day": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 31
+          },
+          "contribution_mode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "fixed"
+            ]
+          },
+          "fixed_monthly_minor": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000000000000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "reserve_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "occurred_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        }
+      },
+      "ReserveArchiveV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reserve_id"
+        ],
+        "properties": {
+          "reserve_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          }
+        }
+      },
+      "ReserveAllocationV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reserve_id",
+          "account_id",
+          "delta_minor"
+        ],
+        "properties": {
+          "reserve_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "account_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "delta_minor": {
+            "type": "integer",
+            "minimum": -1000000000000,
+            "maximum": 1000000000000,
+            "not": {
+              "const": 0
+            }
+          },
+          "occurred_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        }
+      },
+      "ReserveSkipV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reserve_id",
+          "slot_on",
+          "occurred_on"
+        ],
+        "properties": {
+          "reserve_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "slot_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "occurred_on": {
+            "type": "string",
+            "format": "date"
+          }
+        }
+      },
+      "ReserveCycleCloseV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reserve_id",
+          "occurred_on"
+        ],
+        "properties": {
+          "reserve_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "occurred_on": {
+            "type": "string",
+            "format": "date"
+          }
+        }
+      },
+      "ReserveEventVoidV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reserve_id",
+          "account_id",
+          "target_event_id",
+          "occurred_on",
+          "reason"
+        ],
+        "properties": {
+          "reserve_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "account_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "target_event_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "occurred_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "\\S"
+          }
+        }
+      },
+      "ReserveCycleVoidV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reserve_id",
+          "occurred_on",
+          "reason"
+        ],
+        "properties": {
+          "reserve_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+          },
+          "occurred_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "\\S"
+          }
+        }
+      }
+    }
+  },
+  "x-payment-id-allocation": "Both fact_id and transaction_id are server-generated deterministically from authenticated profile, action and client_mutation_id. The client may never provide either ID for payment.record.",
+  "x-atomic-linked-void": "Payment void updates only fact.voided_at/entity_revision and appends the inverse posting in one PostgreSQL COMMIT; deferred SQL triggers reject either half and stable idempotency receipt prevents double refund."
+}

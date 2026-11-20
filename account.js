@@ -1,7 +1,7 @@
 /* Account registration with no external calls in guest or disabled mode. */
 const $=selector=>document.querySelector(selector);
 const MODES={
- login:["Войти по email","Войти"],
+ login:["Войти по email","Войти по email"],
  register:["Создать аккаунт","Отправить подтверждение"],
  resend:["Повторная отправка письма","Отправить письмо"],
  reset:["Восстановление доступа","Отправить ссылку"],
@@ -165,7 +165,9 @@ function activate(next,{preserveFeedback=false}={}){
  $("#password").value="";
  document.querySelectorAll("[data-mode]").forEach(el=>el.setAttribute("aria-current",el.dataset.mode===next?"page":"false"));
  // The resend endpoint is for email verification, never password recovery.
- $('.auth-actions [data-mode="resend"]').hidden=next==="reset"||next==="reset-confirm";
+ $('.auth-actions [data-mode="resend"]').hidden=!["register","resend","verify"].includes(next);
+ $('.auth-actions [data-mode="reset"]').hidden=next!=="login";
+ $("#oauth-login").hidden=next!=="login"||$("#oauth-login").dataset.ready!=="true";
  void challengeFor(next);
 }
 
@@ -181,21 +183,22 @@ async function request(path,body){
 }
 
 async function refreshSession(){
- if(!config.enabled)return false;
+ // A valid OAuth session must be readable even if email registration is canary-only.
  try{
   const response=await fetch('./api/auth/email/me',{cache:'no-store',credentials:'same-origin'});
   if(!response.ok)return false;
   const result=await response.json();
-  const authenticated=result.authenticated===true&&typeof result.user?.email==='string';
+  const authenticated=result.authenticated===true&&typeof result.user?.id==='string'&&/^[a-f0-9]{32}$/.test(result.user.id)&&(result.user.email===null||typeof result.user.email==='string');
   activeAccountId=authenticated&&typeof result.user?.id==='string'&&/^[a-f0-9]{32}$/.test(result.user.id)
    ?result.user.id:null;
   if(authenticated){
    try{sessionStorage.removeItem('fh-guest-session-v2');}catch{}
   }
   $('#session-panel').hidden=!authenticated;
-  $('#change-email-panel').hidden=!authenticated||config.capabilities?.email_change!==true;
+  $('#change-email-panel').hidden=!authenticated||typeof result.user?.email!=='string'||config.capabilities?.email_change!==true;
   if(authenticated&&config.capabilities?.email_change===true)void renderChangeEmailChallenge();
   $('#auth-form').hidden=authenticated;
+  $("#oauth-login").hidden=authenticated||mode!=="login"||$("#oauth-login").dataset.ready!=="true";
   $('.auth-modes').hidden=authenticated;
   $('.auth-actions').hidden=authenticated;
   $('.auth-actions [data-mode="resend"]').hidden=authenticated||mode==="reset"||mode==="reset-confirm";
@@ -204,7 +207,7 @@ async function refreshSession(){
     ?"Вы вошли в Финансовый горизонт."
     :"Для доступа к аккаунту нужен подтверждённый email.";
   $('#session-email').textContent=authenticated
-    ?'Вы вошли как '+result.user.email+'. Синхронизация финансовых данных ещё не включена.'
+    ?(result.user.email?'Вы вошли как '+result.user.email+'. ':'Вы вошли через внешний сервис. ')+'Синхронизация финансовых данных ещё не включена.'
     :'';
   return authenticated;
  }catch{
@@ -249,6 +252,7 @@ async function logout(){
   $("#change-email-password").value="";
   await refreshSession();
   activate('login');
+  window.dispatchEvent?.(new Event('fh:auth-session-change'));
   feedback('Сеанс завершён. Локальная бухгалтерия сохранена.','success');
  }catch(error){
   feedback(error instanceof Error?error.message:'Не удалось выйти','error');
@@ -337,27 +341,51 @@ async function init(){
  });
  document.querySelectorAll("[data-mode]").forEach(button=>button.addEventListener("click",()=>activate(button.dataset.mode)));
  activate(mode);
+ const oauthOutcome=new URLSearchParams(location.search);
+ const oauthStatus=oauthOutcome.get('oauth');
+ if(['failed','denied','linked'].includes(oauthStatus)){
+  oauthOutcome.delete('oauth');
+  const tail=oauthOutcome.toString();
+  history.replaceState(null,'',location.pathname+(tail?'?'+tail:''));
+  if(oauthStatus==='linked'){
+   feedback('Новый способ входа привязан к вашему аккаунту.','success');
+  }else if(oauthStatus==='denied'){
+   feedback('Вход отменён. Вы можете выбрать другой способ.','error');
+  }else{
+   feedback('Не удалось войти через выбранный сервис. Повторите попытку.','error');
+  }
+ }
+ let emailConfigAvailable=false;
  try{
   const res=await fetch("./api/auth/email/config",{cache:"no-store",credentials:"same-origin"});
   if(!res.ok)throw Error("disabled");
   config=await res.json();
   if(!config.enabled||!config.sitekey)throw Error("disabled");
-  $("#auth-logout-others").hidden=config.capabilities?.revoke_other_sessions!==true;
-  updateButton();await challengeFor(mode);
-  const authenticated=await refreshSession();
-  if(changeToken){
-   if(authenticated){
-    try{await confirmEmailChange();}catch(error){
-     feedback(error instanceof Error?error.message:"Не удалось подтвердить новый email","error");
-    }
-   }else{
-    feedback("Для подтверждения нового адреса сначала войдите в существующий аккаунт по старому email. После входа подтверждение продолжится автоматически.","info");
-   }
-  }
- }catch{
-  config={enabled:false,sitekey:""};
-  feedback("Регистрация пока не включена. Можно пользоваться бухгалтерией без аккаунта.","info");
+  emailConfigAvailable=true;
   updateButton();
+  await challengeFor(mode);
+ }catch{
+  // Public email registration can remain a private canary while OAuth is enabled.
+  config={enabled:false,sitekey:""};
+  updateButton();
+ }
+ // This shared session endpoint must be publicly routed separately from registration.
+ const authenticated=await refreshSession();
+ // No account identity must depend on the Turnstile/registration configuration.
+ $("#auth-logout-others").hidden=!authenticated||(
+  emailConfigAvailable&&config.capabilities?.revoke_other_sessions!==true
+ );
+ if(!emailConfigAvailable&&!authenticated&&!['failed','denied','linked'].includes(oauthStatus)){
+  feedback("Регистрация пока не включена. Можно пользоваться бухгалтерией без аккаунта.","info");
+ }
+ if(changeToken){
+  if(authenticated&&emailConfigAvailable){
+   try{await confirmEmailChange();}catch(error){
+    feedback(error instanceof Error?error.message:"Не удалось подтвердить новый email","error");
+   }
+  }else{
+   feedback("Для подтверждения нового адреса сначала войдите в существующий аккаунт по старому email. После входа подтверждение продолжится автоматически.","info");
+  }
  }
 }
 void init();

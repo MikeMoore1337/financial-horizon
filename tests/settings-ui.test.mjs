@@ -17,10 +17,15 @@ test('React Settings avoids duplicated account/theme controls and retains header
  assert.doesNotMatch(settings,/dangerouslySetInnerHTML|innerHTML/);
 });
 
-test('approved seven-card Settings layout remains with responsive CSS',()=>{
+test('seven default Settings cards remain; optional finance card requires reviewed opt-in',()=>{
  for(const id of ['security','backup','import','categories','archive','history','install'])
   assert.ok(settings.includes('<SettingsCard id="'+id+'"'),id);
- assert.equal((settings.match(/<SettingsCard id="/g)||[]).length,7);
+ const cards=[...settings.matchAll(/<SettingsCard id="([^"]+)"/g)].map(x=>x[1]);
+ assert.equal(cards.filter(id=>id!=='finance-accounts').length,7);
+ assert.equal(cards.filter(id=>id==='finance-accounts').length,1);
+ assert.match(settings,/\{showFinanceAccounts && \(/);
+ assert.match(html,/<meta name="fh-finance-accounts" content="enabled">/);
+ assert.match(html,/<meta name="fh-finance-import" content="enabled">/);
  assert.ok(settings.includes('settings-install'));
  assert.ok(css.includes('.settings-grid{display:grid;'));
  assert.ok(css.includes('grid-template-columns:repeat(2,minmax(0,1fr))'));
@@ -66,4 +71,18 @@ test('approved primary button palettes in light/dark remain unchanged',()=>{
  assert.match(css,/\.button-primary\{background:var\(--accent\);color:var\(--onaccent\);border:1px solid transparent\}/);
  assert.match(css,/body\[data-theme=dark\][^\n]*--accent:#6c9dff;[^\n]*--onaccent:#081625/);
  assert.match(css,/body\{margin:0;[^\n]*--accent:#3078fa;[^\n]*--onaccent:#fff/);
+});
+
+
+test('storage context distinguishes server accounts from the local browser budget',()=>{
+ for(const id of ['storage-context-chip','storage-context-title','storage-context-detail','storage-context-footnote']){
+  assert.ok(html.includes('id="'+id+'"'),id);
+ }
+ assert.match(app,/function syncStorageContext\(\)/);
+ assert.match(app,/serverAccounts\?'На сервере':'Локально'/);
+ assert.match(app,/serverAccounts\?'Счета в аккаунте':'Хранится на устройстве'/);
+ assert.match(app,/serverAccounts\?'Локальный бюджет отдельно':'Без банковских подключений'/);
+ assert.match(app,/globalAdd\.hidden=serverAccounts/);
+ assert.match(css,/#top-add\[hidden\]\{display:none\}/);
+ assert.match(html,/<meta name="fh-finance-import" content="enabled">/);
 });

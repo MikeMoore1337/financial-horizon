@@ -13,6 +13,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from urllib.parse import urlsplit
 from pydantic import BaseModel, Field
 
+from . import SESSION_COOKIE
 from .config import Settings
 from .security import normalize_email, valid_password, limit_key
 from .store import AuthStore, Throttled, AuthFailure
@@ -20,7 +21,6 @@ from .turnstile import validate_token
 from .mailer import Mailer
 
 logger=logging.getLogger("fh.email_auth")
-SESSION_COOKIE="fh_email_session"
 GENERIC_MESSAGE="Если адрес допускает действие, письмо с инструкцией будет отправлено."
 
 
@@ -57,7 +57,14 @@ def create_app(
     config: Settings|None=None,
     store: AuthStore|None=None,
     captcha: Callable[[str,str,str,str],bool]|None=None,
-    mailer: Mailer|None=None
+    mailer: Mailer|None=None,
+    oauth_config=None,
+    oauth_store=None,
+    oauth_exchanger=None,
+    finance_engine=None,
+    finance_profile_namespace=None,
+    enable_account_v2_candidate: bool=False,
+    enable_import_candidate: bool=False,
 ) -> FastAPI:
     config=config or Settings.from_env()
     app=FastAPI(title="Financial Horizon Email Auth", docs_url=None, redoc_url=None,
@@ -77,7 +84,10 @@ def create_app(
             if len(await request.body())>4096:
                 return JSONResponse({"detail":"Слишком большой запрос"},status_code=413)
         response=await call_next(request)
-        response.headers["Cache-Control"]="no-store"
+        response.headers["Cache-Control"]=(
+            "private, no-store" if request.url.path.startswith("/api/finance/")
+            else "no-store"
+        )
         response.headers["Referrer-Policy"]="no-referrer"
         response.headers["X-Content-Type-Options"]="nosniff"
         return response
@@ -108,7 +118,10 @@ def create_app(
             "logout-others":((10,3600),None),
             "change-email":((5,3600),(2,86400)),
             "change-confirm":((15,3600),None),
-            "rotate":((6,3600),None)
+            "rotate":((6,3600),None),
+            "finance-session":((20,3600),None),
+            "finance-read":((300,3600),None),
+            "finance-write":((100,3600),None),
         }
         ip_policy,email_policy=policy[action]
         # Global quota must be consumed first, so distributed abusive IPs cannot
@@ -132,9 +145,11 @@ def create_app(
             raise HTTPException(status_code=400,detail="Не удалось подтвердить защитную проверку")
 
     def cookie(response:Response,session:str):
+        # Finance-cookie invalidation is enforced by the opted-in finance
+        # adapter for EVERY session issuer, including OAuth callbacks.
         response.set_cookie(
             key=SESSION_COOKIE,value=session,path="/api/auth",max_age=7*86400,
-            secure=not config.test_mode,httponly=True,samesite="strict"
+            secure=not config.test_mode,httponly=True,samesite="lax"
         )
 
     def deliver(email:str,purpose:str,raw:str):
@@ -253,6 +268,10 @@ def create_app(
         current=store.current(request.cookies.get(SESSION_COOKIE))
         if not current:
             raise HTTPException(status_code=401,detail="Войдите в аккаунт")
+        # OAuth-only accounts have no verified mailbox or password to confirm.
+        # Reject explicitly before the email quota uses current["email"].
+        if not isinstance(current["email"],str) or not current["email"]:
+            raise HTTPException(status_code=403,detail="Смена email недоступна для этого аккаунта")
         try:
             email=normalize_email(payload.email)
         except ValueError:
@@ -313,10 +332,88 @@ def create_app(
         if store is None:raise RuntimeError("Email AuthStore was not initialized")
         store.logout(request.cookies.get(SESSION_COOKIE))
         response.delete_cookie(SESSION_COOKIE,path="/api/auth",
-                               secure=not config.test_mode,httponly=True,samesite="strict")
+                               secure=not config.test_mode,httponly=True,samesite="lax")
+        if finance_engine is not None:
+            response.delete_cookie("fh_finance_session",path="/api/finance/v1",
+                                   secure=not config.test_mode,httponly=True,samesite="strict")
         return {"ok":True}
 
+    # The email application remains the only session and user authority.
+    # No OAuth database migration occurs during normal startup.
+    from fh_auth.config import Config as OAuthConfig
+    from fh_auth.app import make_oauth_router
+    from fh_auth.store import OAuthStore
+    oauth_config = oauth_config or OAuthConfig.from_env()
+    if oauth_config.enabled:
+        if not config.enabled:
+            raise ValueError("OAuth requires the existing email auth service")
+        if (oauth_config.database_path.resolve(strict=False) !=
+                config.database_path.resolve(strict=False) or
+                oauth_config.public_url != config.public_origin):
+            raise ValueError("OAuth and email auth must use one origin and SQLite database")
+        oauth_store = oauth_store or OAuthStore(config.database_path)
+    app.include_router(make_oauth_router(oauth_config, oauth_store, oauth_exchanger))
+    if finance_engine is not None:
+        if not config.enabled or store is None or finance_profile_namespace is None:
+            raise ValueError("Finance API requires active auth and server profile namespace")
+        # Finance routes are available only under explicit opt-in, never by default.
+        from backend.finance_db.finance_router import mount_finance_routes
+
+        mount_finance_routes(
+            app, engine=finance_engine, namespace=finance_profile_namespace,
+            public_origin=config.public_origin,
+            auth_resolver=store.current,
+            secure_cookie=not config.test_mode,
+            rate_limiter=lambda request, action: throttle(request, action),
+            enable_account_v2_candidate=enable_account_v2_candidate,
+            enable_import_candidate=enable_import_candidate,
+        )
     return app
 
 
-app=create_app()
+def _personal_finance_runtime_options() -> dict:
+    """Explicit personal-only finance route opt-in; default startup unchanged.
+
+    This does not run migrations, unlock production secrets, enable public
+    registration or claim recovery checks. The production operator must
+    separately verify PostgreSQL, protected credentials and restore.
+    """
+    import os
+    from uuid import UUID
+
+    mode = os.environ.get("FH_FINANCE_RUNTIME_MODE", "off")
+    v2_mode = os.environ.get("FH_FINANCE_V2_RUNTIME", "off")
+    import_mode = os.environ.get("FH_FINANCE_IMPORT_RUNTIME", "off")
+    if mode not in ("off", "personal") or v2_mode not in ("off", "on") or import_mode not in ("off", "on"):
+        raise ValueError("Invalid finance feature configuration")
+    if mode == "off":
+        if v2_mode != "off" or import_mode != "off":
+            raise ValueError("Finance v2/import requires enabled private finance runtime")
+        return {}
+
+    if import_mode == "on" and v2_mode != "on":
+        raise ValueError("Import requires explicitly enabled private finance v2")
+    raw_namespace = os.environ.get("FH_FINANCE_PROFILE_NAMESPACE", "")
+    try:
+        namespace = UUID(raw_namespace)
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError("Stable finance profile namespace is required") from None
+    if str(namespace) != raw_namespace or namespace.int == 0:
+        raise ValueError("Canonical non-zero finance namespace is required")
+    url = os.environ.get("FH_FINANCE_DATABASE_URL", "")
+    if not url.startswith("postgresql+psycopg://"):
+        raise ValueError("Private PostgreSQL runtime connection is required")
+
+    # Do not import the SQL runtime or require finance dependencies for the
+    # existing email/OAuth service unless this private release flag is set.
+    from backend.finance_db.db import create_finance_engine
+
+    return {
+        "finance_engine": create_finance_engine(url),
+        "finance_profile_namespace": namespace,
+        "enable_account_v2_candidate": v2_mode == "on",
+        "enable_import_candidate": import_mode == "on",
+    }
+
+
+app=create_app(**_personal_finance_runtime_options())

@@ -8,6 +8,8 @@ export interface LoanTerms {
   principalCents: number;
   startDate: string;
   firstDueDate: string;
+  /** Explicit monthly due-day anchor; defaults to firstDueDate day for old callers. */
+  dueDayAnchor?: number; // 1..31; firstDueDate itself is never rewritten.
   termMonths: number;
   annualRateMicroPercent: number; // 9.5% = 9_500_000. Never pass floating APR.
   dayCount: DayCount;
