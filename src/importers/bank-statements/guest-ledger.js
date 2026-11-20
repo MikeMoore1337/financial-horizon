@@ -20,7 +20,7 @@ const plain = value => value !== null && typeof value === 'object' && !Array.isA
   (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 const distinct = values => new Set(values).size === values.length;
 const safeGuestDate = value => typeof value === 'string' &&
-  /^\\d{4}-\\d{2}-\\d{2}$/.test(value) &&
+  /^\d{4}-\d{2}-\d{2}$/.test(value) &&
   Number.isFinite(new Date(value + 'T00:00:00.000Z').getTime()) &&
   new Date(value + 'T00:00:00.000Z').toISOString().slice(0, 10) === value;
 
