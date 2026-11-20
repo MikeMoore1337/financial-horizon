@@ -1,6 +1,7 @@
 /** #38: strictly authenticated, read-only finance snapshot and bank rows. */
-import { decodeCompleteFinanceState } from '../../domain/accounts/server-snapshot.ts';
-import type { AccountServerView } from '../../domain/accounts/server-snapshot.ts';
+import {
+  decodeCompleteFinanceState, type AccountServerView,
+} from '../../domain/accounts/server-snapshot.ts';
 import type { ExistingBankMovement } from './types.ts';
 import { BankCommitError } from './save.ts';
 
