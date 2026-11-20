@@ -50,7 +50,10 @@ export function createScreenRoot(
                   {...screen.props}
                 />
               ) : screen.view === 'bank-import' ? (
-                <BankImport key={screen.props.verifiedActorUserId ?? screen.props.mode} {...screen.props} />
+                <BankImport
+                  key={screen.props.verifiedActorUserId ?? screen.props.mode}
+                  {...screen.props}
+                />
               ) : (
                 <Settings {...screen.props} />
               )}
