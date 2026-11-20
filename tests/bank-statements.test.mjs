@@ -232,9 +232,14 @@ test('a linked loan or obligation payment is never imported silently on matching
   assert.equal(explicit.expectedOperationCount, 1);
   const otherAmount = reconcileBankStatement(preview, [{ ...paid, amountCents: paid.amountCents + 1 }]);
   assert.equal(otherAmount.ready, 1);
-  // An unrelated transfer must not be treated as a payment fact.
-  const transfer = reconcileBankStatement(preview, [{ ...paid, linkedPaymentId: null, kind: 'transfer' }]);
-  assert.equal(transfer.ready, 1);
+  // SQL checks ALL signed postings, including the source debit leg of a
+  // transfer. The client must require explicit review of that same leg.
+  const transfer = reconcileBankStatement(preview, [{
+    ...paid, linkedPaymentId: null, kind: 'transfer',
+    targetAccountId: 'savings',
+  }]);
+  assert.equal(transfer.possibleDuplicates, 1);
+  assert.deepEqual(transfer.rows[0].existingIds, ['settled-loan']);
 });
 
 test('split income/expense columns and negative parentheses', async () => {
@@ -1001,4 +1006,35 @@ test('legacy movements lacking fingerprints are flagged for explicit review, not
   // content hashes do not override conservative manual reconciliation.
   assert.equal(differentFingerprint.possibleDuplicates, 1);
   assert.equal(differentFingerprint.ready, 0);
+});
+
+
+test('separate expense/income matching either transfer leg require manual review', async () => {
+  const original = {
+    id: 'synthetic-internal-transfer',
+    kind: 'transfer', date: '2026-11-07',
+    accountId: 'checking', targetAccountId: 'savings',
+    amountCents: 10000, description: 'Internal transfer already posted',
+    sourceKey: null, fingerprint: null, externalId: null, voidedAt: null,
+  };
+  const fromSource = await previewOf(base +
+    '07.11.2026;-100,00;Bank debit;Основной;;расход;Питание;DEBIT-FROM-TRANSFER\n');
+  const outgoing = reconcileBankStatement(fromSource.preview,[original]);
+  assert.equal(outgoing.ready,0);
+  assert.equal(outgoing.possibleDuplicates,1);
+  assert.deepEqual(outgoing.rows[0].existingIds,[original.id]);
+  await assert.rejects(draftBankImportBatch(outgoing,[
+    outgoing.rows[0].operation.sourceKey,
+  ]));
+
+  const toDestination = await previewOf(base +
+    '07.11.2026;100,00;Bank credit;Накопительный;;доход;Зарплата;CREDIT-FROM-TRANSFER\n');
+  const incoming = reconcileBankStatement(toDestination.preview,[original]);
+  assert.equal(incoming.ready,0);
+  assert.equal(incoming.possibleDuplicates,1);
+  assert.deepEqual(incoming.rows[0].existingIds,[original.id]);
+
+  const unrelated = await previewOf(base +
+    '07.11.2026;-100,00;Unrelated expense;Накопительный;;расход;Питание;OTHER-EXPENSE\n');
+  assert.equal(reconcileBankStatement(unrelated.preview,[original]).ready,1);
 });

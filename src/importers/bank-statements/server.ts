@@ -123,8 +123,11 @@ export function reconcileSignedBankMovements(
       saved.kind !== (tx.kind === 'payment' ? (first.minor > 0 ? 'income' : 'expense') : tx.kind))) {
       throw new BankCommitError('Несогласованная история импорта', 'invalid_snapshot', 422);
     }
-    if (saved && ((saved.status === 'cancelled') !== voided.has(tx.id))) {
-      throw new BankCommitError('Статусы отмены банковских операций не совпадают',
+    // Existing public transaction.reverse may independently reverse one
+    // imported row while its batch remains committed. A cancelled whole batch
+    // must have a reversal for every row, but the converse is not required.
+    if (saved && saved.status === 'cancelled' && !voided.has(tx.id)) {
+      throw new BankCommitError('Отменённая банковская партия без компенсации',
         'invalid_snapshot', 422);
     }
     const kind = tx.kind === 'transfer' ? 'transfer' :
@@ -270,7 +273,8 @@ export async function loadSignedBankSnapshot(
   }
   const bankRows = rows.payload.rows as BankRowWire[];
   if (bankRows.some(row => !row || typeof row.transaction_id !== 'string' ||
-      typeof row.source_key !== 'string' || !safeNumber(row.amount_minor))) {
+      typeof row.source_key !== 'string' || !safeNumber(row.amount_minor) ||
+      (row.status !== 'committed' && row.status !== 'cancelled'))) {
     throw new BankCommitError('Некорректные банковские операции', 'invalid_snapshot', 422);
   }
   const historyPage = validateSignedBankHistoryPage(

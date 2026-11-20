@@ -82,8 +82,12 @@ test('cancelled server bank rows retain original source keys but are excluded fr
 test('signed bank snapshot rejects impossible cancellation/ledger mismatch', () => {
   assert.throws(() => reconcileSignedBankMovements(ledger(false),
     [sampleRow('cancelled')]), BankCommitError);
-  assert.throws(() => reconcileSignedBankMovements(ledger(true),
-    [sampleRow('committed')]), BankCommitError);
+  // A separate public transaction.reverse is legal even when the bank batch
+  // remains committed. Its source identity is reserved but its cash is void.
+  const individuallyReversed = reconcileSignedBankMovements(ledger(true),
+    [sampleRow('committed')]);
+  assert.equal(individuallyReversed[0].sourceKey, source);
+  assert.equal(individuallyReversed[0].voidedAt, date);
   const saved = reconcileSignedBankMovements(ledger(false),[sampleRow('committed')]);
   assert.equal(saved[0].voidedAt, null);
 });

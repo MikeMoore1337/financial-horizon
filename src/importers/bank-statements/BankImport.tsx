@@ -78,12 +78,17 @@ export function BankImport({mode,verifiedActorUserId,guestLedger,guestRevision,
     return ()=>controller.abort();
   },[mode,verifiedActorUserId,refresh]);
 
+  // Paging the audit must not recreate financial selectors or clear the
+  // user's exclusion/review decisions for already-visible statement rows.
+  // Only a NEW authoritative account/movement snapshot may re-run reconciliation.
+  const serverAccounts=server?.accounts;
+  const serverMovements=server?.movements;
   const accounts=useMemo(()=>mode==='guest'
     ?guest.accounts.map(a=>({id:a.id,name:a.name,currency:'RUB' as const}))
-    :(server?.accounts||[]).map(a=>({id:a.id,name:a.name,currency:'RUB' as const})),
-    [mode,guest,server]);
+    :(serverAccounts||[]).map(a=>({id:a.id,name:a.name,currency:'RUB' as const})),
+    [mode,guest,serverAccounts]);
   const existing=useMemo(()=>mode==='guest'
-    ?guestBankMovements(guest):server?.movements||[],[mode,guest,server]);
+    ?guestBankMovements(guest):serverMovements||[],[mode,guest,serverMovements]);
 
   useEffect(()=>{
     if(!table){setPreview(null);return;}

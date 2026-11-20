@@ -66,7 +66,19 @@ export function reconcileBankStatement(
       bucket(byBankId, identity(movement.accountId, movement.externalId), movement);
     }
     if (movement.voidedAt) continue;
-    if (movement.kind !== 'transfer') {
+    // SQL _preflight_row matches any active signed posting on an account,
+    // including an individual transfer leg. A bank expense on the source or
+    // income on the destination must therefore be manually reviewed too.
+    if (movement.kind === 'transfer') {
+      bucket(byCashSignature, identity(
+        movement.accountId, movement.date, movement.amountCents, 'expense',
+      ), movement);
+      if (movement.targetAccountId) {
+        bucket(byCashSignature, identity(
+          movement.targetAccountId, movement.date, movement.amountCents, 'income',
+        ), movement);
+      }
+    } else {
       bucket(byCashSignature, identity(
         movement.accountId, movement.date, movement.amountCents, movement.kind,
       ), movement);
