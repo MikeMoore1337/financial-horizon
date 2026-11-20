@@ -153,3 +153,72 @@ test('#40 actual authenticated reserve snapshot warns at 3 days and refreshes af
     .toContainText(/2\s*000\s*₽/);
   watch.assertClean();
 });
+
+
+test('#137 real browser: QR, other methods, focus, 320-1280 and unchanged settlements', async ({ page, context }) => {
+  const watch = await observe(context, page);
+  await visitGuest(page);
+  const title = 'Синтетический платёж #137';
+  await addScheduledExpense(page, title, plusDays(1), '1240');
+  await openDue(page);
+  const card = page.locator('.fh-center-event[data-payment-source="entry"]').filter({ hasText: title });
+  await card.getByRole('button', { name: 'Настроить оплату' }).click();
+  await expect(page.locator('#entry-dialog')).toBeVisible();
+  await page.locator('[data-action="open-payment-methods"]').click();
+  const form = page.locator('#payment-method-form');
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAFUlEQVR4nGP8//8/AzbAhFV00EoAAFbUAw037MyjAAAAAElFTkSuQmCC',
+    'base64',
+  );
+  await form.locator('[name="type"]').selectOption('qr_image');
+  await form.locator('[name="label"]').fill('Сохранённый QR');
+  await form.locator('[name="qrFile"]').setInputFiles({ name: 'fixture.png', mimeType: 'image/png', buffer: png });
+  await form.locator('button[type="submit"]').click();
+  await expect.poll(async () => (await scopedState(page, 'state')).entries[0].paymentMethods.length).toBe(1);
+  await form.locator('[name="type"]').selectOption('sbp_link');
+  await form.locator('[name="label"]').fill('СБП');
+  await form.locator('[name="value"]').fill('https://qr.nspk.ru/example');
+  await form.locator('button[type="submit"]').click();
+  await expect.poll(async () => (await scopedState(page, 'state')).entries[0].paymentMethods.length).toBe(2);
+  await form.locator('[name="type"]').selectOption('requisites');
+  await form.locator('[name="label"]').fill('Реквизиты');
+  await form.locator('[name="value"]').fill('ООО Пример, счёт 40817810000000000001');
+  await form.locator('button[type="submit"]').click();
+  await expect.poll(async () => (await scopedState(page, 'state')).entries[0].paymentMethods.length).toBe(3);
+  await page.locator('#payment-methods-dialog [data-action="close-payment-methods"]').first().click();
+  await page.locator('#entry-form button[value="cancel"]').first().click();
+  await openDue(page);
+
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate((value) => localStorage.setItem('fh-theme', value), theme);
+    await page.reload();
+    await openDue(page);
+    const payment = page.locator('.fh-center-event[data-payment-source="entry"]').filter({ hasText: title });
+    const trigger = payment.getByRole('button', { name: 'Показать QR' });
+    await trigger.click();
+    const viewer = payment.getByRole('region', { name: 'Просмотр QR-кода' });
+    await expect(viewer.getByRole('img', { name: 'Сохранённый QR-код для оплаты' })).toBeVisible();
+    await expect(viewer.getByRole('link', { name: 'Перейти к оплате СБП' }))
+      .toHaveAttribute('rel', /noreferrer/);
+    await expect(viewer.getByRole('button', { name: 'Скопировать реквизиты' })).toBeVisible();
+    await expect(viewer.getByRole('button', { name: 'Закрыть QR' })).toBeFocused();
+    for (const width of [320, 375, 393, 768, 1280]) {
+      await page.setViewportSize({ width, height: 852 });
+      const overflow = await page.evaluate(() =>
+        Math.max(document.body.scrollWidth, document.documentElement.scrollWidth) -
+        document.documentElement.clientWidth);
+      expect(overflow, 'No horizontal overflow at ' + width + 'px').toBeLessThanOrEqual(1);
+    }
+    await page.keyboard.press('Escape');
+    await expect(viewer).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    await payment.getByText('Другие способы оплаты (2)').click();
+    await expect(payment.getByRole('link', { name: 'Перейти к оплате СБП' })).toBeVisible();
+    await expect(payment.getByRole('button', { name: 'Изменить' })).toHaveAttribute('data-action', 'edit-entry');
+  }
+  const state = await scopedState(page, 'state');
+  expect(state.entries).toHaveLength(1);
+  expect(state.entries[0].paymentMethods).toHaveLength(3);
+  expect(state.settlements).toHaveLength(0); // External actions never mark payment as confirmed.
+  watch.assertClean();
+});
