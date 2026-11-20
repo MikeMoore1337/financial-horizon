@@ -94,6 +94,27 @@ export interface AuditRecord {
   [key: string]: unknown;
 }
 
+export interface GuestBankAccount {
+  id: string;
+  name: string;
+  currency: 'RUB';
+  openingMinor: number;
+}
+export interface GuestBankMovement {
+  sourceKey: string; fingerprint: string; externalId: string | null;
+  date: string; amountCents: number; kind: 'income' | 'expense' | 'transfer';
+  description: string; accountId: string; targetAccountId: string | null;
+  category: string | null; batchKey: string;
+}
+export interface GuestBankBatch {
+  batchKey: string; fileDigest: string; operationCount: number;
+  committedStateRevision: number; cancelledStateRevision: number | null;
+}
+export interface GuestBankLedger {
+  version: 1; accounts: GuestBankAccount[];
+  operations: GuestBankMovement[]; batches: GuestBankBatch[];
+}
+
 export interface FinanceContents {
   entries: FinanceEntry[];
   loans: FinanceLoan[];
@@ -102,6 +123,8 @@ export interface FinanceContents {
   categories: string[];
   audit: AuditRecord[];
   settings: { currency: 'RUB'; [key: string]: unknown };
+  /** Optional guest-only actual bank cash journal; legacy backups omit it. */
+  bankStatements?: GuestBankLedger;
 }
 
 export type FinanceStateV1 = FinanceContents & {

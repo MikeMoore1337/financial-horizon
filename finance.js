@@ -1,3 +1,4 @@
+import {validateGuestBankLedger} from './src/importers/bank-statements/guest-ledger.js';
 // Денежные суммы хранятся целыми копейками. Допущения кредитной модели изложены в README.
 export function cents(input) {
   const normalized = String(input ?? '').trim().replace(/[\s\u00a0\u202f]/g, '').replace(',', '.');
@@ -231,6 +232,9 @@ export function validateState(s){
     !Array.isArray(s.loans)||!Array.isArray(s.settlements)||
     !Array.isArray(s.loanPayments)||!Array.isArray(s.categories)||
     !Array.isArray(s.audit))throw Error('Неподдерживаемая версия или повреждённые финансовые данные');
+ // #38: optional, guest-only actual cash journal. Historical backup payloads
+ // omit it. Validate all bank account/batch identities before committing IDB.
+ if(s.bankStatements!==undefined)validateGuestBankLedger(s.bankStatements);
  // #40: optional account-scoped preference; older encrypted backups lack this field.
  // Strict validation prevents a malformed preference from silently corrupting UI behavior.
  if(s.settings?.paymentReminders!==undefined){
