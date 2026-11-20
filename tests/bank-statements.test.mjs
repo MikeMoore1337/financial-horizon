@@ -883,7 +883,9 @@ test('large overlapping import reconciles with bounded ledger reads and preserve
     'ready', 'possible-duplicate', 'ready', 'invalid',
   ]);
   assert.deepEqual(result.rows.slice(0, 3).map(x => x.existingIds), [
-    ['posted-10'], ['posted-11'], ['posted-12'],
+    ['posted-10'], ['posted-11'],
+    // All five records share the signed-cash tuple, not just the fingerprint.
+    ['posted-10', 'posted-11', 'posted-12', 'posted-13', 'posted-14'],
   ]);
   assert.equal(result.rows.length, 1500);
   assert.equal(result.duplicates, 2);
