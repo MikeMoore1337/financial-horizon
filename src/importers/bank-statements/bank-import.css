@@ -12,3 +12,8 @@
 @media(max-width:1050px){.fh-bank-columns{grid-template-columns:1fr}.fh-bank-aside{grid-template-columns:repeat(2,minmax(0,1fr))}.fh-bank-aside>*:last-child{grid-column:1/-1}}
 @media(max-width:760px){.fh-bank-header{align-items:flex-start;flex-wrap:wrap}.fh-bank-header .header-tools{width:100%}.fh-bank-header .header-tools button{flex:1}.fh-bank-steps{padding:9px}.fh-bank-steps span{font-size:10px;gap:4px;flex-direction:column;text-align:center}.fh-bank-steps b{height:27px;width:27px}.fh-bank-aside{grid-template-columns:1fr}.fh-bank-aside>*:last-child{grid-column:auto}.fh-bank-fields,.fh-bank-format{grid-template-columns:repeat(2,minmax(0,1fr))}.fh-bank-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.fh-bank-panel{padding:16px}}
 @media(max-width:380px){.fh-bank-fields,.fh-bank-format{grid-template-columns:1fr}.fh-bank-header .header-tools{flex-direction:column}.fh-bank-header .header-tools button{width:100%}}
+
+.fh-bank-account-list{display:grid;gap:8px;margin-bottom:14px}
+.fh-bank-account{display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0;border:1px solid var(--line);border-radius:12px;padding:12px;font-size:13px}
+.fh-bank-account strong{min-width:0;overflow-wrap:anywhere}
+.fh-bank-account span{white-space:nowrap;font-weight:720;color:var(--accent-deep)}

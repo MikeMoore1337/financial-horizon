@@ -6,7 +6,7 @@ import {readBankStatementFile,suggestColumnMapping,normalizeBankStatement,
 import {loadSignedBankSnapshot,type SignedBankSnapshot} from './server.ts';
 import {buildBankCommitRequest,buildBankUndoRequest,
   commitConfirmedBankBatch,undoConfirmedBankBatch} from './save.ts';
-import {emptyGuestBankLedger,guestBankMovements} from './guest-ledger.js';
+import {emptyGuestBankLedger,guestBankMovements,guestBankBalance} from './guest-ledger.js';
 import type {BankStatementTable,BankImportPreview,ColumnMapping,MappableField,
   ReconciliationResult,ImportBatchPlan} from './types.ts';
 import type {GuestBankLedger} from '../../types/finance.ts';
@@ -259,9 +259,15 @@ export function BankImport({mode,verifiedActorUserId,guestLedger,guestRevision,
             Применить формат</button>
         </div>}
       </section>
-      {mode==='guest'&&!accounts.length&&<section className="surface fh-bank-panel">
-        <h2>Создать банковский счёт</h2>
+      {mode==='guest'&&<section className="surface fh-bank-panel">
+        <h2>Локальные банковские счета</h2>
         <p className="small-hint">Начальный остаток задаётся явно, отдельно от плановых платежей.</p>
+        {!!guest.accounts.length&&<div className="fh-bank-account-list" aria-label="Остатки банковских счетов">
+          {guest.accounts.map(a=><div key={a.id} className="fh-bank-account">
+            <strong>{a.name}</strong>
+            <span>{money(guestBankBalance(guest,a.id))}</span>
+          </div>)}
+        </div>}
         <div className="fh-bank-fields">
           <label className="field">Название<input maxLength={160} value={accountName}
             onChange={e=>setAccountName(e.target.value)}/></label>

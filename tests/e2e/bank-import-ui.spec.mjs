@@ -22,6 +22,12 @@ test('#38: guest CSV import is local, atomic, duplicate-safe and fully cancellab
   await page.getByRole('textbox',{name:/Начальный остаток/}).fill('1000');
   await page.getByRole('button',{name:'Добавить счёт'}).click();
   await expect.poll(async()=> (await scopedState(page,'state'))?.bankStatements?.accounts?.length).toBe(1);
+  // A second owned account must be available for internal transfer mapping.
+  await page.getByRole('textbox',{name:'Название'}).fill('Накопления');
+  await page.getByRole('textbox',{name:/Начальный остаток/}).fill('300');
+  await page.getByRole('button',{name:'Добавить счёт'}).click();
+  await expect.poll(async()=> (await scopedState(page,'state'))?.bankStatements?.accounts?.length).toBe(2);
+  await expect(page.getByLabel('Остатки банковских счетов')).toContainText('Накопления');
 
   await page.locator('.fh-bank-file input[type="file"]').setInputFiles(file);
   await expect(page.locator('.fh-bank-table tbody tr')).toHaveCount(2);
