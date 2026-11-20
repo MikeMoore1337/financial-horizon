@@ -1,3 +1,5 @@
+import { validateGuestBankLedger, guestBankBalance } from '../../../finance.js';
+export { validateGuestBankLedger, guestBankBalance } from '../../../finance.js';
 /**
  * #38 guest-only bank ledger. Stored as one optional part of the existing
  * versioned finance state; storage.updateState provides the IDB transaction,
@@ -7,7 +9,6 @@
  */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const HASH = /^[0-9a-f]{64}$/;
-const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_MINOR = 1_000_000_000_000;
 const MAX_ACCOUNTS = 100;
 const MAX_OPERATIONS = 5000;
@@ -17,9 +18,6 @@ const fail = (message = 'Повреждён локальный журнал ба
 const integer = (value, min, max) => Number.isSafeInteger(value) && value >= min && value <= max;
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value) &&
   (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
-const safeDate = value => typeof value === 'string' && DATE.test(value) &&
-  Number.isFinite(new Date(value + 'T00:00:00.000Z').getTime()) &&
-  new Date(value + 'T00:00:00.000Z').toISOString().slice(0, 10) === value;
 const distinct = values => new Set(values).size === values.length;
 
 export function emptyGuestBankLedger() {
@@ -29,73 +27,6 @@ export function emptyGuestBankLedger() {
 export function readGuestBankLedger(state) {
   const value = state?.bankStatements;
   return validateGuestBankLedger(value === undefined ? emptyGuestBankLedger() : value);
-}
-
-/** Validate restored/legacy guest backups BEFORE any local state is accepted. */
-export function validateGuestBankLedger(value) {
-  if (!plain(value) || value.version !== 1 ||
-      !Array.isArray(value.accounts) || value.accounts.length > MAX_ACCOUNTS ||
-      !Array.isArray(value.operations) || value.operations.length > MAX_OPERATIONS ||
-      !Array.isArray(value.batches) || value.batches.length > MAX_BATCHES) fail();
-  const ids = new Set(), batches = new Map(), rows = new Set(), external = new Set();
-  for (const account of value.accounts) {
-    if (!plain(account) || !UUID.test(account.id) || ids.has(account.id) ||
-        typeof account.name !== 'string' || !account.name.trim() || account.name.length > 160 ||
-        !integer(account.openingMinor, -MAX_MINOR, MAX_MINOR) || account.currency !== 'RUB') fail();
-    ids.add(account.id);
-  }
-  for (const batch of value.batches) {
-    if (!plain(batch) || !HASH.test(batch.batchKey) || !HASH.test(batch.fileDigest) ||
-        batches.has(batch.batchKey) ||
-        !integer(batch.committedStateRevision, 1, Number.MAX_SAFE_INTEGER) ||
-        (batch.cancelledStateRevision !== null &&
-         (!integer(batch.cancelledStateRevision, batch.committedStateRevision + 1, Number.MAX_SAFE_INTEGER))) ||
-        !integer(batch.operationCount, 1, MAX_BATCH_OPERATIONS)) fail();
-    batches.set(batch.batchKey, batch);
-  }
-  const counts = new Map();
-  for (const op of value.operations) {
-    if (!plain(op) || !HASH.test(op.sourceKey) || rows.has(op.sourceKey) ||
-        !HASH.test(op.fingerprint) || !HASH.test(op.batchKey) ||
-        !batches.has(op.batchKey) || !ids.has(op.accountId) ||
-        !safeDate(op.date) || !integer(op.amountCents, 1, MAX_MINOR) ||
-        !['income','expense','transfer'].includes(op.kind) ||
-        typeof op.description !== 'string' || op.description.length > 500 ||
-        (op.category !== null && (typeof op.category !== 'string' || op.category.length > 160)) ||
-        (op.externalId !== null && (typeof op.externalId !== 'string' ||
-         op.externalId.length < 1 || op.externalId.length > 150)) ||
-        (op.targetAccountId !== null && !ids.has(op.targetAccountId)) ||
-        (op.kind === 'transfer') !== (op.targetAccountId !== null) ||
-        op.targetAccountId === op.accountId) fail();
-    rows.add(op.sourceKey);
-    if (op.externalId !== null) {
-      const bankId = JSON.stringify([op.accountId,op.externalId]);
-      if (external.has(bankId)) fail();
-      external.add(bankId);
-    }
-    counts.set(op.batchKey, (counts.get(op.batchKey) || 0) + 1);
-  }
-  for (const [id,batch] of batches) if (counts.get(id) !== batch.operationCount) fail();
-  // Validate every actual cash position: rejected imported/rollback histories
-  // cannot silently create an unsafe Number or an unlimited balance.
-  for (const account of value.accounts) guestBankBalance(value, account.id);
-  return value;
-}
-
-export function guestBankBalance(data, accountId) {
-  const account = data.accounts.find(item => item.id === accountId);
-  if (!account) fail('Счёт не найден');
-  let value = account.openingMinor;
-  const batchByKey = new Map(data.batches.map(batch => [batch.batchKey,batch]));
-  for (const op of data.operations) {
-    if (batchByKey.get(op.batchKey)?.cancelledStateRevision !== null) continue;
-    if (op.accountId === accountId)
-      value += op.kind === 'income' ? op.amountCents : -op.amountCents;
-    if (op.kind === 'transfer' && op.targetAccountId === accountId) value += op.amountCents;
-    if (!integer(value, -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER))
-      fail('Переполнение локального остатка');
-  }
-  return value;
 }
 
 export function guestBankMovements(data) {
