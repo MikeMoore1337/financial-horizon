@@ -96,3 +96,41 @@ test('guest stale state or concurrent edit refuses undo atomically',()=>{
  assert.deepEqual(s,prev);
  assert.throws(()=>commitGuestBankBatch(s,confirmed([{...plan.operations[0],sourceKey:hash('e')}]),hash('f'),3),/изменилась/);
 });
+
+
+test('guest settlement direction: received income cannot block unrelated bank expense',()=>{
+  const s=opened();
+  s.entries.push({id:'earned-salary',title:'Получено',
+    kind:'income',amountCents:500,date:'2026-11-07',
+    recurrence:'once',category:'Работа',createdAt:'2026-11-07T12:00:00.000Z'});
+  s.settlements.push({id:'received',entryId:'earned-salary',
+    occurrence:'2026-11',date:'2026-11-07',amountCents:500,
+    createdAt:'2026-11-07T12:10:00.000Z'});
+  const plan=confirmed();
+  commitGuestBankBatch(s,plan,hash('f'),2);
+  assert.equal(s.bankStatements.operations.length,1);
+  assert.equal(guestBankBalance(s.bankStatements,accountId),19500);
+});
+
+test('guest settlement direction: actual outgoing expense remains protected',()=>{
+  const s=opened();
+  s.entries.push({id:'internet-expense',title:'Интернет',
+    kind:'expense',amountCents:500,date:'2026-11-07',
+    recurrence:'once',category:'Связь',createdAt:'2026-11-07T12:00:00.000Z'});
+  s.settlements.push({id:'paid-internet',entryId:'internet-expense',
+    occurrence:'2026-11',date:'2026-11-07',amountCents:500,
+    createdAt:'2026-11-07T12:10:00.000Z'});
+  const before=structuredClone(s);
+  assert.throws(()=>commitGuestBankBatch(s,confirmed(),hash('f'),2),
+    /совпадает с ранее отмеченным платежом/);
+  assert.deepEqual(s,before);
+});
+
+test('guest settlement direction: archived or unknown entry identities stay conservative',()=>{
+  const s=opened();
+  s.settlements.push({id:'orphaned',entryId:'unavailable-record',
+    occurrence:'2026-11',date:'2026-11-07',amountCents:500,
+    createdAt:'2026-11-07T12:00:00.000Z'});
+  assert.throws(()=>commitGuestBankBatch(s,confirmed(),hash('f'),2),
+    /совпадает с ранее отмеченным платежом/);
+});

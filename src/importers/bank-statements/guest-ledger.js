@@ -96,11 +96,23 @@ export function commitGuestBankBatch(state, plan, fileDigest, expectedRevision) 
       fail('Повторная или неизвестная операция. Выполните новую сверку.');
     // Old planner payment facts do NOT carry a bank-account identity. Never
     // silently treat the same date/amount as a second real cash debit.
-    if (op.kind === 'expense' && [
-      ...(state.loanPayments || []), ...(state.settlements || []),
-    ].some(paid => !paid.voidedAt && paid.date === op.date &&
-      paid.amountCents === op.amountCents))
-      fail('Банковское списание совпадает с ранее отмеченным платежом. Нужна ручная сверка.');
+    if (op.kind === 'expense') {
+      const loanDebit = (state.loanPayments || []).some(paid =>
+        !paid.voidedAt && paid.date === op.date &&
+        paid.amountCents === op.amountCents);
+      const settlementDebit = (state.settlements || []).some(paid => {
+        if (paid.voidedAt || paid.date !== op.date ||
+            paid.amountCents !== op.amountCents) return false;
+        // Settlements can mark either an income or an expense. An incoming
+        // salary is not evidence of an already-posted outgoing bank debit.
+        // Unknown legacy entry identities fail closed rather than relaxing
+        // the duplicate-payment safeguard.
+        const entry = (state.entries || []).find(item => item.id === paid.entryId);
+        return !entry || entry.kind === 'expense';
+      });
+      if (loanDebit || settlementDebit)
+        fail('Банковское списание совпадает с ранее отмеченным платежом. Нужна ручная сверка.');
+    }
     keys.add(op.sourceKey);
     if (op.externalId !== null) external.add(JSON.stringify([op.accountId,op.externalId]));
     ledger.operations.push({
