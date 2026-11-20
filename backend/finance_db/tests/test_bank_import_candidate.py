@@ -247,3 +247,71 @@ def test_whole_batch_undo_rejects_later_financial_revision_without_partial_rever
     with finance_transaction(engine,verified_user_id=scope.user_id,
                              profile_id=scope.profile_id) as session:
         assert session.execute(text("SELECT status FROM bank_import_batches")).scalar_one()=="committed"
+
+
+
+def test_transfer_equal_amount_same_sender_different_recipient_is_distinct(context):
+    """#38: A→B must not block an otherwise valid A→C transfer for same sum/day."""
+    engine, scope = context
+    a, _ = add_account(engine, scope, opening=10000, name="Outgoing")
+    b, _ = add_account(engine, scope, opening=0, name="First recipient")
+    c, _ = add_account(engine, scope, opening=0, name="Second recipient")
+
+    def transfer(label, target, snapshot):
+        revisions = {
+            row["id"]: row["entity_revision"]
+            for row in snapshot.body["entities"] if row["id"] in (a, target)
+        }
+        op = {
+            "source_key": digest("transfer-source-" + label),
+            "fingerprint": digest("transfer-fp-" + label),
+            "external_id": "BANK-" + label,
+            "account_id": a,
+            "target_account_id": target,
+            "occurred_on": "2026-11-08",
+            "amount_minor": 1800,
+            "kind": "transfer",
+            "description": "Synthetic " + label,
+            "category": None, "currency": "RUB",
+            "reviewed_transaction_ids": [],
+        }
+        body = request_for(scope, (a, revisions), snapshot.body["revision"], [op])
+        body["batch_key"] = digest("transfer-batch-" + label)
+        body["file_digest"] = digest("transfer-file-" + label)
+        return body
+
+    before = get_account_snapshot(engine, scope=scope)
+    first = transfer("TO-B", b, before)
+    receipt = commit_bank_import_candidate(
+        engine, scope=scope, request=first,
+        if_match=before.etag, idempotency_key=first["client_mutation_id"],
+    )
+    assert receipt.status == 201
+
+    after_first = get_account_snapshot(engine, scope=scope)
+    second = transfer("TO-C", c, after_first)
+    result = commit_bank_import_candidate(
+        engine, scope=scope, request=second,
+        if_match=after_first.etag, idempotency_key=second["client_mutation_id"],
+    )
+    assert result.status == 201
+    assert result.body["new_operations"] == 1
+    after_second = get_account_snapshot(engine, scope=scope)
+    balances = {
+        x["id"]: x["data"]["balance_minor"]
+        for x in after_second.body["entities"] if x["kind"] == "account"
+    }
+    assert balances[a] == 6400
+    assert balances[b] == 1800
+    assert balances[c] == 1800
+
+    third = transfer("AGAIN-TO-B", b, after_second)
+    with pytest.raises(FinanceCommandError) as conflict:
+        commit_bank_import_candidate(
+            engine, scope=scope, request=third,
+            if_match=after_second.etag,
+            idempotency_key=third["client_mutation_id"],
+        )
+    assert conflict.value.code == "semantic_conflict"
+    assert get_account_snapshot(engine, scope=scope).etag == after_second.etag
+    assert _counts(engine, scope)["bank_import_rows"] == 2

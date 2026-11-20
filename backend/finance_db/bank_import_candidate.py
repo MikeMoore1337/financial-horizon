@@ -237,15 +237,22 @@ def _preflight_row(session, scope, op):
         match = session.execute(text("""
             SELECT 1 FROM ledger_transactions t
             JOIN ledger_postings p ON p.profile_id=t.profile_id AND p.transaction_id=t.id
+            JOIN ledger_postings destination
+              ON destination.profile_id=t.profile_id
+             AND destination.transaction_id=t.id
             WHERE t.profile_id=:profile AND t.occurred_on=:d AND t.kind='transfer'
               AND p.account_id=:account AND p.signed_minor=:amount
+              AND destination.account_id=:target
+              AND destination.signed_minor=:incoming
               AND NOT EXISTS (
                   SELECT 1 FROM ledger_transactions v WHERE v.profile_id=t.profile_id
                   AND v.reversed_transaction_id=t.id
               )
             LIMIT 1
         """), {"profile":scope.profile_id,"d":op["occurred_on"],
-               "account":op["account_id"],"amount":-op["amount_minor"]}).first()
+               "account":op["account_id"],"amount":-op["amount_minor"],
+               "target":op["target_account_id"],
+               "incoming":op["amount_minor"]}).first()
         if match:
             _conflict()
         return

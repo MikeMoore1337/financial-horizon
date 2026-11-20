@@ -32,6 +32,7 @@ export interface SignedBankSnapshot {
   accounts: ReadonlyArray<{ id: string; name: string; entityRevision: number; balanceMinor: number }>;
   movements: ExistingBankMovement[];
   batches: BankHistoryEntry[];
+  historyNextCursor: number | null;
   revision: number;
   etag: string;
 }
@@ -82,7 +83,8 @@ async function requestJson(
   return { payload, revisionTag: response.headers.get('etag') || '', status: response.status };
 }
 
-function reconciliation(
+/** Pure conversion for bank source identities and cancelled ledger entries. */
+export function reconcileSignedBankMovements(
   state: AccountServerView, bankRows: BankRowWire[],
 ): ExistingBankMovement[] {
   const byTransaction = new Map<string, BankRowWire>();
@@ -121,6 +123,10 @@ function reconciliation(
       saved.kind !== (tx.kind === 'payment' ? (first.minor > 0 ? 'income' : 'expense') : tx.kind))) {
       throw new BankCommitError('Несогласованная история импорта', 'invalid_snapshot', 422);
     }
+    if (saved && ((saved.status === 'cancelled') !== voided.has(tx.id))) {
+      throw new BankCommitError('Статусы отмены банковских операций не совпадают',
+        'invalid_snapshot', 422);
+    }
     const kind = tx.kind === 'transfer' ? 'transfer' :
       (first.minor > 0 ? 'income' : 'expense');
     records.push({
@@ -134,7 +140,7 @@ function reconciliation(
       linkedPaymentId: linked.get(tx.id) || null,
       // Even cancelled imported source keys remain reserved on the server,
       // and must still count as seen for precise re-import protection.
-      voidedAt: saved ? null : voided.has(tx.id) ? tx.occurredOn : null,
+      voidedAt: voided.has(tx.id) ? tx.occurredOn : null,
     });
   }
   if ([...byTransaction.keys()].some(id => !state.ledger.transactions.some(tx => tx.id === id))) {
@@ -142,6 +148,86 @@ function reconciliation(
       'invalid_snapshot', 422);
   }
   return records;
+}
+
+/** One verified page of bank-import history. A long audit must not block cash writes. */
+export interface SignedBankHistoryPage {
+  batches: BankHistoryEntry[];
+  historyNextCursor: number | null;
+}
+
+export function validateSignedBankHistoryPage(
+  payload: unknown,
+  etag: string,
+  expectedRevision: number,
+  expectedEtag: string,
+  beforeCursor: number | null = null,
+): SignedBankHistoryPage {
+  if (!plain(payload) || payload.schema_version !== 1 ||
+      payload.revision !== expectedRevision || etag !== expectedEtag ||
+      !Array.isArray(payload.batches) || payload.batches.length > 100 ||
+      typeof payload.has_more !== 'boolean' ||
+      (beforeCursor !== null && (!Number.isSafeInteger(beforeCursor) ||
+        beforeCursor < 1))) {
+    throw new BankCommitError('История изменилась при чтении, повторите сверку',
+      'stale_revision', 412);
+  }
+  const batches = payload.batches as BankHistoryEntry[];
+  const ids = new Set<string>();
+  let last = beforeCursor ?? expectedRevision + 1;
+  for (const batch of batches) {
+    if (!batch || typeof batch.batch_id !== 'string' ||
+        typeof batch.batch_key !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(batch.batch_key) ||
+        (batch.status !== 'committed' && batch.status !== 'cancelled') ||
+        !Number.isSafeInteger(batch.committed_revision) ||
+        batch.committed_revision < 1 ||
+        batch.committed_revision >= last ||
+        !Number.isSafeInteger(batch.operation_count) ||
+        batch.operation_count < 1 || batch.operation_count > 1000 ||
+        !Number.isFinite(Date.parse(batch.committed_at)) ||
+        ids.has(batch.batch_id)) {
+      throw new BankCommitError('Некорректная история партий', 'invalid_snapshot', 422);
+    }
+    ids.add(batch.batch_id);
+    last = batch.committed_revision;
+  }
+  if (payload.has_more) {
+    if (batches.length !== 100 ||
+        !Number.isSafeInteger(payload.next_cursor) ||
+        payload.next_cursor !== batches[batches.length - 1]?.committed_revision ||
+        (beforeCursor !== null && (payload.next_cursor as number) >= beforeCursor)) {
+      throw new BankCommitError('Некорректный курсор истории импорта',
+        'invalid_snapshot', 422);
+    }
+  } else if (payload.next_cursor !== null) {
+    throw new BankCommitError('Некорректное завершение истории импорта',
+      'invalid_snapshot', 422);
+  }
+  return {
+    batches,
+    historyNextCursor: payload.has_more ? payload.next_cursor as number : null,
+  };
+}
+
+/** Cursor read stays anchored to the exact full authenticated finance revision. */
+export async function loadOlderSignedBankHistory(
+  current: SignedBankSnapshot,
+  transport: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<SignedBankHistoryPage> {
+  const cursor = current.historyNextCursor;
+  if (cursor === null) return { batches: [], historyNextCursor: null };
+  if (!Number.isSafeInteger(cursor) || cursor < 1) {
+    throw new BankCommitError('Неверный курсор', 'invalid_snapshot', 422);
+  }
+  const response = await requestJson(
+    '/api/finance/v2/bank-import/batches?limit=100&cursor=' + cursor,
+    { method: 'GET', signal }, transport,
+  );
+  return validateSignedBankHistoryPage(
+    response.payload, response.revisionTag, current.revision, current.etag, cursor,
+  );
 }
 
 /** Bootstrap same FH authenticated finance cookie; read all 3 revisions consistently. */
@@ -177,11 +263,8 @@ export async function loadSignedBankSnapshot(
   if (!plain(rows.payload) || !plain(history.payload) ||
       rows.payload.schema_version !== 1 || history.payload.schema_version !== 1 ||
       !Array.isArray(rows.payload.rows) || !Array.isArray(history.payload.batches) ||
-      history.payload.has_more !== false ||
       rows.payload.revision !== server.ledger.revision ||
-      history.payload.revision !== server.ledger.revision ||
-      rows.revisionTag !== snapshot.revisionTag ||
-      history.revisionTag !== snapshot.revisionTag) {
+      rows.revisionTag !== snapshot.revisionTag) {
     throw new BankCommitError('История изменилась при чтении, повторите сверку',
       'stale_revision', 412);
   }
@@ -190,18 +273,17 @@ export async function loadSignedBankSnapshot(
       typeof row.source_key !== 'string' || !safeNumber(row.amount_minor))) {
     throw new BankCommitError('Некорректные банковские операции', 'invalid_snapshot', 422);
   }
-  const batches = history.payload.batches as BankHistoryEntry[];
-  if (batches.some(batch => !batch || typeof batch.batch_id !== 'string' ||
-      !safeNumber(batch.committed_revision))) {
-    throw new BankCommitError('Некорректная история импорта', 'invalid_snapshot', 422);
-  }
+  const historyPage = validateSignedBankHistoryPage(
+    history.payload, history.revisionTag, server.ledger.revision, snapshot.revisionTag,
+  );
   return {
     accounts: server.ledger.accounts.filter(a => a.archivedAt === null).map(account => ({
       id: account.id, name: account.name, entityRevision: account.entityRevision,
       balanceMinor: stateBalance(server, account.id),
     })),
-    movements: reconciliation(server, bankRows),
-    batches,
+    movements: reconcileSignedBankMovements(server, bankRows),
+    batches: historyPage.batches,
+    historyNextCursor: historyPage.historyNextCursor,
     revision: server.ledger.revision,
     etag: snapshot.revisionTag,
   };

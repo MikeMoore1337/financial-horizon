@@ -3,7 +3,7 @@ import {Icon} from '../../react/Calendar';
 import {formatRubMinor,parseRubMinor} from '../../react/accounts-view-model';
 import {readBankStatementFile,suggestColumnMapping,normalizeBankStatement,
   reconcileBankStatement,draftBankImportBatch} from './index.ts';
-import {loadSignedBankSnapshot,type SignedBankSnapshot} from './server.ts';
+import {loadSignedBankSnapshot,loadOlderSignedBankHistory,type SignedBankSnapshot} from './server.ts';
 import {buildBankCommitRequest,buildBankUndoRequest,
   commitConfirmedBankBatch,undoConfirmedBankBatch} from './save.ts';
 import {emptyGuestBankLedger,guestBankMovements,guestBankBalance} from './guest-ledger.js';
@@ -54,6 +54,7 @@ export function BankImport({mode,verifiedActorUserId,guestLedger,guestRevision,
   const [decisions,setDecisions]=useState<Record<string,'include'|'skip'|'reviewed'>>({});
   const [server,setServer]=useState<SignedBankSnapshot|null>(null);
   const [serverBusy,setServerBusy]=useState(false);
+  const [historyBusy,setHistoryBusy]=useState(false);
   const [refresh,setRefresh]=useState(0);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
@@ -185,6 +186,29 @@ export function BankImport({mode,verifiedActorUserId,guestLedger,guestRevision,
       setError('Отмена отклонена. Проверьте последующие изменения и ревизию профиля.');
       if(mode==='account')setRefresh(x=>x+1);
     }finally{locked.current=false;setBusy(false);}
+  }
+  async function loadOlderHistory(){
+    if(mode!=='account'||!server||server.historyNextCursor===null||
+      historyBusy||busy)return;
+    setHistoryBusy(true);setError('');
+    try{
+      const current=server;
+      const page=await loadOlderSignedBankHistory(current);
+      setServer(previous=>{
+        if(!previous||previous.revision!==current.revision||
+          previous.etag!==current.etag||
+          previous.historyNextCursor!==current.historyNextCursor)return previous;
+        if(page.batches.some(batch=>
+          previous.batches.some(existing=>existing.batch_id===batch.batch_id))){
+          setError('Повторная страница истории; обновите финансовую сверку.');
+          return previous;
+        }
+        return {...previous,batches:[...previous.batches,...page.batches],
+          historyNextCursor:page.historyNextCursor};
+      });
+    }catch{
+      setError('Не удалось проверить предыдущую страницу истории. Обновите сверку.');
+    }finally{setHistoryBusy(false);}
   }
   async function addAccount(){
     if(busy||!accountName.trim())return;
@@ -389,6 +413,12 @@ export function BankImport({mode,verifiedActorUserId,guestLedger,guestRevision,
           {batch.canUndo&&<button type="button" className="button-secondary"
             onClick={()=>void undo(batch.key)} disabled={busy}>Отменить</button>}
         </div>)}
+        {mode==='account'&&server?.historyNextCursor!==null&&server&&
+          <button type="button" className="button-secondary"
+            disabled={busy||historyBusy||serverBusy}
+            onClick={()=>void loadOlderHistory()}>
+            {historyBusy?'Проверка истории…':'Загрузить более ранние партии'}
+          </button>}
       </section>
     </aside></div>
   </section>;
