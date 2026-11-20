@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 from fh_email_auth.app import create_app
 from fh_email_auth.config import Settings
 from fh_email_auth.store import AuthStore
+from fh_email_auth.security import limit_key
 from fh_email_auth import SESSION_COOKIE
 from reserves_stub import ReserveStub
 
@@ -101,13 +102,26 @@ def local_app(directory):
     reserves_stub = ReserveStub()
 
     @app.post("/__e2e__/personal-session")
-    def synthetic_personal_session(response: Response, enable_finance_stub: bool = False,
+    def synthetic_personal_session(response: Response, request: Request,
+                                   enable_finance_stub: bool = False,
                                    enable_reserves_stub: bool = False):
         # This route exists only in the isolated localhost E2E ASGI app.
         # Create a genuine revocable FH session without consuming the shared
         # public registration rate quota or exposing a raw token in JSON.
         if enable_reserves_stub and not enable_finance_stub:
             raise HTTPException(422)
+        # Isolate tests running consecutively against the SAME disposable
+        # localhost AuthStore. A previous browser project must not consume
+        # the next test's finance-session quota (HTTP 429). Do not change the
+        # production FH limiter or exempt requests inside any single test.
+        if real_finance:
+            client_ip = request.client.host if request.client else "unknown"
+            keys = (
+                limit_key(config.rate_secret, "finance-session-global", "all"),
+                limit_key(config.rate_secret, "finance-session-ip", client_ip),
+            )
+            with store._db() as db:
+                db.execute("DELETE FROM counters WHERE key IN (?, ?)", keys)
         email = "personal-" + uuid4().hex + "@example.invalid"
         token = store.create_account(email)
         if not token:
