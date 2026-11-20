@@ -1,7 +1,7 @@
 """#38: real PostgreSQL atomic bank-import candidate tests. Synthetic only."""
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import uuid4, uuid5
 from hashlib import sha256
 from concurrent.futures import ThreadPoolExecutor
 
@@ -315,3 +315,56 @@ def test_transfer_equal_amount_same_sender_different_recipient_is_distinct(conte
     assert conflict.value.code == "semantic_conflict"
     assert get_account_snapshot(engine, scope=scope).etag == after_second.etag
     assert _counts(engine, scope)["bank_import_rows"] == 2
+
+
+
+def test_public_transaction_reverse_keeps_import_batch_committed_but_voids_money(context):
+    """#38: independent ledger reversal is legitimate before whole-batch undo.
+
+    The immutable bank source key remains reserved and bank batch remains
+    committed; the signed UI must read and reconcile that state without error.
+    """
+    engine, scope = context
+    account, _ = add_account(engine, scope, opening=50000)
+    initial = get_account_snapshot(engine, scope=scope)
+    versions = {
+        entity["id"]: entity["entity_revision"]
+        for entity in initial.body["entities"] if entity["id"] == account
+    }
+    bank = request_for(scope, (account, versions), initial.body["revision"])
+    receipt = commit_bank_import_candidate(
+        engine, scope=scope, request=bank,
+        if_match=initial.etag, idempotency_key=bank["client_mutation_id"],
+    )
+    assert receipt.status == 201
+    batch_id = uuid5(scope.profile_id, "bank-import:v1:" + bank["batch_key"])
+    bank_tx_id = str(uuid5(batch_id, bank["operations"][0]["source_key"]))
+    committed = get_account_snapshot(engine, scope=scope)
+    revisions = {
+        entity["id"]: entity["entity_revision"]
+        for entity in committed.body["entities"]
+        if entity["id"] in (account, bank_tx_id)
+    }
+    assert set(revisions) == {account, bank_tx_id}
+    cmd = make_command(
+        committed.body["revision"], "transaction.reverse",
+        {"transaction_id": bank_tx_id, "reason": "Synthetic individual reversal"},
+        revisions,
+    )
+    result = call(engine, scope, cmd, committed.etag, internal=False)
+    assert result.status == 201
+    final = get_account_snapshot(engine, scope=scope)
+    assert next(
+        e["data"]["balance_minor"] for e in final.body["entities"]
+        if e["id"] == account
+    ) == 50000
+
+    from backend.finance_db.bank_import_candidate import get_bank_import_rows
+
+    private = get_bank_import_rows(engine, scope=scope)
+    assert private.status == 200
+    assert len(private.body["rows"]) == 1
+    assert private.body["rows"][0]["transaction_id"] == bank_tx_id
+    assert private.body["rows"][0]["status"] == "committed"
+    assert private.body["rows"][0]["source_key"] == bank["operations"][0]["source_key"]
+    assert _counts(engine, scope)["bank_import_rows"] == 1
