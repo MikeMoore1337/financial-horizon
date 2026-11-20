@@ -2,18 +2,22 @@
 
 ## Status
 
-The browser CSV/XLSX parser, reconciliation and draft generation are read-only.
-The #38 branch now also contains **unpublished** SQL-atomic bank-import,
-compensating undo, private batch-history and v2 HTTP candidates. These do
-persist real ledger movements if explicitly wired, but are **not enabled by
-default, deployed to production, or connected to the application UI**.
+The CSV/XLSX parser and reconciliation are read-only until the owner confirms a
+batch. PR #86 now contains the **owner-approved** mobile/desktop React import
+screen, atomic guest IndexedDB bank ledger with full-batch cancellation, and an
+isolated PostgreSQL implementation with protected API commit/undo/history.
+This code has **not yet been merged or released to production**.
 
-This is a Draft PR, not an accepted release. Neither CI nor a candidate
-module proves guest-mode integration, owner-approved mobile/desktop UI, full
-integration acceptance or production deployment.
+On 20 November 2026 the owner approved the ChatGPT mockups and confirmed an
+encrypted backup and isolated restore of the live `0006_reserve_events` database
+(16 RLS tables). Synthetic guest/browser and two-browser PostgreSQL CI passed
+on an earlier exact SHA. The production `0007_bank_statements` migration,
+native server/Caddy release and final static activation are still pending.
 
-Existing domestic XLSX (excel-import.js) and loan schedule CSV (schedule.js)
-are deliberately left unchanged.
+The approved mockup is a ChatGPT-produced visual concept. The three native
+third-party design-original executors were not run; no ALL_THREE completion is
+claimed. Existing domestic XLSX (`excel-import.js`) and loan schedule CSV
+(`schedule.js`) remain unchanged.
 
 ## Import pipeline
 
@@ -56,48 +60,53 @@ are deliberately left unchanged.
     compensating ledger transactions atomically. Undo is conservatively denied
     if *any* later financial revision exists, even an unrelated change.
 
-## Implemented bank integration candidate (DISABLED BY DEFAULT)
+## Implemented bank integration candidate (SERVER OFF BY DEFAULT)
 
-- Schema: `backend/finance_db/migrations/versions/0007_bank_statements.py`.
-  Separate RLS-protected `bank_import_batches` and immutable
-  `bank_import_rows`; neither replaces legacy migration #69 data.
-- SQL core: `backend/finance_db/bank_import_candidate.py`, scoped by the
-  verified auth principal and `finance_profiles FOR UPDATE`. The candidate
-  uses integer minor units, journal receipts, ETag and current revisions.
-- Private HTTP: `backend/finance_api/bank_import_http_candidate.py` and
-  `backend/finance_db/finance_router.py`: POST `/api/finance/v2/bank-import/commit`,
-  POST `/undo`, GET `/batches`. All bank endpoints are **unmounted** unless
-  the host explicitly passes `enable_bank_import_candidate=True` with finance
-  v2 enabled. No production environment toggle enables it.
-- TypeScript: `src/importers/bank-statements/save.ts`; builds normalized
-  confirmed requests, sends same-origin credentials and checks authoritative
-  server results. The module is not mounted in production navigation.
-- PostgreSQL commit currently accepts up to **1,000 operations per atomic
-  batch** and 2 MB of JSON. The browser parser accepts up to 10,000 rows, so
-  a larger confirmed selection must fail clearly; **never split an import
-  without an explicit product decision**.
-- Reimport with the same committed `batch_key` and identical payload
-  acknowledges zero new movements. Partial overlap must be reconciled before
-  committing; a conflicting source key or external ID cannot be overwritten.
-- This is an owner-only personal-finance candidate, not a general bank API:
-  RUB only, no automatic FX, no bank scraping, no original statement storage.
+- Schema: `backend/finance_db/migrations/versions/0007_bank_statements.py`,
+  separate append-only RLS `bank_import_batches` / `bank_import_rows`.
+- SQL core: `backend/finance_db/bank_import_candidate.py`, verified session,
+  PostgreSQL transaction locks, ETag CAS, receipts, source-key replay
+  protection, linked-payment checks and all-or-nothing compensating undo.
+- Private endpoints: POST `/api/finance/v2/bank-import/commit` and `/undo`,
+  GET `/batches` and `/rows`. All four are **unmounted by default** until
+  `FH_FINANCE_BANK_IMPORT_RUNTIME=on` with personal finance v2 enabled.
+  This is independent of the legacy `FH_FINANCE_IMPORT_RUNTIME` flag (#69).
+- `src/importers/bank-statements/BankImport.tsx`, `server.ts`, `save.ts`:
+  manual mapping, protected full finance snapshot + row identities,
+  signed write intent and validated receipts. No raw statement file is
+  transmitted; date/amount/description/IDs from confirmed operations are
+  sent to finance API only after explicit confirmation.
+- Guest `guest-ledger.js`: actual bank accounts and balances separate from
+  the legacy planner, atomically persisted and included in encrypted backups.
+- Signed UI requires a separate static meta flag
+  `fh-finance-bank-import=enabled`; initial release has it **disabled**.
+  Guest local import remains available without banking API.
+- Up to 1,000 operations per atomic batch and 2 MB API JSON; the browser
+  parser accepts up to 10,000 rows, so a larger selection must be reduced
+  before confirmation. RUB only, no bank scraping or automatic FX.
+- Reimport of identical committed source rows creates zero new movements.
+  Partial overlap must be reconciled manually before committing; conflicting
+  source keys and bank IDs cannot be overwritten.
 
 ## Outstanding release gates
 
-- Design originals / UI workflow and explicit owner visual approval for both
-  mobile and desktop. No new bank import UI has been implemented.
-- Wire accepted UI state to the authenticated finance v2 snapshot and
-  reconciled bank history, and implement matching **atomic IndexedDB guest
-  storage/undo** without impacting existing offline PWA or encrypted export.
-- Reconcile the confirmed selection with all existing transactions and
-  already-posted obligation/loan payment facts in both device and server
-  scopes. Ensure proposed matches are resolved manually.
-- Complete real PostgreSQL, Chromium/WebKit, security, concurrency and offline
-  regression tests on the **final** exact HEAD; review migration, permissions,
-  credit/payment invariants and restore drill. Earlier green CI is insufficient.
-- No merge, production migration, server flag activation or Issue closure
-  until all gates are actually passed. Production must preserve existing
-  financial data and have a verified rollback procedure.
+- Complete final exact-HEAD lint, typecheck, build, Node, pytest,
+  PostgreSQL, Chromium/WebKit and multi-device CI, plus an independent
+  release review. Earlier green CI is not proof for a later commit.
+- Real owner backup/restore of `0006` (16 tables) is **PASS**.
+  This does not prove migrated production `0007` (18 FORCE RLS tables).
+- Follow `docs/operations/BANK_STATEMENT_RELEASE_38.md`: main merge,
+  protected backend stage, encrypted backup/restore before migration,
+  additive `0007` migration, RLS/ACL proof, encrypted backup/restore
+  after migration, exact-SHA backend publication.
+- Run `scripts/fh_bank38_release.py` only on the authorized native VPS
+  for exact Caddy GET/POST allowlist and separate systemd bank flag;
+  verify same-origin credentials, anonymous 401, wrong-Origin 403,
+  strong ETag, OAuth and old finance routes. No user write in operator.
+- Separately release the signed UI meta flag once the backend is confirmed
+  live; verify the public exact SHA, guest and signed browser reimport,
+  partially overlapping CSV/XLSX, transfers, whole-batch undo, encrypted
+  backup/restore and logout. Close #38 only after real acceptance.
 
 ## Limits and threat boundaries
 
@@ -129,10 +138,9 @@ are deliberately left unchanged.
 - Compatibility: run the existing domestic Excel and loan schedule tests.
 - Before merge: Node 24 lint, strict tsc, build, unit, component, audit and
   Chromium/WebKit CI on the precise PR HEAD.
-- **Acceptance pending:** owner UI approval, guest IndexedDB atomic
-  commit/undo, released UI integration, full exact-HEAD review and verification
-  on the deployed production SHA. Until then leave this PR Draft and Issue #38
-  open; do not claim that passing isolated PostgreSQL CI is a production release.
+- **Acceptance pending:** live native-host schema/backend/Caddy/static release
+  and owner real-site E2E. Synthetic QA and approved UI do not constitute
+  a production release.
 
 Additional parsing rules: a split credit/debit column determines transaction direction and a conflicting explicit kind blocks the row. For XLSX, sourceKey includes a stable sheet identity in addition to file digest and physical row, preventing cross-sheet collisions. Missing trailing optional XLSX cells are treated as blank (but surplus columns and malformed CSV widths remain invalid).
 
