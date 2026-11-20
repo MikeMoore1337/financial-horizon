@@ -454,6 +454,7 @@ def mount_finance_routes(
             from backend.finance_db.bank_import_candidate import (
                 commit_bank_import_candidate, undo_bank_import_candidate,
                 get_bank_import_history,
+                get_bank_import_rows,
             )
 
             async def _handle_bank_request(request: Request, *, undo: bool):
@@ -484,6 +485,24 @@ def mount_finance_routes(
                     log.error("bank_import_candidate_db_failed")
                     return _finance_error(FinanceCommandError(
                         "service_unavailable", "Импорт не подтверждён сервером", 503,
+                    ))
+
+            @v2.get("/bank-import/rows")
+            def bank_import_rows(request: Request):
+                rate(request, "finance-read")
+                verified = scope(request)
+                try:
+                    if request.query_params:
+                        raise FinanceCommandError(
+                            "invalid_command", "Недопустимые параметры сверки", 422
+                        )
+                    return _finance_response(get_bank_import_rows(engine, scope=verified))
+                except FinanceCommandError as exc:
+                    return _finance_error(exc)
+                except SQLAlchemyError:
+                    log.error("bank_import_reconciliation_db_failed")
+                    return _finance_error(FinanceCommandError(
+                        "service_unavailable", "Сверка импортов недоступна", 503,
                     ))
 
             @v2.get("/bank-import/batches")

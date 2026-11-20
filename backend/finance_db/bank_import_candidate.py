@@ -497,3 +497,48 @@ def get_bank_import_history(
                 entries[-1]["committed_revision"] if has_more else None
             ),
         },_opaque_etag(scope.profile_id,int(current)))
+
+def get_bank_import_rows(
+    engine: Engine, *, scope: VerifiedFinanceScope,
+) -> FinanceResult:
+    """Scoped immutable bank-entry identities for full browser reconciliation.
+
+    The caller must compare this revision with its COMPLETE /state revision.
+    Never return a truncated list: missing one imported row could create cash
+    twice. File contents and filenames are neither stored nor returned.
+    """
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        revision = session.execute(text("""
+            SELECT revision FROM finance_profiles WHERE id=:p FOR SHARE
+        """), {"p":scope.profile_id}).scalar_one_or_none()
+        if revision is None:
+            raise FinanceCommandError("forbidden", "Нет доступа к профилю", 403)
+        rows = session.execute(text("""
+            SELECT r.source_key,r.fingerprint,r.external_id,r.account_id,
+                   r.target_account_id,r.transaction_id,r.kind,r.occurred_on,
+                   r.amount_minor,r.description,r.category,b.status
+            FROM bank_import_rows r
+            JOIN bank_import_batches b ON b.profile_id=r.profile_id
+             AND b.id=r.batch_id
+            WHERE r.profile_id=:p ORDER BY r.transaction_id LIMIT 5001
+        """), {"p":scope.profile_id}).mappings().all()
+        if len(rows)>5000:
+            raise FinanceCommandError("service_unavailable",
+                                      "Требуется постраничная сверка импорта", 503)
+        return FinanceResult(200,{
+            "schema_version":1,"revision":int(revision),
+            "rows":[{
+                "source_key":row["source_key"].strip(),
+                "fingerprint":row["fingerprint"].strip(),
+                "external_id":row["external_id"],
+                "account_id":str(row["account_id"]),
+                "target_account_id":str(row["target_account_id"])
+                     if row["target_account_id"] is not None else None,
+                "transaction_id":str(row["transaction_id"]),
+                "kind":row["kind"],"occurred_on":row["occurred_on"].isoformat(),
+                "amount_minor":int(row["amount_minor"]),
+                "description":row["description"],"category":row["category"],
+                "status":row["status"],
+            } for row in rows],
+        },_opaque_etag(scope.profile_id,int(revision)))

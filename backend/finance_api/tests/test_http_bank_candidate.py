@@ -188,3 +188,36 @@ def test_bank_history_private_pagination_tracks_reversals(bank_http):
     assert after_undo.status_code==200
     assert after_undo.json()["batches"][0]["status"]=="cancelled"
     assert after_undo.json()["batches"][0]["cancelled_revision"]==after_undo.json()["revision"]
+
+def test_bank_reconciliation_rows_return_exact_profile_records_without_raw_file(bank_http):
+    _,token=bank_http["first"]
+    client=bank_http["bank_client"](token)
+    state=snapshot(client)
+    account_id=str(uuid4())
+    create=request(state,"account.create",{
+        "id":account_id,"name":"Owned synthetic bank","kind":"bank",
+        "currency":"RUB","opening_minor":15000,
+    })
+    assert post(client,state,create).status_code==201
+    before=snapshot(client)
+    payload=_bank_body(before,account_id)
+    committed=_write(client,"commit",before,payload)
+    assert committed.status_code==201,committed.text
+    read=client.get("/api/finance/v2/bank-import/rows")
+    assert read.status_code==200,read.text
+    body=read.json()
+    assert body["revision"]==committed.json()["revision"]
+    assert len(body["rows"])==1
+    row=body["rows"][0]
+    assert row["source_key"]==payload["operations"][0]["source_key"]
+    assert row["external_id"]=="SYN-008"
+    assert row["amount_minor"]==1250
+    assert row["status"]=="committed"
+    assert "file_digest" not in read.text
+    assert "filename" not in read.text
+    assert read.headers["cache-control"]=="private, no-store"
+    assert client.get("/api/finance/v2/bank-import/rows?cursor=x").status_code==422
+    anonymous=TestClient(bank_http["bank_app"],base_url=ORIGIN,
+                         raise_server_exceptions=False)
+    assert anonymous.get("/api/finance/v2/bank-import/rows").status_code==401
+
