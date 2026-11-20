@@ -597,7 +597,7 @@ export function PaymentCenter({
         <div className="fh-center-grid">
           <section className="surface fh-center-payments" aria-label="Список к оплате">
             <div className="fh-center-heading">
-              <h2>К оплате</h2>
+              <h2>Напоминания</h2>
               <span
                 className="fh-center-count"
                 role="status"
