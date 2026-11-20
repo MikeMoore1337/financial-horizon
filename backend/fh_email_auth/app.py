@@ -386,15 +386,22 @@ def _personal_finance_runtime_options() -> dict:
     mode = os.environ.get("FH_FINANCE_RUNTIME_MODE", "off")
     v2_mode = os.environ.get("FH_FINANCE_V2_RUNTIME", "off")
     import_mode = os.environ.get("FH_FINANCE_IMPORT_RUNTIME", "off")
-    if mode not in ("off", "personal") or v2_mode not in ("off", "on") or import_mode not in ("off", "on"):
+    # #38 is independent of the #69 legacy import window. Never make bank
+    # writes live by inheriting its existing production enablement.
+    bank_import_mode = os.environ.get("FH_FINANCE_BANK_IMPORT_RUNTIME", "off")
+    if (mode not in ("off", "personal") or v2_mode not in ("off", "on")
+            or import_mode not in ("off", "on")
+            or bank_import_mode not in ("off", "on")):
         raise ValueError("Invalid finance feature configuration")
     if mode == "off":
-        if v2_mode != "off" or import_mode != "off":
+        if v2_mode != "off" or import_mode != "off" or bank_import_mode != "off":
             raise ValueError("Finance v2/import requires enabled private finance runtime")
         return {}
 
     if import_mode == "on" and v2_mode != "on":
         raise ValueError("Import requires explicitly enabled private finance v2")
+    if bank_import_mode == "on" and v2_mode != "on":
+        raise ValueError("Bank import requires explicitly enabled private finance v2")
     raw_namespace = os.environ.get("FH_FINANCE_PROFILE_NAMESPACE", "")
     try:
         namespace = UUID(raw_namespace)
@@ -415,6 +422,7 @@ def _personal_finance_runtime_options() -> dict:
         "finance_profile_namespace": namespace,
         "enable_account_v2_candidate": v2_mode == "on",
         "enable_import_candidate": import_mode == "on",
+        "enable_bank_import_candidate": bank_import_mode == "on",
     }
 
 
