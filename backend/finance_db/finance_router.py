@@ -87,6 +87,7 @@ def mount_finance_routes(
     secure_cookie: bool, rate_limiter: Callable[[Request, str], None] | None = None,
     enable_account_v2_candidate: bool = False,
     enable_import_candidate: bool = False,
+    enable_bank_import_candidate: bool = False,
 ) -> None:
     """Explicit application wiring only; create_app() default does not call it.
 
@@ -96,8 +97,12 @@ def mount_finance_routes(
     if (engine is None or engine.dialect.name != "postgresql"
         or not isinstance(namespace, UUID) or not public_origin):
         raise ValueError("Finance routes require validated PostgreSQL and server namespace")
-    if type(enable_account_v2_candidate) is not bool or type(enable_import_candidate) is not bool:
+    if (type(enable_account_v2_candidate) is not bool or
+        type(enable_import_candidate) is not bool or
+        type(enable_bank_import_candidate) is not bool):
         raise ValueError("Candidate route opt-in must be explicit boolean")
+    if enable_bank_import_candidate and not enable_account_v2_candidate:
+        raise ValueError("Bank import requires private finance v2 routing")
     if enable_import_candidate and not enable_account_v2_candidate:
         raise ValueError("Import requires approved private finance v2 runtime")
 
@@ -443,5 +448,49 @@ def mount_finance_routes(
                 return _finance_error(FinanceCommandError(
                     "service_unavailable", "Операция не подтверждена сервером", 503,
                 ))
+
+        if enable_bank_import_candidate:
+            from backend.finance_api.bank_import_http_candidate import parse_bank_import_body
+            from backend.finance_db.bank_import_candidate import (
+                commit_bank_import_candidate, undo_bank_import_candidate,
+            )
+
+            async def _handle_bank_request(request: Request, *, undo: bool):
+                _guard_origin(request, public_origin)
+                await run_in_threadpool(rate, request, "finance-write")
+                verified = await run_in_threadpool(scope, request)
+                try:
+                    body = await parse_bank_import_body(request)
+                except FinanceCommandError as exc:
+                    return _finance_error(exc)
+
+                def submit_from_fresh_session():
+                    current = scope(request)
+                    if current != verified:
+                        raise HTTPException(status_code=401, detail="Сеанс изменился")
+                    action = undo_bank_import_candidate if undo else commit_bank_import_candidate
+                    return action(
+                        engine, scope=current, request=body,
+                        if_match=request.headers.get("if-match", ""),
+                        idempotency_key=request.headers.get("idempotency-key", ""),
+                    )
+
+                try:
+                    return _finance_response(await run_in_threadpool(submit_from_fresh_session))
+                except FinanceCommandError as exc:
+                    return _finance_error(exc)
+                except SQLAlchemyError:
+                    log.error("bank_import_candidate_db_failed")
+                    return _finance_error(FinanceCommandError(
+                        "service_unavailable", "Импорт не подтверждён сервером", 503,
+                    ))
+
+            @v2.post("/bank-import/commit")
+            async def bank_import_commit(request: Request):
+                return await _handle_bank_request(request, undo=False)
+
+            @v2.post("/bank-import/undo")
+            async def bank_import_undo(request: Request):
+                return await _handle_bank_request(request, undo=True)
 
         app.include_router(v2)

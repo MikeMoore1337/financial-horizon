@@ -65,6 +65,7 @@ def create_app(
     finance_profile_namespace=None,
     enable_account_v2_candidate: bool=False,
     enable_import_candidate: bool=False,
+    enable_bank_import_candidate: bool=False,
 ) -> FastAPI:
     config=config or Settings.from_env()
     app=FastAPI(title="Financial Horizon Email Auth", docs_url=None, redoc_url=None,
@@ -367,6 +368,7 @@ def create_app(
             rate_limiter=lambda request, action: throttle(request, action),
             enable_account_v2_candidate=enable_account_v2_candidate,
             enable_import_candidate=enable_import_candidate,
+            enable_bank_import_candidate=enable_bank_import_candidate,
         )
     return app
 
