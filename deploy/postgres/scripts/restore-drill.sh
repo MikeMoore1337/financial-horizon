@@ -47,6 +47,8 @@ case "$version" in
     expected_tables=15 ;;
   0006_reserve_events)
     expected_tables=16 ;;
+  0007_bank_statements)
+    expected_tables=18 ;;
   *)
     echo "Unsupported finance migration version in backup" >&2
     exit 1 ;;
