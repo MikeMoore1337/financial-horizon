@@ -9,6 +9,7 @@ import { Settings, type SettingsProps } from './Settings';
 import { AuthBoundary, type AuthAccess } from './AuthBoundary';
 import { Accounts, type AccountsProps } from './Accounts';
 import { ConnectedAccounts, type ConnectedAccountsProps } from './ConnectedAccounts';
+import { BankImport, type BankImportProps } from '../importers/bank-statements/BankImport';
 
 export type ScreenView =
   | { view: 'calendar'; props: CalendarProps }
@@ -17,7 +18,8 @@ export type ScreenView =
   | { view: 'loans'; props: LoansProps }
   | { view: 'settings'; props: SettingsProps }
   | { view: 'accounts'; props: AccountsProps }
-  | { view: 'accounts-connected'; props: ConnectedAccountsProps };
+  | { view: 'accounts-connected'; props: ConnectedAccountsProps }
+  | { view: 'bank-import'; props: BankImportProps };
 
 /** One React owner for any migrated screen, never shared with legacy innerHTML. */
 export function createScreenRoot(
@@ -45,6 +47,11 @@ export function createScreenRoot(
               ) : screen.view === 'accounts-connected' ? (
                 <ConnectedAccounts
                   key={screen.props.verifiedActorUserId ?? 'locked'}
+                  {...screen.props}
+                />
+              ) : screen.view === 'bank-import' ? (
+                <BankImport
+                  key={screen.props.verifiedActorUserId ?? screen.props.mode}
                   {...screen.props}
                 />
               ) : (

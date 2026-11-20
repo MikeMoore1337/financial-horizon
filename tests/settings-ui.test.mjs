@@ -17,11 +17,13 @@ test('React Settings avoids duplicated account/theme controls and retains header
  assert.doesNotMatch(settings,/dangerouslySetInnerHTML|innerHTML/);
 });
 
-test('seven default Settings cards remain; optional finance card requires reviewed opt-in',()=>{
+test('eight Settings cards include approved bank import; optional finance accounts require opt-in',()=>{
  for(const id of ['security','backup','import','categories','archive','history','install'])
   assert.ok(settings.includes('<SettingsCard id="'+id+'"'),id);
  const cards=[...settings.matchAll(/<SettingsCard id="([^"]+)"/g)].map(x=>x[1]);
- assert.equal(cards.filter(id=>id!=='finance-accounts').length,7);
+ assert.equal(cards.filter(id=>id!=='finance-accounts').length,8);
+ assert.ok(cards.includes('bank-statement-import'));
+ assert.match(settings,/data-view="bank-import"/);
  assert.equal(cards.filter(id=>id==='finance-accounts').length,1);
  assert.match(settings,/\{showFinanceAccounts && \(/);
  assert.match(html,/<meta name="fh-finance-accounts" content="enabled">/);

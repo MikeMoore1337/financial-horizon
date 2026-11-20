@@ -329,3 +329,56 @@ class ImportRecordMap(Base):
     record_type: Mapped[str] = mapped_column(String(30), primary_key=True)
     source_record_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     target_id: Mapped[Uuid] = mapped_column(UUID(as_uuid=True))
+
+class BankImportBatch(ProfileEntity, Base):
+    """Separate from #69 legacy-history import; bank ledger audit only."""
+    __tablename__ = "bank_import_batches"
+    __table_args__ = (profile_fk(),)
+    batch_key: Mapped[str] = mapped_column(CHAR(64))
+    file_digest: Mapped[str] = mapped_column(CHAR(64))
+    payload_sha256: Mapped[bytes] = mapped_column(LargeBinary(32))
+    status: Mapped[str] = mapped_column(String(16))
+    committed_revision: Mapped[int] = mapped_column(BigInteger)
+    cancelled_revision: Mapped[int | None] = mapped_column(BigInteger)
+    operation_count: Mapped[int] = mapped_column(Integer)
+    committed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("now()"))
+
+
+class BankImportRow(Base):
+    """Original bank entry mapping is immutable, even after whole-batch reversal."""
+    __tablename__ = "bank_import_rows"
+    __table_args__ = (
+        profile_fk(),
+        ForeignKeyConstraint(
+            ["profile_id", "batch_id"],
+            ["finance.bank_import_batches.profile_id", "finance.bank_import_batches.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["profile_id", "account_id"],
+            ["finance.accounts.profile_id", "finance.accounts.id"], ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["profile_id", "target_account_id"],
+            ["finance.accounts.profile_id", "finance.accounts.id"], ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["profile_id", "transaction_id"],
+            ["finance.ledger_transactions.profile_id", "finance.ledger_transactions.id"],
+            ondelete="RESTRICT",
+        ),
+    )
+    profile_id: Mapped[Uuid] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    source_key: Mapped[str] = mapped_column(CHAR(64), primary_key=True)
+    batch_id: Mapped[Uuid] = mapped_column(UUID(as_uuid=True))
+    fingerprint: Mapped[str] = mapped_column(CHAR(64))
+    external_id: Mapped[str | None] = mapped_column(String(150))
+    account_id: Mapped[Uuid] = mapped_column(UUID(as_uuid=True))
+    target_account_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
+    transaction_id: Mapped[Uuid] = mapped_column(UUID(as_uuid=True))
+    kind: Mapped[str] = mapped_column(String(16))
+    occurred_on: Mapped[date] = mapped_column(Date)
+    amount_minor: Mapped[int] = mapped_column(BigInteger)
+    description: Mapped[str] = mapped_column(String(500))
+    category: Mapped[str | None] = mapped_column(String(160))
+

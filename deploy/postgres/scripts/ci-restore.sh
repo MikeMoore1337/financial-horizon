@@ -22,13 +22,13 @@ gpg --batch --yes --pinentry-mode loopback --passphrase 'CI-ONLY-NOT-A-REAL-SECR
     --exit-on-error
 tables="$(docker exec "$pg" psql -U postgres -d fh_finance_ci_restore -Atc \
   "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname='finance' AND tablename <> 'alembic_version'")"
-test "$tables" = 16
+test "$tables" = 18
 test "$(docker exec "$pg" psql -U postgres -d fh_finance_ci_restore -Atc \
   "SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname='finance'")" = fh_finance_migrator
 test "$(docker exec "$pg" psql -U postgres -d fh_finance_ci_restore -Atc \
   "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON c.relnamespace=n.oid
      WHERE n.nspname='finance' AND c.relkind='r' AND c.relname<>'alembic_version'
-       AND pg_get_userbyid(c.relowner)='fh_finance_migrator'")" = 16
+       AND pg_get_userbyid(c.relowner)='fh_finance_migrator'")" = 18
 # Verify at least the two synthetic owner profiles are present after restore.\n# The expanded ledger suite may legitimately add more isolated profiles.
 test "$(docker exec "$pg" psql -U postgres -d fh_finance_ci_restore -Atc \
   "SELECT count(*) FROM finance.finance_profiles")" -ge 2
@@ -43,4 +43,4 @@ test "$(docker exec "$pg" psql -U fh_finance_runtime -d fh_finance_ci_restore -A
 docker exec "$pg" psql -v ON_ERROR_STOP=1 -U postgres -d fh_finance_ci_restore \
   -c 'CREATE EXTENSION IF NOT EXISTS amcheck' >/dev/null
 docker exec "$pg" pg_amcheck -U postgres -d fh_finance_ci_restore --no-dependent-indexes >/dev/null
-echo "CI_ENCRYPTED_RESTORE_PASS: 16 tables, temporary restored database"
+echo "CI_ENCRYPTED_RESTORE_PASS: 18 tables, temporary restored database"

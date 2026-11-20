@@ -94,7 +94,7 @@ test -n "$expected_version" && test "$version" = "$expected_version"
 tables="$(docker exec -u postgres fh-finance-postgres \
   psql -U postgres -d fh_finance -Atc \
   "SELECT count(*) FROM pg_tables WHERE schemaname='finance' AND tablename<>'alembic_version'")"
-test "$tables" = 16
+test "$tables" = 18
 
 # Exercise the actual production backup and isolated restore scripts with
 # an ephemeral synthetic GPG key. No user or production data is used.

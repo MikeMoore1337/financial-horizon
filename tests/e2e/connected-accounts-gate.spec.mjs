@@ -34,6 +34,15 @@ test('#33 server-backed accounts remain hidden to guests and are available only 
   await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
   await view(page, 'settings');
   await expect(page.locator('[data-settings-card="finance-accounts"]')).toBeVisible();
+  await expect(page.locator('[data-settings-card="bank-statement-import"]')).toHaveCount(0);
+  await page.evaluate(() => {
+    const hidden = document.createElement('button');
+    hidden.dataset.view = 'bank-import';
+    document.body.append(hidden);
+    hidden.click();
+    hidden.remove();
+  });
+  await expect(page.locator('#toolbar-title')).toHaveText('Настройки');
   expect(financeCalls).toEqual([]);
   watch.assertClean();
 });
