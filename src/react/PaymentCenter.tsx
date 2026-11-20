@@ -138,7 +138,13 @@ function PaymentMethodAction({
           className="button-secondary fh-center-action"
           aria-expanded={showQr}
           aria-controls={contentId}
-          onClick={() => (showQr ? closeQr() : (setImageFailed(false), setShowQr(true)))}
+          onClick={() => {
+            if (showQr) closeQr();
+            else {
+              setImageFailed(false);
+              setShowQr(true);
+            }
+          }}
         >
           {showQr ? 'Скрыть QR' : 'Показать QR'}
         </button>
