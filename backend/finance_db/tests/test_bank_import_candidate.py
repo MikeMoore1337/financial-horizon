@@ -340,12 +340,15 @@ def test_public_transaction_reverse_keeps_import_batch_committed_but_voids_money
     batch_id = uuid5(scope.profile_id, "bank-import:v1:" + bank["batch_key"])
     bank_tx_id = str(uuid5(batch_id, bank["operations"][0]["source_key"]))
     committed = get_account_snapshot(engine, scope=scope)
+    # The v1/v2 account snapshot lists account entities only. The imported
+    # transaction has the immutable first entity revision assigned by _post;
+    # an existing public transaction.reverse test uses the same contract.
     revisions = {
         entity["id"]: entity["entity_revision"]
-        for entity in committed.body["entities"]
-        if entity["id"] in (account, bank_tx_id)
+        for entity in committed.body["entities"] if entity["id"] == account
     }
-    assert set(revisions) == {account, bank_tx_id}
+    assert set(revisions) == {account}
+    revisions[bank_tx_id] = 1
     cmd = make_command(
         committed.body["revision"], "transaction.reverse",
         {"transaction_id": bank_tx_id, "reason": "Synthetic individual reversal"},
