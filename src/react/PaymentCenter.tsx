@@ -50,9 +50,39 @@ function mainMethod(methods: readonly PaymentMethod[]): PaymentMethod | null {
   return preferred ?? null;
 }
 
-/** Exposes existing #136 metadata, never creates a settlement from a URL or QR. */
-function PaymentMethodAction({ method, id }: { method: PaymentMethod | null; id: string }) {
+/** #136 payment metadata only: these actions never post a financial settlement. */
+function PaymentMethodAction({
+  method,
+  id,
+  alternatives = [],
+}: {
+  method: PaymentMethod | null;
+  id: string;
+  alternatives?: readonly PaymentMethod[];
+}) {
   const [showQr, setShowQr] = useState(false);
+  const [imageFailed, setImageFailed] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  const closeQr = () => {
+    setShowQr(false);
+    triggerRef.current?.focus();
+  };
+  useEffect(() => {
+    if (!showQr) return;
+    closeRef.current?.focus();
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setShowQr(false);
+        triggerRef.current?.focus();
+      }
+    };
+    document.addEventListener('keydown', onEscape);
+    return () => document.removeEventListener('keydown', onEscape);
+  }, [showQr]);
+
   if (!method) {
     return (
       <button
@@ -89,22 +119,58 @@ function PaymentMethodAction({ method, id }: { method: PaymentMethod | null; id:
     if (!method.imageData || !validQrData(method.imageData)) {
       return <span className="small-hint">QR повреждён. Измените способ оплаты.</span>;
     }
+    const phoneAlternatives = alternatives.filter((option) => {
+      if (option.type === 'requisites') return Boolean(option.value?.trim());
+      if (option.type !== 'payment_url' && option.type !== 'sbp_link') return false;
+      try {
+        safePaymentUrl(option.value);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    const contentId = 'fh-center-qr-' + id + '-' + method.id;
     return (
       <div className="fh-center-qr">
         <button
+          ref={triggerRef}
           type="button"
           className="button-secondary fh-center-action"
           aria-expanded={showQr}
-          onClick={() => setShowQr((prev) => !prev)}
+          aria-controls={contentId}
+          onClick={() => (showQr ? closeQr() : (setImageFailed(false), setShowQr(true)))}
         >
           {showQr ? 'Скрыть QR' : 'Показать QR'}
         </button>
         {showQr && (
-          <div className="fh-center-qr-content">
-            <img src={method.imageData} alt="Сохранённый QR-код для оплаты" />
-            <p className="small-hint">
-              На том же телефоне используйте другой способ оплаты, если он доступен.
-            </p>
+          <div id={contentId} className="fh-center-qr-content" role="region" aria-label="Просмотр QR-кода">
+            <button ref={closeRef} type="button" className="button-text" onClick={closeQr}>
+              Закрыть QR
+            </button>
+            {imageFailed ? (
+              <p role="alert">Не удалось открыть изображение QR. Измените способ оплаты.</p>
+            ) : (
+              <img
+                src={method.imageData}
+                alt="Сохранённый QR-код для оплаты"
+                onError={() => setImageFailed(true)}
+              />
+            )}
+            {phoneAlternatives.length ? (
+              <div className="fh-center-qr-alternatives" aria-label="Способы оплаты с этого телефона">
+                <p className="small-hint">Для оплаты с этого телефона:</p>
+                {phoneAlternatives.map((option) => (
+                  <div className="fh-center-qr-option" key={option.id}>
+                    <span className="small-hint">{option.label}</span>
+                    <PaymentMethodAction method={option} id={id} />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="small-hint">
+                Другой способ оплаты с этого телефона не настроен. Можно открыть QR на другом устройстве.
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -143,6 +209,7 @@ function PaymentRow({
   formatDate: PaymentCenterProps['formatDate'];
 }) {
   const method = payment.source === 'entry' ? mainMethod(methods) : null;
+  const otherMethods = method ? methods.filter((item) => item.id !== method.id) : [];
   return (
     <article
       className="fh-center-event"
@@ -162,22 +229,51 @@ function PaymentRow({
           {relativeDate(payment.dueDate, payment.daysUntilDue, formatDate)}
         </p>
         <p className="fh-center-meta">
+          Полная сумма: {rubles(payment.plannedCents)}
           {payment.partial
-            ? `Внесено ${rubles(payment.paidCents)} из ${rubles(payment.plannedCents)}`
+            ? ' · внесено ' + rubles(payment.paidCents)
             : payment.source === 'loan'
-              ? 'Платёж по кредиту'
-              : 'Оплата ещё не подтверждена'}
+              ? ' · платёж по кредиту'
+              : ' · оплата ещё не подтверждена'}
         </p>
       </div>
       <div className="fh-center-event-side">
         <strong className="fh-center-amount">{rubles(payment.remainingCents)}</strong>
         <div className="fh-center-actions">
           {payment.source === 'entry' ? (
-            <PaymentMethodAction
-              key={payment.recordId + ':' + method?.id}
-              method={method}
-              id={payment.recordId}
-            />
+            <>
+              <PaymentMethodAction
+                key={payment.recordId + ':' + method?.id}
+                method={method}
+                id={payment.recordId}
+                alternatives={otherMethods}
+              />
+              {otherMethods.length > 0 && (
+                <details className="fh-center-other-methods">
+                  <summary>Другие способы оплаты ({otherMethods.length})</summary>
+                  <div className="fh-center-other-list">
+                    {otherMethods.map((option) => (
+                      <div className="fh-center-other-option" key={option.id}>
+                        <span className="small-hint">{option.label}</span>
+                        <PaymentMethodAction
+                          method={option}
+                          id={payment.recordId}
+                          alternatives={methods.filter((item) => item.id !== option.id)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+              <button
+                type="button"
+                className="button-secondary fh-center-action"
+                data-action="edit-entry"
+                data-id={payment.recordId}
+              >
+                Изменить
+              </button>
+            </>
           ) : null}
           <button
             type="button"
@@ -448,6 +544,12 @@ export function PaymentCenter({
 }: PaymentCenterProps) {
   const [showSettings, setShowSettings] = useState(false);
   const due = result?.duePayments.filter((row) => row.daysUntilDue <= 7) ?? [];
+  const dueGroups = [
+    { key: 'overdue', title: 'Просрочено', rows: due.filter((row) => row.status === 'overdue') },
+    { key: 'today', title: 'Сегодня', rows: due.filter((row) => row.status === 'today') },
+    { key: 'upcoming', title: 'Скоро', rows: due.filter((row) => row.status === 'upcoming') },
+  ];
+  for (const group of dueGroups) group.rows.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
   const reminders =
     result?.alerts.filter((item): item is PaymentReminder => item.kind === 'payment') ?? [];
   const total = due.reduce((sum, row) => sum + row.remainingCents, 0);
@@ -479,7 +581,7 @@ export function PaymentCenter({
         <div className="fh-center-grid">
           <section className="surface fh-center-payments" aria-label="Список к оплате">
             <div className="fh-center-heading">
-              <h2>Напоминания</h2>
+              <h2>К оплате</h2>
               <span
                 className="fh-center-count"
                 role="status"
@@ -489,15 +591,22 @@ export function PaymentCenter({
               </span>
             </div>
             {due.length ? (
-              due.map((row) => (
-                <PaymentRow
-                  key={row.key}
-                  payment={row}
-                  methods={paymentMethods[row.recordId] ?? []}
-                  rubles={rubles}
-                  formatDate={formatDate}
-                />
-              ))
+              dueGroups.map((group) =>
+                group.rows.length ? (
+                  <section key={group.key} className="fh-center-group" aria-label={group.title}>
+                    <h3 className="fh-center-group-title">{group.title}</h3>
+                    {group.rows.map((row) => (
+                      <PaymentRow
+                        key={row.key}
+                        payment={row}
+                        methods={paymentMethods[row.recordId] ?? []}
+                        rubles={rubles}
+                        formatDate={formatDate}
+                      />
+                    ))}
+                  </section>
+                ) : null,
+              )
             ) : (
               <div className="fh-center-empty" role="status">
                 <strong>Нет ближайших платежей</strong>
