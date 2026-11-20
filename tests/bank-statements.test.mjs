@@ -188,6 +188,30 @@ test('content-only duplicates need explicit review, even when same bank IDs abse
   );
 });
 
+test('a linked loan or obligation payment is never imported silently on matching cash fields', async () => {
+  const { preview } = await previewOf(base +
+    '07.11.2026;-999,95;Описание банковского списания;Основной;;расход;Питание;LINK-1\n');
+  const operation = preview.rows[0].operation;
+  const paid = {
+    id: 'settled-loan', linkedPaymentId: 'loan-fact-1',
+    accountId: operation.accountId, date: operation.date,
+    amountCents: operation.amountCents, kind: 'expense',
+    description: 'Ранее оплаченный кредит',
+  };
+  const result = reconcileBankStatement(preview, [paid]);
+  assert.equal(result.ready, 0);
+  assert.equal(result.possibleDuplicates, 1);
+  assert.deepEqual(result.rows[0].existingIds, ['settled-loan']);
+  await assert.rejects(draftBankImportBatch(result, [operation.sourceKey]), /подтверждения/);
+  const explicit = await draftBankImportBatch(result, [operation.sourceKey], [operation.sourceKey]);
+  assert.equal(explicit.expectedOperationCount, 1);
+  const otherAmount = reconcileBankStatement(preview, [{ ...paid, amountCents: paid.amountCents + 1 }]);
+  assert.equal(otherAmount.ready, 1);
+  // An unrelated transfer must not be treated as a payment fact.
+  const transfer = reconcileBankStatement(preview, [{ ...paid, linkedPaymentId: null, kind: 'transfer' }]);
+  assert.equal(transfer.ready, 1);
+});
+
 test('split income/expense columns and negative parentheses', async () => {
   const table = await readBankStatementFile(input(
     'date;income;expense;account;description\n' +

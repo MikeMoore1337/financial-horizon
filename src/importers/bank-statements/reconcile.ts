@@ -40,6 +40,7 @@ export function reconcileBankStatement(
   const byBankId = new Map<string, ExistingBankMovement[]>();
   const byFingerprint = new Map<string, ExistingBankMovement[]>();
   const byLegacyContent = new Map<string, ExistingBankMovement[]>();
+  const byLinkedPayment = new Map<string, ExistingBankMovement[]>();
   const byTransferAccount = new Map<string, ExistingBankMovement[]>();
   const ledgerOrder = new Map<ExistingBankMovement, number>();
   const bucket = <T>(map: Map<string, T[]>, key: string, item: T) => {
@@ -65,6 +66,13 @@ export function reconcileBankStatement(
     if (movement.fingerprint) bucket(byFingerprint, movement.fingerprint, movement);
     else if (movement.kind !== 'transfer') {
       bucket(byLegacyContent, legacySignature(movement), movement);
+    }
+    // A bank debit can be an already-posted obligation or loan payment even
+    // when the bank description and the ledger note are different. Escalate
+    // matching linked payment facts to manual review, never an exact replay.
+    if (movement.linkedPaymentId) {
+      bucket(byLinkedPayment,
+        identity(movement.accountId, movement.date, movement.amountCents), movement);
     }
     if (movement.kind === 'transfer') {
       bucket(byTransferAccount,
@@ -131,6 +139,12 @@ export function reconcileBankStatement(
     // classified as ready. Such matches are never promoted to exact duplicates.
     for (const candidate of byLegacyContent.get(legacySignature(op)) || []) {
       candidates.add(candidate);
+    }
+    if (op.kind !== 'transfer') {
+      for (const candidate of byLinkedPayment.get(
+        identity(op.accountId, op.date, op.amountCents)) || []) {
+        candidates.add(candidate);
+      }
     }
     if (op.kind === 'transfer') {
       for (const accountId of [op.accountId, op.targetAccountId]) {
