@@ -383,6 +383,28 @@ test('source key replay with changed column mapping is a hard conflict', async (
   assert.ok(attempt.rows[0].warnings.some(x => x.code === 'SOURCE_KEY_CONFLICT'));
 });
 
+test('same-source replay rejects changed descriptions and bank ID mapping', async () => {
+  const { preview } = await previewOf(base +
+    '07.11.2026;-100;Синтетическая;Основной;;расход;Питание;SOURCE-SAFE-1\n');
+  const original = preview.rows[0].operation;
+  const stored = [{ ...original, id: 'booked-source-safe' }];
+  assert.equal(reconcileBankStatement(preview, stored).duplicates, 1);
+  const tampered = [
+    { ...original, description: 'Другая колонка' },
+    { ...original, fingerprint: 'stale-fingerprint' },
+    { ...original, externalId: null },
+    { ...original, category: null },
+  ];
+  for (const operation of tampered) {
+    const changed = reconcileBankStatement({
+      ...preview, rows: [{ ...preview.rows[0], operation }],
+    }, stored);
+    assert.equal(changed.invalid, 1);
+    assert.ok(changed.rows[0].warnings.some(x => x.code === 'SOURCE_KEY_CONFLICT'));
+    await assert.rejects(draftBankImportBatch(changed, [operation.sourceKey]));
+  }
+});
+
 test('invalid trailing timestamp text or time values do not silently become a valid day', async () => {
   const value = base +
     '2026-11-07Tnot-time;-3;A;Основной;;расход;Питание;TS-1\n' +

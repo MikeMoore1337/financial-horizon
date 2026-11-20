@@ -85,10 +85,14 @@ export function reconcileBankStatement(
     if (!op) return { ...row, status: 'invalid', existingIds: [] };
     const sourceMatches = bySource.get(op.sourceKey) || [];
     if (sourceMatches.length) {
+      // A source key identifies one physical row of one immutable source file.
+      // A remapping of that row must never become a silent replay.
       const differs = sourceMatches.length !== 1 || sourceMatches.some(x =>
         !matchesFinancialFields(x, op) ||
-        (x.externalId !== undefined && x.externalId !== null && op.externalId &&
-          x.externalId !== op.externalId));
+        x.description !== op.description ||
+        (x.fingerprint != null && x.fingerprint !== op.fingerprint) ||
+        (x.externalId ?? null) !== op.externalId ||
+        (x.category ?? null) !== op.category);
       return {
         ...row, status: differs ? 'invalid' : 'duplicate',
         existingIds: sourceMatches.map(x => x.id),
