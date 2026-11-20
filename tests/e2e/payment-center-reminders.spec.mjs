@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { deflateSync } from 'node:zlib';
 import { observe, visitGuest, view, scopedState } from './helpers.mjs';
 
 function iso(date) {
@@ -155,6 +156,34 @@ test('#40 actual authenticated reserve snapshot warns at 3 days and refreshes af
 });
 
 
+function syntheticQrPng() {
+  const chunk = (type, data) => {
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const payload = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    let crc = 0xffffffff;
+    for (const byte of payload) {
+      crc ^= byte;
+      for (let i = 0; i < 8; i++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+    }
+    const trailer = Buffer.alloc(4);
+    trailer.writeUInt32BE((crc ^ 0xffffffff) >>> 0);
+    return Buffer.concat([length, payload, trailer]);
+  };
+  const header = Buffer.from('89504e470d0a1a0a', 'hex');
+  const dimensions = Buffer.alloc(13);
+  dimensions.writeUInt32BE(1, 0);
+  dimensions.writeUInt32BE(1, 4);
+  dimensions[8] = 8;
+  dimensions[9] = 6;
+  return Buffer.concat([
+    header,
+    chunk('IHDR', dimensions),
+    chunk('IDAT', deflateSync(Buffer.from([0, 0, 0, 0, 255]))),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
 test('#137 real browser: QR, other methods, focus, 320-1280 and unchanged settlements', async ({ page, context }) => {
   const watch = await observe(context, page);
   await visitGuest(page);
@@ -166,15 +195,12 @@ test('#137 real browser: QR, other methods, focus, 320-1280 and unchanged settle
   await expect(page.locator('#entry-dialog')).toBeVisible();
   await page.locator('[data-action="open-payment-methods"]').click();
   const form = page.locator('#payment-method-form');
-  const png = Buffer.from(
-    'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAFUlEQVR4nGP8//8/AzbAhFV00EoAAFbUAw037MyjAAAAAElFTkSuQmCC',
-    'base64',
-  );
+  const png = syntheticQrPng();
   await form.locator('[name="type"]').selectOption('qr_image');
   await form.locator('[name="label"]').fill('Сохранённый QR');
   await form.locator('[name="qrFile"]').setInputFiles({ name: 'fixture.png', mimeType: 'image/png', buffer: png });
   await form.locator('button[type="submit"]').click();
-  await expect.poll(async () => (await scopedState(page, 'state')).entries[0].paymentMethods.length).toBe(1);
+  await expect.poll(async () => ((await scopedState(page, 'state')).entries[0].paymentMethods?.length ?? 0)).toBe(1);
   await form.locator('[name="type"]').selectOption('sbp_link');
   await form.locator('[name="label"]').fill('СБП');
   await form.locator('[name="value"]').fill('https://qr.nspk.ru/example');
