@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {emptyState,validateState} from '../finance.js';
+import {reconcileBankStatement} from '../src/importers/bank-statements/reconcile.ts';
 import {
   emptyGuestBankLedger,readGuestBankLedger,guestBankMovements,guestBankBalance,
   addGuestBankAccount,commitGuestBankBatch,undoGuestBankBatch,
@@ -56,7 +57,6 @@ test('guest batch commit and whole undo preserve immutable financial facts',()=>
   };
   // A compensated batch remains an immutable imported-source identity.
   // The user must not be invited to post the same bank file again.
-  const {reconcileBankStatement} = await import('../src/importers/bank-statements/reconcile.ts');
   const status=reconcileBankStatement(reread,cancelled);
   assert.equal(status.duplicates,2);
   assert.equal(status.ready,0);
