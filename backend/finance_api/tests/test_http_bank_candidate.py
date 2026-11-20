@@ -71,7 +71,7 @@ def _bank_body(state,account_id):
 
 
 def test_bank_route_unmounted_without_separate_opt_in(env):
-    assert all("bank-import" not in route.path for route in env["app"].routes)
+    assert all("bank-import" not in getattr(route, "path", "") for route in env["app"].routes)
     _,token=env["first"]
     client=env["client"](token)
     assert client.post("/api/finance/v2/bank-import/commit",
