@@ -14,7 +14,7 @@ const empty: SettingsProps = {
 afterEach(cleanup);
 
 describe('React Settings - local data controls', () => {
-  it('renders exactly seven approved cards and no duplicate account/theme controls', () => {
+  it('renders eight approved cards and no duplicate account/theme controls', () => {
     render(
       <StrictMode>
         <Settings {...empty} />
@@ -22,11 +22,12 @@ describe('React Settings - local data controls', () => {
     );
     expect(screen.getByRole('heading', { name: 'Настройки' })).toBeTruthy();
     const cards = document.querySelectorAll('[data-settings-card]');
-    expect(cards.length).toBe(7);
+    expect(cards.length).toBe(8);
     expect([...cards].map((card) => card.getAttribute('data-settings-card'))).toEqual([
       'security',
       'backup',
       'import',
+      'bank-statement-import',
       'categories',
       'archive',
       'history',
@@ -95,7 +96,7 @@ describe('React Settings - local data controls', () => {
 it('optional server accounts entry is hidden by default and only routes on explicit opt-in', () => {
   render(<Settings {...empty} showFinanceAccounts />);
   const cards = document.querySelectorAll('[data-settings-card]');
-  expect(cards).toHaveLength(8);
+  expect(cards).toHaveLength(9);
   const accountCard = document.querySelector('[data-settings-card="finance-accounts"]');
   expect(accountCard).not.toBeNull();
   expect(accountCard?.querySelector('[data-view="accounts-connected"]')).not.toBeNull();
@@ -111,7 +112,7 @@ it('personal cloud import requires independent accounts and import opt-ins', () 
   expect(document.querySelector('[data-action="cloud-import"]')).toBeNull();
   cleanup();
   render(<Settings {...empty} showFinanceAccounts showFinanceImport />);
-  expect(document.querySelectorAll('[data-settings-card]')).toHaveLength(8);
+  expect(document.querySelectorAll('[data-settings-card]')).toHaveLength(9);
   const action = document.querySelector<HTMLButtonElement>('[data-action="cloud-import"]');
   expect(action).not.toBeNull();
   expect(action?.textContent).toContain('Перенести данные');
