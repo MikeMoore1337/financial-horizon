@@ -916,6 +916,40 @@ test('indexed reconciliation detects both directions of transfers across bank st
   assert.deepEqual(sameFile.rows.map(x => x.status), ['ready', 'possible-duplicate']);
 });
 
+test('same-day matching cash amount requires manual review even with different notes', async () => {
+  const { preview } = await previewOf(base +
+    '07.11.2026;-330;Банк: кафе;Основной;;расход;Питание;AMOUNT-CHECK-1\n');
+  const op = preview.rows[0].operation;
+  const saved = {
+    id: 'manual-no-bank-id', accountId: op.accountId, date: op.date,
+    amountCents: op.amountCents, kind: 'expense', description: 'Вручную: обед',
+  };
+  const overlap = reconcileBankStatement(preview, [saved]);
+  assert.equal(overlap.possibleDuplicates, 1);
+  assert.equal(overlap.ready, 0);
+  assert.deepEqual(overlap.rows[0].existingIds, [saved.id]);
+  await assert.rejects(draftBankImportBatch(overlap, [op.sourceKey]), /подтверждения/);
+});
+
+test('cancelled bank-source keys remain duplicate identities but not active cash matches', async () => {
+  const { preview } = await previewOf(base +
+    '07.11.2026;-330;Синтетика;Основной;;расход;Питание;CANCEL-SOURCE-1\n');
+  const op = preview.rows[0].operation;
+  const saved = { ...op, id: 'reversed-bank-row', voidedAt: '2026-11-08' };
+  const replay = reconcileBankStatement(preview, [saved]);
+  assert.equal(replay.duplicates, 1);
+  assert.equal(replay.ready, 0);
+  await assert.rejects(draftBankImportBatch(replay, [op.sourceKey]));
+  const similar = {
+    ...op, sourceKey: 'different-extract', externalId: 'different-bank-id',
+    fingerprint: 'another-fingerprint', description: 'Вновь потрачено',
+  };
+  const next = reconcileBankStatement({
+    ...preview, rows: [{ ...preview.rows[0], operation: similar }],
+  }, [saved]);
+  assert.equal(next.ready, 1);
+});
+
 test('legacy movements lacking fingerprints are flagged for explicit review, not silently imported', async () => {
   const { preview } = await previewOf(base +
     '07.11.2026;-100,00;Кофе;Основной;;расход;Питание;\n');

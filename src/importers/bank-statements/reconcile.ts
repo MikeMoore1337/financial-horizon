@@ -40,6 +40,7 @@ export function reconcileBankStatement(
   const byBankId = new Map<string, ExistingBankMovement[]>();
   const byFingerprint = new Map<string, ExistingBankMovement[]>();
   const byLegacyContent = new Map<string, ExistingBankMovement[]>();
+  const byCashSignature = new Map<string, ExistingBankMovement[]>();
   const byLinkedPayment = new Map<string, ExistingBankMovement[]>();
   const byTransferAccount = new Map<string, ExistingBankMovement[]>();
   const ledgerOrder = new Map<ExistingBankMovement, number>();
@@ -57,11 +58,18 @@ export function reconcileBankStatement(
     identity(m.accountId, m.date, m.kind, m.amountCents, m.targetAccountId ?? null,
       m.description.trim().toLocaleLowerCase('ru-RU'));
   for (const movement of existing) {
-    if (movement.voidedAt) continue;
     ledgerOrder.set(movement, ledgerOrder.size);
+    // Reversed imported movements remain immutable bank-source identities,
+    // but never count as active spending or heuristic cash matches.
     if (movement.sourceKey) bucket(bySource, movement.sourceKey, movement);
     if (movement.externalId) {
       bucket(byBankId, identity(movement.accountId, movement.externalId), movement);
+    }
+    if (movement.voidedAt) continue;
+    if (movement.kind !== 'transfer') {
+      bucket(byCashSignature, identity(
+        movement.accountId, movement.date, movement.amountCents, movement.kind,
+      ), movement);
     }
     if (movement.fingerprint) bucket(byFingerprint, movement.fingerprint, movement);
     else if (movement.kind !== 'transfer') {
@@ -141,6 +149,12 @@ export function reconcileBankStatement(
       candidates.add(candidate);
     }
     if (op.kind !== 'transfer') {
+      // Server SQL also matches account/date/signed amount even if a manually
+      // entered note differs. The preview must expose the SAME ambiguity.
+      for (const candidate of byCashSignature.get(
+        identity(op.accountId, op.date, op.amountCents, op.kind)) || []) {
+        candidates.add(candidate);
+      }
       for (const candidate of byLinkedPayment.get(
         identity(op.accountId, op.date, op.amountCents)) || []) {
         candidates.add(candidate);
