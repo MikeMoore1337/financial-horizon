@@ -1042,7 +1042,7 @@ test('separate expense/income matching either transfer leg require manual review
 
 test('linked payment review respects cash direction and never matches an opposite sign', async () => {
   const incoming = await previewOf(base +
-    '07.11.2026;100,00;Bank incoming;Основной;;доход;Зарплата;PAYMENT-CREDIT\\n');
+    '07.11.2026;100,00;Bank incoming;Основной;;доход;Зарплата;PAYMENT-CREDIT\n');
   const oldExpense = {
     id: 'existing-expense', linkedPaymentId: 'loan-payment-fact',
     accountId: 'checking', date: '2026-11-07',
@@ -1054,7 +1054,7 @@ test('linked payment review respects cash direction and never matches an opposit
     .rows[0].existingIds, []);
 
   const outgoing = await previewOf(base +
-    '07.11.2026;-100,00;Bank outgoing;Основной;;расход;Питание;PAYMENT-DEBIT\\n');
+    '07.11.2026;-100,00;Bank outgoing;Основной;;расход;Питание;PAYMENT-DEBIT\n');
   const oldIncome = {
     ...oldExpense, id: 'existing-income', kind: 'income',
     description: 'Previous unrelated income',
