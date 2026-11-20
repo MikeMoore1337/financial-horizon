@@ -101,18 +101,30 @@ export interface GuestBankAccount {
   openingMinor: number;
 }
 export interface GuestBankMovement {
-  sourceKey: string; fingerprint: string; externalId: string | null;
-  date: string; amountCents: number; kind: 'income' | 'expense' | 'transfer';
-  description: string; accountId: string; targetAccountId: string | null;
-  category: string | null; batchKey: string;
+  sourceKey: string;
+  fingerprint: string;
+  externalId: string | null;
+  date: string;
+  amountCents: number;
+  kind: 'income' | 'expense' | 'transfer';
+  description: string;
+  accountId: string;
+  targetAccountId: string | null;
+  category: string | null;
+  batchKey: string;
 }
 export interface GuestBankBatch {
-  batchKey: string; fileDigest: string; operationCount: number;
-  committedStateRevision: number; cancelledStateRevision: number | null;
+  batchKey: string;
+  fileDigest: string;
+  operationCount: number;
+  committedStateRevision: number;
+  cancelledStateRevision: number | null;
 }
 export interface GuestBankLedger {
-  version: 1; accounts: GuestBankAccount[];
-  operations: GuestBankMovement[]; batches: GuestBankBatch[];
+  version: 1;
+  accounts: GuestBankAccount[];
+  operations: GuestBankMovement[];
+  batches: GuestBankBatch[];
 }
 
 export interface FinanceContents {
