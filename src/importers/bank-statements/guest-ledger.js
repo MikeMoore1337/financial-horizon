@@ -19,6 +19,10 @@ const integer = (value, min, max) => Number.isSafeInteger(value) && value >= min
 const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value) &&
   (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
 const distinct = values => new Set(values).size === values.length;
+const safeGuestDate = value => typeof value === 'string' &&
+  /^\\d{4}-\\d{2}-\\d{2}$/.test(value) &&
+  Number.isFinite(new Date(value + 'T00:00:00.000Z').getTime()) &&
+  new Date(value + 'T00:00:00.000Z').toISOString().slice(0, 10) === value;
 
 export function emptyGuestBankLedger() {
   return { version: 1, accounts: [], operations: [], batches: [] };
@@ -78,6 +82,13 @@ export function commitGuestBankBatch(state, plan, fileDigest, expectedRevision) 
   for (const op of plan.operations) {
     if (!op || !HASH.test(op.sourceKey) || !HASH.test(op.fingerprint) ||
         !plan.sourceKeys.includes(op.sourceKey) ||
+        op.currency !== 'RUB' || !integer(op.amountCents, 1, MAX_MINOR) ||
+        !['income','expense','transfer'].includes(op.kind) ||
+        !safeGuestDate(op.date) ||
+        typeof op.description !== 'string' || op.description.length > 500 ||
+        (op.category !== null && (typeof op.category !== 'string' || op.category.length > 160)) ||
+        (op.externalId !== null && (typeof op.externalId !== 'string' ||
+         op.externalId.length < 1 || op.externalId.length > 150)) ||
         !ledger.accounts.some(x => x.id === op.accountId) ||
         (op.kind === 'transfer' && !ledger.accounts.some(x => x.id === op.targetAccountId)) ||
         keys.has(op.sourceKey) ||

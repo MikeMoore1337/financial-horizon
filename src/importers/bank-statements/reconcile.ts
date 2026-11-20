@@ -151,10 +151,21 @@ export function reconcileBankStatement(
     if (op.kind !== 'transfer') {
       // Server SQL also matches account/date/signed amount even if a manually
       // entered note differs. The preview must expose the SAME ambiguity.
-      for (const candidate of byCashSignature.get(
-        identity(op.accountId, op.date, op.amountCents, op.kind)) || []) {
-        candidates.add(candidate);
+      const cashMatches = byCashSignature.get(
+        identity(op.accountId, op.date, op.amountCents, op.kind)) || [];
+      // Server refuses more than 32 ambiguous cash matches. Avoid O(rows *
+      // entire-ledger) preview amplification from common daily amounts.
+      if (cashMatches.length > 32) {
+        return {
+          ...row, status: 'invalid', existingIds: [],
+          warnings: [...row.warnings, {
+            code: 'TOO_MANY_CASH_MATCHES', severity: 'error',
+            row: row.rowNumber,
+            message: 'Слишком много совпадающих операций; требуется уточнение выписки',
+          }],
+        };
       }
+      for (const candidate of cashMatches) candidates.add(candidate);
       for (const candidate of byLinkedPayment.get(
         identity(op.accountId, op.date, op.amountCents)) || []) {
         candidates.add(candidate);

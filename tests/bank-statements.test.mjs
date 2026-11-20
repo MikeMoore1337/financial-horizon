@@ -828,8 +828,10 @@ test('large overlapping import reconciles with bounded ledger reads and preserve
     id: 'posted-' + i, sourceKey: 'previous-' + i,
     externalId: 'bank-previous-' + i, fingerprint: 'old-content-' + i,
     accountId: 'checking', targetAccountId: null,
-    date: '2026-11-08', amountCents: 500, kind: 'expense',
-    category: 'Питание', currency: 'RUB', description: 'Синтетический расход',
+    date: '2026-11-08',
+    amountCents: i >= 10 && i <= 14 ? 500 : 1_000_000 + i,
+    kind: 'expense', category: 'Питание', currency: 'RUB',
+    description: 'Синтетический расход',
   }, {
     get(target, key, receiver) {
       if (['sourceKey', 'externalId', 'fingerprint', 'accountId'].includes(String(key))) {
@@ -844,11 +846,20 @@ test('large overlapping import reconciles with bounded ledger reads and preserve
       sourceRow: i + 2, sourceKey: 'new-' + i,
       externalId: 'bank-new-' + i, fingerprint: 'new-content-' + i,
       accountId: 'checking', targetAccountId: null,
-      date: '2026-11-08', amountCents: 500, kind: 'expense',
+      date: '2026-11-08', amountCents: 500 + i, kind: 'expense',
       category: 'Питание', currency: 'RUB',
       description: 'Синтетический расход',
     },
   }));
+  // The few overlapping movements have matching cash fields; other 2,495
+  // records are distinct, to test both safety and indexed performance.
+  rows[0].operation.amountCents = 500;
+  rows[1].operation.amountCents = 500;
+  rows[2].operation.amountCents = 500;
+  rows[5].operation.amountCents = 5000;
+  rows[6].operation.amountCents = 5000;
+  rows[7].operation.amountCents = 5100;
+  rows[8].operation.amountCents = 5100;
   rows[0].operation.sourceKey = 'previous-10';
   rows[0].operation.externalId = 'bank-previous-10';
   // Exact source replay must also preserve its recorded content fingerprint.
@@ -984,5 +995,8 @@ test('legacy movements lacking fingerprints are flagged for explicit review, not
   const differentFingerprint = reconcileBankStatement(preview, [
     { ...saved, fingerprint: 'unrelated-fingerprint' },
   ]);
-  assert.equal(differentFingerprint.ready, 1);
+  // The server still sees matching account/date/cash effect; different
+  // content hashes do not override conservative manual reconciliation.
+  assert.equal(differentFingerprint.possibleDuplicates, 1);
+  assert.equal(differentFingerprint.ready, 0);
 });

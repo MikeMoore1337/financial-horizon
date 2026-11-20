@@ -21,7 +21,9 @@ function opened(){
 function confirmed(ops=[{sourceKey:hash('a'),fingerprint:hash('b'),externalId:'SYN-1',
   date:'2026-11-07',amountCents:500,kind:'expense',description:'Синтетика',
   accountId,targetAccountId:null,category:null}]){
-  return {batchKey:hash('c'),sourceKeys:ops.map(x=>x.sourceKey),operations:ops,expectedOperationCount:ops.length};
+  const normalized = ops.map(op => ({ ...op, currency: 'RUB' }));
+  return {batchKey:hash('c'),sourceKeys:normalized.map(x=>x.sourceKey),
+    operations:normalized,expectedOperationCount:normalized.length};
 }
 test('guest bank ledger starts empty, distinct from planner and accepts old backups',()=>{
   const s=emptyState();
