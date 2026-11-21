@@ -78,6 +78,7 @@ def local_app(directory):
             finance_engine=create_finance_engine(),
             finance_profile_namespace=UUID("e15ea001-d512-4fb7-a0ee-e05b4df1d45e"),
             enable_account_v2_candidate=True,
+            enable_import_candidate=True,
             # Only the disposable SQL E2E server opts into the #38 candidate.
             # The actual application startup defaults to OFF.
             enable_bank_import_candidate=True,

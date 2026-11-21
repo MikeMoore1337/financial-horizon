@@ -109,6 +109,13 @@ async function fingerprint(serialized) {
   return [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 function recordIndex(snapshot) {
+  if (snapshot.bankStatements !== undefined) {
+    const bank = snapshot.bankStatements;
+    if (Object.keys(bank).some(key => !['version', 'accounts', 'operations', 'batches'].includes(key)) ||
+        bank.accounts.length || bank.operations.length || bank.batches.length) {
+      fail('Локальные банковские счета и операции пока нельзя полностью перенести');
+    }
+  }
   const counts = {};
   const sourceKeys = [];
   for (const type of kinds) {
@@ -118,6 +125,7 @@ function recordIndex(snapshot) {
     for (const record of group) {
       if (!isObject(record) || typeof record.id !== 'string' ||
           record.id.length < 1 || record.id.length > 128 ||
+          record.id.trim() !== record.id || /[\u0000-\u001f\u007f]/.test(record.id) ||
           seen.has(record.id)) fail('Повторяющийся или недопустимый идентификатор');
       seen.add(record.id);
       // The source record map is keyed by type + original local ID. No
@@ -126,7 +134,56 @@ function recordIndex(snapshot) {
     }
     counts[type] = group.length;
   }
+  if (sourceKeys.length > 10_000) fail('Превышен предел количества записей для переноса');
+  validateProjection(snapshot);
   return {counts, recordCount: sourceKeys.length};
+}
+
+// Mirror the server's insertable financial projection before staging metadata.
+function validateProjection(snapshot) {
+  const invalid = () => fail('Часть записей нельзя безопасно представить на сервере');
+  const money = (value, positive = false) => Number.isSafeInteger(value) &&
+    value >= (positive ? 1 : 0) && value <= 1_000_000_000_000;
+  const day = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    value.slice(0,4) !== '0000' && Number.isFinite(Date.parse(value+'T00:00:00Z')) &&
+    new Date(value+'T00:00:00Z').toISOString().slice(0,10) === value;
+  const timestamp = value => value == null || (typeof value === 'string' && value.length <= 40 &&
+    /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,6})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(value) &&
+    day(value.slice(0,10)) && Number.isFinite(Date.parse(value)));
+  const title = value => typeof value === 'string' && value.length <= 160 && value.trim().length > 0;
+  const integer = (value, min, max) => Number.isSafeInteger(value) && value >= min && value <= max;
+  if (snapshot.settings?.currency !== 'RUB') invalid();
+  const entries = new Set(snapshot.entries.map(x=>x.id));
+  const loans = new Set(snapshot.loans.map(x=>x.id));
+  for (const row of snapshot.entries) {
+    if (!title(row.title) || !['income','expense'].includes(row.kind) ||
+        !['once','monthly','yearly'].includes(row.recurrence) || !money(row.amountCents) ||
+        !day(row.date) || !timestamp(row.deletedAt) ||
+        (row.category != null && (typeof row.category !== 'string' || row.category.length > 100))) invalid();
+  }
+  for (const row of snapshot.loans) {
+    if (!title(row.title) || !money(row.openingCents) || !money(row.paymentCents) ||
+        typeof row.apr !== 'number' || !Number.isFinite(row.apr) || row.apr < 0 || row.apr > 1000 ||
+        !/^\d+(?:\.\d{1,2})?$/.test(String(row.apr)) || !integer(row.termMonths,1,1200) ||
+        !integer(row.dueDay,1,31) || !day(row.asOfDate) || !timestamp(row.deletedAt)) invalid();
+    if (row.schedule != null) {
+      if (!Array.isArray(row.schedule) || row.schedule.length > 5000) invalid();
+      for (const item of row.schedule) {
+        if (!isObject(item) || !day(item.date) ||
+            ['amountCents','balanceCents','interestCents','principalCents']
+              .some(field=>item[field] != null && !money(item[field]))) invalid();
+      }
+    }
+  }
+  for (const row of snapshot.settlements) {
+    if (!entries.has(row.entryId) || typeof row.occurrence !== 'string' ||
+        !/^\d{4}-(?:0[1-9]|1[0-2])$/.test(row.occurrence) || row.occurrence.startsWith('0000-') ||
+        !day(row.date) || !money(row.amountCents,true) || !timestamp(row.voidedAt)) invalid();
+  }
+  for (const row of snapshot.loanPayments) {
+    if (!loans.has(row.loanId) || !['term','amount'].includes(row.strategy) ||
+        !day(row.date) || !money(row.amountCents,true) || !timestamp(row.voidedAt)) invalid();
+  }
 }
 
 /**
@@ -217,11 +274,13 @@ export async function planVerifiedLegacyImportCandidate({
  * The plaintext is ephemeral and must never be logged or persisted locally.
  */
 export async function prepareVerifiedLegacyImportTransportCandidate({
-  verified, preview, signal,
+  verified, preview, signal, mergeDecisions = null, comparison = null,
 }) {
+  const merging = preview?.status === 'NEEDS_CONFLICT_DECISION' && Array.isArray(mergeDecisions);
   if (!signal || signal.aborted || !verified || !isObject(verified) ||
       verified.backupVersion !== 1 || !isObject(verified.snapshot) ||
-      !preview || !isObject(preview) || preview.status !== 'PREVIEW_ONLY' ||
+      !preview || !isObject(preview) || (preview.status !== 'PREVIEW_ONLY' && !merging) ||
+      (!merging && mergeDecisions !== null) ||
       preview.sendAllowed !== false || preview.originalPreserved !== true ||
       !userScope.test(preview.sourceScope) ||
       preview.sourceScope !== verified.scope ||
@@ -233,6 +292,17 @@ export async function prepareVerifiedLegacyImportTransportCandidate({
        !uuid.test(preview.preservedZeroAccountId)) ||
       !/^[0-9a-f]{64}$/.test(preview.sourceSha256)) {
     fail('Не подтверждён безопасный перенос в собственный пустой профиль');
+  }
+  let pinnedDecisions, pinnedComparison;
+  if (merging) {
+    try {
+      assertSafeJSONBeforeClone(mergeDecisions);
+      assertSafeJSONBeforeClone(comparison);
+      pinnedDecisions = structuredClone(mergeDecisions);
+      pinnedComparison = structuredClone(comparison);
+    } catch {
+      fail('Небезопасные решения по записям');
+    }
   }
   let pinned;
   try {
@@ -259,14 +329,43 @@ export async function prepareVerifiedLegacyImportTransportCandidate({
     fail('Суммы или исходные данные изменились перед отправкой');
   }
   const rows = [];
-  for (const kind of kinds) {
-    for (const record of pinned[kind]) {
-      rows.push({record_type: kind, source_record_id: record.id});
+  const chosen = new Map(), linked = new Set();
+  if (merging) {
+    if (preview.preservedZeroAccountId || pinnedComparison?.status !== 'NEEDS_OWNER_DECISIONS' ||
+        pinnedDecisions.length !== index.recordCount) fail('Не выбрано решение для каждой записи');
+    for (const decision of pinnedDecisions) {
+      if (!isObject(decision) || !kinds.includes(decision.kind) ||
+          typeof decision.sourceId !== 'string' || !['add', 'link'].includes(decision.action)) {
+        fail('Некорректное решение по записи');
+      }
+      const recordKey = JSON.stringify([decision.kind, decision.sourceId]);
+      if (chosen.has(recordKey)) fail('Повторное решение по записи');
+      if (decision.action === 'link') {
+        if (!uuid.test(decision.targetId || '') ||
+            !pinnedComparison.groups?.[decision.kind]?.serverIds?.includes(decision.targetId) ||
+            linked.has(JSON.stringify([decision.kind, decision.targetId]))) {
+          fail('Выбранная серверная запись недоступна или используется повторно');
+        }
+        linked.add(JSON.stringify([decision.kind, decision.targetId]));
+      } else if (decision.targetId != null) fail('Неожиданная связь для новой записи');
+      chosen.set(recordKey, decision);
     }
   }
-  return Object.freeze({
+  for (const kind of kinds) {
+    for (const record of pinned[kind]) {
+      const row = {record_type: kind, source_record_id: record.id};
+      if (merging) {
+        const decision = chosen.get(JSON.stringify([kind, record.id]));
+        if (!decision) fail('Не выбрано решение для каждой записи');
+        row.decision = decision.action;
+        if (decision.action === 'link') row.target_id = decision.targetId;
+      }
+      rows.push(row);
+    }
+  }
+  const payload = {
     manifest: Object.freeze({
-      schema_version: 1,
+      schema_version: merging ? 2 : 1,
       source_scope: preview.sourceScope,
       source_revision: preview.sourceRevision,
       source_sha256: hash,
@@ -281,5 +380,11 @@ export async function prepareVerifiedLegacyImportTransportCandidate({
       rows,
     }),
     source_canonical_json: canonicalSnapshot,
-  });
+  };
+  const encoder = new TextEncoder();
+  if (encoder.encode(JSON.stringify({manifest:payload.manifest})).byteLength > 2_000_000 ||
+      encoder.encode(JSON.stringify(payload)).byteLength > 10_000_000) {
+    fail('Финансовые данные превышают лимит серверного запроса');
+  }
+  return Object.freeze(payload);
 }

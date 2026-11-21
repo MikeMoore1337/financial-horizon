@@ -11,6 +11,7 @@ never fabricate bank balances or ledger postings.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
@@ -24,6 +25,7 @@ from sqlalchemy.engine import Engine
 from .db import finance_transaction
 from .import_manifest_candidate import (
     _safe_manifest, _KIND, import_batch_id, require_safe_import_target,
+    require_safe_merge_target, mapped_target, stage_import_manifest_candidate,
 )
 from .ledger_service import FinanceCommandError, VerifiedFinanceScope
 
@@ -166,6 +168,13 @@ def _snapshot_rows(snapshot: dict, source_revision: int) -> dict[str, list[dict]
     settings = snapshot.get("settings")
     if type(settings) is not dict or settings.get("currency") != "RUB":
         _invalid()
+    if "bankStatements" in snapshot:
+        bank = snapshot["bankStatements"]
+        if (type(bank) is not dict or set(bank) != {"version", "accounts", "operations", "batches"}
+            or type(bank.get("version")) is not int or bank["version"] != 1
+            or any(type(bank.get(k)) is not list or bank[k]
+                   for k in ("accounts", "operations", "batches"))):
+            _invalid()
     if type(snapshot.get("categories")) is not list or type(snapshot.get("audit")) is not list:
         _invalid()
 
@@ -302,11 +311,51 @@ _SQL = {
     """),
 }
 
+_SAME_TARGET = {
+    "entries": text("""
+        SELECT EXISTS(SELECT 1 FROM obligations WHERE profile_id=:p AND id=:id
+          AND title=:title AND direction=:direction AND amount_minor=:amount
+          AND starts_on=CAST(:starts AS date) AND recurrence_unit=:recurrence
+          AND recurrence_every=1 AND timezone='UTC'
+          AND category IS NOT DISTINCT FROM :category
+          AND deleted_at IS NOT DISTINCT FROM :deleted)
+    """),
+    "loans": text("""
+        SELECT EXISTS(SELECT 1 FROM loans WHERE profile_id=:p AND id=:id
+          AND title=:title AND opening_minor=:opening AND payment_minor=:payment
+          AND apr_basis_points=:apr AND term_months=:term AND due_day=:due
+          AND as_of_date=CAST(:asof AS date) AND calculation_version=1
+          AND imported_schedule IS NOT DISTINCT FROM CAST(:schedule AS jsonb)
+          AND deleted_at IS NOT DISTINCT FROM :deleted)
+    """),
+    "settlements": text("""
+        SELECT EXISTS(SELECT 1 FROM settlements WHERE profile_id=:p AND id=:id
+          AND obligation_id=:entry AND occurrence_on=CAST(:occurrence AS date)
+          AND paid_on=CAST(:paid AS date) AND amount_minor=:amount
+          AND voided_at IS NOT DISTINCT FROM :voided)
+    """),
+    "loanPayments": text("""
+        SELECT EXISTS(SELECT 1 FROM loan_payments WHERE profile_id=:p AND id=:id
+          AND loan_id=:loan AND paid_on=CAST(:paid AS date) AND amount_minor=:amount
+          AND strategy=:strategy AND voided_at IS NOT DISTINCT FROM :voided)
+    """),
+}
+
+# All SQL comes from the fixed queries above. For an explicit "add", reject
+# an already identical server projection rather than silently creating a copy.
+if any(query.text.count(" AND id=:id") != 1 for query in _SAME_TARGET.values()):
+    raise RuntimeError("Merge duplicate queries must contain exactly one target ID predicate")
+_ANY_SAME_TARGET = {
+    kind: text(query.text.replace(" AND id=:id", "", 1))
+    for kind, query in _SAME_TARGET.items()
+}
+
 
 def commit_verified_legacy_import_candidate(
     engine: Engine, *, scope: VerifiedFinanceScope, manifest: object,
     source_canonical_json: str,
     fail_after_sql_kind: str | None = None,
+    _session=None,
 ) -> dict[str, object]:
     """Commit a staged import exactly once, within one scoped SQL transaction.
 
@@ -335,9 +384,16 @@ def commit_verified_legacy_import_candidate(
     digest = bytes.fromhex(request.source_sha256)
     receipt_id = uuid5(batch_id, "financial-horizon:verified-import-commit:v1")
     counts = {kind: len(rows[kind]) for kind in _KIND}
+    merge_counts = ({
+        "created_counts": {kind: sum(row.record_type == kind and row.decision == "add"
+                                     for row in request.rows) for kind in _KIND},
+        "linked_counts": {kind: sum(row.record_type == kind and row.decision == "link"
+                                    for row in request.rows) for kind in _KIND},
+    } if request.schema_version == 2 else {})
 
-    with finance_transaction(engine, verified_user_id=scope.user_id,
-                             profile_id=scope.profile_id) as session:
+    transaction = (nullcontext(_session) if _session is not None else finance_transaction(
+        engine, verified_user_id=scope.user_id, profile_id=scope.profile_id))
+    with transaction as session:
         profile = session.execute(text("""
             SELECT revision FROM finance_profiles WHERE id=:p FOR UPDATE
         """), {"p": scope.profile_id}).mappings().one_or_none()
@@ -368,6 +424,7 @@ def commit_verified_legacy_import_candidate(
                 "batch_id": str(batch_id), "source_sha256": request.source_sha256,
                 "record_count": len(inventory), "counts": counts,
                 "source_original_preserved": True, "cash_postings_created": 0,
+                **merge_counts,
             }
         if batch["status"] != "staged":
             _conflict()
@@ -377,7 +434,10 @@ def commit_verified_legacy_import_candidate(
                                       int(profile["revision"]))
         # Recheck exact same server account UUID, zero cash and no postings
         # under the profile lock immediately before any import SQL writes.
-        require_safe_import_target(session, scope.profile_id, request)
+        if request.schema_version == 1:
+            require_safe_import_target(session, scope.profile_id, request)
+        else:
+            require_safe_merge_target(session, scope, request)
 
         mapped = session.execute(text("""
             SELECT record_type,source_record_id,target_id FROM import_record_map
@@ -387,13 +447,33 @@ def commit_verified_legacy_import_candidate(
                    for row in mapped}
         if set(targets) != set(inventory):
             _conflict()
+        decisions = {(row.record_type, row.source_record_id): row for row in request.rows}
         for kind, source_id in inventory:
-            if targets[kind, source_id] != uuid5(
-                scope.profile_id, "financial-horizon:legacy-record:v1:" +
-                request.source_sha256 + ":" + kind + ":" + source_id,
-            ):
+            if targets[kind, source_id] != mapped_target(scope, request, decisions[kind, source_id]):
                 _conflict()
         values = _build_sql_rows(rows, targets, scope)
+        if request.schema_version == 2:
+            linked = {(r.record_type, mapped_target(scope, request, r))
+                      for r in request.rows if r.decision == "link"}
+            for kind in _KIND:
+                new_projections = set()
+                for value in values[kind]:
+                    is_link = (kind, value["id"]) in linked
+                    if not is_link:
+                        comparable = {k: v for k, v in value.items() if k not in ("p", "id")}
+                        if kind == "loans" and comparable["schedule"] is not None:
+                            comparable["schedule"] = json.loads(comparable["schedule"])
+                        fingerprint = json.dumps(comparable, ensure_ascii=False, sort_keys=True,
+                                                 separators=(",", ":"), default=str)
+                        if fingerprint in new_projections:
+                            _conflict()
+                        new_projections.add(fingerprint)
+                    query = _SAME_TARGET[kind] if is_link else _ANY_SAME_TARGET[kind]
+                    identical = session.execute(query, value).scalar_one()
+                    if identical != is_link:
+                        _conflict()
+                values[kind] = [value for value in values[kind]
+                                if (kind, value["id"]) not in linked]
         # Every table write, receipt, source archive and revision belongs to
         # this *single* PostgreSQL transaction. Errors roll back ALL of it.
         for kind in _KIND:
@@ -409,6 +489,7 @@ def commit_verified_legacy_import_candidate(
             "source_sha256": request.source_sha256,
             "record_count": len(inventory), "counts": counts,
             "source_original_preserved": True, "cash_postings_created": 0,
+            **merge_counts,
         }
         session.execute(text("""
             UPDATE import_batches
@@ -439,6 +520,33 @@ def commit_verified_legacy_import_candidate(
                                    "record_count": len(inventory)},
                                   separators=(",", ":"))})
         return response
+
+
+def atomic_verified_legacy_merge_candidate(
+    engine: Engine, *, scope: VerifiedFinanceScope, manifest: object,
+    source_canonical_json: str, fail_after_sql_kind: str | None = None,
+) -> dict[str, object]:
+    """Stage and apply v2 as one scoped transaction; never strand a new stage."""
+    request = _safe_manifest(manifest)
+    if request.schema_version != 2:
+        _invalid()
+    batch_id = import_batch_id(scope, request)
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        profile = session.execute(text("""
+            SELECT revision FROM finance_profiles WHERE id=:p FOR UPDATE
+        """), {"p":scope.profile_id}).scalar_one_or_none()
+        if profile is None:
+            raise FinanceCommandError("forbidden", "Финансовый профиль недоступен", 403)
+        status = session.execute(text("""
+            SELECT status FROM import_batches WHERE profile_id=:p AND id=:id
+        """), {"p":scope.profile_id, "id":batch_id}).scalar_one_or_none()
+        if status != "committed":
+            stage_import_manifest_candidate(engine, scope=scope, manifest=manifest, _session=session)
+        return commit_verified_legacy_import_candidate(
+            engine, scope=scope, manifest=manifest, source_canonical_json=source_canonical_json,
+            fail_after_sql_kind=fail_after_sql_kind, _session=session,
+        )
 
 
 def restore_original_legacy_source_candidate(

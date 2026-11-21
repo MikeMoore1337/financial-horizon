@@ -150,6 +150,65 @@ def test_import_http_stage_commit_replay_restore_without_minting_cash(personal_i
         assert s.execute(text("SELECT count(*) FROM command_receipts")).scalar_one() == 1
 
 
+def test_http_merge_links_existing_and_adds_new_without_touching_other_owner(personal_import):
+    uid, token = personal_import["first"]
+    c = personal_import["client_import"](token)
+    state = c.get("/api/finance/v1/state?limit_entities=5000")
+    first, raw = bundle(uid)
+    assert write(c, "manifest", state, {"manifest":first}).status_code == 202
+    assert write(c, "commit", state, {"manifest":first, "source_canonical_json":raw}).status_code == 201
+    before = c.get("/api/finance/v1/state?limit_entities=5000")
+    existing = before.json()["entities"][0]
+    changed = source()
+    changed["revision"] = 1
+    changed["entries"].append({"id":"new-synthetic", "title":"Новая запись",
+        "kind":"income", "amountCents":35000, "date":"2026-12-01", "recurrence":"once"})
+    manifest, raw = bundle(uid, changed)
+    manifest.update(schema_version=2, source_revision=1, expected_server_revision=1)
+    manifest["rows"][0].update(decision="link", target_id=existing["id"])
+    manifest["rows"][1].update(decision="add")
+    other_uid, other_token = personal_import["new_user"]()
+    other = personal_import["client_import"](other_token)
+    other_before = other.get("/api/finance/v1/state?limit_entities=5000")
+    staged = write(c, "manifest", before, {"manifest":manifest})
+    assert staged.status_code == 422, staged.text
+    committed = write(c, "commit", before, {"manifest":manifest, "source_canonical_json":raw})
+    assert committed.status_code == 201, committed.text
+    assert committed.json()["created_counts"]["entries"] == 1
+    assert committed.json()["linked_counts"]["entries"] == 1
+    replay = write(c, "commit", before, {"manifest":manifest, "source_canonical_json":raw})
+    assert replay.status_code == 200 and replay.json()["replayed"] is True
+    after = c.get("/api/finance/v1/state?limit_entities=5000")
+    assert len(after.json()["entities"]) == 2
+    assert existing in after.json()["entities"]
+    assert other.get("/api/finance/v1/state?limit_entities=5000").json()["entities"] == other_before.json()["entities"]
+    restored = c.post("/api/finance/v1/import/restore", headers={"Origin":ORIGIN}, json={
+        "batch_id":committed.json()["batch_id"], "source_sha256":manifest["source_sha256"],
+        "confirm_restore":True,
+    })
+    assert restored.status_code == 200 and restored.text == raw
+
+
+def test_http_merge_rejects_another_owners_target(personal_import):
+    owner, token = personal_import["first"]
+    other_id, other_token = personal_import["new_user"]()
+    c, other = personal_import["client_import"](token), personal_import["client_import"](other_token)
+    other_before = other.get("/api/finance/v1/state?limit_entities=5000")
+    other_manifest, other_raw = bundle(other_id)
+    assert write(other, "manifest", other_before, {"manifest":other_manifest}).status_code == 202
+    assert write(other, "commit", other_before, {"manifest":other_manifest,
+                  "source_canonical_json":other_raw}).status_code == 201
+    other_after = other.get("/api/finance/v1/state?limit_entities=5000")
+    foreign_id = other_after.json()["entities"][0]["id"]
+    own = c.get("/api/finance/v1/state?limit_entities=5000")
+    manifest, raw = bundle(owner)
+    manifest["schema_version"] = 2
+    manifest["rows"][0].update(decision="link", target_id=foreign_id)
+    assert write(c, "commit", own, {"manifest":manifest,"source_canonical_json":raw}).status_code == 409
+    assert c.get("/api/finance/v1/state?limit_entities=5000").json()["entities"] == []
+    assert other.get("/api/finance/v1/state?limit_entities=5000").json()["entities"] == other_after.json()["entities"]
+
+
 def test_personal_import_http_rejects_cross_scope_csrf_malformed_and_unapproved(personal_import):
     uid, token = personal_import["first"]
     c = personal_import["client_import"](token)

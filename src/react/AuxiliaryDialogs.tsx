@@ -169,6 +169,7 @@ export function CloudImportDialog() {
         Локальные данные останутся на устройстве даже после импорта.
       </p>
       <p id="cloud-import-summary" className="form-note" role="status" aria-live="polite" />
+      <div id="cloud-import-comparison" />
       <label className="field" id="cloud-import-preserve-row" hidden>
         <span>
           <input type="checkbox" id="cloud-import-preserve-zero-account" /> Я отдельно подтверждаю
@@ -189,6 +190,9 @@ export function CloudImportDialog() {
       <div className="dialog-actions">
         <button type="button" className="button-secondary" data-action="cancel-cloud-import">
           Отмена
+        </button>
+        <button type="button" className="button-secondary" data-action="prepare-cloud-merge" hidden>
+          Подготовить предпросмотр
         </button>
         <button type="button" className="button-primary" data-action="confirm-cloud-import">
           Перенести на сервер

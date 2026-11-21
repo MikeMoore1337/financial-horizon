@@ -304,9 +304,10 @@ def mount_finance_routes(
         from backend.finance_api.import_http_candidate import (
             parse_personal_import_envelope, require_manifest_if_match,
         )
-        from .import_manifest_candidate import stage_import_manifest_candidate
+        from .import_manifest_candidate import stage_import_manifest_candidate, _safe_manifest
         from .import_commit_candidate import (
             commit_verified_legacy_import_candidate,
+            atomic_verified_legacy_merge_candidate,
             restore_original_legacy_source_candidate,
         )
 
@@ -341,6 +342,8 @@ def mount_finance_routes(
             def operation():
                 current = _fresh_import_scope(request, prior)
                 require_manifest_if_match(request, scope=current, manifest=payload["manifest"])
+                if _safe_manifest(payload["manifest"]).schema_version == 2:
+                    raise FinanceCommandError("invalid_command", "Объединение выполняется одной транзакцией", 422)
                 return stage_import_manifest_candidate(
                     engine, scope=current, manifest=payload["manifest"],
                 )
@@ -363,7 +366,10 @@ def mount_finance_routes(
             def operation():
                 current = _fresh_import_scope(request, prior)
                 require_manifest_if_match(request, scope=current, manifest=payload["manifest"])
-                return commit_verified_legacy_import_candidate(
+                execute = (atomic_verified_legacy_merge_candidate
+                           if _safe_manifest(payload["manifest"]).schema_version == 2
+                           else commit_verified_legacy_import_candidate)
+                return execute(
                     engine, scope=current, manifest=payload["manifest"],
                     source_canonical_json=payload["source_canonical_json"],
                 )

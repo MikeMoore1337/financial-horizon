@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createSampleState} from '../finance.js';
 import {planVerifiedLegacyImportCandidate, prepareVerifiedLegacyImportTransportCandidate} from '../src/cloud/legacy-import-manifest-candidate.mjs';
+import {addGuestBankAccount} from '../src/importers/bank-statements/guest-ledger.js';
 
 const USER = 'a'.repeat(32);
 const ACCOUNT = 'account:' + USER;
@@ -54,6 +55,48 @@ test('v2 preview enumerates actual source without changing or posting money', as
   assert.equal(result.originalPreserved, true);
   assert.deepEqual(source, original);
   assert.equal(Object.isFrozen(result), true);
+});
+
+test('bank records cannot be presented as a complete legacy import', async () => {
+  const source = createSampleState();
+  source.bankStatements = {version:1, accounts:[], operations:[], batches:[]};
+  assert.equal((await plan({verified: verified(source)})).status, 'PREVIEW_ONLY');
+  addGuestBankAccount(source,{id:'11111111-1111-4111-8111-111111111111',
+    name:'Synthetic',openingMinor:100},source.revision);
+  await assert.rejects(plan({verified: verified(source)}), /банковск/i);
+});
+
+test('oversized escaped upload is rejected before any staging request', async () => {
+  const source=createSampleState();
+  source.audit=[{description:'\\'.repeat(3_500_000)}];
+  const candidate=await plan({verified:verified(source)});
+  await assert.rejects(prepareVerifiedLegacyImportTransportCandidate({
+    verified:verified(source),preview:candidate,signal:new AbortController().signal,
+  }),/лимит серверного запроса/);
+});
+
+test('server manifest limits and invalid source identifiers fail before staging', async () => {
+  const source=createSampleState();
+  source.entries[0].id=' bad-id';
+  await expectHold(plan({verified:verified(source)}));
+  source.entries[0].id='bad\nid';
+  await expectHold(plan({verified:verified(source)}));
+  source.entries=Array.from({length:10_001},(_,index)=>({id:'record-'+index}));
+  source.loans=[];
+  await expectHold(plan({verified:verified(source)}));
+});
+
+test('financial fields rejected by the server cannot become an approved preview', async () => {
+  for (const mutate of [
+    source=>{source.entries[0].date='2026-02-30'},
+    source=>{source.entries[0].amountCents=1_000_000_000_001},
+    source=>{source.loans[0].apr=12.345},
+    source=>{source.settings.currency='USD'},
+    source=>{source.settlements.push({id:'orphan',entryId:'missing',occurrence:'2026-11',date:'2026-11-01',amountCents:1})},
+  ]) {
+    const source=createSampleState();mutate(source);
+    await expectHold(plan({verified:verified(source)}));
+  }
 });
 
 test('v1 compatible backup requires no invented revision or opening balance', async () => {

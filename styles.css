@@ -78,6 +78,13 @@ button,input,select{font:inherit}button{cursor:pointer}svg{width:20px;height:20p
 .settings-grid .setting-actions [hidden]{display:none}
 /* The optional import consent stays hidden until a verified zero account is found. */
 #cloud-import-preserve-row[hidden]{display:none}
+#cloud-import-dialog [hidden]{display:none}
+#cloud-import-dialog .dialog-body{grid-template-columns:minmax(0,1fr)}
+#cloud-import-dialog .dialog-actions{flex-wrap:wrap}
+#cloud-import-comparison{min-width:0;overflow-wrap:anywhere}
+#cloud-import-comparison ul{padding-left:20px}
+#cloud-import-comparison label{display:block;margin:8px 0}
+#cloud-import-comparison select{display:block;width:100%;max-width:100%;min-width:0}
 #cloud-import-preserve-zero-account,#cloud-import-final-consent{display:inline-block;width:auto;min-width:0;height:auto;padding:0;vertical-align:middle}
 
 

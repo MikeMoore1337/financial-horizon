@@ -4,6 +4,7 @@ import {createSampleState} from '../finance.js';
 import {encryptBackup} from '../backup.js';
 import {verifyLiveLegacyBackup} from '../src/security/live-legacy-preflight.ts';
 import {planLiveLegacyImportPreviewCandidate} from '../src/cloud/live-legacy-import-preview-candidate.mjs';
+import {prepareLivePersonalImportCandidate, preparePersonalMergeReviewCandidate, executeConfirmedPersonalImportCandidate} from '../src/cloud/personal-import-transport-candidate.mjs';
 
 const accountA = 'a'.repeat(32);
 const accountB = 'b'.repeat(32);
@@ -80,6 +81,114 @@ const account = id => ({kind:'account',verifiedUserId:id});
 const guest = (namespace='guest-qa-local') => ({kind:'guest',guestNamespace:namespace});
 const verify = (selection, backupText, extra={}) => verifyLiveLegacyBackup({
   selection,backupText,backupPassword,consent,...extra,
+});
+
+test('populated profile yields a verified read-only inventory, never an import command', async () => {
+  const source=legacy(), backupText=await encryptBackup(source,backupPassword);
+  const db=mount({['account-state-v2:'+accountA]:source});
+  const profile='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const entities=[
+    {id:'11111111-1111-4111-8111-111111111111',kind:'account',entity_revision:1,data:{}},
+    {id:'22222222-2222-4222-8222-222222222222',kind:'obligation',entity_revision:1,data:{}},
+    {id:'33333333-3333-4333-8333-333333333333',kind:'reserve',entity_revision:1,data:{}},
+  ];
+  const calls=[];
+  const fetchImpl=async (url,init)=>{
+    calls.push([new URL(url).pathname,init.method]);
+    const body=init.method==='POST' ? {ok:true,profile_id:profile} :
+      {schema_version:1,profile_id:profile,revision:3,currency:'RUB',entities};
+    return new Response(JSON.stringify(body),{status:200,headers:{
+      'Content-Type':'application/json',ETag:'"synthetic"',
+    }});
+  };
+  const signal=new AbortController().signal;
+  const prepared=await prepareLivePersonalImportCandidate({
+    verifiedActorUserId:accountA,backupText,backupPassword,fetchImpl,
+    origin:'https://fin-horizon.example',signal,explicitConsent:true,
+  });
+  assert.equal(prepared.preview.status,'NEEDS_CONFLICT_DECISION');
+  assert.equal(prepared.serverCounts.account,1);
+  assert.equal(prepared.serverCounts.obligation,1);
+  assert.equal(prepared.serverCounts.reserve,1);
+  assert.equal(prepared.comparison.status,'NEEDS_OWNER_DECISIONS');
+  assert.equal(prepared.comparison.groups.entries.local.length,source.entries.length);
+  assert.deepEqual(prepared.comparison.groups.entries.serverIds,[entities[1].id]);
+  assert.equal(prepared.payload,undefined);
+  const decisions=Object.entries(prepared.comparison.groups).flatMap(([kind,group])=>
+    group.local.map(row=>({kind,sourceId:row.sourceId,action:'add'})));
+  const draft=await preparePersonalMergeReviewCandidate({prepared,verifiedActorUserId:accountA,
+    currentLocalSnapshotMatches:true,decisions,signal});
+  assert.equal(draft.preview.status,'MERGE_PREVIEW_ONLY');
+  assert.equal(draft.payload.manifest.schema_version,2);
+  assert.equal(draft.payload.manifest.rows.length,prepared.preview.recordCount);
+  await assert.rejects(preparePersonalMergeReviewCandidate({prepared,verifiedActorUserId:accountA,
+    currentLocalSnapshotMatches:true,decisions:decisions.slice(1),signal}),/IMPORT_HOLD/);
+  await assert.rejects(preparePersonalMergeReviewCandidate({prepared,verifiedActorUserId:accountA,
+    currentLocalSnapshotMatches:true,decisions:[{...decisions[0],action:'link',
+      targetId:'44444444-4444-4444-8444-444444444444'},...decisions.slice(1)],signal}),/IMPORT_HOLD/);
+  let getterCalled=false;
+  const unsafe={...decisions[0]};
+  Object.defineProperty(unsafe,'action',{enumerable:true,get(){getterCalled=true;return 'add'}});
+  await assert.rejects(preparePersonalMergeReviewCandidate({prepared,verifiedActorUserId:accountA,
+    currentLocalSnapshotMatches:true,decisions:[unsafe,...decisions.slice(1)],signal}),/IMPORT_HOLD/);
+  assert.equal(getterCalled,false);
+  await assert.rejects(executeConfirmedPersonalImportCandidate({
+    prepared,verifiedActorUserId:accountA,currentLocalSnapshotMatches:true,
+    explicitFinalConsent:true,fetchImpl,signal,
+  }),/IMPORT_HOLD/);
+  const recorded=[];
+  const batch='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const finish=await executeConfirmedPersonalImportCandidate({prepared:draft,
+    verifiedActorUserId:accountA,currentLocalSnapshotMatches:true,explicitFinalConsent:true,signal,
+    fetchImpl:async (url,init)=>{
+      const path=new URL(url).pathname;recorded.push(path);
+      let body;
+      if(path.endsWith('/manifest'))body={status:'UNVERIFIED_MANIFEST_STAGED',batch_id:batch,
+        record_count:draft.preview.recordCount,financial_write:false};
+      else if(path.endsWith('/commit'))body={status:'COMMITTED',batch_id:batch,revision:4,
+        record_count:draft.preview.recordCount,source_sha256:draft.preview.sourceSha256,
+        source_original_preserved:true,cash_postings_created:0,
+        created_counts:Object.fromEntries(Object.entries(draft.mergeCounts.add).reverse()),
+        linked_counts:Object.fromEntries(Object.entries(draft.mergeCounts.link).reverse())};
+      else return new Response(draft.payload.source_canonical_json,{status:200,headers:{'Content-Type':'application/json'}});
+      return new Response(JSON.stringify(body),{status:200,headers:{'Content-Type':'application/json'}});
+    },
+  });
+  assert.equal(finish.status,'COMMITTED_AND_SOURCE_RESTORED');
+  assert.deepEqual(recorded,['/api/finance/v1/import/commit','/api/finance/v1/import/restore']);
+  assert.deepEqual(calls,[['/api/auth/email/finance/session','POST'],
+    ['/api/finance/v1/state','GET']]);
+  assert.deepEqual(db.values.get('account-state-v2:'+accountA),source);
+  assert.equal(db.writeCount,0);
+});
+
+test('populated preview rejects incomplete, stale and malformed snapshots before reading local data', async () => {
+  const source=legacy(), backupText=await encryptBackup(source,backupPassword);
+  const db=mount({['account-state-v2:'+accountA]:source});
+  const profile='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const row={id:'11111111-1111-4111-8111-111111111111',kind:'obligation',entity_revision:1,data:{}};
+  const valid={schema_version:1,profile_id:profile,revision:3,currency:'RUB',entities:[row]};
+  for(const [body,etag] of [
+    [{...valid,next_cursor:'more'},'"strong"'],
+    [valid,'W/"weak"'],
+    [{...valid,entities:[row,row]},'"strong"'],
+    [{...valid,entities:[{...row,entity_revision:4}]},'"strong"'],
+    [{...valid,entities:[{...row,kind:'unknown'}]},'"strong"'],
+  ]) {
+    const calls=[];
+    await assert.rejects(prepareLivePersonalImportCandidate({
+      verifiedActorUserId:accountA,backupText,backupPassword,
+      origin:'https://fin-horizon.example',signal:new AbortController().signal,
+      explicitConsent:true,fetchImpl:async (url,init)=>{
+        calls.push([new URL(url).pathname,init.method]);
+        return new Response(JSON.stringify(init.method==='POST' ? {ok:true,profile_id:profile} : body),
+          {status:200,headers:{'Content-Type':'application/json',ETag:etag}});
+      },
+    }),/IMPORT_HOLD/);
+    assert.deepEqual(calls,[['/api/auth/email/finance/session','POST'],['/api/finance/v1/state','GET']]);
+  }
+  assert.equal(db.openCount,0);
+  assert.deepEqual(db.values.get('account-state-v2:'+accountA),source);
 });
 
 test('unclaimed guest reads only legacy state and migrates encrypted v1 backup to v2',async()=>{

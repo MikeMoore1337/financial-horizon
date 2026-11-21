@@ -9,11 +9,19 @@
 import {verifyLiveLegacyBackup} from '../security/live-legacy-preflight.ts';
 import {planLiveLegacyImportPreviewCandidate} from './live-legacy-import-preview-candidate.mjs';
 import {prepareVerifiedLegacyImportTransportCandidate} from './legacy-import-manifest-candidate.mjs';
+import {compareLegacyWithServer} from './legacy-merge-comparison.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const STRONG_ETAG = /^"[^"\r\n]{1,254}"$/;
 const USER = /^[a-f0-9]{32}$/;
 const HASH = /^[a-f0-9]{64}$/;
+const COUNT_KINDS = ['entries','loans','settlements','loanPayments'];
+
+function matchingCounts(actual, expected) {
+  return actual && expected && typeof actual === 'object' && !Array.isArray(actual) &&
+    Object.keys(actual).length === COUNT_KINDS.length && COUNT_KINDS.every(kind =>
+      Number.isSafeInteger(actual[kind]) && actual[kind] >= 0 && actual[kind] === expected[kind]);
+}
 
 function hold(reason) { throw Error('IMPORT_HOLD: ' + reason); }
 function active(signal) {
@@ -140,14 +148,14 @@ export async function prepareLivePersonalImportCandidate({
       snapshot.schema_version !== 1 ||
       !Number.isSafeInteger(snapshot.revision) || snapshot.revision < 0 ||
       !Array.isArray(snapshot.entities) ||
-      snapshot.entities.length > 1 || snapshot.next_cursor != null) {
+      snapshot.entities.length > 5000 || snapshot.next_cursor != null) {
     hold('Сервер содержит записи или вернул неполный финансовый снимок');
   }
   // The only compatible nonempty target is a single untouched 0-RUB account.
   // Its UUID/revision and absence of all other server facts are rechecked by
   // PostgreSQL under profile lock at both stage and commit. Never delete it.
-  const existing = snapshot.entities[0] ?? null;
-  if (existing && (existing.kind !== 'account' || !UUID.test(existing.id) ||
+  const existing = snapshot.entities.length === 1 ? snapshot.entities[0] : null;
+  const compatible = existing && !(existing.kind !== 'account' || !UUID.test(existing.id) ||
       existing.entity_revision !== 1 ||
       typeof existing.data?.name !== 'string' ||
       existing.data.name.length < 1 || existing.data.name.length > 160 ||
@@ -156,8 +164,21 @@ export async function prepareLivePersonalImportCandidate({
       existing.data.balance_minor !== 0 ||
       existing.data.reserved_minor !== 0 ||
       existing.data.available_minor !== 0 ||
-      existing.data.archived_at != null)) {
-    hold('На сервере есть действующие финансовые записи. Автоматическое объединение запрещено');
+      existing.data.archived_at != null);
+  const needsComparison = snapshot.entities.length > 0 && !compatible;
+  const seen = new Set();
+  if (needsComparison) {
+    for (const entity of snapshot.entities) {
+      if (!entity ||
+          !['account', 'obligation', 'loan', 'reserve', 'transaction', 'settlement', 'loan_payment'].includes(entity.kind) ||
+          typeof entity.id !== 'string' || !UUID.test(entity.id) || seen.has(entity.id) ||
+          !Number.isSafeInteger(entity.entity_revision) || entity.entity_revision < 1 ||
+          entity.entity_revision > snapshot.revision ||
+          !entity.data || typeof entity.data !== 'object' || Array.isArray(entity.data)) {
+        hold('Повреждён серверный финансовый снимок');
+      }
+      seen.add(entity.id);
+    }
   }
   active(signal);
   const selection = {kind: 'account', verifiedUserId: verifiedActorUserId};
@@ -167,13 +188,13 @@ export async function prepareLivePersonalImportCandidate({
     previewRequested: true, explicitGuestTransfer: false,
     // This only prepares a proposal; the SECOND explicit checkbox is still
     // required before HTTP stage/commit.
-    confirmPreserveZeroAccount: existing !== null,
+    confirmPreserveZeroAccount: Boolean(compatible),
   };
   const target = {
     accountScope: 'account:' + verifiedActorUserId,
     profileId: session.profile_id, serverRevision: snapshot.revision,
-    hasRemoteRecords: existing !== null,
-    preserveZeroAccountId: existing?.id ?? null,
+    hasRemoteRecords: snapshot.entities.length > 0,
+    preserveZeroAccountId: compatible ? existing.id : null,
   };
   const preview = await planLiveLegacyImportPreviewCandidate({
     selection, backupText, backupPassword, consent, target, signal,
@@ -183,6 +204,18 @@ export async function prepareLivePersonalImportCandidate({
   const source = await verifyLiveLegacyBackup({
     selection, backupText, backupPassword, consent,
   });
+  if (needsComparison) {
+    active(signal);
+    const serverCounts = Object.fromEntries(
+      ['account', 'obligation', 'loan', 'reserve', 'transaction', 'settlement', 'loan_payment']
+        .map(kind => [kind, snapshot.entities.filter(entity => entity.kind === kind).length]),
+    );
+    return Object.freeze({actor: verifiedActorUserId, origin, etag,
+      profileId: session.profile_id, revision: snapshot.revision,
+      snapshot: source.snapshot, preview, serverCounts,
+      comparison: compareLegacyWithServer(source.snapshot, snapshot.entities),
+      serverEntities: snapshot.entities});
+  }
   const payload = await prepareVerifiedLegacyImportTransportCandidate({
     verified: source, preview, signal,
   });
@@ -194,6 +227,34 @@ export async function prepareLivePersonalImportCandidate({
     preservedZeroAccountId: existing?.id ?? null,
     preservedZeroAccountName: existing?.data.name ?? null,
   });
+}
+
+/** Build a local review artifact; this does not send or authorize any write. */
+export async function preparePersonalMergeReviewCandidate({
+  prepared, verifiedActorUserId, currentLocalSnapshotMatches, decisions, signal,
+}) {
+  active(signal);
+  if (!prepared || prepared.actor !== verifiedActorUserId || !USER.test(verifiedActorUserId) ||
+      currentLocalSnapshotMatches !== true || prepared.preview?.status !== 'NEEDS_CONFLICT_DECISION' ||
+      prepared.comparison?.status !== 'NEEDS_OWNER_DECISIONS' ||
+      !STRONG_ETAG.test(prepared.etag || '') || !Array.isArray(decisions)) {
+    hold('Нужны неизменённый источник и решения для всех записей');
+  }
+  const payload = await prepareVerifiedLegacyImportTransportCandidate({
+    verified: {scope:prepared.preview.sourceScope, sourceRevision:prepared.preview.sourceRevision,
+      snapshot:prepared.snapshot, backupVersion:1},
+    preview:prepared.preview, signal, mergeDecisions:decisions,
+    comparison:prepared.comparison,
+  });
+  active(signal);
+  const counts = {};
+  for (const action of ['add', 'link']) {
+    counts[action] = Object.fromEntries(COUNT_KINDS
+      .map(kind => [kind, payload.manifest.rows.filter(row =>
+        row.record_type === kind && row.decision === action).length]));
+  }
+  return Object.freeze({...prepared, payload, mergeCounts:counts,
+    preview:Object.freeze({...prepared.preview, status:'MERGE_PREVIEW_ONLY'})});
 }
 
 /**
@@ -208,11 +269,14 @@ export async function executeConfirmedPersonalImportCandidate({
   fetchImpl, signal,
 }) {
   active(signal);
+  const isMerge = prepared?.preview?.status === 'MERGE_PREVIEW_ONLY';
   if (!prepared || prepared.actor !== verifiedActorUserId ||
       explicitFinalConsent !== true || currentLocalSnapshotMatches !== true ||
       !USER.test(verifiedActorUserId) || !STRONG_ETAG.test(prepared.etag || '') ||
       !HASH.test(prepared.preview?.sourceSha256 || '') ||
-      prepared.preview?.status !== 'PREVIEW_ONLY' ||
+      !['PREVIEW_ONLY','MERGE_PREVIEW_ONLY'].includes(prepared.preview?.status) ||
+      (isMerge && (prepared.payload?.manifest?.schema_version !== 2 || !prepared.mergeCounts)) ||
+      (!isMerge && prepared.payload?.manifest?.schema_version !== 1) ||
       (prepared.preservedZeroAccountId &&
        (explicitPreserveZeroAccountConsent !== true ||
         prepared.payload?.manifest?.preserve_zero_account_id !==
@@ -222,28 +286,33 @@ export async function executeConfirmedPersonalImportCandidate({
     hold('Перенос не подтверждён пользователем или исходная база изменилась');
   }
   const origin = safeOrigin(prepared.origin);
-  const stageResponse = await request(fetchImpl, origin,
-    '/api/finance/v1/import/manifest', 'POST',
-    {manifest: prepared.payload.manifest}, signal, prepared.etag);
-  const stage = await responseJson(stageResponse);
-  if (![200, 202].includes(stageResponse.status) ||
-      stage.status !== 'UNVERIFIED_MANIFEST_STAGED' ||
-      stage.financial_write !== false || stage.record_count !== prepared.preview.recordCount ||
-      !UUID.test(stage.batch_id)) {
-    hold('Не совпала серверная подготовка переноса');
+  let stage = null;
+  if (!isMerge) {
+    const stageResponse = await request(fetchImpl, origin,
+      '/api/finance/v1/import/manifest', 'POST',
+      {manifest: prepared.payload.manifest}, signal, prepared.etag);
+    stage = await responseJson(stageResponse);
+    if (![200, 202].includes(stageResponse.status) ||
+        stage.status !== 'UNVERIFIED_MANIFEST_STAGED' ||
+        stage.financial_write !== false || stage.record_count !== prepared.preview.recordCount ||
+        !UUID.test(stage.batch_id)) {
+      hold('Не совпала серверная подготовка переноса');
+    }
   }
-  // No money was moved in stage. Commit now requires the SAME pinned
-  // SHA-256/If-Match and is atomic on PostgreSQL, no automatic retry.
+  // V2 stages and commits in one server transaction; neither mode retries.
   const committedResponse = await request(fetchImpl, origin,
     '/api/finance/v1/import/commit', 'POST', prepared.payload,
     signal, prepared.etag);
   const committed = await responseJson(committedResponse);
   if (![200, 201].includes(committedResponse.status) ||
-      committed.status !== 'COMMITTED' || committed.batch_id !== stage.batch_id ||
+      committed.status !== 'COMMITTED' || !UUID.test(committed.batch_id || '') ||
+      (!isMerge && committed.batch_id !== stage.batch_id) ||
       committed.source_sha256 !== prepared.preview.sourceSha256 ||
       committed.record_count !== prepared.preview.recordCount ||
       committed.source_original_preserved !== true ||
       committed.cash_postings_created !== 0 ||
+      (isMerge && (!matchingCounts(committed.created_counts, prepared.mergeCounts.add) ||
+        !matchingCounts(committed.linked_counts, prepared.mergeCounts.link))) ||
       !Number.isSafeInteger(committed.revision) ||
       committed.revision !== prepared.revision + 1) {
     hold('Результат финансового импорта не подтверждён; не повторяйте операцию');
@@ -267,6 +336,7 @@ export async function executeConfirmedPersonalImportCandidate({
     revision: committed.revision, recordCount: committed.record_count,
     sourceSha256: committed.source_sha256,
     localDataPreserved: true, cashPostingsCreated: 0,
+    ...(isMerge ? {mergeCounts:prepared.mergeCounts} : {}),
     ...(prepared.preservedZeroAccountId ? {serverZeroAccountPreserved: true} : {}),
   });
 }

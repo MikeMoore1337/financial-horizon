@@ -16,7 +16,9 @@ from sqlalchemy import text
 from backend.finance_db.db import finance_transaction
 from backend.finance_db.import_commit_candidate import (
     commit_verified_legacy_import_candidate,
+    atomic_verified_legacy_merge_candidate,
     restore_original_legacy_source_candidate,
+    _snapshot_rows,
 )
 from backend.finance_db.import_manifest_candidate import stage_import_manifest_candidate
 from backend.finance_db.ledger_service import (
@@ -67,6 +69,17 @@ def canonical(snapshot):
                       separators=(",", ":"))
 
 
+def test_import_refuses_nonempty_bank_history_before_sql():
+    source = original()
+    source["bankStatements"] = {"version": 1, "accounts": [], "operations": [], "batches": []}
+    _snapshot_rows(source, source["revision"])
+    for kind in ("accounts", "operations", "batches"):
+        modified = json.loads(json.dumps(source))
+        modified["bankStatements"][kind].append({"id": "synthetic"})
+        with pytest.raises(FinanceCommandError):
+            _snapshot_rows(modified, modified["revision"])
+
+
 def manifest_for(scope, snapshot, serialized=None, **patch):
     raw = serialized if serialized is not None else canonical(snapshot)
     rows = [{"record_type":kind, "source_record_id":x["id"]}
@@ -95,6 +108,23 @@ def counts(engine, scope):
                          "accounts","ledger_postings","ledger_transactions",
                          "command_receipts","change_log")
         }
+
+
+def test_bank_history_rejected_without_changing_existing_sql(context):
+    engine, scope = context
+    source = original()
+    source["bankStatements"] = {"version": 1, "accounts": [{"id": "synthetic"}],
+                                "operations": [], "batches": []}
+    raw = canonical(source)
+    manifest = manifest_for(scope, source, raw)
+    stage_import_manifest_candidate(engine, scope=scope, manifest=manifest)
+    before = counts(engine, scope)
+    with pytest.raises(FinanceCommandError):
+        commit_verified_legacy_import_candidate(
+            engine, scope=scope, manifest=manifest, source_canonical_json=raw,
+        )
+    assert counts(engine, scope) == before
+    assert get_finance_snapshot(engine, scope=scope).body["revision"] == 0
 
 
 def test_real_atomic_import_preserves_all_four_types_and_original_bytes(context):
@@ -150,6 +180,213 @@ def test_real_atomic_import_preserves_all_four_types_and_original_bytes(context)
     assert replay["replayed"] is True and replay["revision"] == 1
     assert replay["record_count"] == done["record_count"]
     assert counts(engine, scope)["command_receipts"] == 1
+
+
+def _previous_import_and_merge(engine, scope):
+    source = original()
+    first = manifest_for(scope, source)
+    stage_import_manifest_candidate(engine, scope=scope, manifest=first)
+    commit_verified_legacy_import_candidate(
+        engine, scope=scope, manifest=first, source_canonical_json=canonical(source),
+    )
+    with finance_transaction(engine, verified_user_id=scope.user_id, profile_id=scope.profile_id) as s:
+        mapping = {(r["record_type"], r["source_record_id"]): str(r["target_id"])
+                   for r in s.execute(text("""
+                     SELECT record_type,source_record_id,target_id FROM import_record_map
+                     WHERE profile_id=:p
+                   """), {"p":scope.profile_id}).mappings().all()}
+    account_id, _ = add_account(engine, scope, opening=123456)
+    source["revision"] += 1
+    source["entries"].append({"id":"new-entry", "title":"Новый синтетический расход",
+        "kind":"expense", "amountCents":450, "date":"2026-12-05", "recurrence":"once"})
+    raw = canonical(source)
+    manifest = manifest_for(scope, source, raw, schema_version=2, expected_server_revision=2)
+    for row in manifest["rows"]:
+        target = mapping.get((row["record_type"], row["source_record_id"]))
+        row["decision"] = "link" if target else "add"
+        if target:
+            row["target_id"] = target
+    return source, raw, manifest, account_id
+
+
+def test_merge_preserves_existing_profile_and_does_not_duplicate_previous_import(context):
+    engine, scope = context
+    source, raw, manifest, account_id = _previous_import_and_merge(engine, scope)
+    before = get_finance_snapshot(engine, scope=scope).body["entities"]
+    stage_import_manifest_candidate(engine, scope=scope, manifest=manifest)
+    done = commit_verified_legacy_import_candidate(
+        engine, scope=scope, manifest=manifest, source_canonical_json=raw,
+    )
+    after = get_finance_snapshot(engine, scope=scope).body["entities"]
+    assert done["revision"] == 3 and done["cash_postings_created"] == 0
+    assert {x["id"] for x in before}.issubset({x["id"] for x in after})
+    assert len(after) == len(before) + 1
+    assert next(x for x in after if x["id"] == account_id)["data"]["balance_minor"] == 123456
+    assert restore_original_legacy_source_candidate(
+        engine, scope=scope, batch_id=done["batch_id"], source_sha256=manifest["source_sha256"],
+    ) == raw
+    replay = commit_verified_legacy_import_candidate(
+        engine, scope=scope, manifest=manifest, source_canonical_json=raw,
+    )
+    assert replay["replayed"] is True
+    assert get_finance_snapshot(engine, scope=scope).body["entities"] == after
+
+
+def test_merge_rejects_changed_link_without_partial_writes(context):
+    engine, scope = context
+    source, _, manifest, _ = _previous_import_and_merge(engine, scope)
+    source["entries"][0]["amountCents"] += 1
+    raw = canonical(source)
+    manifest["source_sha256"] = sha256(raw.encode("utf-8")).hexdigest()
+    before = get_finance_snapshot(engine, scope=scope)
+    stage_import_manifest_candidate(engine, scope=scope, manifest=manifest)
+    with pytest.raises(FinanceCommandError):
+        commit_verified_legacy_import_candidate(
+            engine, scope=scope, manifest=manifest, source_canonical_json=raw,
+        )
+    after = get_finance_snapshot(engine, scope=scope)
+    assert after.body["entities"] == before.body["entities"] and after.etag == before.etag
+
+
+def test_merge_rejects_previous_source_id_marked_as_new(context):
+    engine, scope = context
+    _, _, manifest, _ = _previous_import_and_merge(engine, scope)
+    manifest["rows"][0].pop("target_id")
+    manifest["rows"][0]["decision"] = "add"
+    before = get_finance_snapshot(engine, scope=scope)
+    with pytest.raises(FinanceCommandError):
+        stage_import_manifest_candidate(engine, scope=scope, manifest=manifest)
+    after = get_finance_snapshot(engine, scope=scope)
+    assert after.body["entities"] == before.body["entities"] and after.etag == before.etag
+
+
+def test_merge_rejects_new_id_with_identical_server_financial_record(context):
+    engine, scope = context
+    source, _, manifest, _ = _previous_import_and_merge(engine, scope)
+    copied = dict(source["entries"][0], id="different-source-id")
+    source["entries"].append(copied)
+    raw = canonical(source)
+    manifest["source_sha256"] = sha256(raw.encode("utf-8")).hexdigest()
+    manifest["rows"].append({"record_type":"entries", "source_record_id":copied["id"],
+                             "decision":"add"})
+    before = get_finance_snapshot(engine, scope=scope)
+    stage_import_manifest_candidate(engine, scope=scope, manifest=manifest)
+    with pytest.raises(FinanceCommandError):
+        commit_verified_legacy_import_candidate(engine, scope=scope, manifest=manifest,
+                                                source_canonical_json=raw)
+    after = get_finance_snapshot(engine, scope=scope)
+    assert after.body["entities"] == before.body["entities"] and after.etag == before.etag
+
+
+def test_merge_rejects_identical_new_records_before_any_insert(context):
+    engine, scope = context
+    source, _, manifest, _ = _previous_import_and_merge(engine, scope)
+    copied = dict(source["entries"][-1], id="another-new-id")
+    source["entries"].append(copied)
+    raw = canonical(source)
+    manifest["source_sha256"] = sha256(raw.encode("utf-8")).hexdigest()
+    manifest["rows"].append({"record_type":"entries", "source_record_id":copied["id"],
+                             "decision":"add"})
+    before = get_finance_snapshot(engine, scope=scope)
+    stage_import_manifest_candidate(engine, scope=scope, manifest=manifest)
+    with pytest.raises(FinanceCommandError):
+        commit_verified_legacy_import_candidate(engine, scope=scope, manifest=manifest,
+                                                source_canonical_json=raw)
+    after = get_finance_snapshot(engine, scope=scope)
+    assert after.body["entities"] == before.body["entities"] and after.etag == before.etag
+
+
+def test_merge_rechecks_revision_after_stage(context):
+    engine, scope = context
+    _, raw, manifest, _ = _previous_import_and_merge(engine, scope)
+    stage_import_manifest_candidate(engine, scope=scope, manifest=manifest)
+    add_account(engine, scope, opening=42, name="Другой синтетический счёт")
+    before = get_finance_snapshot(engine, scope=scope)
+    with pytest.raises(FinanceCommandError) as error:
+        commit_verified_legacy_import_candidate(engine, scope=scope, manifest=manifest,
+                                                source_canonical_json=raw)
+    assert error.value.code == "stale_revision"
+    after = get_finance_snapshot(engine, scope=scope)
+    assert after.body["entities"] == before.body["entities"] and after.etag == before.etag
+
+
+def test_merge_sql_failure_rolls_back_added_records_and_preserves_existing(context):
+    engine, scope = context
+    _, raw, manifest, _ = _previous_import_and_merge(engine, scope)
+    stage_import_manifest_candidate(engine, scope=scope, manifest=manifest)
+    before = get_finance_snapshot(engine, scope=scope)
+    with pytest.raises(RuntimeError, match="SYNTHETIC_IMPORT_TRANSACTION_FAILURE"):
+        commit_verified_legacy_import_candidate(engine, scope=scope, manifest=manifest,
+                                                source_canonical_json=raw,
+                                                fail_after_sql_kind="entries")
+    after = get_finance_snapshot(engine, scope=scope)
+    assert after.body["entities"] == before.body["entities"] and after.etag == before.etag
+
+
+def test_merge_rejects_two_source_records_linked_to_one_target(context):
+    engine, scope = context
+    _, _, manifest, _ = _previous_import_and_merge(engine, scope)
+    linked = next(row for row in manifest["rows"] if row["record_type"] == "entries" and row["decision"] == "link")
+    new = next(row for row in manifest["rows"] if row["source_record_id"] == "new-entry")
+    new.update(decision="link", target_id=linked["target_id"])
+    before = get_finance_snapshot(engine, scope=scope)
+    with pytest.raises(FinanceCommandError):
+        stage_import_manifest_candidate(engine, scope=scope, manifest=manifest)
+    after = get_finance_snapshot(engine, scope=scope)
+    assert after.body["entities"] == before.body["entities"] and after.etag == before.etag
+
+
+def test_merge_preserves_existing_reserve_and_allocations(context):
+    from backend.finance_db.tests.test_reserve_v2_candidate import reserve_input, submit
+    engine, scope = context
+    _, raw, manifest, account = _previous_import_and_merge(engine, scope)
+    obligation = next(row["target_id"] for row in manifest["rows"]
+                      if row["record_type"] == "entries" and row["source_record_id"] == "legacy-rent")
+    reserve = reserve_input(account, obligation)
+    assert submit(engine, scope, "reserve.create", reserve, [account, obligation]).status == 201
+    before = get_finance_snapshot(engine, scope=scope)
+    manifest["expected_server_revision"] = before.body["revision"]
+    stage_import_manifest_candidate(engine, scope=scope, manifest=manifest)
+    commit_verified_legacy_import_candidate(engine, scope=scope, manifest=manifest,
+                                            source_canonical_json=raw)
+    after = get_finance_snapshot(engine, scope=scope)
+    before_by_id = {row["id"]:row for row in before.body["entities"]}
+    after_by_id = {row["id"]:row for row in after.body["entities"]}
+    assert all(after_by_id[key] == value for key, value in before_by_id.items())
+    assert after_by_id[reserve["id"]]["data"]["allocated_minor"] == 3000
+
+
+def _import_metadata_counts(engine, scope):
+    with finance_transaction(engine, verified_user_id=scope.user_id, profile_id=scope.profile_id) as s:
+        return tuple(s.execute(text("SELECT count(*) FROM " + table + " WHERE profile_id=:p"),
+                               {"p":scope.profile_id}).scalar_one()
+                     for table in ("import_batches", "import_record_map"))
+
+
+def test_atomic_merge_failure_leaves_no_staged_batch_or_new_financial_rows(context):
+    engine, scope = context
+    _, raw, manifest, _ = _previous_import_and_merge(engine, scope)
+    before = get_finance_snapshot(engine, scope=scope)
+    metadata = _import_metadata_counts(engine, scope)
+    with pytest.raises(RuntimeError, match="SYNTHETIC_IMPORT_TRANSACTION_FAILURE"):
+        atomic_verified_legacy_merge_candidate(engine, scope=scope, manifest=manifest,
+            source_canonical_json=raw, fail_after_sql_kind="entries")
+    after = get_finance_snapshot(engine, scope=scope)
+    assert after.body["entities"] == before.body["entities"] and after.etag == before.etag
+    assert _import_metadata_counts(engine, scope) == metadata
+
+
+def test_atomic_merge_replay_does_not_add_any_financial_record(context):
+    engine, scope = context
+    _, raw, manifest, _ = _previous_import_and_merge(engine, scope)
+    first = atomic_verified_legacy_merge_candidate(engine, scope=scope, manifest=manifest,
+                                                    source_canonical_json=raw)
+    after = get_finance_snapshot(engine, scope=scope)
+    replay = atomic_verified_legacy_merge_candidate(engine, scope=scope, manifest=manifest,
+                                                     source_canonical_json=raw)
+    assert first["replayed"] is False and replay["replayed"] is True
+    assert replay["batch_id"] == first["batch_id"]
+    assert get_finance_snapshot(engine, scope=scope).body["entities"] == after.body["entities"]
 
 
 @pytest.mark.parametrize("version", [1, 2])
