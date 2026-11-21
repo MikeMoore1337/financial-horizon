@@ -389,6 +389,22 @@ def test_atomic_merge_replay_does_not_add_any_financial_record(context):
     assert get_finance_snapshot(engine, scope=scope).body["entities"] == after.body["entities"]
 
 
+def test_atomic_merge_refuses_unreviewable_schedule_fields_without_a_stage(context):
+    engine, scope = context
+    source, _, manifest, _ = _previous_import_and_merge(engine, scope)
+    source["loans"][0]["schedule"][0]["internalId"] = "synthetic"
+    raw = canonical(source)
+    manifest["source_sha256"] = sha256(raw.encode("utf-8")).hexdigest()
+    metadata = _import_metadata_counts(engine, scope)
+    before = get_finance_snapshot(engine, scope=scope)
+    with pytest.raises(FinanceCommandError):
+        atomic_verified_legacy_merge_candidate(engine, scope=scope, manifest=manifest,
+                                                source_canonical_json=raw)
+    after = get_finance_snapshot(engine, scope=scope)
+    assert after.body["entities"] == before.body["entities"] and after.etag == before.etag
+    assert _import_metadata_counts(engine, scope) == metadata
+
+
 @pytest.mark.parametrize("version", [1, 2])
 def test_v1_and_v2_snapshot_bytes_round_trip_without_inventing_balances(context, version):
     engine, scope = context

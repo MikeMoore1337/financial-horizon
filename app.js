@@ -827,32 +827,35 @@ function renderCloudImportComparison(prepared){
  if(!prepared.comparison)return;
  const labels={entries:'Обязательства',loans:'Кредиты',settlements:'Оплаты',loanPayments:'Платежи по кредитам'};
  const entities=new Map(prepared.serverEntities.map(item=>[item.id,item]));
+ const serverNumbers=new Map();
+ for(const kind of ['account','obligation','loan','reserve','transaction','settlement','loan_payment'])
+  prepared.serverEntities.filter(item=>item.kind===kind).map(item=>item.id).sort()
+   .forEach((id,index)=>serverNumbers.set(id,index+1));
  const parents={entries:new Map(prepared.snapshot.entries.map(item=>[item.id,item])),
   loans:new Map(prepared.snapshot.loans.map(item=>[item.id,item]))};
+ const localNumbers={entries:new Map(prepared.comparison.groups.entries.local.map((row,index)=>[row.sourceId,index+1])),
+  loans:new Map(prepared.comparison.groups.loans.local.map((row,index)=>[row.sourceId,index+1]))};
  const money=value=>Number.isSafeInteger(value)?rubles(value):'сумма не указана';
  const recurrence=value=>({once:'один раз',none:'один раз',monthly:'ежемесячно',month:'ежемесячно',yearly:'ежегодно',year:'ежегодно'}[value]||'не указана');
  const strategy=value=>({term:'уменьшение срока',amount:'уменьшение платежа'}[value]||'не указана');
- const schedule=rows=>Array.isArray(rows)?(rows.length?rows.map(row=>{
-  const extra=Object.fromEntries(Object.entries(row).filter(([name])=>
-   !['date','amountCents','balanceCents','interestCents','principalCents'].includes(name)));
-  return `${row.date}: платёж ${money(row.amountCents)}, остаток ${money(row.balanceCents)}, проценты ${money(row.interestCents)}, долг ${money(row.principalCents)}`+
-   (Object.keys(extra).length?', дополнительные поля '+JSON.stringify(extra):'');
- }).join('; '):'пустой'):'нет';
+ const schedule=rows=>Array.isArray(rows)?(rows.length?rows.map(row=>
+  `${row.date}: платёж ${money(row.amountCents)}, остаток ${money(row.balanceCents)}, проценты ${money(row.interestCents)}, долг ${money(row.principalCents)}`).join('; '):'пустой'):'нет';
  const localText=(kind,row)=>{
   if(kind==='entries')return `${row.title} · ${row.kind==='income'?'доход':'расход'} · ${money(row.amountCents)} · ${row.date} · ${recurrence(row.recurrence)} · зона UTC · категория ${row.category||'нет'} · удалено ${row.deletedAt||'нет'}`;
   if(kind==='loans')return `${row.title} · долг ${money(row.openingCents)} · платёж ${money(row.paymentCents)} · ставка ${row.apr}% · срок ${row.termMonths} мес. · день ${row.dueDay} · на ${row.asOfDate} · версия расчёта 1 · удалено ${row.deletedAt||'нет'} · график: ${schedule(row.schedule)}`;
   const parent=kind==='settlements'?parents.entries.get(row.entryId):parents.loans.get(row.loanId);
-  return `${parent?.title||'Связанная запись'} · ${money(row.amountCents)} · ${row.date} · ${kind==='settlements'?'период '+row.occurrence:'стратегия '+strategy(row.strategy)} · отменено ${row.voidedAt||'нет'}`;
+  const number=kind==='settlements'?localNumbers.entries.get(row.entryId):localNumbers.loans.get(row.loanId);
+  return `${parent?.title||'Связанная запись'} №${number||'—'} · ${money(row.amountCents)} · ${row.date} · ${kind==='settlements'?'период '+row.occurrence:'стратегия '+strategy(row.strategy)} · отменено ${row.voidedAt||'нет'}`;
  };
  const serverText=item=>{
   const d=item.data;
   if(item.kind==='account')return `${d.name} · ${{bank:'банк',cash:'наличные',savings:'накопительный'}[d.type]||'счёт'} · ${d.currency} · начальный ${money(d.opening_minor)} · остаток ${money(d.balance_minor)} · резерв ${money(d.reserved_minor)} · доступно ${money(d.available_minor)} · архив ${d.archived_at||'нет'}`;
-  if(item.kind==='reserve')return `${d.title} · цель ${money(d.target_minor)} на ${d.target_on||'не указана'} · отложено ${money(d.allocated_minor)} · счёт ${entities.get(d.account_id)?.data?.name||'не указан'} · обязательство ${entities.get(d.obligation_id)?.data?.title||'не указано'} · архив ${d.archived_at||'нет'}`;
+  if(item.kind==='reserve')return `${d.title} · цель ${money(d.target_minor)} на ${d.target_on||'не указана'} · отложено ${money(d.allocated_minor)} · счёт №${serverNumbers.get(d.account_id)||'—'} ${entities.get(d.account_id)?.data?.name||'не указан'} · обязательство №${serverNumbers.get(d.obligation_id)||'—'} ${entities.get(d.obligation_id)?.data?.title||'не указано'} · архив ${d.archived_at||'нет'}`;
   if(item.kind==='transaction')return `${{income:'доход',expense:'расход',transfer:'перевод',adjustment:'корректировка',payment:'платёж',reversal:'отмена'}[d.kind]||'операция'} · ${d.occurred_on} · ${d.note||'без примечания'} · проведена ${d.posted_at||'нет'}`;
   if(item.kind==='obligation')return `${d.title} · ${d.direction==='income'?'доход':'расход'} · ${money(d.amount_minor)} · ${d.starts_on} · ${recurrence(d.recurrence_unit)}, интервал ${d.recurrence_every}, зона ${d.timezone} · категория ${d.category||'нет'} · удалено ${d.deleted_at||'нет'}`;
   if(item.kind==='loan')return `${d.title} · долг ${money(d.opening_minor)} · платёж ${money(d.payment_minor)} · ставка ${d.apr_basis_points/100}% · срок ${d.term_months} мес. · день ${d.due_day} · на ${d.as_of_date} · версия расчёта ${d.calculation_version} · удалено ${d.deleted_at||'нет'} · график: ${schedule(d.imported_schedule)}`;
   const parent=entities.get(item.kind==='settlement'?d.obligation_id:d.loan_id);
-  return `${parent?.data?.title||'Связанная запись'} · ${money(d.amount_minor)} · ${d.paid_on} · ${item.kind==='settlement'?'период '+d.occurrence_on:'стратегия '+strategy(d.strategy)} · отменено ${d.voided_at||'нет'}`;
+  return `${parent?.data?.title||'Связанная запись'} №${serverNumbers.get(parent?.id)||'—'} · ${money(d.amount_minor)} · ${d.paid_on} · ${item.kind==='settlement'?'период '+d.occurrence_on:'стратегия '+strategy(d.strategy)} · отменено ${d.voided_at||'нет'}`;
  };
  const shortServerText=item=>{
   const d=item.data,parent=entities.get(item.kind==='settlement'?d.obligation_id:d.loan_id);
@@ -895,18 +898,18 @@ function renderCloudImportComparison(prepared){
   details.addEventListener('toggle',()=>{
    if(!details.open||details.children.length>1)return;
    const list=document.createElement('ul'),rows=new Map(prepared.snapshot[kind].map(row=>[row.id,row]));
-   for(const entry of group.local){
-    const li=document.createElement('li');li.textContent='Локально: '+localText(kind,rows.get(entry.sourceId))+' · ID '+entry.sourceId;
+   for(const [index,entry] of group.local.entries()){
+    const li=document.createElement('li');li.textContent='Локально №'+(index+1)+': '+localText(kind,rows.get(entry.sourceId));
     if(entry.candidateIds.length){
      const matches=document.createElement('ul');
-     for(const id of entry.candidateIds){const candidate=document.createElement('li'),target=entities.get(id);candidate.textContent='Возможно совпадает: '+shortServerText(target)+' · ID '+id+'. '+differences(kind,rows.get(entry.sourceId),target);matches.append(candidate);}
+     for(const id of entry.candidateIds){const candidate=document.createElement('li'),target=entities.get(id);candidate.textContent='Возможно совпадает с серверной №'+serverNumbers.get(id)+': '+shortServerText(target)+'. '+differences(kind,rows.get(entry.sourceId),target);matches.append(candidate);}
      li.append(matches);
     }else li.append(' — похожие записи по проверенным признакам не найдены');
     const decisionLabel=document.createElement('label');decisionLabel.textContent=' Решение: ';
     const select=document.createElement('select');select.dataset.mergeKind=kind;select.dataset.sourceId=entry.sourceId;
     const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='Выберите действие';select.append(placeholder);
     const add=document.createElement('option');add.value='add';add.textContent='Добавить отдельную запись';select.append(add);
-    for(const id of group.serverIds){const option=document.createElement('option');option.value='link:'+id;option.textContent='Связать с серверной: '+shortServerText(entities.get(id))+' · ID '+id;select.append(option);}
+    for(const id of group.serverIds){const option=document.createElement('option');option.value='link:'+id;option.textContent='Связать с серверной №'+serverNumbers.get(id)+': '+shortServerText(entities.get(id));select.append(option);}
     const comparison=document.createElement('p');
     select.addEventListener('change',()=>{comparison.textContent=select.value.startsWith('link:')?
      differences(kind,rows.get(entry.sourceId),entities.get(select.value.slice(5))):'';});
@@ -915,7 +918,7 @@ function renderCloudImportComparison(prepared){
    }
    const remote=document.createElement('li');remote.textContent='Все серверные записи:';
    const remoteList=document.createElement('ul');
-   for(const id of group.serverIds){const li=document.createElement('li');li.textContent=serverText(entities.get(id))+' · ID '+id;remoteList.append(li);}
+   for(const id of group.serverIds){const li=document.createElement('li');li.textContent='№'+serverNumbers.get(id)+': '+serverText(entities.get(id));remoteList.append(li);}
    remote.append(remoteList);list.append(remote);details.append(list);
   });
   root.append(details);
@@ -924,7 +927,7 @@ function renderCloudImportComparison(prepared){
  if(other.length){
   const details=document.createElement('details'),summary=document.createElement('summary'),list=document.createElement('ul');
   summary.textContent=`Серверные счета, резервы и операции: ${other.length} — сохраняются`;
-  for(const item of other){const li=document.createElement('li');li.textContent=serverText(item)+' · ID '+item.id;list.append(li);}
+  for(const item of other){const li=document.createElement('li');li.textContent='№'+serverNumbers.get(item.id)+': '+serverText(item);list.append(li);}
   details.append(summary,list);root.append(details);
  }
 }

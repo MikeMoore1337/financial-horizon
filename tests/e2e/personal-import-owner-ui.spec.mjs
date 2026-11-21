@@ -104,6 +104,7 @@ test('#69 populated profile shows a read-only inventory and cannot submit',async
  await expect(page.locator('#cloud-import-heading')).toHaveText('Проверьте план переноса');
  await expect(page.locator('#cloud-import-summary')).toContainText('Добавить: 1, связать с сервером: 0');
  await expect(page.locator('#cloud-import-comparison label p').first()).toHaveText('Добавить отдельную запись');
+ expect(await page.locator('#cloud-import-comparison').innerText()).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
  await expect(page.locator('#cloud-import-final-consent')).not.toBeChecked();
  await expect(page.locator('[data-action="prepare-cloud-merge"]')).not.toBeVisible();
  await expect(page.locator('[data-action="confirm-cloud-import"]')).toBeEnabled();

@@ -170,6 +170,7 @@ function validateProjection(snapshot) {
       if (!Array.isArray(row.schedule) || row.schedule.length > 5000) invalid();
       for (const item of row.schedule) {
         if (!isObject(item) || !day(item.date) ||
+            Object.keys(item).some(field=>!['date','amountCents','balanceCents','interestCents','principalCents'].includes(field)) ||
             ['amountCents','balanceCents','interestCents','principalCents']
               .some(field=>item[field] != null && !money(item[field]))) invalid();
       }

@@ -374,6 +374,15 @@ def commit_verified_legacy_import_candidate(
     if sha256(encoded).hexdigest() != request.source_sha256:
         _invalid()
     rows = _snapshot_rows(source, request.source_revision)
+    if request.schema_version == 2:
+        allowed_schedule_fields = {"date", "amountCents", "balanceCents", "interestCents", "principalCents"}
+        for loan in rows["loans"]:
+            schedule = loan.get("schedule")
+            if schedule is not None and (type(schedule) is not list or any(
+                type(item) is not dict or not set(item).issubset(allowed_schedule_fields)
+                for item in schedule
+            )):
+                _invalid()
     inventory = sorted((kind, _record_id(item["id"]))
                        for kind in _KIND for item in rows[kind])
     expected = sorted((item.record_type, item.source_record_id) for item in request.rows)

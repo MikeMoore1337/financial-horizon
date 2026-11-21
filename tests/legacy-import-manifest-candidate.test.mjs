@@ -91,6 +91,7 @@ test('financial fields rejected by the server cannot become an approved preview'
     source=>{source.entries[0].date='2026-02-30'},
     source=>{source.entries[0].amountCents=1_000_000_000_001},
     source=>{source.loans[0].apr=12.345},
+    source=>{source.loans[0].schedule=[{date:'2026-12-01',amountCents:1,internalId:'hidden'}]},
     source=>{source.settings.currency='USD'},
     source=>{source.settlements.push({id:'orphan',entryId:'missing',occurrence:'2026-11',date:'2026-11-01',amountCents:1})},
   ]) {
