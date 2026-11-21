@@ -177,6 +177,12 @@ export async function prepareLivePersonalImportCandidate({
           !entity.data || typeof entity.data !== 'object' || Array.isArray(entity.data)) {
         hold('Повреждён серверный финансовый снимок');
       }
+      if (entity.kind === 'loan' && entity.data.imported_schedule !== null &&
+          (!Array.isArray(entity.data.imported_schedule) || entity.data.imported_schedule.some(row =>
+            !row || typeof row !== 'object' || Array.isArray(row) || Object.keys(row).some(field =>
+              !['date','amountCents','balanceCents','interestCents','principalCents'].includes(field))))) {
+        hold('Серверный кредитный график нельзя полностью показать для проверки');
+      }
       seen.add(entity.id);
     }
   }
