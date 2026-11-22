@@ -229,7 +229,7 @@ test(`${sourceKind} bank transfer verifies receipt and cancellation=${cancelled}
     currentLocalSnapshotMatches:true,explicitFinalConsent:true,explicitGuestTransfer:sourceKind==='guest',fetchImpl:send,signal});
   assert.equal(result.cashPostingsCreated,cancelled?2:1);
   assert.deepEqual(calls,['/api/finance/v1/import/commit','/api/finance/v1/import/restore',
-    '/api/finance/v1/state','/api/finance/v1/state','/api/finance/v1/import/bank/rows']);
+    '/api/finance/v1/state','/api/finance/v1/import/bank/rows']);
   corruptBalance=true;
   await assert.rejects(executeConfirmedPersonalImportCandidate({prepared:reviewed,verifiedActorUserId:accountA,
     currentLocalSnapshotMatches:true,explicitFinalConsent:true,explicitGuestTransfer:sourceKind==='guest',fetchImpl:send,signal}),/IMPORT_HOLD/);
