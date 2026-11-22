@@ -234,3 +234,54 @@ test('preserved server zero account cannot be committed without separate checkbo
   assert.equal(result.status, 'COMMITTED_AND_SOURCE_RESTORED');
   assert.equal(result.serverZeroAccountPreserved, true);
 });
+
+
+test('planner merge confirms actual readback, all projected fields and existing server data', async () => {
+  const account = {id:'11111111-1111-4111-8111-111111111111',kind:'account',entity_revision:1,
+    data:{name:'Existing synthetic account',type:'bank',currency:'RUB',
+      opening_minor:500,balance_minor:500,reserved_minor:0,available_minor:500,archived_at:null}};
+  const row={id:'synthetic-one',title:'Safe imported expense',kind:'expense',
+    amountCents:12345,date:'2026-11-01',recurrence:'once'};
+  const added={id:'22222222-2222-4222-8222-222222222222',kind:'obligation',entity_revision:1,
+    data:{title:row.title,direction:'expense',amount_minor:12345,starts_on:row.date,
+      timezone:'UTC',recurrence_unit:'none',recurrence_every:1,category:null,deleted_at:null}};
+  const addCounts={entries:1,loans:0,settlements:0,loanPayments:0};
+  const linkCounts={entries:0,loans:0,settlements:0,loanPayments:0};
+  const original='{"synthetic":"source-original"}';
+  const prepared={
+    actor:USER,origin:ORIGIN,profileId:PROFILE,etag:ETAG,revision:3,
+    preview:{status:'MERGE_PREVIEW_ONLY',sourceSha256:'c'.repeat(64),recordCount:1},
+    snapshot:{entries:[row],loans:[],settlements:[],loanPayments:[]},
+    serverEntities:[account],mergeCounts:{add:addCounts,link:linkCounts},
+    payload:{manifest:{schema_version:2,explicit_guest_transfer:false,
+      rows:[{record_type:'entries',source_record_id:row.id,decision:'add'}]},
+      source_canonical_json:original},
+  };
+  const commit={status:'COMMITTED',batch_id:BATCH,revision:4,record_count:1,
+    source_sha256:prepared.preview.sourceSha256,source_original_preserved:true,
+    cash_postings_created:0,created_counts:addCounts,linked_counts:linkCounts};
+  const testResponse=async changed=>{
+    const entities=changed?[account,{...added,data:{...added.data,amount_minor:12346}}]:[account,added];
+    const replies=[
+      reply(commit,201),
+      new Response(original,{status:200,headers:{'Content-Type':'application/json'}}),
+      new Response(JSON.stringify({schema_version:1,profile_id:PROFILE,revision:4,currency:'RUB',
+        entities}),{status:200,headers:{ETag:'"fh.1.4.synthetic"','Content-Type':'application/json'}}),
+    ];
+    const paths=[];
+    const run=executeConfirmedPersonalImportCandidate({
+      prepared,verifiedActorUserId:USER,currentLocalSnapshotMatches:true,
+      explicitFinalConsent:true,fetchImpl:async url=>{
+        paths.push(new URL(url).pathname);
+        return replies.shift();
+      },signal:req(),
+    });
+    if(changed)await assert.rejects(run,/IMPORT_HOLD:/);
+    else assert.equal((await run).status,'COMMITTED_AND_SOURCE_RESTORED');
+    assert.deepEqual(paths,[
+      '/api/finance/v1/import/commit','/api/finance/v1/import/restore','/api/finance/v1/state',
+    ]);
+  };
+  await testResponse(false);
+  await testResponse(true);
+});
