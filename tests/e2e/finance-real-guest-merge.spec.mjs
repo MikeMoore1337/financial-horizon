@@ -1,8 +1,11 @@
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {test,expect} from '@playwright/test';
 import {visitGuest,view,addEntry,scopedState} from './helpers.mjs';
 
 const origin='http://127.0.0.1:8791';
+const canonical=value=>value===null||typeof value!=='object'?JSON.stringify(value):
+ Array.isArray(value)?'['+value.map(canonical).join(',')+']':
+ '{'+Object.keys(value).sort().map(key=>JSON.stringify(key)+':'+canonical(value[key])).join(',')+'}';
 async function snapshot(request){
  const response=await request.get('/api/finance/v1/state?limit_entities=5000');
  expect(response.status()).toBe(200);
@@ -196,5 +199,50 @@ test('#69 guest source can be imported into an empty profile without deleting ei
  expect(after.body.entities.filter(row=>row.kind==='account')).toHaveLength(0);
  expect(await scopedState(guest,'guest-state-v2')).toEqual(guestBefore);
  expect(await scopedState(page,'account-state-v2:'+owner.id)).toEqual(accountBefore);
+ await guest.close();
+});
+
+test('#69 previous guest record is linked and not duplicated in a later merge',async({page,context})=>{
+ test.setTimeout(120_000);
+ if(process.env.FH_E2E_REAL_FINANCE!=='yes')test.skip();
+ const created=await context.request.post('/__e2e__/personal-session');expect(created.status()).toBe(200);
+ await page.goto('/?auth=success');await expect(page.locator('#save-indicator')).toHaveText('Локальная база готова');
+ const guest=await context.newPage();await visitGuest(guest);
+ await addEntry(guest,'Synthetic previously imported guest',{amount:'12.34'});
+ const initial=await scopedState(guest,'guest-state-v2');
+ expect((await context.request.post('/api/auth/email/finance/session',{headers:{Origin:origin},data:{}})).status()).toBe(200);
+ let before=await snapshot(context.request);
+ const raw=canonical(initial),manifest={schema_version:1,source_scope:'guest:local-guest-v1',
+  source_revision:initial.revision,source_sha256:createHash('sha256').update(raw).digest('hex'),
+  expected_server_revision:before.body.revision,external_encrypted_backup_checked:true,
+  explicit_owner_consent:true,explicit_guest_transfer:true,
+  rows:['entries','loans','settlements','loanPayments'].flatMap(kind=>initial[kind].map(row=>({record_type:kind,source_record_id:row.id})))};
+ const headers={Origin:origin,'If-Match':before.etag};
+ expect((await context.request.post('/api/finance/v1/import/manifest',{headers,data:{manifest}})).status()).toBe(202);
+ expect((await context.request.post('/api/finance/v1/import/commit',{headers,data:{manifest,source_canonical_json:raw}})).status()).toBe(201);
+ before=await snapshot(context.request);
+ const old=before.body.entities.find(row=>row.kind==='obligation');
+ await addEntry(guest,'Synthetic new guest obligation',{amount:'56.78'});
+ const original=await scopedState(guest,'guest-state-v2');
+ await view(guest,'settings');await guest.locator('[data-action="backup"]').click();
+ await guest.locator('#password-form [name="password"]').fill('Synthetic-guest-passphrase-2026!');
+ const downloading=guest.waitForEvent('download');await guest.locator('#password-form button[type="submit"]').click();
+ const backup=await downloading;
+ await view(page,'settings');await page.locator('[data-action="cloud-import-guest"]').click();
+ await page.locator('#cloud-import-file').setInputFiles(await backup.path());
+ await page.locator('#password-form [name="password"]').fill('Synthetic-guest-passphrase-2026!');
+ await page.locator('#password-form button[type="submit"]').click();
+ await page.locator('#cloud-import-comparison summary').first().click();
+ await page.locator(`#cloud-import-comparison select[data-source-id="${original.entries[0].id}"]`).selectOption('link:'+old.id);
+ await page.locator(`#cloud-import-comparison select[data-source-id="${original.entries[1].id}"]`).selectOption('add');
+ await page.locator('[data-action="prepare-cloud-merge"]').click();
+ await expect(page.locator('#cloud-import-summary')).toContainText('Добавить: 1, связать с сервером: 1');
+ await page.locator('#cloud-import-guest-consent').check();await page.locator('#cloud-import-final-consent').check();
+ await page.locator('[data-action="confirm-cloud-import"]').click();
+ await expect(page.locator('#cloud-import-summary')).toContainText('Добавлено 1, сопоставлено 1');
+ const after=await snapshot(context.request);
+ expect(after.body.entities).toHaveLength(before.body.entities.length+1);
+ expect(after.body.entities.find(row=>row.id===old.id)).toEqual(old);
+ expect(await scopedState(guest,'guest-state-v2')).toEqual(original);
  await guest.close();
 });
