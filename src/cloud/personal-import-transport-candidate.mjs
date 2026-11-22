@@ -171,12 +171,12 @@ export async function prepareLivePersonalImportCandidate({
   const needsComparison = snapshot.entities.length > 0 && !compatible;
   const seen = new Set();
   if (needsComparison) {
+    // A bank batch can increment an account multiple times in one profile revision.
     for (const entity of snapshot.entities) {
       if (!entity ||
           !['account', 'obligation', 'loan', 'reserve', 'transaction', 'settlement', 'loan_payment'].includes(entity.kind) ||
           typeof entity.id !== 'string' || !UUID.test(entity.id) || seen.has(entity.id) ||
           !Number.isSafeInteger(entity.entity_revision) || entity.entity_revision < 1 ||
-          entity.entity_revision > snapshot.revision ||
           !entity.data || typeof entity.data !== 'object' || Array.isArray(entity.data)) {
         hold('Повреждён серверный финансовый снимок');
       }

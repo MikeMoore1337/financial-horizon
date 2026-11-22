@@ -123,7 +123,7 @@ test('populated profile yields a verified read-only inventory, never an import c
   const db=mount({['account-state-v2:'+accountA]:source});
   const profile='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
   const entities=[
-    {id:'11111111-1111-4111-8111-111111111111',kind:'account',entity_revision:1,data:{}},
+    {id:'11111111-1111-4111-8111-111111111111',kind:'account',entity_revision:5,data:{}},
     {id:'22222222-2222-4222-8222-222222222222',kind:'obligation',entity_revision:1,data:{}},
     {id:'33333333-3333-4333-8333-333333333333',kind:'reserve',entity_revision:1,data:{}},
   ];
@@ -207,7 +207,8 @@ test('populated preview rejects incomplete, stale and malformed snapshots before
     [{...valid,next_cursor:'more'},'"strong"'],
     [valid,'W/"weak"'],
     [{...valid,entities:[row,row]},'"strong"'],
-    [{...valid,entities:[{...row,entity_revision:4}]},'"strong"'],
+    [{...valid,entities:[{...row,entity_revision:0}]},'"strong"'],
+    [{...valid,entities:[{...row,entity_revision:Number.MAX_SAFE_INTEGER+1}]},'"strong"'],
     [{...valid,entities:[{...row,kind:'unknown'}]},'"strong"'],
     [{...valid,entities:[{...row,kind:'loan',data:{imported_schedule:[{date:'2026-01-01',internalId:'synthetic'}]}}]},'"strong"'],
     [{...valid,entities:[{...row,kind:'transaction',data:{postings:[]}}]},'"strong"'],

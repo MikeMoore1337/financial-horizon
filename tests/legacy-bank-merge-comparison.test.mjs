@@ -45,6 +45,14 @@ test('guest bank comparison shows matching candidates without deciding or mutati
  assert.deepEqual(input,before);
 });
 
+test('account revision can exceed profile revision after a multi-row bank batch',()=>{
+ const input=fixture();
+ input.snapshot.entities[0].entity_revision=input.snapshot.revision+2;
+ assert.equal(run(input).sourceAccounts[0].candidateIds[0],remoteId);
+ input.snapshot.entities[0].entity_revision=0;
+ assert.throws(()=>run(input),/IMPORT_HOLD/);
+});
+
 test('changed fingerprint or category is a conflict, never an automatic match',()=>{
  for(const change of [row=>{row.fingerprint=hash('e');},row=>{row.category='другое';}]){
   const input=fixture();change(input.bankHistory.rows[0]);

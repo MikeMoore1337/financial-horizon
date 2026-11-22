@@ -22,10 +22,11 @@ export function compareGuestBankHistory({ledger,sourceRevision,snapshot,bankHist
     !Array.isArray(bankHistory.rows) || bankHistory.rows.length>5000 ||
     !etag.test(snapshotEtag||'') || bankEtag!==snapshotEtag) hold();
  const entities=new Map();
+ // A bank batch can increment an account multiple times in one profile revision.
  for(const entity of snapshot.entities){
   if(!entity || !uuid.test(entity.id||'') || entities.has(entity.id) ||
      !Number.isSafeInteger(entity.entity_revision) || entity.entity_revision<1 ||
-     entity.entity_revision>snapshot.revision || !entity.data || typeof entity.data!=='object' ||
+     !entity.data || typeof entity.data!=='object' ||
      Array.isArray(entity.data)) hold();
   entities.set(entity.id,entity);
  }
