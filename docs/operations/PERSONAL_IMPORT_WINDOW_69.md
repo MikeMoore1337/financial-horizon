@@ -212,11 +212,13 @@ FH_PERSONAL_IMPORT_WINDOW=ENABLE \
 2. точно заменяет `FH_FINANCE_IMPORT_RUNTIME=off` на `on`, оставляя
    личный namespace, пароль БД и OAuth-конфигурацию неизменными;
 3. перезапускает **только** `fh-email-auth.service`;
-4. добавляет в Caddy только три пути и только для POST:
-   `/api/finance/v1/import/manifest`, `/commit`, `/restore`;
+4. добавляет в Caddy только три пути для POST:
+   `/api/finance/v1/import/manifest`, `/commit`, `/restore`, а также
+   ровно один защищённый GET `/api/finance/v1/import/bank/rows` для сверки;
 5. валидирует Caddy и выполняет только **анонимные отрицательные** запросы
    к каждой из трёх операций (HTTP 401 с правильным Origin, 403 с
-   неправильным Origin), а также проверяет действующие OAuth и API.
+   неправильным Origin), проверяет анонимный отказ GET сверки, а также
+   проверяет действующие OAuth и API.
 6. при ошибке пытается восстановить два исходных конфигурационных файла
    и перезапустить только auth backend.
 
