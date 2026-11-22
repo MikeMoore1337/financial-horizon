@@ -185,6 +185,14 @@ export async function prepareLivePersonalImportCandidate({
       }
       seen.add(entity.id);
     }
+    const accounts = new Set(snapshot.entities.filter(entity => entity.kind === 'account').map(entity => entity.id));
+    for (const entity of snapshot.entities.filter(entity => entity.kind === 'transaction')) {
+      if (!Array.isArray(entity.data.postings) || entity.data.postings.length === 0 ||
+          entity.data.postings.some(posting => !posting || !accounts.has(posting.account_id) ||
+            !Number.isSafeInteger(posting.signed_minor))) {
+        hold('Нельзя полностью показать проводки серверной операции');
+      }
+    }
   }
   active(signal);
   const selection = {kind: 'account', verifiedUserId: verifiedActorUserId};

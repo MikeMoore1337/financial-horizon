@@ -71,7 +71,7 @@ test('#69 populated profile shows a read-only inventory and cannot submit',async
    importPosts.push(new URL(req.url()).pathname);
  });
  await visitGuest(page);
- const created=await context.request.post('/__e2e__/personal-session?enable_finance_stub=true&enable_reserves_stub=true');
+ const created=await context.request.post('/__e2e__/personal-session?enable_finance_stub=true&enable_reserves_stub=true&enable_transaction_stub=true');
  expect(created.status()).toBe(200);
  const owner=(await created.json()).user;
  await page.goto('/?auth=success');
@@ -92,12 +92,18 @@ test('#69 populated profile shows a read-only inventory and cannot submit',async
  await expect(page.locator('#cloud-import-heading')).toHaveText('Проверка профилей');
  await expect(page.locator('#cloud-import-summary')).toContainText('обязательств 2');
  await expect(page.locator('#cloud-import-summary')).toContainText('резервов 2');
+ await expect(page.locator('#cloud-import-summary')).toContainText('операций 1');
  await expect(page.locator('#cloud-import-summary')).toContainText('Выберите действие для каждой записи');
  await expect(page.locator('#cloud-import-summary')).toContainText('Сходство не доказывает дубль');
  await expect(page.locator('#cloud-import-final-consent')).not.toBeVisible();
  await page.locator('#cloud-import-comparison summary').first().click();
  await expect(page.locator('#cloud-import-comparison')).toContainText('Synthetic local preview');
  await expect(page.locator('#cloud-import-comparison')).toContainText('Хостинг');
+ await page.locator('#cloud-import-comparison summary').last().click();
+ await expect(page.locator('#cloud-import-comparison')).toContainText('Synthetic transaction');
+ await expect(page.locator('#cloud-import-comparison')).toContainText('Основной счёт:');
+ await expect(page.locator('#cloud-import-comparison')).toContainText(
+  new Intl.NumberFormat('ru-RU',{style:'currency',currency:'RUB',maximumFractionDigits:2,minimumFractionDigits:0}).format(-123.45));
  await expect(page.locator('[data-action="confirm-cloud-import"]')).toBeDisabled();
  await page.locator('#cloud-import-comparison select').first().selectOption('add');
  await page.locator('[data-action="prepare-cloud-merge"]').click();

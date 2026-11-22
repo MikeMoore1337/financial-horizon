@@ -175,6 +175,8 @@ test('populated preview rejects incomplete, stale and malformed snapshots before
     [{...valid,entities:[{...row,entity_revision:4}]},'"strong"'],
     [{...valid,entities:[{...row,kind:'unknown'}]},'"strong"'],
     [{...valid,entities:[{...row,kind:'loan',data:{imported_schedule:[{date:'2026-01-01',internalId:'synthetic'}]}}]},'"strong"'],
+    [{...valid,entities:[{...row,kind:'transaction',data:{postings:[]}}]},'"strong"'],
+    [{...valid,entities:[{...row,kind:'transaction',data:{postings:[{account_id:row.id,signed_minor:123}]}}]},'"strong"'],
   ]) {
     const calls=[];
     await assert.rejects(prepareLivePersonalImportCandidate({
