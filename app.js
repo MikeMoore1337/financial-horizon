@@ -1,5 +1,5 @@
 import {cents,rubles,numberInput,monthKey,monthIndex,shiftMonth,monthLabel,dayInMonth,loanLedger,previewLoanPayment,getMonthEvents,monthTotals,createSampleState,isActive,emptyState,payoffMonths,MAX_QR_BYTES,validQrData,safePaymentUrl,upsertPaymentMethod,deletePaymentMethod,choosePrimaryPaymentMethod} from './finance.js';
-import {readState,updateState,replaceState,askPersistentStorage,storageStatus,selectStateScope,revokeStateScope} from './storage.js?rev=auth-scopes-v18';
+import {readState,updateState,replaceState,withStableImportSnapshot,askPersistentStorage,storageStatus,selectStateScope,revokeStateScope} from './storage.js?rev=auth-scopes-v18';
 import {encryptBackup,decryptBackup} from './backup.js';
 import {parseSchedule} from './schedule.js';
 import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.js';
@@ -982,21 +982,21 @@ async function confirmCloudImport(){
  cloudImportBusy=true;
  const button=$('#cloud-import-dialog [data-action="confirm-cloud-import"]');
  button.disabled=true;
+ let requested=false;
  try{
   if(guestMode||actor!==activeUserId||emailSession.userId!==actor||
      !await refreshEmailSession())
    throw Error('Сессия изменилась. Перенос отменён.');
-  const current=await readState();
-  const unchanged=sameFinancialJSON(current,prepared.snapshot);
-  if(!unchanged)throw Error('Локальные данные изменились. Создайте новую копию и предпросмотр.');
-  const result=await executeConfirmedPersonalImportCandidate({
-   prepared,verifiedActorUserId:actor,currentLocalSnapshotMatches:unchanged,
-   explicitFinalConsent:true,
-   explicitPreserveZeroAccountConsent:prepared.preservedZeroAccountId ?
-    $('#cloud-import-preserve-zero-account').checked===true : false,
-   fetchImpl:window.fetch.bind(window),
-   signal:cloudImportController?.signal,
-  });
+  const result=await withStableImportSnapshot(
+   current=>sameFinancialJSON(current,prepared.snapshot),
+   signal=>{requested=true;return executeConfirmedPersonalImportCandidate({
+    prepared,verifiedActorUserId:actor,currentLocalSnapshotMatches:true,
+    explicitFinalConsent:true,
+    explicitPreserveZeroAccountConsent:prepared.preservedZeroAccountId ?
+     $('#cloud-import-preserve-zero-account').checked===true : false,
+    fetchImpl:window.fetch.bind(window),signal,
+   });},{signal:cloudImportController?.signal},
+  );
   const localAfter=await readState();
   const changedDuringTransfer=!sameFinancialJSON(localAfter,prepared.snapshot);
   pendingCloudImport=null;cloudImportFile=null;
@@ -1017,9 +1017,10 @@ async function confirmCloudImport(){
   $('#cloud-import-final-consent').checked=false;
   $('#cloud-import-preserve-zero-account').checked=false;
   $('#cloud-import-preserve-row').hidden=true;
-  $('#cloud-import-summary').textContent=
+  $('#cloud-import-summary').textContent=requested?
    'Результат переноса неизвестен. Локальные данные сохранены. Не повторяйте импорт, '+
-   'пока не проверите серверную копию и квитанцию.';
+   'пока не проверите серверную копию и квитанцию.':
+   'Перенос не отправлен. Локальные данные сохранены; проверьте их и подготовьте новый просмотр.';
   throw error;
  }finally{cloudImportBusy=false;button.disabled=true;}
 }
