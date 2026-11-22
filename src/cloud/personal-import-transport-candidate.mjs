@@ -599,7 +599,8 @@ export async function executeConfirmedPersonalImportCandidate({
       restored !== prepared.payload.source_canonical_json) {
     hold('Не удалось восстановить исходные байты с сервера. Не повторяйте импорт');
   }
-  if(isMerge)await verifyCommittedPlannerMerge(prepared,committed,fetchImpl,origin,signal);
+  // Bank merges already perform their own full snapshot and cash reconciliation.
+  if(isMerge&&!bank)await verifyCommittedPlannerMerge(prepared,committed,fetchImpl,origin,signal);
   if(bank)await verifyCommittedBankImport(prepared,committed,fetchImpl,origin,signal);
   active(signal);
   return Object.freeze({
