@@ -4,6 +4,8 @@ const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]
 const hash=/^[0-9a-f]{64}$/;
 const etag=/^"[^"\r\n]{1,254}"$/;
 const name=value=>typeof value==='string'?value.normalize('NFKC').trim().toLocaleLowerCase('ru-RU'):'';
+const day=value=>typeof value==='string' && /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+ Number.isFinite(Date.parse(value+'T00:00:00Z')) && new Date(value+'T00:00:00Z').toISOString().slice(0,10)===value;
 const hold=()=>{throw Error('IMPORT_HOLD: Неполная или несогласованная банковская история');};
 
 /** Read-only comparison; every account and operation still requires owner review. */
@@ -50,7 +52,7 @@ export function compareGuestBankHistory({ledger,sourceRevision,snapshot,bankHist
      !uuid.test(row.transaction_id||'') || transactionIds.has(row.transaction_id) ||
      !['committed','cancelled'].includes(row.status) || !['income','expense','transfer'].includes(row.kind) ||
      !Number.isSafeInteger(row.amount_minor) || row.amount_minor<1 || row.amount_minor>1_000_000_000_000 ||
-     typeof row.occurred_on!=='string' || !/^\d{4}-\d{2}-\d{2}$/.test(row.occurred_on) ||
+     !day(row.occurred_on) ||
      typeof row.description!=='string' || row.description.length>500 ||
      (row.category!==null && (typeof row.category!=='string' || !row.category || row.category.length>160)) ||
      (row.external_id!==null && (typeof row.external_id!=='string' || !row.external_id || row.external_id.length>150))) hold();

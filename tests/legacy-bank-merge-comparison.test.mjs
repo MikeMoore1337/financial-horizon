@@ -79,6 +79,7 @@ test('stale, incomplete, or tampered server data fail closed',()=>{
  for(const modify of [
   x=>{x.snapshot.next_cursor='more';},x=>{x.bankHistory.revision++;},
   x=>{x.snapshot.entities[1].data.postings[0].signed_minor=500;},
+  x=>{x.snapshot.entities[1].data.occurred_on='2026-02-31';x.bankHistory.rows[0].occurred_on='2026-02-31';},
   x=>{x.bankHistory.rows[0].description='несовпадающее описание';},
   x=>{x.snapshot.entities.pop();},x=>{x.bankHistory.rows.push(structuredClone(x.bankHistory.rows[0]));},
   x=>{x.state.bankStatements.operations[0].amountCents=0;},
