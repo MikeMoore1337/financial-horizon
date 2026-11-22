@@ -127,3 +127,58 @@ test('account revocation cancels the lock and never copies into another account'
  });
  expect(other.entries).toEqual([]);
 });
+
+test('guest source stays locked during transfer while the account scope remains active',async({page,context})=>{
+ const guest=await context.newPage();
+ await initialize(page);await initialize(guest);
+ await guest.evaluate(async()=>{
+  await window.fhStorage.selectStateScope(null);
+  await window.fhStorage.updateState(state=>{state.settings.syntheticGuest='before';});
+ });
+ await page.evaluate(async()=>{
+  window.fhAbort=new AbortController();window.fhLockStarted=false;
+  window.fhLockTask=window.fhStorage.withStableImportSnapshot(
+   state=>state.settings.syntheticGuest==='before',
+   ()=>new Promise(resolve=>{window.fhLockStarted=true;window.fhRelease=resolve;}),
+   {signal:window.fhAbort.signal,guestSource:{sourceKey:'guest-state-v2',claim:'a'.repeat(32)}},
+  );
+ });
+ await expect.poll(()=>page.evaluate(()=>window.fhLockStarted)).toBe(true);
+ await guest.evaluate(()=>{window.fhWriteTask=window.fhStorage.updateState(state=>{state.settings.syntheticGuest='after';});});
+ expect(await isBlocked(guest)).toBe(true);
+ await page.evaluate(()=>window.fhRelease('ok'));
+ expect(await page.evaluate(()=>window.fhLockTask)).toBe('ok');
+ await guest.evaluate(()=>window.fhWriteTask);
+ expect(await guest.evaluate(async()=>(await window.fhStorage.readState()).settings.syntheticGuest)).toBe('after');
+ expect(await page.evaluate(async()=>(await window.fhStorage.readState()).settings.syntheticGuest)).toBeUndefined();
+ await guest.close();
+});
+
+test('guest transfer rejects a changed claim and never reads the former account',async({page})=>{
+ await initialize(page);
+ const result=await page.evaluate(async()=>{
+  let called=false;
+  try{
+   await window.fhStorage.withStableImportSnapshot(()=>true,()=>{called=true;},
+    {signal:new AbortController().signal,guestSource:{sourceKey:'guest-state-v2',claim:'b'.repeat(32)}});
+  }catch(error){return {called,message:error.message};}
+ });
+ expect(result.called).toBe(false);
+ expect(result.message).toContain('Гостевой профиль изменился');
+});
+
+test('guest transfer rejects a malformed null claim instead of treating it as unclaimed',async({page})=>{
+ await initialize(page);
+ const result=await page.evaluate(async()=>{
+  const db=await new Promise((resolve,reject)=>{const request=indexedDB.open('financial-horizon-browser-v1',1);
+   request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+  await new Promise((resolve,reject)=>{const tx=db.transaction('finance','readwrite');
+   tx.objectStore('finance').put(null,'legacy-account-claim-v2');tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});
+  db.close();let called=false;
+  try{await window.fhStorage.withStableImportSnapshot(()=>true,()=>{called=true;},
+   {signal:new AbortController().signal,guestSource:{sourceKey:'state',claim:null}});}
+  catch(error){return {called,message:error.message};}
+ });
+ expect(result.called).toBe(false);
+ expect(result.message).toContain('Гостевой профиль изменился');
+});

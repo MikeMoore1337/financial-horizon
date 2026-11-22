@@ -171,6 +171,12 @@ export function CloudImportDialog() {
       </p>
       <p id="cloud-import-summary" className="form-note" role="status" aria-live="polite" />
       <div id="cloud-import-comparison" />
+      <label className="field" id="cloud-import-guest-row" hidden>
+        <span>
+          <input type="checkbox" id="cloud-import-guest-consent" /> Я отдельно подтверждаю перенос
+          гостевых данных в текущий аккаунт. Гостевая копия останется на устройстве.
+        </span>
+      </label>
       <label className="field" id="cloud-import-preserve-row" hidden>
         <span>
           <input type="checkbox" id="cloud-import-preserve-zero-account" /> Я отдельно подтверждаю

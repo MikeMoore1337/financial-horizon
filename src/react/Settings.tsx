@@ -112,9 +112,14 @@ export function Settings({
               <Icon name="upload" /> Восстановить
             </button>
             {showFinanceAccounts && showFinanceImport && (
-              <button className="button-secondary" data-action="cloud-import">
-                <Icon name="upload" /> Перенести данные в аккаунт
-              </button>
+              <>
+                <button className="button-secondary" data-action="cloud-import">
+                  <Icon name="upload" /> Перенести данные в аккаунт
+                </button>
+                <button className="button-secondary" data-action="cloud-import-guest">
+                  <Icon name="upload" /> Перенести гостевые данные
+                </button>
+              </>
             )}
           </div>
           <p

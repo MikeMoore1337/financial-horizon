@@ -136,12 +136,42 @@ test('existing server records force explicit conflict decision and no automatic 
 
 test('guest transfer requires separate explicit opt-in, keeps old guest scope', async () => {
   const source = createSampleState();
-  const selected = verified(source, {scope: 'guest:synthetic-guest-77', sourceKey: 'state'});
+  const selected = verified(source, {scope: 'guest:synthetic-guest-77', sourceKey: 'state',guestClaim:null});
   await expectHold(plan({verified: selected}));
   const result = await plan({verified: selected, consent: {...consent(), explicitGuestTransfer: true}});
   assert.equal(result.sourceScope, selected.scope);
   assert.equal(result.targetScope, ACCOUNT);
   assert.equal(result.sendAllowed, false);
+});
+
+test('guest upload candidate needs distinct consent and exact verified target account', async () => {
+  const source = createSampleState();
+  const selected = verified(source, {scope:'guest:synthetic-guest-77',sourceKey:'guest-state-v2',guestClaim:USER});
+  const preview = await plan({verified:selected,consent:{...consent(),explicitGuestTransfer:true}});
+  const signal = new AbortController().signal;
+  const prepare = extra => prepareVerifiedLegacyImportTransportCandidate({verified:selected,preview,signal,...extra});
+  await expectHold(prepare({}));
+  await expectHold(prepare({confirmedGuestTransfer:true,confirmedTargetScope:'account:'+'b'.repeat(32)}));
+  await expectHold(prepare({confirmedGuestTransfer:true,confirmedTargetScope:ACCOUNT,
+    verified:{...selected,sourceKey:'account-state-v2:'+USER}}));
+  await expectHold(prepare({confirmedGuestTransfer:true,confirmedTargetScope:ACCOUNT,
+    preview:{...preview,guestTransferApproved:false}}));
+  const original=structuredClone(source);
+  const payload=await prepare({confirmedGuestTransfer:true,confirmedTargetScope:ACCOUNT});
+  assert.equal(payload.manifest.source_scope,'guest:synthetic-guest-77');
+  assert.equal(payload.manifest.explicit_guest_transfer,true);
+  assert.equal(payload.manifest.explicit_owner_consent,true);
+  assert.deepEqual(source,original);
+  const populated=await plan({verified:selected,target:target({hasRemoteRecords:true}),
+    consent:{...consent(),explicitGuestTransfer:true}});
+  const decisions=['entries','loans','settlements','loanPayments'].flatMap(kind=>
+    source[kind].map(row=>({kind,sourceId:row.id,action:'add'})));
+  const comparison={status:'NEEDS_OWNER_DECISIONS',groups:{}};
+  const merge=await prepareVerifiedLegacyImportTransportCandidate({verified:selected,preview:populated,signal,
+    mergeDecisions:decisions,comparison,confirmedGuestTransfer:true,confirmedTargetScope:ACCOUNT});
+  assert.equal(merge.manifest.schema_version,2);
+  assert.equal(merge.manifest.explicit_guest_transfer,true);
+  assert.ok(merge.manifest.rows.every(row=>row.decision==='add'));
 });
 
 test('account data never cross-copies to another authenticated user', async () => {

@@ -5,6 +5,7 @@ import {encryptBackup} from '../backup.js';
 import {verifyLiveLegacyBackup} from '../src/security/live-legacy-preflight.ts';
 import {planLiveLegacyImportPreviewCandidate} from '../src/cloud/live-legacy-import-preview-candidate.mjs';
 import {prepareLivePersonalImportCandidate, preparePersonalMergeReviewCandidate, executeConfirmedPersonalImportCandidate} from '../src/cloud/personal-import-transport-candidate.mjs';
+import {addGuestBankAccount,commitGuestBankBatch} from '../src/importers/bank-statements/guest-ledger.js';
 
 const accountA = 'a'.repeat(32);
 const accountB = 'b'.repeat(32);
@@ -81,6 +82,40 @@ const account = id => ({kind:'account',verifiedUserId:id});
 const guest = (namespace='guest-qa-local') => ({kind:'guest',guestNamespace:namespace});
 const verify = (selection, backupText, extra={}) => verifyLiveLegacyBackup({
   selection,backupText,backupPassword,consent,...extra,
+});
+
+test('bank history shows a read-only comparison and rejects mismatched server revisions',async()=>{
+  const source=createSampleState(), accountId='11111111-1111-4111-8111-111111111111';
+  addGuestBankAccount(source,{id:accountId,name:'Synthetic bank',openingMinor:20000},source.revision);source.revision++;
+  const operation={sourceKey:'a'.repeat(64),fingerprint:'b'.repeat(64),externalId:'SYN',
+    date:'2026-11-01',amountCents:500,kind:'expense',description:'Synthetic bank row',
+    accountId,targetAccountId:null,category:null,currency:'RUB'};
+  commitGuestBankBatch(source,{batchKey:'c'.repeat(64),sourceKeys:[operation.sourceKey],
+    operations:[operation],expectedOperationCount:1},'d'.repeat(64),source.revision);source.revision++;
+  const original=clone(source),backupText=await encryptBackup(source,backupPassword);
+  const db=mount({['account-state-v2:'+accountA]:source});
+  const profile='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const snapshot={schema_version:1,profile_id:profile,revision:1,currency:'RUB',entities:[]};
+  const calls=[];let stale=false;
+  const fetchImpl=async(url,init)=>{
+    const path=new URL(url).pathname;calls.push([path,init.method]);
+    const body=path.endsWith('/session')?{ok:true,profile_id:profile}:
+      path.endsWith('/rows')?{schema_version:1,revision:stale?2:1,rows:[]}:snapshot;
+    return new Response(JSON.stringify(body),{status:200,headers:{'Content-Type':'application/json',ETag:'"synthetic"'}});
+  };
+  const input={verifiedActorUserId:accountA,backupText,backupPassword,fetchImpl,
+    origin:'https://fin-horizon.example',signal:new AbortController().signal,explicitConsent:true};
+  const result=await prepareLivePersonalImportCandidate(input);
+  assert.equal(result.preview.status,'BANK_REVIEW_ONLY');
+  assert.equal(result.bankComparison.sourceAccounts[0].balanceMinor,19500);
+  assert.equal(result.bankComparison.operations.length,1);
+  assert.equal(result.payload,undefined);
+  assert.deepEqual(calls,[['/api/auth/email/finance/session','POST'],
+    ['/api/finance/v1/state','GET'],['/api/finance/v2/bank-import/rows','GET']]);
+  stale=true;
+  await assert.rejects(prepareLivePersonalImportCandidate(input),/IMPORT_HOLD/);
+  assert.deepEqual(db.values.get('account-state-v2:'+accountA),original);
+  assert.equal(db.writeCount,0);
 });
 
 test('populated profile yields a verified read-only inventory, never an import command', async () => {
@@ -201,6 +236,7 @@ test('unclaimed guest reads only legacy state and migrates encrypted v1 backup t
   const result=await verify(guest(),backupText);
   assert.equal(result.scope,'guest:guest-qa-local');
   assert.equal(result.sourceKey,'state');
+  assert.equal(result.guestClaim,null);
   assert.equal(result.backupVersion,1);
   assert.equal(result.sourceRevision,0);
   assert.equal(result.snapshot.version,2);
@@ -218,6 +254,7 @@ test('claimed guest uses separate guest-state-v2, never leaks claimed legacy sta
   const db=mount({state:previous,'legacy-account-claim-v2':accountA,'guest-state-v2':guestState});
   const result=await verify(guest(),backupText);
   assert.equal(result.sourceKey,'guest-state-v2');
+  assert.equal(result.guestClaim,accountA);
   assert.equal(result.snapshot.entries[0].title,'EXPLICIT_GUEST_ONLY');
   assert.notEqual(result.snapshot.entries[0].title,previous.entries[0].title);
   assert.deepEqual(db.values.get('state'),previous);

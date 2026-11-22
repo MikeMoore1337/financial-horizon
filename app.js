@@ -37,6 +37,7 @@ const financeReservesEnabled=financeAccountsEnabled&&document.querySelector('met
 let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null,obligationsSection:'payments',focusReserveId:null,reserveSuggestions:[]},passwordMode='export',restoreFile=null,verifyBackupFile=null,cloudImportFile=null,pendingCloudImport=null,cloudImportController=null,cloudImportBusy=false,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
 const emailSession=createEmailSession();
 let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
+let cloudImportSourceKind='account';
 const GUEST_MODE_KEY='fh-guest-session-v2';
 let screenRoot=null;
 let navRoots=null;
@@ -549,14 +550,17 @@ async function handleAction(button){
  if(type==='backup'){passwordMode='export';$('#password-heading').textContent='Создать резервную копию';$('#password-form').reset();openDialog('#password-dialog');return;}
  if(type==='verify-backup'){$('#backup-verify-status').textContent='';$('#verify-backup-file').value='';$('#verify-backup-file').click();return;}
  if(type==='restore'){$('#restore-file').value='';$('#restore-file').click();return;}
- if(type==='cloud-import'){
+ if(type==='cloud-import'||type==='cloud-import-guest'){
   if(!financeImportEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId)throw Error('Перенос доступен только своему FH-аккаунту');
+  if(cloudImportBusy||busy)throw Error('Дождитесь завершения текущей проверки');
+  cloudImportSourceKind=type==='cloud-import-guest'?'guest':'account';
   pendingCloudImport=null;cloudImportFile=null;
   $('#cloud-import-file').value='';$('#cloud-import-file').click();return;
  }
  if(type==='cancel-cloud-import'){
   cloudImportController?.abort();pendingCloudImport=null;cloudImportFile=null;
   $('#cloud-import-final-consent').checked=false;
+  $('#cloud-import-guest-consent').checked=false;$('#cloud-import-guest-row').hidden=true;
   $('#cloud-import-preserve-zero-account').checked=false;
   $('#cloud-import-preserve-row').hidden=true;
   $('#cloud-import-dialog').close();return;
@@ -773,7 +777,7 @@ async function performRestore(password){
 async function prepareCloudImport(password){
  if(cloudImportBusy||busy||!financeImportEnabled||guestMode||!cloudImportFile)
   throw Error('Перенос недоступен или уже выполняется');
- const actor=activeUserId;
+ const actor=activeUserId,sourceKind=cloudImportSourceKind;
  if(!actor||emailSession.userId!==actor||!await refreshEmailSession())
   throw Error('Сессия финансового аккаунта не подтверждена');
  cloudImportBusy=true;
@@ -787,11 +791,23 @@ async function prepareCloudImport(password){
   const prepared=await prepareLivePersonalImportCandidate({
    verifiedActorUserId:actor,backupText:text,backupPassword:password,
    fetchImpl:window.fetch.bind(window),origin:window.location.origin,
-   signal:controller.signal,explicitConsent:true,
+   signal:controller.signal,explicitConsent:true,sourceKind,
+   explicitGuestTransfer:sourceKind==='guest',
   });
   if(controller.signal.aborted||guestMode||activeUserId!==actor||emailSession.userId!==actor)
    throw Error('Сессия изменилась во время проверки импорта');
   pendingCloudImport=prepared;
+  if(prepared.bankComparison){
+   renderCloudBankHistory(prepared);
+   $('#cloud-import-heading').textContent='Сравнение банковской истории';
+   $('#cloud-import-summary').textContent='Просмотр без записи: счетов '+prepared.bankComparison.sourceAccounts.length+
+    ', операций '+prepared.bankComparison.operations.length+'. Совпадения требуют ручной проверки. '+
+    'Перенос банковской истории ещё не доступен; исходные данные сохранены.';
+   $('#cloud-import-final-consent').closest('label').hidden=true;
+   $('#cloud-import-dialog [data-action="prepare-cloud-merge"]').hidden=true;
+   $('#cloud-import-preserve-row').hidden=true;$('#cloud-import-guest-row').hidden=true;
+   cloudImportFile=null;return;
+  }
   renderCloudImportComparison(prepared);
   const count=prepared.preview.counts;
   $('#cloud-import-heading').textContent=prepared.serverCounts ?
@@ -799,7 +815,7 @@ async function prepareCloudImport(password){
   $('#cloud-import-final-consent').closest('label').hidden=Boolean(prepared.serverCounts);
   $('#cloud-import-dialog [data-action="prepare-cloud-merge"]').hidden=!prepared.serverCounts;
   $('#cloud-import-summary').textContent=
-   (prepared.serverCounts ? 'Локальная копия: ' : 'Готово к переносу: ')+
+   (prepared.guestSource ? 'Гостевая копия: ' : (prepared.serverCounts ? 'Локальная копия: ' : 'Готово к переносу: '))+
    count.entries+' обязательств, '+count.loans+' кредитов, '+
    count.settlements+' фактических оплат и '+count.loanPayments+' платежей по кредитам. '+
    'Серверная ревизия: '+prepared.revision+'. Пока ничего не загружено.'+
@@ -814,6 +830,8 @@ async function prepareCloudImport(password){
     prepared.preservedZeroAccountName+'» с нулевым остатком останется на сервере без изменений.' : '');
   $('#cloud-import-preserve-row').hidden=!prepared.preservedZeroAccountId;
   $('#cloud-import-preserve-zero-account').checked=false;
+  $('#cloud-import-guest-row').hidden=!prepared.guestSource;
+  $('#cloud-import-guest-consent').checked=false;
   $('#cloud-import-final-consent').checked=false;
   // Never retain the original encrypted file or password in global state.
   cloudImportFile=null;
@@ -821,6 +839,35 @@ async function prepareCloudImport(password){
   pendingCloudImport=null;cloudImportFile=null;controller.abort();
   throw error;
  }finally{cloudImportBusy=false;}
+}
+function renderCloudBankHistory(prepared){
+ const root=$('#cloud-import-comparison');root.replaceChildren();
+ const ledger=prepared.snapshot.bankStatements,entities=new Map(prepared.serverEntities.map(row=>[row.id,row]));
+ const bankRows=new Map(prepared.bankHistory.rows.map(row=>[row.transaction_id,row]));
+ const accounts=new Map(ledger.accounts.map(row=>[row.id,row]));
+ const kind=value=>({income:'доход',expense:'расход',transfer:'перевод'}[value]||'операция');
+ const add=(title,lines)=>{
+  const group=document.createElement('details'),summary=document.createElement('summary'),list=document.createElement('ul');
+  summary.textContent=title;for(const text of lines){const item=document.createElement('li');item.textContent=text;list.append(item);}
+  group.append(summary,list);root.append(group);
+ };
+ add('Локальные счета и текущие остатки',prepared.bankComparison.sourceAccounts.map(row=>{
+  const source=accounts.get(row.sourceId),matches=row.candidateIds.map(id=>entities.get(id)?.data?.name||'Счёт');
+  return `${source.name} · начальный ${rubles(row.openingMinor)} · остаток ${rubles(row.balanceMinor)} · `+
+   (matches.length?'Возможные серверные счета: '+matches.join(', '):'Похожих серверных счетов не найдено');
+ }));
+ const localOperations=new Map(ledger.operations.map(row=>[row.sourceKey,row]));
+ add('Локальные банковские операции',prepared.bankComparison.operations.map(row=>{
+  const source=localOperations.get(row.sourceKey),target=accounts.get(source.targetAccountId);
+  const matches=row.candidateIds.map(id=>bankRows.get(id)).filter(Boolean);
+  return `${source.date} · ${source.description||'Без описания'} · ${kind(source.kind)} · ${rubles(source.amountCents)} · `+
+   `${accounts.get(source.accountId)?.name||'Счёт'}${target?' → '+target.name:''} · `+
+   `${row.status==='cancelled'?'отменена':'действует'} · `+
+   (row.identityConflict?'конфликт идентичности; требуется проверка':`возможных совпадений: ${matches.length}`);
+ }));
+ add('Серверная банковская история',prepared.bankHistory.rows.map(row=>
+  `${row.occurred_on} · ${row.description||'Без описания'} · ${kind(row.kind)} · ${rubles(row.amount_minor)} · `+
+  `${entities.get(row.account_id)?.data?.name||'Счёт'}${row.target_account_id?' → '+(entities.get(row.target_account_id)?.data?.name||'Счёт'):''} · ${row.status==='cancelled'?'отменена':'сохранена'}`));
 }
 function renderCloudImportComparison(prepared){
  const root=$('#cloud-import-comparison');root.replaceChildren();
@@ -946,10 +993,10 @@ async function prepareCloudMergeReview(){
  try{
   if(guestMode||actor!==activeUserId||emailSession.userId!==actor||!await refreshEmailSession())
    throw Error('Сессия изменилась. Проверка остановлена.');
-  const current=await readState();
-  const reviewed=await preparePersonalMergeReviewCandidate({prepared,verifiedActorUserId:actor,
-   currentLocalSnapshotMatches:sameFinancialJSON(current,prepared.snapshot),decisions,
-   signal:cloudImportController?.signal});
+  const reviewed=await withStableImportSnapshot(current=>sameFinancialJSON(current,prepared.snapshot),
+   signal=>preparePersonalMergeReviewCandidate({prepared,verifiedActorUserId:actor,
+    currentLocalSnapshotMatches:true,decisions,signal}),
+   {signal:cloudImportController?.signal,...(prepared.guestSource?{guestSource:prepared.guestSource}:{})});
   if(cloudImportController?.signal.aborted||guestMode||activeUserId!==actor||emailSession.userId!==actor)
    throw Error('Сессия изменилась. Проверка остановлена.');
   pendingCloudImport=reviewed;
@@ -977,6 +1024,8 @@ async function confirmCloudImport(){
  if($('#cloud-import-final-consent').checked!==true)
   throw Error('Требуется отдельное подтверждение сохранённой шифрованной копии');
  const prepared=pendingCloudImport, actor=prepared.actor;
+ if(prepared.guestSource&&$('#cloud-import-guest-consent').checked!==true)
+  throw Error('Отдельно подтвердите перенос гостевой копии в текущий аккаунт');
  if(prepared.preservedZeroAccountId&&$('#cloud-import-preserve-zero-account').checked!==true)
   throw Error('Отдельно подтвердите сохранение существующего пустого счёта');
  cloudImportBusy=true;
@@ -992,15 +1041,21 @@ async function confirmCloudImport(){
    signal=>{requested=true;return executeConfirmedPersonalImportCandidate({
     prepared,verifiedActorUserId:actor,currentLocalSnapshotMatches:true,
     explicitFinalConsent:true,
+    explicitGuestTransfer:prepared.guestSource ? $('#cloud-import-guest-consent').checked===true : false,
     explicitPreserveZeroAccountConsent:prepared.preservedZeroAccountId ?
      $('#cloud-import-preserve-zero-account').checked===true : false,
     fetchImpl:window.fetch.bind(window),signal,
-   });},{signal:cloudImportController?.signal},
+   });},{signal:cloudImportController?.signal,...(prepared.guestSource?{guestSource:prepared.guestSource}:{})},
   );
-  const localAfter=await readState();
-  const changedDuringTransfer=!sameFinancialJSON(localAfter,prepared.snapshot);
+  let changedDuringTransfer;
+  if(prepared.guestSource){
+   try{await withStableImportSnapshot(current=>sameFinancialJSON(current,prepared.snapshot),()=>true,
+    {signal:cloudImportController?.signal,guestSource:prepared.guestSource});changedDuringTransfer=false;}
+   catch{changedDuringTransfer=true;}
+  }else changedDuringTransfer=!sameFinancialJSON(await readState(),prepared.snapshot);
   pendingCloudImport=null;cloudImportFile=null;
   $('#cloud-import-final-consent').checked=false;
+  $('#cloud-import-guest-consent').checked=false;$('#cloud-import-guest-row').hidden=true;
   $('#cloud-import-preserve-zero-account').checked=false;
   $('#cloud-import-preserve-row').hidden=true;
   $('#cloud-import-summary').textContent=
@@ -1015,6 +1070,7 @@ async function confirmCloudImport(){
   // A network failure AFTER commit is UNKNOWN. Do not retry automatically.
   pendingCloudImport=null;cloudImportFile=null;cloudImportController?.abort();
   $('#cloud-import-final-consent').checked=false;
+  $('#cloud-import-guest-consent').checked=false;$('#cloud-import-guest-row').hidden=true;
   $('#cloud-import-preserve-zero-account').checked=false;
   $('#cloud-import-preserve-row').hidden=true;
   $('#cloud-import-summary').textContent=requested?
@@ -1114,6 +1170,7 @@ function bindEvents(){
   $('#cloud-import-comparison').replaceChildren();
   $('#cloud-import-dialog [data-action="prepare-cloud-merge"]').hidden=true;
   $('#cloud-import-final-consent').checked=false;
+  $('#cloud-import-guest-consent').checked=false;$('#cloud-import-guest-row').hidden=true;
   $('#cloud-import-preserve-zero-account').checked=false;
   $('#cloud-import-preserve-row').hidden=true;
  });

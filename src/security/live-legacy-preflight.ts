@@ -30,6 +30,7 @@ export type VerifiedLegacySnapshot = Readonly<{
   sourceRevision: number;
   snapshot: ReturnType<typeof migrateState>;
   backupVersion: 1;
+  guestClaim?: string | null;
 }>;
 
 function selectedScope(selection: ExplicitLegacySelection): LocalScope {
@@ -157,5 +158,6 @@ export async function verifyLiveLegacyBackup(input: {
     sourceRevision: source.revision,
     snapshot: structuredClone(source),
     backupVersion: 1,
+    ...(scope.startsWith('guest:') ? {guestClaim: first.claim} : {}),
   };
 }

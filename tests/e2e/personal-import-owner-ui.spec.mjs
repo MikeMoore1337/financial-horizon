@@ -14,6 +14,7 @@ test('#69 import entry only for verified FH owner, no automatic financial POST',
  await expect(page.locator('[data-action="backup"]')).toBeVisible();
  await expect(page.locator('[data-action="verify-backup"]')).toBeVisible();
  await expect(page.locator('[data-action="cloud-import"]')).toHaveCount(0);
+ await expect(page.locator('[data-action="cloud-import-guest"]')).toHaveCount(0);
  expect(importPosts).toEqual([]);
 
  // Create a genuine revocable FH AuthStore cookie with the isolated E2E
@@ -59,6 +60,7 @@ test('#69 import entry only for verified FH owner, no automatic financial POST',
  await visitGuest(page);
  await view(page,'settings');
  await expect(page.locator('[data-action="cloud-import"]')).toHaveCount(0);
+ await expect(page.locator('[data-action="cloud-import-guest"]')).toHaveCount(0);
  expect(importPosts).toEqual([]);
  expect(await scopedState(page,'account-state-v2:'+owner.id)).toEqual(snapshot);
  watch.assertClean();

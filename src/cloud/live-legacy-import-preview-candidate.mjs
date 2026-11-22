@@ -72,6 +72,7 @@ export async function planLiveLegacyImportPreviewCandidate({
   });
   if (original.scope !== again.scope ||
       original.sourceKey !== again.sourceKey ||
+      original.guestClaim !== again.guestClaim ||
       original.sourceRevision !== again.sourceRevision ||
       preview.sourceSha256 !== matched.sourceSha256 ||
       preview.sourceScope !== matched.sourceScope ||

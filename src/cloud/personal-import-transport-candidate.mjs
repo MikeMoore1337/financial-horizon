@@ -10,6 +10,8 @@ import {verifyLiveLegacyBackup} from '../security/live-legacy-preflight.ts';
 import {planLiveLegacyImportPreviewCandidate} from './live-legacy-import-preview-candidate.mjs';
 import {prepareVerifiedLegacyImportTransportCandidate} from './legacy-import-manifest-candidate.mjs';
 import {compareLegacyWithServer} from './legacy-merge-comparison.mjs';
+import {compareGuestBankHistory} from './legacy-bank-merge-comparison.mjs';
+import {sameFinancialJSON} from '../security/protected-staging.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const STRONG_ETAG = /^"[^"\r\n]{1,254}"$/;
@@ -110,14 +112,15 @@ async function request(fetchImpl, origin, path, method, body, signal, etag) {
 /** Only prepares source bytes after actual externally saved backup check. */
 export async function prepareLivePersonalImportCandidate({
   verifiedActorUserId, backupText, backupPassword, fetchImpl,
-  origin, signal, explicitConsent = false,
+  origin, signal, explicitConsent = false, sourceKind = 'account', explicitGuestTransfer = false,
 }) {
   active(signal); safeOrigin(origin);
   if (!USER.test(verifiedActorUserId) ||
       explicitConsent !== true ||
       typeof backupText !== 'string' || backupText.length < 100 ||
       backupText.length > 8_000_000 || typeof backupPassword !== 'string' ||
-      backupPassword.length < 12 || typeof fetchImpl !== 'function') {
+      backupPassword.length < 12 || typeof fetchImpl !== 'function' ||
+      !['account','guest'].includes(sourceKind) || explicitGuestTransfer !== (sourceKind === 'guest')) {
     hold('Нужны подтверждённый FH-аккаунт и внешняя шифрованная копия');
   }
   // Reject obviously unprotected or malformed files BEFORE creating a
@@ -195,11 +198,12 @@ export async function prepareLivePersonalImportCandidate({
     }
   }
   active(signal);
-  const selection = {kind: 'account', verifiedUserId: verifiedActorUserId};
+  const selection = sourceKind === 'guest' ? {kind:'guest',guestNamespace:'local-guest-v1'} :
+    {kind:'account',verifiedUserId:verifiedActorUserId};
   const consent = {
     savedEncryptedBackupOutsideThisBrowser: true, confirmedReadOnlyPreflight: true,
     externalEncryptedBackupVerified: true, confirmedTargetAccount: true,
-    previewRequested: true, explicitGuestTransfer: false,
+    previewRequested: true, explicitGuestTransfer,
     // This only prepares a proposal; the SECOND explicit checkbox is still
     // required before HTTP stage/commit.
     confirmPreserveZeroAccount: Boolean(compatible),
@@ -210,6 +214,21 @@ export async function prepareLivePersonalImportCandidate({
     hasRemoteRecords: snapshot.entities.length > 0,
     preserveZeroAccountId: compatible ? existing.id : null,
   };
+  const bankSource = await verifyLiveLegacyBackup({selection,backupText,backupPassword,consent});
+  const ledger=bankSource.snapshot.bankStatements;
+  if (ledger && (ledger.accounts.length || ledger.operations.length || ledger.batches.length)) {
+    const historyResponse=await request(fetchImpl,origin,'/api/finance/v2/bank-import/rows','GET',null,signal);
+    const bankHistory=await responseJson(historyResponse);
+    const bankComparison=compareGuestBankHistory({ledger,sourceRevision:bankSource.sourceRevision,snapshot,bankHistory,
+      snapshotEtag:etag,bankEtag:historyResponse.headers.get('etag')});
+    const again=await verifyLiveLegacyBackup({selection,backupText,backupPassword,consent});
+    if (bankSource.sourceKey!==again.sourceKey || bankSource.guestClaim!==again.guestClaim ||
+        !sameFinancialJSON(bankSource.snapshot,again.snapshot)) hold('Исходная банковская история изменилась');
+    active(signal);
+    return Object.freeze({actor:verifiedActorUserId,origin,etag,profileId:session.profile_id,
+      revision:snapshot.revision,snapshot:bankSource.snapshot,serverEntities:snapshot.entities,
+      bankHistory,bankComparison,preview:Object.freeze({status:'BANK_REVIEW_ONLY'})});
+  }
   const preview = await planLiveLegacyImportPreviewCandidate({
     selection, backupText, backupPassword, consent, target, signal,
   });
@@ -218,6 +237,10 @@ export async function prepareLivePersonalImportCandidate({
   const source = await verifyLiveLegacyBackup({
     selection, backupText, backupPassword, consent,
   });
+  if (preview.sourceKey !== source.sourceKey || preview.guestClaim !== source.guestClaim)
+    hold('Исходный профиль изменился во время проверки');
+  const guestSource=sourceKind === 'guest' ?
+    Object.freeze({sourceKey:source.sourceKey,claim:source.guestClaim}) : null;
   if (needsComparison) {
     active(signal);
     const serverCounts = Object.fromEntries(
@@ -226,18 +249,19 @@ export async function prepareLivePersonalImportCandidate({
     );
     return Object.freeze({actor: verifiedActorUserId, origin, etag,
       profileId: session.profile_id, revision: snapshot.revision,
-      snapshot: source.snapshot, preview, serverCounts,
+      snapshot: source.snapshot, preview, serverCounts,guestSource,
       comparison: compareLegacyWithServer(source.snapshot, snapshot.entities),
       serverEntities: snapshot.entities});
   }
   const payload = await prepareVerifiedLegacyImportTransportCandidate({
-    verified: source, preview, signal,
+    verified: source, preview, signal,confirmedGuestTransfer:sourceKind === 'guest',
+    confirmedTargetScope:sourceKind === 'guest' ? target.accountScope : null,
   });
   active(signal);
   return Object.freeze({
     actor: verifiedActorUserId, origin, etag,
     profileId: session.profile_id, revision: snapshot.revision,
-    snapshot: source.snapshot, preview, payload,
+    snapshot: source.snapshot, preview, payload,guestSource,
     preservedZeroAccountId: existing?.id ?? null,
     preservedZeroAccountName: existing?.data.name ?? null,
   });
@@ -255,10 +279,12 @@ export async function preparePersonalMergeReviewCandidate({
     hold('Нужны неизменённый источник и решения для всех записей');
   }
   const payload = await prepareVerifiedLegacyImportTransportCandidate({
-    verified: {scope:prepared.preview.sourceScope, sourceRevision:prepared.preview.sourceRevision,
-      snapshot:prepared.snapshot, backupVersion:1},
+    verified: {scope:prepared.preview.sourceScope,sourceKey:prepared.preview.sourceKey,
+      ...(prepared.guestSource ? {guestClaim:prepared.guestSource.claim} : {}),
+      sourceRevision:prepared.preview.sourceRevision,snapshot:prepared.snapshot,backupVersion:1},
     preview:prepared.preview, signal, mergeDecisions:decisions,
-    comparison:prepared.comparison,
+    comparison:prepared.comparison,confirmedGuestTransfer:Boolean(prepared.guestSource),
+    confirmedTargetScope:prepared.guestSource ? 'account:'+verifiedActorUserId : null,
   });
   active(signal);
   const counts = {};
@@ -280,7 +306,7 @@ export async function preparePersonalMergeReviewCandidate({
 export async function executeConfirmedPersonalImportCandidate({
   prepared, verifiedActorUserId, currentLocalSnapshotMatches,
   explicitFinalConsent, explicitPreserveZeroAccountConsent = false,
-  fetchImpl, signal,
+  explicitGuestTransfer = false,fetchImpl, signal,
 }) {
   active(signal);
   const isMerge = prepared?.preview?.status === 'MERGE_PREVIEW_ONLY';
@@ -289,6 +315,8 @@ export async function executeConfirmedPersonalImportCandidate({
       !USER.test(verifiedActorUserId) || !STRONG_ETAG.test(prepared.etag || '') ||
       !HASH.test(prepared.preview?.sourceSha256 || '') ||
       !['PREVIEW_ONLY','MERGE_PREVIEW_ONLY'].includes(prepared.preview?.status) ||
+      explicitGuestTransfer !== Boolean(prepared.guestSource) ||
+      Boolean(prepared.guestSource) !== Boolean(prepared.payload?.manifest?.explicit_guest_transfer) ||
       (isMerge && (prepared.payload?.manifest?.schema_version !== 2 || !prepared.mergeCounts)) ||
       (!isMerge && prepared.payload?.manifest?.schema_version !== 1) ||
       (prepared.preservedZeroAccountId &&

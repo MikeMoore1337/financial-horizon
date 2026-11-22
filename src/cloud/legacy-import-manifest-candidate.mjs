@@ -216,6 +216,11 @@ export async function planVerifiedLegacyImportCandidate({
       verified.scope !== target.accountScope) {
     fail('Запрещён перенос между чужими аккаунтами');
   }
+  if (verified.scope.startsWith('guest:') &&
+      (!(verified.guestClaim === null || /^[a-f0-9]{32}$/.test(verified.guestClaim || '')) ||
+       verified.sourceKey !== (verified.guestClaim ? 'guest-state-v2' : 'state'))) {
+    fail('Не подтверждена исходная гостевая область');
+  }
   if (!consent || consent.externalEncryptedBackupVerified !== true ||
       consent.confirmedTargetAccount !== true || consent.previewRequested !== true ||
       (verified.scope.startsWith('guest:') && consent.explicitGuestTransfer !== true)) {
@@ -250,6 +255,9 @@ export async function planVerifiedLegacyImportCandidate({
     preservedZeroAccountId: approvedZeroAccount ? target.preserveZeroAccountId : null,
     sourceScope: verified.scope,
     targetScope: target.accountScope,
+    sourceKey: verified.sourceKey,
+    ...(verified.scope.startsWith('guest:') ? {guestClaim: verified.guestClaim} : {}),
+    guestTransferApproved: verified.scope.startsWith('guest:') && consent.explicitGuestTransfer === true,
     targetProfileId: target.profileId,
     sourceVersion: pinned.version,
     sourceRevision: expectedRevision,
@@ -266,7 +274,7 @@ export async function planVerifiedLegacyImportCandidate({
 
 
 /**
- * Explicit account-only personal import payload. This DOES NOT send HTTP,
+ * Explicit personal import payload. This DOES NOT send HTTP,
  * change IndexedDB or authorize migration. The caller must have independently
  * verified an externally saved AES-GCM backup and confirmed the owner account.
  * It rechecks the canonical bytes against the read-only preview's SHA so no
@@ -276,16 +284,24 @@ export async function planVerifiedLegacyImportCandidate({
  */
 export async function prepareVerifiedLegacyImportTransportCandidate({
   verified, preview, signal, mergeDecisions = null, comparison = null,
+  confirmedGuestTransfer = false, confirmedTargetScope = null,
 }) {
   const merging = preview?.status === 'NEEDS_CONFLICT_DECISION' && Array.isArray(mergeDecisions);
+  const guest = guestScope.test(preview?.sourceScope || '');
+  const sourceAllowed = guest ?
+    (confirmedGuestTransfer === true && preview?.guestTransferApproved === true &&
+     userScope.test(preview?.targetScope || '') && confirmedTargetScope === preview.targetScope &&
+     preview.sourceKey === verified?.sourceKey && preview.guestClaim === verified?.guestClaim &&
+     ['state','guest-state-v2'].includes(verified?.sourceKey)) :
+    (confirmedGuestTransfer === false && userScope.test(preview?.sourceScope || '') &&
+     preview?.targetScope === verified?.scope);
   if (!signal || signal.aborted || !verified || !isObject(verified) ||
       verified.backupVersion !== 1 || !isObject(verified.snapshot) ||
       !preview || !isObject(preview) || (preview.status !== 'PREVIEW_ONLY' && !merging) ||
       (!merging && mergeDecisions !== null) ||
       preview.sendAllowed !== false || preview.originalPreserved !== true ||
-      !userScope.test(preview.sourceScope) ||
+      !sourceAllowed ||
       preview.sourceScope !== verified.scope ||
-      preview.targetScope !== verified.scope ||
       !uuid.test(preview.targetProfileId) ||
       !Number.isSafeInteger(preview.expectedServerRevision) ||
       preview.expectedServerRevision < 0 ||
@@ -373,7 +389,7 @@ export async function prepareVerifiedLegacyImportTransportCandidate({
       expected_server_revision: preview.expectedServerRevision,
       external_encrypted_backup_checked: true,
       explicit_owner_consent: true,
-      explicit_guest_transfer: false,
+      explicit_guest_transfer: guest,
       ...(preview.preservedZeroAccountId ? {
         preserve_zero_account_id: preview.preservedZeroAccountId,
         confirm_preserve_zero_account: true,

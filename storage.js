@@ -213,12 +213,17 @@ export async function replaceState(state,{expectedRevision}={}){
 
 // Keep one native readwrite transaction open while the approved snapshot is sent.
 // Other tabs, including older writers using this object store, must wait.
-export async function withStableImportSnapshot(verify,operation,{signal}={}){
+export async function withStableImportSnapshot(verify,operation,{signal,guestSource}={}){
  if(typeof verify!=='function'||typeof operation!=='function'||!signal||signal.aborted||
     typeof signal.addEventListener!=='function'||typeof signal.removeEventListener!=='function')
   throw Error('Проверка исходной базы недоступна');
  const {key,epoch,signal:scopeSignal}=currentScope();
  if(!key.startsWith('account-state-v2:'))throw Error('Перенос доступен только своему аккаунту');
+ if(guestSource!==undefined&&(!guestSource||typeof guestSource!=='object'||
+    !(guestSource.claim===null||(typeof guestSource.claim==='string'&&/^[a-f0-9]{32}$/.test(guestSource.claim)))||
+    guestSource.sourceKey!==(guestSource.claim?GUEST_KEY:KEY)))throw Error('Некорректная гостевая область');
+ const guestClaim=guestSource?.claim,sourceKey=guestSource?guestSource.sourceKey:key;
+ const isGuest=guestSource!==undefined;
  const db=await openDb();assertScope(epoch,key);
  return new Promise((resolve,reject)=>{
   const tx=db.transaction(STORE,'readwrite'),object=tx.objectStore(STORE);
@@ -228,7 +233,8 @@ export async function withStableImportSnapshot(verify,operation,{signal}={}){
   const timer=setTimeout(()=>{failure=Error('Проверка переноса прервана; результат отправки может быть неизвестен');cancel();},45000);
   scopeSignal.addEventListener('abort',cancel,{once:true});signal.addEventListener('abort',cancel,{once:true});
   const cleanup=()=>{clearTimeout(timer);scopeSignal.removeEventListener('abort',cancel);signal.removeEventListener('abort',cancel);};
-  const fence=object.get(FENCE_PREFIX+key),request=object.get(key);
+  const fence=object.get(FENCE_PREFIX+key),sourceFence=isGuest?object.get(FENCE_PREFIX+sourceKey):fence;
+  const claim=isGuest?object.get(CLAIM_KEY):null,request=object.get(sourceKey);
   const keepAlive=()=>{
    if(done)return;
    const next=object.get(FENCE_PREFIX+key);
@@ -238,7 +244,10 @@ export async function withStableImportSnapshot(verify,operation,{signal}={}){
    try{
     assertScope(epoch,key);
     if(signal.aborted||scopeSignal.aborted)throw Error(REVOKED_MESSAGE);
-    if(fence.result!==undefined)throw Error(FENCED_MESSAGE);
+    if(fence.result!==undefined||sourceFence.result!==undefined)throw Error(FENCED_MESSAGE);
+    if(isGuest&&((guestClaim===null&&claim.result!==undefined)||
+       (guestClaim!==null&&claim.result!==guestClaim)))throw Error('Гостевой профиль изменился. Подготовьте новый просмотр.');
+    if(isGuest&&request.result===undefined)throw Error('Гостевой профиль не найден');
     const current=request.result===undefined?emptyState():migrateState(request.result);
     const matched=verify(current);
     if(matched!==true)throw Error('Локальные данные изменились. Создайте новую копию и предпросмотр.');
