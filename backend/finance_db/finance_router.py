@@ -304,11 +304,13 @@ def mount_finance_routes(
         from backend.finance_api.import_http_candidate import (
             parse_personal_import_envelope, require_manifest_if_match,
         )
-        from .import_manifest_candidate import stage_import_manifest_candidate
+        from .import_manifest_candidate import stage_import_manifest_candidate, _safe_manifest
         from .import_commit_candidate import (
             commit_verified_legacy_import_candidate,
+            atomic_verified_legacy_merge_candidate,
             restore_original_legacy_source_candidate,
         )
+        from .bank_import_candidate import get_bank_import_rows
 
         async def _import_payload(request: Request, action: str):
             _guard_origin(request, public_origin)
@@ -333,6 +335,22 @@ def mount_finance_routes(
                          "X-Content-Type-Options":"nosniff"},
             )
 
+        @router.get("/import/bank/rows")
+        def import_bank_rows(request: Request):
+            rate(request, "finance-read")
+            verified = scope(request)
+            try:
+                if request.query_params:
+                    raise FinanceCommandError("invalid_command", "Недопустимые параметры сверки", 422)
+                return _finance_response(get_bank_import_rows(engine, scope=verified))
+            except FinanceCommandError as exc:
+                return _finance_error(exc)
+            except SQLAlchemyError:
+                log.error("personal_import_bank_reconciliation_db_failed")
+                return _finance_error(FinanceCommandError(
+                    "service_unavailable", "Сверка импортов недоступна", 503,
+                ))
+
         @router.post("/import/manifest")
         async def stage_import_http(request: Request):
             prior, payload, error = await _import_payload(request, "manifest")
@@ -341,6 +359,8 @@ def mount_finance_routes(
             def operation():
                 current = _fresh_import_scope(request, prior)
                 require_manifest_if_match(request, scope=current, manifest=payload["manifest"])
+                if _safe_manifest(payload["manifest"]).schema_version in (2, 3):
+                    raise FinanceCommandError("invalid_command", "Объединение выполняется одной транзакцией", 422)
                 return stage_import_manifest_candidate(
                     engine, scope=current, manifest=payload["manifest"],
                 )
@@ -363,7 +383,10 @@ def mount_finance_routes(
             def operation():
                 current = _fresh_import_scope(request, prior)
                 require_manifest_if_match(request, scope=current, manifest=payload["manifest"])
-                return commit_verified_legacy_import_candidate(
+                execute = (atomic_verified_legacy_merge_candidate
+                           if _safe_manifest(payload["manifest"]).schema_version in (2, 3)
+                           else commit_verified_legacy_import_candidate)
+                return execute(
                     engine, scope=current, manifest=payload["manifest"],
                     source_canonical_json=payload["source_canonical_json"],
                 )

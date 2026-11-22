@@ -78,6 +78,7 @@ def local_app(directory):
             finance_engine=create_finance_engine(),
             finance_profile_namespace=UUID("e15ea001-d512-4fb7-a0ee-e05b4df1d45e"),
             enable_account_v2_candidate=True,
+            enable_import_candidate=True,
             # Only the disposable SQL E2E server opts into the #38 candidate.
             # The actual application startup defaults to OFF.
             enable_bank_import_candidate=True,
@@ -104,11 +105,14 @@ def local_app(directory):
     @app.post("/__e2e__/personal-session")
     def synthetic_personal_session(response: Response, request: Request,
                                    enable_finance_stub: bool = False,
-                                   enable_reserves_stub: bool = False):
+                                   enable_reserves_stub: bool = False,
+                                   enable_transaction_stub: bool = False):
         # This route exists only in the isolated localhost E2E ASGI app.
         # Create a genuine revocable FH session without consuming the shared
         # public registration rate quota or exposing a raw token in JSON.
         if enable_reserves_stub and not enable_finance_stub:
+            raise HTTPException(422)
+        if enable_transaction_stub and not enable_reserves_stub:
             raise HTTPException(422)
         # Isolate tests running consecutively against the SAME disposable
         # localhost AuthStore. A previous browser project must not consume
@@ -136,7 +140,7 @@ def local_app(directory):
             finance_stub_users.add(user["id"])
             finance_requests[user["id"]] = {"session": 0, "state": 0}
         if enable_reserves_stub:
-            reserves_stub.activate(user["id"])
+            reserves_stub.activate(user["id"], transaction=enable_transaction_stub)
             finance_requests[user["id"]]["commands"] = 0
         return {"authenticated": True, "user": user}
 

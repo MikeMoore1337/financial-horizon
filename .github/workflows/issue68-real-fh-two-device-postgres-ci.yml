@@ -4,7 +4,17 @@ on:
     branches: [main]
     paths:
       - 'tests/e2e/finance-real-multidevice.spec.mjs'
+      - 'tests/e2e/finance-real-personal-merge.spec.mjs'
+      - 'tests/e2e/finance-real-guest-merge.spec.mjs'
+      - 'tests/e2e/personal-import-source-lock.spec.mjs'
       - 'tests/e2e/server.py'
+      - 'app.js'
+      - 'storage.js'
+      - 'styles.css'
+      - 'src/cloud/**'
+      - 'src/react/AuxiliaryDialogs.tsx'
+      - 'src/react/Settings.tsx'
+      - 'src/security/live-legacy-preflight.ts'
       - 'backend/finance_api/**'
       - 'backend/finance_db/**'
       - 'src/react/accounts-finance-gateway.ts'
@@ -13,7 +23,17 @@ on:
     branches: [main]
     paths:
       - 'tests/e2e/finance-real-multidevice.spec.mjs'
+      - 'tests/e2e/finance-real-personal-merge.spec.mjs'
+      - 'tests/e2e/finance-real-guest-merge.spec.mjs'
+      - 'tests/e2e/personal-import-source-lock.spec.mjs'
       - 'tests/e2e/server.py'
+      - 'app.js'
+      - 'storage.js'
+      - 'styles.css'
+      - 'src/cloud/**'
+      - 'src/react/AuxiliaryDialogs.tsx'
+      - 'src/react/Settings.tsx'
+      - 'src/security/live-legacy-preflight.ts'
       - 'backend/finance_api/**'
       - 'backend/finance_db/**'
       - 'src/react/accounts-finance-gateway.ts'
@@ -81,7 +101,7 @@ jobs:
           npx playwright install chromium webkit
       - name: Two live FH sessions + PostgreSQL across two distinct browser contexts
         timeout-minutes: 10
-        run: npx playwright test tests/e2e/finance-real-multidevice.spec.mjs --project=chromium-desktop --project=webkit-mobile
+        run: npx playwright test tests/e2e/finance-real-multidevice.spec.mjs tests/e2e/finance-real-personal-merge.spec.mjs tests/e2e/finance-real-guest-merge.spec.mjs tests/e2e/personal-import-source-lock.spec.mjs --project=chromium-desktop --project=webkit-mobile
       - name: Upload only synthetic browser failure traces
         if: failure()
         uses: actions/upload-artifact@v4

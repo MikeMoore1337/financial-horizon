@@ -50,7 +50,7 @@ class ReserveStub:
         self.lock = threading.Lock()
         self.users = {}
 
-    def activate(self, user_id):
+    def activate(self, user_id, transaction=False):
         with self.lock:
             self.users[user_id] = {
                 "revision": 1, "balance": 7000000, "account_revision": 1,
@@ -64,6 +64,13 @@ class ReserveStub:
                 ],
                 "transactions": [], "facts": [], "mutations": {},
             }
+            if transaction:
+                self.users[user_id]["transactions"].append({
+                    "id": "66666666-6666-4666-8666-666666666666", "kind": "transaction", "entity_revision": 1,
+                    "data": {"kind": "expense", "occurred_on": "2026-11-01", "note": "Synthetic transaction",
+                             "posted_at": "2026-11-01T12:00:00Z",
+                             "postings": [{"account_id": ACCOUNT, "signed_minor": -12345}]},
+                })
 
     def exists(self, user_id):
         with self.lock:

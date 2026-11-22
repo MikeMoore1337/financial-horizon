@@ -86,6 +86,8 @@ def test_atomic_bank_commit_replay_and_whole_batch_reversal(context):
         if_match=after.etag,idempotency_key=undo["client_mutation_id"])
     assert cancelled.status==201 and cancelled.body["reversed_operations"]==2
     final=get_account_snapshot(engine,scope=scope)
+    account_a = next(row for row in final.body["entities"] if row["id"] == a)
+    assert account_a["entity_revision"] > final.body["revision"]
     assert {x["id"]:x["data"]["balance_minor"] for x in final.body["entities"]}=={
         a:50000,b:1000,
     }

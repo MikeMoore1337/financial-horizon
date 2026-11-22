@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createSampleState} from '../finance.js';
 import {planVerifiedLegacyImportCandidate, prepareVerifiedLegacyImportTransportCandidate} from '../src/cloud/legacy-import-manifest-candidate.mjs';
+import {addGuestBankAccount} from '../src/importers/bank-statements/guest-ledger.js';
 
 const USER = 'a'.repeat(32);
 const ACCOUNT = 'account:' + USER;
@@ -56,6 +57,49 @@ test('v2 preview enumerates actual source without changing or posting money', as
   assert.equal(Object.isFrozen(result), true);
 });
 
+test('bank records cannot be presented as a complete legacy import', async () => {
+  const source = createSampleState();
+  source.bankStatements = {version:1, accounts:[], operations:[], batches:[]};
+  assert.equal((await plan({verified: verified(source)})).status, 'PREVIEW_ONLY');
+  addGuestBankAccount(source,{id:'11111111-1111-4111-8111-111111111111',
+    name:'Synthetic',openingMinor:100},source.revision);
+  await assert.rejects(plan({verified: verified(source)}), /банковск/i);
+});
+
+test('oversized escaped upload is rejected before any staging request', async () => {
+  const source=createSampleState();
+  source.audit=[{description:'\\'.repeat(3_500_000)}];
+  const candidate=await plan({verified:verified(source)});
+  await assert.rejects(prepareVerifiedLegacyImportTransportCandidate({
+    verified:verified(source),preview:candidate,signal:new AbortController().signal,
+  }),/лимит серверного запроса/);
+});
+
+test('server manifest limits and invalid source identifiers fail before staging', async () => {
+  const source=createSampleState();
+  source.entries[0].id=' bad-id';
+  await expectHold(plan({verified:verified(source)}));
+  source.entries[0].id='bad\nid';
+  await expectHold(plan({verified:verified(source)}));
+  source.entries=Array.from({length:10_001},(_,index)=>({id:'record-'+index}));
+  source.loans=[];
+  await expectHold(plan({verified:verified(source)}));
+});
+
+test('financial fields rejected by the server cannot become an approved preview', async () => {
+  for (const mutate of [
+    source=>{source.entries[0].date='2026-02-30'},
+    source=>{source.entries[0].amountCents=1_000_000_000_001},
+    source=>{source.loans[0].apr=12.345},
+    source=>{source.loans[0].schedule=[{date:'2026-12-01',amountCents:1,internalId:'hidden'}]},
+    source=>{source.settings.currency='USD'},
+    source=>{source.settlements.push({id:'orphan',entryId:'missing',occurrence:'2026-11',date:'2026-11-01',amountCents:1})},
+  ]) {
+    const source=createSampleState();mutate(source);
+    await expectHold(plan({verified:verified(source)}));
+  }
+});
+
 test('v1 compatible backup requires no invented revision or opening balance', async () => {
   const source = createSampleState();
   source.version = 1;
@@ -92,12 +136,42 @@ test('existing server records force explicit conflict decision and no automatic 
 
 test('guest transfer requires separate explicit opt-in, keeps old guest scope', async () => {
   const source = createSampleState();
-  const selected = verified(source, {scope: 'guest:synthetic-guest-77', sourceKey: 'state'});
+  const selected = verified(source, {scope: 'guest:synthetic-guest-77', sourceKey: 'state',guestClaim:null});
   await expectHold(plan({verified: selected}));
   const result = await plan({verified: selected, consent: {...consent(), explicitGuestTransfer: true}});
   assert.equal(result.sourceScope, selected.scope);
   assert.equal(result.targetScope, ACCOUNT);
   assert.equal(result.sendAllowed, false);
+});
+
+test('guest upload candidate needs distinct consent and exact verified target account', async () => {
+  const source = createSampleState();
+  const selected = verified(source, {scope:'guest:synthetic-guest-77',sourceKey:'guest-state-v2',guestClaim:USER});
+  const preview = await plan({verified:selected,consent:{...consent(),explicitGuestTransfer:true}});
+  const signal = new AbortController().signal;
+  const prepare = extra => prepareVerifiedLegacyImportTransportCandidate({verified:selected,preview,signal,...extra});
+  await expectHold(prepare({}));
+  await expectHold(prepare({confirmedGuestTransfer:true,confirmedTargetScope:'account:'+'b'.repeat(32)}));
+  await expectHold(prepare({confirmedGuestTransfer:true,confirmedTargetScope:ACCOUNT,
+    verified:{...selected,sourceKey:'account-state-v2:'+USER}}));
+  await expectHold(prepare({confirmedGuestTransfer:true,confirmedTargetScope:ACCOUNT,
+    preview:{...preview,guestTransferApproved:false}}));
+  const original=structuredClone(source);
+  const payload=await prepare({confirmedGuestTransfer:true,confirmedTargetScope:ACCOUNT});
+  assert.equal(payload.manifest.source_scope,'guest:synthetic-guest-77');
+  assert.equal(payload.manifest.explicit_guest_transfer,true);
+  assert.equal(payload.manifest.explicit_owner_consent,true);
+  assert.deepEqual(source,original);
+  const populated=await plan({verified:selected,target:target({hasRemoteRecords:true}),
+    consent:{...consent(),explicitGuestTransfer:true}});
+  const decisions=['entries','loans','settlements','loanPayments'].flatMap(kind=>
+    source[kind].map(row=>({kind,sourceId:row.id,action:'add'})));
+  const comparison={status:'NEEDS_OWNER_DECISIONS',groups:{}};
+  const merge=await prepareVerifiedLegacyImportTransportCandidate({verified:selected,preview:populated,signal,
+    mergeDecisions:decisions,comparison,confirmedGuestTransfer:true,confirmedTargetScope:ACCOUNT});
+  assert.equal(merge.manifest.schema_version,2);
+  assert.equal(merge.manifest.explicit_guest_transfer,true);
+  assert.ok(merge.manifest.rows.every(row=>row.decision==='add'));
 });
 
 test('account data never cross-copies to another authenticated user', async () => {

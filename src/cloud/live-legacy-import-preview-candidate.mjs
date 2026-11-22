@@ -24,7 +24,7 @@ function live(signal) {
  * writer during any future cloud upload; #68 must enforce native CAS first.
  */
 export async function planLiveLegacyImportPreviewCandidate({
-  selection, backupText, backupPassword, consent, target, signal,
+  selection, backupText, backupPassword, consent, target, signal, allowBank = false,
 }) {
   live(signal);
   // Freeze scalar input values before IndexedDB/backup PBKDF awaits.
@@ -59,7 +59,7 @@ export async function planLiveLegacyImportPreviewCandidate({
   });
   live(signal);
   const preview = await planVerifiedLegacyImportCandidate({
-    verified: original, target: pinnedTarget, consent: previewConsent, signal,
+    verified: original, target: pinnedTarget, consent: previewConsent, signal, allowBank,
   });
   live(signal);
   const again = await verifyLiveLegacyBackup({
@@ -68,10 +68,11 @@ export async function planLiveLegacyImportPreviewCandidate({
   });
   live(signal);
   const matched = await planVerifiedLegacyImportCandidate({
-    verified: again, target: pinnedTarget, consent: previewConsent, signal,
+    verified: again, target: pinnedTarget, consent: previewConsent, signal, allowBank,
   });
   if (original.scope !== again.scope ||
       original.sourceKey !== again.sourceKey ||
+      original.guestClaim !== again.guestClaim ||
       original.sourceRevision !== again.sourceRevision ||
       preview.sourceSha256 !== matched.sourceSha256 ||
       preview.sourceScope !== matched.sourceScope ||

@@ -88,7 +88,7 @@ def fixture_env():
     )
 
 
-def test_only_three_new_exact_post_routes_with_no_wildcard_or_oauth_changes():
+def test_only_exact_import_routes_with_no_wildcard_or_oauth_changes():
     m = load()
     base = fixture_caddy(m)
     patched = m.caddy_import_patch(base)
@@ -96,9 +96,11 @@ def test_only_three_new_exact_post_routes_with_no_wildcard_or_oauth_changes():
     assert patched.count(b"@fh_personal_import_write") == 2
     assert patched.count(b"method POST") >= 2
     assert b"reverse_proxy 127.0.0.1:9138" in patched
-    assert patched.count(b'header_down Cache-Control "private, no-store, no-transform"') == 2
+    assert patched.count(b'header_down Cache-Control "private, no-store, no-transform"') == 3
     assert b"handle @fh_oauth_live_get" in patched
-    assert b"method GET\n        path /api/finance/v1/import/" not in patched
+    assert (b"method GET\n        path /api/finance/v1/import/bank/rows\n" in patched)
+    assert patched.count(b"@fh_personal_import_read") == 2
+    assert patched.count(b"/api/finance/v1/import/bank/rows") == 1
     assert b"/api/finance/v1/import/*" not in patched
     for p in ("manifest", "commit", "restore"):
         assert patched.count(
@@ -113,6 +115,23 @@ def test_only_three_new_exact_post_routes_with_no_wildcard_or_oauth_changes():
     ):
         with pytest.raises(m.Hold, match="^CADDY_FINANCE_"):
             m.caddy_import_patch(invalid)
+
+
+def test_bank_reconciliation_read_requires_anonymous_denial(monkeypatch):
+    m = load()
+    def probe(path, *, method="GET", origin=None):
+        if path == "/api/auth/providers":
+            return 200
+        if method == "POST" and origin == "https://untrusted.example":
+            return 403
+        return 401
+    monkeypatch.setattr(m.finance,"local_probe",probe)
+    monkeypatch.setattr(m.finance,"public_probe",probe)
+    m.verify_enabled()
+    monkeypatch.setattr(m.finance,"public_probe",lambda path, **kw:
+                        200 if path == "/api/finance/v1/import/bank/rows" else probe(path,**kw))
+    with pytest.raises(m.Hold,match="IMPORT_BANK_READ_ANONYMOUS_GUARD_FAILED"):
+        m.verify_enabled()
 
 
 def test_interleaved_existing_finance_caddy_blocks_are_safe_and_preserved():
@@ -325,7 +344,9 @@ def test_failed_public_smoke_restores_runtime_caddy_and_restarts_auth(
     assert ("systemctl", "restart", "fh-finance-personal.service") not in events
 
 
-def test_disable_first_closes_public_route_then_auth_runtime(monkeypatch, tmp_path):
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("tampered", [False, True])
+def test_disable_first_closes_public_route_then_auth_runtime(monkeypatch, tmp_path, legacy, tampered):
     m = load()
     old_runtime = fixture_env()
     old_caddy = fixture_caddy(m)
@@ -337,6 +358,10 @@ def test_disable_first_closes_public_route_then_auth_runtime(monkeypatch, tmp_pa
         m.RUNTIME: old_runtime.replace(m.OFF, m.ON),
         m.CADDY: m.caddy_import_patch(old_caddy),
     }
+    if legacy:
+        values[m.CADDY] = values[m.CADDY].replace(m.IMPORT_ROUTING.encode(),m.LEGACY_IMPORT_ROUTING.encode(),1)
+    if tampered:
+        values[m.CADDY] += b"# concurrent change\n"
     order = []
     monkeypatch.setenv("FH_PERSONAL_IMPORT_WINDOW", "DISABLE")
     monkeypatch.setattr(m.os, "geteuid", lambda: 0)
@@ -353,6 +378,12 @@ def test_disable_first_closes_public_route_then_auth_runtime(monkeypatch, tmp_pa
     monkeypatch.setattr(m, "restart_auth", lambda: order.append(("restart-auth",)))
     monkeypatch.setattr(m.finance, "local_probe", lambda *a, **kw: 404)
     monkeypatch.setattr(m.finance, "enabled_local_smoke", lambda: None)
+    if tampered:
+        before = dict(values)
+        with pytest.raises(m.Hold,match="CADDY_CONCURRENT_CHANGE_REQUIRES_REVIEW"):
+            m.disable("1" * 40)
+        assert values == before and order == []
+        return
     m.disable("1" * 40)
     assert values[m.CADDY] == old_caddy
     assert values[m.RUNTIME] == old_runtime

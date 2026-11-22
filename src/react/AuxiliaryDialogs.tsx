@@ -165,10 +165,18 @@ export function CloudImportDialog() {
         </button>
       </div>
       <p className="form-note">
-        Шифрованная копия сверена с текущей бухгалтерией. На сервере пока ничего не изменено.
-        Локальные данные останутся на устройстве даже после импорта.
+        Шифрованная копия сверена с текущей бухгалтерией. На сервере пока ничего не изменено. После
+        подтверждения сервер получит расшифрованные финансовые данные. Локальные данные останутся на
+        устройстве даже после импорта.
       </p>
       <p id="cloud-import-summary" className="form-note" role="status" aria-live="polite" />
+      <div id="cloud-import-comparison" />
+      <label className="field" id="cloud-import-guest-row" hidden>
+        <span>
+          <input type="checkbox" id="cloud-import-guest-consent" /> Я отдельно подтверждаю перенос
+          гостевых данных в текущий аккаунт. Гостевая копия останется на устройстве.
+        </span>
+      </label>
       <label className="field" id="cloud-import-preserve-row" hidden>
         <span>
           <input type="checkbox" id="cloud-import-preserve-zero-account" /> Я отдельно подтверждаю
@@ -189,6 +197,9 @@ export function CloudImportDialog() {
       <div className="dialog-actions">
         <button type="button" className="button-secondary" data-action="cancel-cloud-import">
           Отмена
+        </button>
+        <button type="button" className="button-secondary" data-action="prepare-cloud-merge" hidden>
+          Подготовить предпросмотр
         </button>
         <button type="button" className="button-primary" data-action="confirm-cloud-import">
           Перенести на сервер

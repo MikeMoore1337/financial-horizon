@@ -12,7 +12,7 @@ After external-backup + independent-browser-restore are owner-accepted:
 After the owner finishes one import, close the write surface:
   FH_PERSONAL_IMPORT_WINDOW=DISABLE python3 scripts/fh_finance_personal_import_window.py --sha SHA --disable
 
-Only three exact same-origin POST paths are published. If anything diverges,
+Only three exact POST paths and one authenticated reconciliation GET are published. If anything diverges,
 the action refuses or restores its own runtime/Caddy changes. Static UI is a
 separate reviewed release and remains independently gated.
 """
@@ -31,7 +31,7 @@ import fh_finance_auth_source_rollout as source
 import fh_finance_private_api_release as finance
 
 
-IMPORT_ROUTING = (
+LEGACY_IMPORT_ROUTING = (
     "    @fh_personal_import_write {\n"
     "        method POST\n"
     "        path /api/finance/v1/import/manifest /api/finance/v1/import/commit /api/finance/v1/import/restore\n"
@@ -39,6 +39,18 @@ IMPORT_ROUTING = (
     "    handle @fh_personal_import_write {\n"
     "        reverse_proxy 127.0.0.1:9138\n"
     "    }\n"
+)
+IMPORT_ROUTING = (
+    "    @fh_personal_import_read {\n"
+    "        method GET\n"
+    "        path /api/finance/v1/import/bank/rows\n"
+    "    }\n"
+    "    handle @fh_personal_import_read {\n"
+    "        reverse_proxy 127.0.0.1:9138 {\n"
+    "            header_down Cache-Control \"private, no-store, no-transform\"\n"
+    "        }\n"
+    "    }\n"
+    + LEGACY_IMPORT_ROUTING
 )
 OFF = b"FH_FINANCE_IMPORT_RUNTIME=off\n"
 ON = b"FH_FINANCE_IMPORT_RUNTIME=on\n"
@@ -171,7 +183,7 @@ def _require_existing_finance_routes(text: str) -> None:
 
 
 def caddy_import_patch(original: bytes) -> bytes:
-    """Append exact import POST handler without rewriting live finance/OAuth.
+    """Append exact import handlers without rewriting live finance/OAuth.
 
     The old release's finance read/write blocks are validated individually:
     their byte-contiguous layout is not a security requirement. Other site
@@ -255,7 +267,7 @@ def live_preflight(
         if finance.local_probe(
             "/api/finance/v1/import/manifest", method="POST",
             origin=finance.ORIGIN,
-        ) != 404:
+        ) != 404 or finance.local_probe("/api/finance/v1/import/bank/rows") != 404:
             deny("IMPORT_ALREADY_MOUNTED_WITH_FLAG_OFF")
     else:
         b_runtime, b_caddy = backup_paths(sha)
@@ -269,7 +281,7 @@ def live_preflight(
         if finance.local_probe(
             "/api/finance/v1/import/manifest",
             method="POST", origin=finance.ORIGIN,
-        ) != 401:
+        ) != 401 or finance.local_probe("/api/finance/v1/import/bank/rows") != 401:
             deny("IMPORT_LOCAL_ANONYMOUS_AUTH_GUARD_FAILED")
     if (not BACKUPS.is_dir() or BACKUPS.is_symlink() or
         BACKUPS.stat().st_uid != 0 or
@@ -298,6 +310,9 @@ def verify_enabled() -> None:
             finance.public_probe(endpoint, method="POST",
                                  origin="https://untrusted.example") != 403):
             deny("IMPORT_PUBLIC_DENY_ANONYMOUS_OR_CSRF_FAILED")
+    if (finance.local_probe("/api/finance/v1/import/bank/rows") != 401 or
+        finance.public_probe("/api/finance/v1/import/bank/rows") != 401):
+        deny("IMPORT_BANK_READ_ANONYMOUS_GUARD_FAILED")
     if finance.public_probe("/api/auth/providers") != 200:
         deny("OAUTH_ORIGIN_FAILED")
 
@@ -326,8 +341,9 @@ def restore_before_enable(raw: bytes, caddy: bytes, mode: int) -> None:
                 error="CADDY_RESTORE_RELOAD_FAILED")
     finance.atomic_replace(RUNTIME, raw, mode=0o600)
     restart_auth()
-    if finance.local_probe("/api/finance/v1/import/manifest",
-                           method="POST", origin=finance.ORIGIN) != 404:
+    if (finance.local_probe("/api/finance/v1/import/manifest",
+                            method="POST", origin=finance.ORIGIN) != 404 or
+        finance.local_probe("/api/finance/v1/import/bank/rows") != 404):
         deny("IMPORT_ROUTE_REMAINS_ACTIVE_AFTER_ROLLBACK")
     print("FH_IMPORT_WINDOW_ROLLBACK=PASS")
 
@@ -368,7 +384,7 @@ def enable(sha: str) -> None:
         if finance.local_probe(
             "/api/finance/v1/import/manifest", method="POST",
             origin=finance.ORIGIN,
-        ) != 401:
+        ) != 401 or finance.local_probe("/api/finance/v1/import/bank/rows") != 401:
             deny("IMPORT_LOCAL_AUTH_GUARD_FAILED")
         before, _ = finance.caddy_snapshot()
         if before != caddy:
@@ -412,7 +428,9 @@ def disable(sha: str) -> None:
     if mode != "on" or now != old_runtime.replace(OFF, ON, 1):
         deny("IMPORT_RUNTIME_ALREADY_DISABLED_OR_CHANGED")
     current, caddy_mode = finance.caddy_snapshot()
-    if current != caddy_import_patch(old_caddy):
+    current_expected = caddy_import_patch(old_caddy)
+    legacy_expected = current_expected.replace(IMPORT_ROUTING.encode(), LEGACY_IMPORT_ROUTING.encode(), 1)
+    if current not in (current_expected, legacy_expected):
         deny("CADDY_CONCURRENT_CHANGE_REQUIRES_REVIEW")
     # Close PUBLIC import routes FIRST. A failed backend restart must never
     # leave private financial import POST paths reachable from the internet.
@@ -423,10 +441,10 @@ def disable(sha: str) -> None:
                 error="IMPORT_DISABLE_CADDY_RELOAD_FAILED")
     finance.atomic_replace(RUNTIME, old_runtime, mode=0o600)
     restart_auth()
-    if finance.local_probe(
+    if (finance.local_probe(
         "/api/finance/v1/import/manifest", method="POST",
         origin=finance.ORIGIN,
-    ) != 404:
+    ) != 404 or finance.local_probe("/api/finance/v1/import/bank/rows") != 404):
         deny("IMPORT_STILL_MOUNTED_AFTER_DISABLE")
     finance.enabled_local_smoke()
     print("FH_IMPORT_WINDOW_BACKEND=DISABLED")

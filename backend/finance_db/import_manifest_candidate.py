@@ -1,18 +1,20 @@
-"""#69: RLS-scoped PostgreSQL import source MANIFEST staging - feature OFF.
+"""#69: RLS-scoped PostgreSQL import source manifest staging.
 
 This is *not* a financial import, authoritative validation of an encrypted
 backup or a public HTTP route. It does not change account balances, loan data,
 settlements, server revision or original IndexedDB.
 
-A future independently approved importer must verify the actual encrypted
-source, mapping and money before atomically committing any financial fact.
+The caller must verify the actual encrypted source and confirm the mapping;
+the commit rechecks the source and money under the profile lock.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from hashlib import sha256
 from uuid import UUID, uuid5
 import json
 import re
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
 from sqlalchemy import text
@@ -33,6 +35,8 @@ class ImportRowCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     record_type: str
     source_record_id: str = Field(min_length=1, max_length=128)
+    decision: Literal["add", "link"] | None = None
+    target_id: str | None = Field(default=None, pattern=_UUID.pattern)
 
     @field_validator("record_type")
     @classmethod
@@ -49,6 +53,29 @@ class ImportRowCandidate(BaseModel):
         return value
 
 
+class BankAccountChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    source_id: str = Field(pattern=_UUID.pattern)
+    decision: Literal["add", "link"]
+    target_id: str | None = Field(default=None, pattern=_UUID.pattern)
+    account_kind: Literal["bank", "card", "cash", "savings", "other"] | None = None
+
+
+class BankOperationChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    source_key: str = Field(pattern=_HEX_SHA.pattern)
+    decision: Literal["add", "link"]
+    target_id: str | None = Field(default=None, pattern=_UUID.pattern)
+    reviewed_transaction_ids: list[str] = Field(default_factory=list, max_length=32)
+
+    @field_validator("reviewed_transaction_ids")
+    @classmethod
+    def valid_reviewed_ids(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)) or any(not _UUID.fullmatch(item) for item in value):
+            raise ValueError("invalid reviewed transaction identities")
+        return value
+
+
 class ImportSourceManifestCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: StrictInt
@@ -62,11 +89,13 @@ class ImportSourceManifestCandidate(BaseModel):
     preserve_zero_account_id: str | None = Field(default=None, pattern=_UUID.pattern)
     confirm_preserve_zero_account: StrictBool = False
     rows: list[ImportRowCandidate] = Field(max_length=_MAX_RECORDS)
+    bank_accounts: list[BankAccountChoice] = Field(default_factory=list, max_length=100)
+    bank_operations: list[BankOperationChoice] = Field(default_factory=list, max_length=5000)
 
     @field_validator("schema_version")
     @classmethod
     def exact_version(cls, value: int) -> int:
-        if value != 1:
+        if value not in (1, 2, 3):
             raise ValueError("unsupported manifest schema")
         return value
 
@@ -100,6 +129,37 @@ def _safe_manifest(value: object) -> ImportSourceManifestCandidate:
         unique = {(row.record_type, row.source_record_id) for row in request.rows}
         if len(unique) != len(request.rows):
             raise ValueError("duplicate import source ID")
+        if request.schema_version == 1:
+            if any(row.decision is not None or row.target_id is not None for row in request.rows):
+                raise ValueError("v1 cannot contain merge decisions")
+        else:
+            if request.preserve_zero_account_id is not None:
+                raise ValueError("v2 preserves every existing account")
+            if any(row.decision is None or (row.decision == "link") != (row.target_id is not None)
+                   for row in request.rows):
+                raise ValueError("every record needs an explicit merge decision")
+            linked = [(row.record_type, row.target_id) for row in request.rows if row.target_id]
+            if len(set(linked)) != len(linked):
+                raise ValueError("multiple source records cannot silently share a target")
+        if request.schema_version != 3:
+            if request.bank_accounts or request.bank_operations:
+                raise ValueError("bank decisions require schema v3")
+        else:
+            if not request.bank_accounts:
+                raise ValueError("bank import requires an explicit account decision")
+            accounts = request.bank_accounts
+            operations = request.bank_operations
+            if (len({x.source_id for x in accounts}) != len(accounts)
+                or len({x.source_key for x in operations}) != len(operations)
+                or len({x.target_id for x in accounts if x.target_id}) != sum(bool(x.target_id) for x in accounts)
+                or len({x.target_id for x in operations if x.target_id}) != sum(bool(x.target_id) for x in operations)):
+                raise ValueError("duplicate bank source or target")
+            if any((x.decision == "link") != (x.target_id is not None) or
+                   (x.decision == "add") != (x.account_kind is not None) for x in accounts):
+                raise ValueError("every bank account requires a complete decision")
+            if any((x.decision == "link") != (x.target_id is not None) or
+                   (x.decision == "link" and x.reviewed_transaction_ids) for x in operations):
+                raise ValueError("every bank operation requires a complete decision")
         # A SHA from client input is an *unverified claim* until the true
         # encrypted source is recovered and independently matched to it.
         return request
@@ -118,6 +178,30 @@ def import_batch_id(scope: VerifiedFinanceScope,
     )
     if request.preserve_zero_account_id is not None:
         identity += ":preserve-zero:" + request.preserve_zero_account_id
+    if request.schema_version in (2, 3):
+        decisions = sorted((r.record_type, r.source_record_id, r.decision, r.target_id or "")
+                           for r in request.rows)
+        identity += ":merge-v2:" + sha256(json.dumps(
+            decisions, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")).hexdigest()
+    if request.schema_version == 3:
+        bank = {"accounts": [x.model_dump() for x in sorted(request.bank_accounts, key=lambda x: x.source_id)],
+                "operations": [x.model_dump() for x in sorted(request.bank_operations, key=lambda x: x.source_key)]}
+        identity += ":bank-v3:" + sha256(json.dumps(bank, ensure_ascii=False, sort_keys=True,
+                                                  separators=(",", ":")).encode("utf-8")).hexdigest()
+    return uuid5(scope.profile_id, identity)
+
+
+def mapped_target(scope: VerifiedFinanceScope, request: ImportSourceManifestCandidate,
+                  row: ImportRowCandidate) -> UUID:
+    if request.schema_version in (2, 3):
+        if row.target_id is not None:
+            return UUID(row.target_id)
+        identity = ("financial-horizon:legacy-record:v2:" + request.source_scope + ":" +
+                    row.record_type + ":" + row.source_record_id)
+    else:
+        identity = ("financial-horizon:legacy-record:v1:" + request.source_sha256 + ":" +
+                    row.record_type + ":" + row.source_record_id)
     return uuid5(scope.profile_id, identity)
 
 
@@ -161,8 +245,39 @@ def require_safe_import_target(session, profile_id: UUID,
                                   "Нельзя объединить действующие серверные финансы", 409)
 
 
+_MERGE_TARGET_SQL = {
+    "entries": text("SELECT id FROM obligations WHERE profile_id=:p AND id=:id"),
+    "loans": text("SELECT id FROM loans WHERE profile_id=:p AND id=:id"),
+    "settlements": text("SELECT id FROM settlements WHERE profile_id=:p AND id=:id"),
+    "loanPayments": text("SELECT id FROM loan_payments WHERE profile_id=:p AND id=:id"),
+}
+
+
+def require_safe_merge_target(session, scope: VerifiedFinanceScope,
+                              request: ImportSourceManifestCandidate) -> None:
+    """Check provenance and selected targets while the profile row is locked."""
+    history = session.execute(text("""
+        SELECT DISTINCT m.record_type,m.source_record_id,m.target_id
+        FROM import_record_map m JOIN import_batches b
+          ON b.profile_id=m.profile_id AND b.source_sha256=m.source_sha256
+        WHERE m.profile_id=:p AND b.status='committed'
+    """), {"p": scope.profile_id}).mappings().all()
+    previous = {}
+    for old in history:
+        previous.setdefault((old["record_type"], old["source_record_id"]), set()).add(old["target_id"])
+    for row in request.rows:
+        target = mapped_target(scope, request, row)
+        prior = previous.get((row.record_type, row.source_record_id), set())
+        if prior and (row.decision != "link" or prior != {target}):
+            raise FinanceCommandError("semantic_conflict", "Исходная запись уже переносилась", 409)
+        if row.decision == "link" and session.execute(
+            _MERGE_TARGET_SQL[row.record_type], {"p": scope.profile_id, "id": target}
+        ).scalar_one_or_none() is None:
+            raise FinanceCommandError("semantic_conflict", "Выбранная серверная запись отсутствует", 409)
+
+
 def stage_import_manifest_candidate(
-    engine: Engine, *, scope: VerifiedFinanceScope, manifest: object,
+    engine: Engine, *, scope: VerifiedFinanceScope, manifest: object, _session=None,
 ) -> dict[str, object]:
     """Stage a deterministic map under real PostgreSQL RLS; NO financial writes.
 
@@ -178,13 +293,15 @@ def stage_import_manifest_candidate(
         )
     digest_bytes = bytes.fromhex(request.source_sha256)
     canonical_rows = sorted((item.record_type, item.source_record_id) for item in request.rows)
+    by_key = {(item.record_type, item.source_record_id): item for item in request.rows}
     manifest_fingerprint = sha256(
         json.dumps(canonical_rows, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     batch_id = import_batch_id(scope, request)
-    with finance_transaction(
+    transaction = (nullcontext(_session) if _session is not None else finance_transaction(
         engine, verified_user_id=scope.user_id, profile_id=scope.profile_id,
-    ) as session:
+    ))
+    with transaction as session:
         # Use the same profile-level row lock as the financial command core,
         # so no concurrent confirmed posting can enter between the empty
         # financial-data check and creation of the staged metadata.
@@ -210,9 +327,7 @@ def stage_import_manifest_candidate(
                 ORDER BY record_type,source_record_id
             """), {"p": scope.profile_id, "sha": digest_bytes}).mappings().all()
             expected = [
-                (kind, old_id, uuid5(scope.profile_id,
-                    "financial-horizon:legacy-record:v1:" +
-                    request.source_sha256 + ":" + kind + ":" + old_id))
+                (kind, old_id, mapped_target(scope, request, by_key[kind, old_id]))
                 for kind, old_id in canonical_rows
             ]
             if (bytes(existing["source_sha256"]) != digest_bytes
@@ -238,7 +353,10 @@ def stage_import_manifest_candidate(
             )
         # Any existing account requires the exact UUID and a second owner
         # confirmation; only one untouched zero-RUB account is compatible.
-        require_safe_import_target(session, scope.profile_id, request)
+        if request.schema_version == 1:
+            require_safe_import_target(session, scope.profile_id, request)
+        else:
+            require_safe_merge_target(session, scope, request)
         session.execute(text("""
             INSERT INTO import_batches
              (profile_id,id,source_sha256,status,base_revision)
@@ -246,9 +364,7 @@ def stage_import_manifest_candidate(
         """), {"p": scope.profile_id, "id": batch_id,
                "sha": digest_bytes, "r": request.expected_server_revision})
         for kind, old_id in canonical_rows:
-            target = uuid5(scope.profile_id,
-                "financial-horizon:legacy-record:v1:" +
-                request.source_sha256 + ":" + kind + ":" + old_id)
+            target = mapped_target(scope, request, by_key[kind, old_id])
             session.execute(text("""
                 INSERT INTO import_record_map
                  (profile_id,source_sha256,record_type,source_record_id,target_id)
