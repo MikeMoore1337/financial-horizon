@@ -330,6 +330,111 @@ export async function preparePersonalMergeReviewCandidate({
     preview:Object.freeze({...prepared.preview, status:'MERGE_PREVIEW_ONLY'})});
 }
 
+// Verify the actual server projection, not only the receipt and recovered source.
+// Bank-specific postings/balances have an additional independent verification.
+function plannerProjection(kind,row,targets) {
+  const utc=value=>{
+    if(value==null)return null;
+    const time=Date.parse(value);
+    if(!Number.isFinite(time))hold('Невозможно проверить дату перенесённой записи');
+    return new Date(time).toISOString();
+  };
+  if(kind==='entries')return {
+    title:row.title,direction:row.kind,amount_minor:row.amountCents,starts_on:row.date,
+    timezone:'UTC',recurrence_unit:{once:'none',monthly:'month',yearly:'year'}[row.recurrence],
+    recurrence_every:1,category:row.category??null,deleted_at:utc(row.deletedAt),
+  };
+  if(kind==='loans')return {
+    title:row.title,opening_minor:row.openingCents,payment_minor:row.paymentCents,
+    apr_basis_points:Math.round(row.apr*100),term_months:row.termMonths,
+    due_day:row.dueDay,as_of_date:row.asOfDate,calculation_version:1,
+    imported_schedule:row.schedule??null,deleted_at:utc(row.deletedAt),
+  };
+  if(kind==='settlements')return {
+    obligation_id:targets.get(JSON.stringify(['entries',row.entryId])),
+    occurrence_on:row.occurrence+'-01',paid_on:row.date,
+    amount_minor:row.amountCents,voided_at:utc(row.voidedAt),
+  };
+  return {
+    loan_id:targets.get(JSON.stringify(['loans',row.loanId])),
+    paid_on:row.date,amount_minor:row.amountCents,
+    strategy:row.strategy,voided_at:utc(row.voidedAt),
+  };
+}
+
+async function verifyCommittedPlannerMerge(prepared,committed,fetchImpl,origin,signal){
+  const response=await request(fetchImpl,origin,'/api/finance/v1/state?limit_entities=5000','GET',null,signal);
+  const state=await responseJson(response,10_000_000);
+  if(response.status!==200||!STRONG_ETAG.test(response.headers.get('etag')||'')||
+     state?.schema_version!==1||state.profile_id!==prepared.profileId||
+     state.currency!=='RUB'||state.revision!==committed.revision||
+     !Array.isArray(state.entities)||state.next_cursor!=null||
+     !Array.isArray(prepared.serverEntities))
+    hold('Невозможно проверить полный серверный снимок после объединения');
+
+  const before=new Map(prepared.serverEntities.map(entity=>[entity.id,entity]));
+  const after=new Map(state.entities.map(entity=>[entity.id,entity]));
+  if(before.size!==prepared.serverEntities.length||after.size!==state.entities.length)
+    hold('Обнаружены повторяющиеся идентификаторы серверных записей');
+  const bank=prepared.bankCounts;
+  const plannerAdded=COUNT_KINDS.reduce((sum,kind)=>sum+prepared.mergeCounts.add[kind],0);
+  const extra=bank?bank.accountsAdded+bank.operationsAdded+bank.reversalTransactions:0;
+  if(state.entities.length!==before.size+plannerAdded+extra)
+    hold('Количество серверных записей после объединения не совпало с планом');
+  const serverKind={entries:'obligation',loans:'loan',settlements:'settlement',loanPayments:'loan_payment'};
+  const allowedKinds=new Set(Object.values(serverKind));
+  for(const [id,prior] of before){
+    const current=after.get(id);
+    if(!current||(allowedKinds.has(prior.kind)&&!sameFinancialJSON(prior,current)))
+      hold('Существующая серверная финансовая запись изменилась');
+  }
+  const available=new Map(state.entities.filter(entity=>
+    !before.has(entity.id)&&allowedKinds.has(entity.kind)).map(entity=>[entity.id,entity]));
+  if(available.size!==plannerAdded)hold('Список новых финансовых записей неполон');
+  const choices=new Map(prepared.payload.manifest.rows.map(choice=>
+    [JSON.stringify([choice.record_type,choice.source_record_id]),choice]));
+  if(choices.size!==prepared.preview.recordCount)
+    hold('Повторяются решения по исходным финансовым записям');
+  const targets=new Map();
+  for(const kind of COUNT_KINDS){
+    if(!Array.isArray(prepared.snapshot[kind]))hold('Исходный список неполон');
+    for(const row of prepared.snapshot[kind]){
+      const key=JSON.stringify([kind,row.id]),choice=choices.get(key);
+      if(!choice||!['add','link'].includes(choice.decision))
+        hold('Решение по исходной записи отсутствует');
+      const expected=plannerProjection(kind,row,targets);
+      const same=entity=>{
+        if(entity?.kind!==serverKind[kind]||!entity.data)return false;
+        const actual={...entity.data};
+        if(Object.hasOwn(actual,'deleted_at')&&actual.deleted_at!=null){
+          const date=Date.parse(actual.deleted_at);
+          if(!Number.isFinite(date))return false;
+          actual.deleted_at=new Date(date).toISOString();
+        }
+        if(Object.hasOwn(actual,'voided_at')&&actual.voided_at!=null){
+          const date=Date.parse(actual.voided_at);
+          if(!Number.isFinite(date))return false;
+          actual.voided_at=new Date(date).toISOString();
+        }
+        return sameFinancialJSON(expected,actual);
+      };
+      let match;
+      if(choice.decision==='link'){
+        match=before.get(choice.target_id);
+        if(!match||!same(match)||!same(after.get(choice.target_id)))
+          hold('Связанная серверная запись не соответствует источнику');
+      }else{
+        const matches=[...available.values()].filter(entity=>entity.entity_revision===1&&same(entity));
+        if(matches.length!==1)hold('Новая серверная запись не соответствует подтверждённому источнику');
+        match=matches[0];
+        available.delete(match.id);
+      }
+      targets.set(key,match.id);
+    }
+  }
+  if(available.size!==0)hold('После объединения остались неподтверждённые финансовые записи');
+}
+
 async function verifyCommittedBankImport(prepared,committed,fetchImpl,origin,signal){
   const manifest=prepared.payload.manifest,ledger=prepared.snapshot.bankStatements;
   const accountTargets=committed.bank_account_targets,operationTargets=committed.bank_operation_targets;
@@ -494,6 +599,7 @@ export async function executeConfirmedPersonalImportCandidate({
       restored !== prepared.payload.source_canonical_json) {
     hold('Не удалось восстановить исходные байты с сервера. Не повторяйте импорт');
   }
+  if(isMerge)await verifyCommittedPlannerMerge(prepared,committed,fetchImpl,origin,signal);
   if(bank)await verifyCommittedBankImport(prepared,committed,fetchImpl,origin,signal);
   active(signal);
   return Object.freeze({
