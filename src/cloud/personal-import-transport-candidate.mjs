@@ -433,9 +433,10 @@ async function verifyCommittedPlannerMerge(prepared,committed,fetchImpl,origin,s
     }
   }
   if(available.size!==0)hold('После объединения остались неподтверждённые финансовые записи');
+  return {state,etag:response.headers.get('etag')};
 }
 
-async function verifyCommittedBankImport(prepared,committed,fetchImpl,origin,signal){
+async function verifyCommittedBankImport(prepared,committed,fetchImpl,origin,signal,verifiedState=null){
   const manifest=prepared.payload.manifest,ledger=prepared.snapshot.bankStatements;
   const accountTargets=committed.bank_account_targets,operationTargets=committed.bank_operation_targets;
   const validMap=(map,keys)=>map&&typeof map==='object'&&!Array.isArray(map)&&
@@ -444,8 +445,9 @@ async function verifyCommittedBankImport(prepared,committed,fetchImpl,origin,sig
   if(!validMap(accountTargets,ledger.accounts.map(x=>x.id))||
      !validMap(operationTargets,ledger.operations.map(x=>x.sourceKey)))
     hold('Сервер не подтвердил карту банковских записей');
-  const stateResponse=await request(fetchImpl,origin,'/api/finance/v1/state?limit_entities=5000','GET',null,signal);
-  const state=await responseJson(stateResponse,10_000_000),tag=stateResponse.headers.get('etag');
+  // Reuse the already checked full snapshot rather than fetching twice while IDB is locked.
+  if(!verifiedState)hold('Серверный снимок после объединения не проверен');
+  const {state,etag:tag}=verifiedState;
   const historyResponse=await request(fetchImpl,origin,'/api/finance/v1/import/bank/rows','GET',null,signal);
   const history=await responseJson(historyResponse,10_000_000);
   if(state.profile_id!==prepared.profileId||state.revision!==committed.revision)
@@ -599,9 +601,9 @@ export async function executeConfirmedPersonalImportCandidate({
       restored !== prepared.payload.source_canonical_json) {
     hold('Не удалось восстановить исходные байты с сервера. Не повторяйте импорт');
   }
-  // Verify every planner projection, then separately reconcile bank postings and balances.
-  if(isMerge)await verifyCommittedPlannerMerge(prepared,committed,fetchImpl,origin,signal);
-  if(bank)await verifyCommittedBankImport(prepared,committed,fetchImpl,origin,signal);
+  // Verify planner projections, then reuse the same pinned snapshot for bank reconciliation.
+  const verifiedState=isMerge?await verifyCommittedPlannerMerge(prepared,committed,fetchImpl,origin,signal):null;
+  if(bank)await verifyCommittedBankImport(prepared,committed,fetchImpl,origin,signal,verifiedState);
   active(signal);
   return Object.freeze({
     status: 'COMMITTED_AND_SOURCE_RESTORED',
