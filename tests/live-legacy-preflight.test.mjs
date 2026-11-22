@@ -283,12 +283,37 @@ test('populated profile yields a verified read-only inventory, never an import c
         source_original_preserved:true,cash_postings_created:0,
         created_counts:Object.fromEntries(Object.entries(draft.mergeCounts.add).reverse()),
         linked_counts:Object.fromEntries(Object.entries(draft.mergeCounts.link).reverse())};
-      else return new Response(draft.payload.source_canonical_json,{status:200,headers:{'Content-Type':'application/json'}});
+      else if(path.endsWith('/state')){
+        let index=0;
+        const newEntities=[
+          ...draft.snapshot.entries.map(row=>({
+            id:String(++index).padStart(8,'0')+'-0000-4000-8000-000000000000',
+            kind:'obligation',entity_revision:1,
+            data:{title:row.title,direction:row.kind,amount_minor:row.amountCents,
+              starts_on:row.date,timezone:'UTC',recurrence_unit:{once:'none',monthly:'month',
+                yearly:'year'}[row.recurrence],recurrence_every:1,category:row.category??null,
+              deleted_at:row.deletedAt??null},
+          })),
+          ...draft.snapshot.loans.map(row=>({
+            id:String(++index).padStart(8,'0')+'-0000-4000-8000-000000000000',
+            kind:'loan',entity_revision:1,
+            data:{title:row.title,opening_minor:row.openingCents,payment_minor:row.paymentCents,
+              apr_basis_points:Math.round(row.apr*100),term_months:row.termMonths,
+              due_day:row.dueDay,as_of_date:row.asOfDate,calculation_version:1,
+              imported_schedule:row.schedule??null,deleted_at:row.deletedAt??null},
+          })),
+        ];
+        return new Response(JSON.stringify({schema_version:1,profile_id:profile,revision:4,
+          currency:'RUB',entities:[...entities,...newEntities]}),{status:200,
+          headers:{ETag:'"after-merge"','Content-Type':'application/json'}});
+      }else return new Response(draft.payload.source_canonical_json,
+        {status:200,headers:{'Content-Type':'application/json'}});
       return new Response(JSON.stringify(body),{status:200,headers:{'Content-Type':'application/json'}});
     },
   });
   assert.equal(finish.status,'COMMITTED_AND_SOURCE_RESTORED');
-  assert.deepEqual(recorded,['/api/finance/v1/import/commit','/api/finance/v1/import/restore']);
+  assert.deepEqual(recorded,['/api/finance/v1/import/commit','/api/finance/v1/import/restore',
+    '/api/finance/v1/state']);
   assert.deepEqual(calls,[['/api/auth/email/finance/session','POST'],
     ['/api/finance/v1/state','GET']]);
   assert.deepEqual(db.values.get('account-state-v2:'+accountA),source);
