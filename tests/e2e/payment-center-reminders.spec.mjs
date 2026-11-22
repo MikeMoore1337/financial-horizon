@@ -31,6 +31,31 @@ async function openDue(page) {
   await expect(page.getByRole('heading', { name: 'Центр оплат' })).toBeVisible();
 }
 
+test('#138 guest: partial amount, overpayment rejection and remaining payment', async ({ page }) => {
+  await visitGuest(page);
+  await addScheduledExpense(page, 'Оплата частями #138', plusDays(1), '100.01');
+  await openDue(page);
+  const card = page.locator('.fh-center-event').filter({ hasText: 'Оплата частями #138' });
+  await card.getByRole('button', { name: 'Отметить оплату' }).click();
+  const form = page.locator('#settlement-form');
+  await expect(form.locator('[name="date"]')).toHaveValue(iso(new Date()));
+  await form.locator('[name="amount"]').fill('30');
+  await form.locator('button[type="submit"]').click();
+  await expect(page.locator('#settlement-dialog')).not.toBeVisible();
+  await card.getByRole('button', { name: 'Отметить оплату' }).click();
+  await expect(form.locator('[name="amount"]')).toHaveValue('70.01');
+  await expect(form.locator('#settlement-description')).toContainText('Осталось:');
+  await form.locator('[name="amount"]').fill('70.02');
+  await form.locator('button[type="submit"]').click();
+  await expect(page.locator('#settlement-dialog')).toBeVisible();
+  expect((await scopedState(page, 'state')).settlements).toHaveLength(1);
+  await form.locator('[name="amount"]').fill('70.01');
+  await form.locator('button[type="submit"]').click();
+  await expect(card).toHaveCount(0);
+  const state = await scopedState(page, 'state');
+  expect(state.settlements.map((payment) => payment.amountCents)).toEqual([3000, 7001]);
+});
+
 test('#40 real guest: persisted 1/3/7 preferences, partial and full confirmed payment', async ({ page, context }) => {
   const watch = await observe(context, page);
   await page.setViewportSize({ width: 393, height: 852 });

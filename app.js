@@ -482,10 +482,10 @@ function openSettlement(entryId,occurrence=ui.month,paymentId=null){
  form.elements.entryId.value=entryId;form.elements.occurrence.value=existing?.occurrence||occurrence;
  const paid=state.settlements.filter(s=>s.entryId===entryId&&s.occurrence===occurrence&&!s.voidedAt).reduce((a,b)=>a+b.amountCents,0);
  form.elements.amount.value=existing?numberInput(existing.amountCents):numberInput(Math.max(0,entry.amountCents-paid));
- form.elements.date.value=existing?.date||dayInMonth(occurrence,Math.min(Number(entry.date.slice(-2)),28));
+ form.elements.date.value=existing?.date||today();
  form.dataset.paymentId=paymentId||'';
  $('#settlement-heading').textContent=existing?'Изменить фактическую сумму':'Отметить фактическую сумму';
- $('#settlement-description').textContent=`${entry.title}. План: ${rubles(entry.amountCents)}. Уже внесено: ${rubles(paid)}. Можно внести часть суммы.`;
+ $('#settlement-description').textContent=`${entry.title}. План: ${rubles(entry.amountCents)}. Уже внесено: ${rubles(paid)}. Осталось: ${rubles(Math.max(0,entry.amountCents-paid))}. Можно внести часть суммы.`;
  openDialog('#settlement-dialog');
 }
 function requireConfirm(title,text){
