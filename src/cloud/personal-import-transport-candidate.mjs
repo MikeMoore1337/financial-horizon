@@ -217,7 +217,7 @@ export async function prepareLivePersonalImportCandidate({
   const bankSource = await verifyLiveLegacyBackup({selection,backupText,backupPassword,consent});
   const ledger=bankSource.snapshot.bankStatements;
   if (ledger && (ledger.accounts.length || ledger.operations.length || ledger.batches.length)) {
-    const historyResponse=await request(fetchImpl,origin,'/api/finance/v2/bank-import/rows','GET',null,signal);
+    const historyResponse=await request(fetchImpl,origin,'/api/finance/v1/import/bank/rows','GET',null,signal);
     const bankHistory=await responseJson(historyResponse);
     const bankComparison=compareGuestBankHistory({ledger,sourceRevision:bankSource.sourceRevision,snapshot,bankHistory,
       snapshotEtag:etag,bankEtag:historyResponse.headers.get('etag')});
@@ -225,9 +225,16 @@ export async function prepareLivePersonalImportCandidate({
     if (bankSource.sourceKey!==again.sourceKey || bankSource.guestClaim!==again.guestClaim ||
         !sameFinancialJSON(bankSource.snapshot,again.snapshot)) hold('Исходная банковская история изменилась');
     active(signal);
+    const preview=await planLiveLegacyImportPreviewCandidate({selection,backupText,backupPassword,consent,
+      target:{...target,hasRemoteRecords:true,preserveZeroAccountId:null},signal,allowBank:true});
+    const checked=await verifyLiveLegacyBackup({selection,backupText,backupPassword,consent});
+    if (bankSource.sourceKey!==checked.sourceKey || bankSource.guestClaim!==checked.guestClaim ||
+        !sameFinancialJSON(bankSource.snapshot,checked.snapshot)) hold('Исходная банковская история изменилась');
     return Object.freeze({actor:verifiedActorUserId,origin,etag,profileId:session.profile_id,
-      revision:snapshot.revision,snapshot:bankSource.snapshot,serverEntities:snapshot.entities,
-      bankHistory,bankComparison,preview:Object.freeze({status:'BANK_REVIEW_ONLY'})});
+      revision:snapshot.revision,snapshot:checked.snapshot,serverEntities:snapshot.entities,
+      bankHistory,bankComparison,preview,
+      ...(sourceKind==='guest'?{guestSource:Object.freeze({sourceKey:checked.sourceKey,claim:checked.guestClaim})}:{}),
+      comparison:compareLegacyWithServer(checked.snapshot,snapshot.entities)});
   }
   const preview = await planLiveLegacyImportPreviewCandidate({
     selection, backupText, backupPassword, consent, target, signal,
@@ -269,7 +276,7 @@ export async function prepareLivePersonalImportCandidate({
 
 /** Build a local review artifact; this does not send or authorize any write. */
 export async function preparePersonalMergeReviewCandidate({
-  prepared, verifiedActorUserId, currentLocalSnapshotMatches, decisions, signal,
+  prepared, verifiedActorUserId, currentLocalSnapshotMatches, decisions, bankDecisions = null, signal,
 }) {
   active(signal);
   if (!prepared || prepared.actor !== verifiedActorUserId || !USER.test(verifiedActorUserId) ||
@@ -285,6 +292,9 @@ export async function preparePersonalMergeReviewCandidate({
     preview:prepared.preview, signal, mergeDecisions:decisions,
     comparison:prepared.comparison,confirmedGuestTransfer:Boolean(prepared.guestSource),
     confirmedTargetScope:prepared.guestSource ? 'account:'+verifiedActorUserId : null,
+    bankDecisions,bankComparison:prepared.bankComparison??null,
+    bankServerEntities:prepared.bankComparison ? prepared.serverEntities : null,
+    bankHistory:prepared.bankComparison ? prepared.bankHistory : null,
   });
   active(signal);
   const counts = {};
@@ -293,8 +303,114 @@ export async function preparePersonalMergeReviewCandidate({
       .map(kind => [kind, payload.manifest.rows.filter(row =>
         row.record_type === kind && row.decision === action).length]));
   }
-  return Object.freeze({...prepared, payload, mergeCounts:counts,
+  let bankCounts=null;
+  if (prepared.preview.bankTransfer) {
+    const accounts=payload.manifest.bank_accounts,operations=payload.manifest.bank_operations;
+    const source=new Map(prepared.snapshot.bankStatements.operations.map(x=>[x.sourceKey,x]));
+    const batches=new Map(prepared.snapshot.bankStatements.batches.map(x=>[x.batchKey,x]));
+    let postings=0,cancelled=false,cancelledOperations=0;
+    for (const choice of operations.filter(x=>x.decision==='add')) {
+      const row=source.get(choice.source_key),isCancelled=batches.get(row.batchKey).cancelledStateRevision!==null;
+      postings+=(row.kind==='transfer'?2:1)*(isCancelled?2:1);
+      cancelled ||= isCancelled;
+      if(isCancelled)cancelledOperations++;
+    }
+    bankCounts={accountsAdded:accounts.filter(x=>x.decision==='add').length,
+      accountsLinked:accounts.filter(x=>x.decision==='link').length,
+      operationsAdded:operations.filter(x=>x.decision==='add').length,
+      operationsLinked:operations.filter(x=>x.decision==='link').length,
+      postings,reversalTransactions:cancelledOperations,revisionIncrement:cancelled?2:1};
+    const addedPlanner=Object.values(counts.add).reduce((a,b)=>a+b,0);
+    if (prepared.serverEntities.length+addedPlanner+bankCounts.accountsAdded+
+        bankCounts.operationsAdded+cancelledOperations>5000 ||
+        prepared.bankHistory.rows.length+bankCounts.operationsAdded>5000)
+      hold('После переноса полный снимок превысит предел безопасной проверки');
+  }
+  return Object.freeze({...prepared, payload, mergeCounts:counts,bankCounts,
     preview:Object.freeze({...prepared.preview, status:'MERGE_PREVIEW_ONLY'})});
+}
+
+async function verifyCommittedBankImport(prepared,committed,fetchImpl,origin,signal){
+  const manifest=prepared.payload.manifest,ledger=prepared.snapshot.bankStatements;
+  const accountTargets=committed.bank_account_targets,operationTargets=committed.bank_operation_targets;
+  const validMap=(map,keys)=>map&&typeof map==='object'&&!Array.isArray(map)&&
+    Object.keys(map).length===keys.length&&keys.every(key=>Object.hasOwn(map,key)&&UUID.test(map[key]||''))&&
+    new Set(Object.values(map)).size===keys.length;
+  if(!validMap(accountTargets,ledger.accounts.map(x=>x.id))||
+     !validMap(operationTargets,ledger.operations.map(x=>x.sourceKey)))
+    hold('Сервер не подтвердил карту банковских записей');
+  const stateResponse=await request(fetchImpl,origin,'/api/finance/v1/state?limit_entities=5000','GET',null,signal);
+  const state=await responseJson(stateResponse,10_000_000),tag=stateResponse.headers.get('etag');
+  const historyResponse=await request(fetchImpl,origin,'/api/finance/v1/import/bank/rows','GET',null,signal);
+  const history=await responseJson(historyResponse,10_000_000);
+  if(state.profile_id!==prepared.profileId||state.revision!==committed.revision)
+    hold('Не подтверждена серверная ревизия банковского переноса');
+  const comparison=compareGuestBankHistory({ledger,sourceRevision:prepared.preview.sourceRevision,
+    snapshot:state,bankHistory:history,snapshotEtag:tag,bankEtag:historyResponse.headers.get('etag')});
+  const addedPlanner=Object.values(prepared.mergeCounts.add).reduce((a,b)=>a+b,0);
+  if(state.entities.length!==prepared.serverEntities.length+addedPlanner+prepared.bankCounts.accountsAdded+
+      prepared.bankCounts.operationsAdded+prepared.bankCounts.reversalTransactions ||
+     history.rows.length!==prepared.bankHistory.rows.length+prepared.bankCounts.operationsAdded)
+    hold('Количество серверных записей не совпало с планом переноса');
+  const before=new Map(prepared.serverEntities.map(x=>[x.id,x])),after=new Map(state.entities.map(x=>[x.id,x]));
+  const accountChoices=new Map(manifest.bank_accounts.map(x=>[x.source_id,x]));
+  const operationChoices=new Map(manifest.bank_operations.map(x=>[x.source_key,x]));
+  const targetAccounts=new Set(Object.values(accountTargets)),balances=new Map();
+  for(const source of ledger.accounts){
+    const choice=accountChoices.get(source.id),target=accountTargets[source.id],prior=before.get(target),now=after.get(target);
+    if(!choice||!now||now.kind!=='account'||now.data.name!==source.name||now.data.currency!=='RUB'||
+       now.data.opening_minor!==source.openingMinor||now.data.archived_at!=null||
+       (choice.decision==='link'&&(!prior||prior.kind!=='account'||choice.target_id!==target||
+         now.data.type!==prior.data.type))||
+       (choice.decision==='add'&&(prior||now.data.type!==choice.account_kind)))
+      hold('Серверный счёт не совпал с планом переноса');
+    const balance=choice.decision==='link'?prior.data.balance_minor:source.openingMinor;
+    const reserved=choice.decision==='link'?prior.data.reserved_minor:0;
+    if(!Number.isSafeInteger(balance)||!Number.isSafeInteger(reserved))hold('Не подтверждён остаток счёта');
+    balances.set(source.id,{balance,reserved,target,revision:choice.decision==='link'?prior.entity_revision:1});
+  }
+  const batches=new Map(ledger.batches.map(x=>[x.batchKey,x]));
+  const rows=new Map(history.rows.map(x=>[x.transaction_id,x]));
+  for(const source of ledger.operations){
+    const choice=operationChoices.get(source.sourceKey),id=operationTargets[source.sourceKey],row=rows.get(id);
+    const sourceAccount=balances.get(source.accountId),target=source.targetAccountId?balances.get(source.targetAccountId):null;
+    const cancelled=batches.get(source.batchKey).cancelledStateRevision!==null;
+    if(!choice||!row||!sourceAccount||(source.targetAccountId&&!target)||
+       (choice.decision==='link'&&choice.target_id!==id)||(choice.decision==='add'&&before.has(id))||
+       (row.source_key!==source.sourceKey&&(source.externalId===null||row.external_id!==source.externalId))||
+       row.fingerprint!==source.fingerprint||row.external_id!==source.externalId||
+       row.account_id!==sourceAccount.target||row.target_account_id!==(target?.target??null)||
+       row.kind!==source.kind||row.occurred_on!==source.date||row.amount_minor!==source.amountCents||
+       row.description!==source.description||row.category!==source.category||
+       comparison.serverStatuses[id]!== (cancelled?'cancelled':'committed'))
+      hold('Серверная банковская операция не совпала с планом');
+    if(choice.decision==='add'){
+      const increments=cancelled?2:1;
+      sourceAccount.revision+=increments;
+      if(target)target.revision+=increments;
+      if(!cancelled){
+        sourceAccount.balance+=source.kind==='income'?source.amountCents:-source.amountCents;
+        if(target)target.balance+=source.amountCents;
+      }
+      if(!Number.isSafeInteger(sourceAccount.balance)||(target&&!Number.isSafeInteger(target.balance)))
+        hold('Не подтверждён итоговый остаток счёта');
+    }
+  }
+  for(const value of balances.values()){
+    const data=after.get(value.target).data;
+    if(after.get(value.target).entity_revision!==value.revision||
+       data.balance_minor!==value.balance||data.reserved_minor!==value.reserved||
+       data.available_minor!==value.balance-value.reserved)hold('Остаток после переноса не совпал с планом');
+  }
+  for(const old of prepared.serverEntities){
+    const current=after.get(old.id);
+    if(!current||(!targetAccounts.has(old.id)&&!sameFinancialJSON(old,current)))
+      hold('Существующая серверная запись изменилась после переноса');
+  }
+  const oldRows=new Map(history.rows.map(row=>[row.transaction_id,row]));
+  for(const row of prepared.bankHistory.rows)
+    if(!oldRows.has(row.transaction_id)||!sameFinancialJSON(row,oldRows.get(row.transaction_id)))
+      hold('Существующая банковская история изменилась после переноса');
 }
 
 /**
@@ -310,6 +426,7 @@ export async function executeConfirmedPersonalImportCandidate({
 }) {
   active(signal);
   const isMerge = prepared?.preview?.status === 'MERGE_PREVIEW_ONLY';
+  const bank = prepared?.preview?.bankTransfer === true;
   if (!prepared || prepared.actor !== verifiedActorUserId ||
       explicitFinalConsent !== true || currentLocalSnapshotMatches !== true ||
       !USER.test(verifiedActorUserId) || !STRONG_ETAG.test(prepared.etag || '') ||
@@ -317,7 +434,8 @@ export async function executeConfirmedPersonalImportCandidate({
       !['PREVIEW_ONLY','MERGE_PREVIEW_ONLY'].includes(prepared.preview?.status) ||
       explicitGuestTransfer !== Boolean(prepared.guestSource) ||
       Boolean(prepared.guestSource) !== Boolean(prepared.payload?.manifest?.explicit_guest_transfer) ||
-      (isMerge && (prepared.payload?.manifest?.schema_version !== 2 || !prepared.mergeCounts)) ||
+      (isMerge && (prepared.payload?.manifest?.schema_version !== (bank?3:2) || !prepared.mergeCounts ||
+        (bank && !prepared.bankCounts))) ||
       (!isMerge && prepared.payload?.manifest?.schema_version !== 1) ||
       (prepared.preservedZeroAccountId &&
        (explicitPreserveZeroAccountConsent !== true ||
@@ -352,11 +470,15 @@ export async function executeConfirmedPersonalImportCandidate({
       committed.source_sha256 !== prepared.preview.sourceSha256 ||
       committed.record_count !== prepared.preview.recordCount ||
       committed.source_original_preserved !== true ||
-      committed.cash_postings_created !== 0 ||
+      committed.cash_postings_created !== (bank?prepared.bankCounts.postings:0) ||
+      (bank && (committed.bank_accounts_created!==prepared.bankCounts.accountsAdded ||
+        committed.bank_accounts_linked!==prepared.bankCounts.accountsLinked ||
+        committed.bank_operations_created!==prepared.bankCounts.operationsAdded ||
+        committed.bank_operations_linked!==prepared.bankCounts.operationsLinked)) ||
       (isMerge && (!matchingCounts(committed.created_counts, prepared.mergeCounts.add) ||
         !matchingCounts(committed.linked_counts, prepared.mergeCounts.link))) ||
       !Number.isSafeInteger(committed.revision) ||
-      committed.revision !== prepared.revision + 1) {
+      committed.revision !== prepared.revision + (bank?prepared.bankCounts.revisionIncrement:1)) {
     hold('Результат финансового импорта не подтверждён; не повторяйте операцию');
   }
   // Explicit byte-exact server recovery proves imported source remains
@@ -372,12 +494,14 @@ export async function executeConfirmedPersonalImportCandidate({
       restored !== prepared.payload.source_canonical_json) {
     hold('Не удалось восстановить исходные байты с сервера. Не повторяйте импорт');
   }
+  if(bank)await verifyCommittedBankImport(prepared,committed,fetchImpl,origin,signal);
   active(signal);
   return Object.freeze({
     status: 'COMMITTED_AND_SOURCE_RESTORED',
     revision: committed.revision, recordCount: committed.record_count,
     sourceSha256: committed.source_sha256,
-    localDataPreserved: true, cashPostingsCreated: 0,
+    localDataPreserved: true, cashPostingsCreated: bank?prepared.bankCounts.postings:0,
+    ...(bank ? {bankCounts:prepared.bankCounts} : {}),
     ...(isMerge ? {mergeCounts:prepared.mergeCounts} : {}),
     ...(prepared.preservedZeroAccountId ? {serverZeroAccountPreserved: true} : {}),
   });

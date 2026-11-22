@@ -1,11 +1,11 @@
-"""#69: RLS-scoped PostgreSQL import source MANIFEST staging - feature OFF.
+"""#69: RLS-scoped PostgreSQL import source manifest staging.
 
 This is *not* a financial import, authoritative validation of an encrypted
 backup or a public HTTP route. It does not change account balances, loan data,
 settlements, server revision or original IndexedDB.
 
-A future independently approved importer must verify the actual encrypted
-source, mapping and money before atomically committing any financial fact.
+The caller must verify the actual encrypted source and confirm the mapping;
+the commit rechecks the source and money under the profile lock.
 """
 from __future__ import annotations
 
@@ -53,6 +53,29 @@ class ImportRowCandidate(BaseModel):
         return value
 
 
+class BankAccountChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    source_id: str = Field(pattern=_UUID.pattern)
+    decision: Literal["add", "link"]
+    target_id: str | None = Field(default=None, pattern=_UUID.pattern)
+    account_kind: Literal["bank", "card", "cash", "savings", "other"] | None = None
+
+
+class BankOperationChoice(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    source_key: str = Field(pattern=_HEX_SHA.pattern)
+    decision: Literal["add", "link"]
+    target_id: str | None = Field(default=None, pattern=_UUID.pattern)
+    reviewed_transaction_ids: list[str] = Field(default_factory=list, max_length=32)
+
+    @field_validator("reviewed_transaction_ids")
+    @classmethod
+    def valid_reviewed_ids(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)) or any(not _UUID.fullmatch(item) for item in value):
+            raise ValueError("invalid reviewed transaction identities")
+        return value
+
+
 class ImportSourceManifestCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: StrictInt
@@ -66,11 +89,13 @@ class ImportSourceManifestCandidate(BaseModel):
     preserve_zero_account_id: str | None = Field(default=None, pattern=_UUID.pattern)
     confirm_preserve_zero_account: StrictBool = False
     rows: list[ImportRowCandidate] = Field(max_length=_MAX_RECORDS)
+    bank_accounts: list[BankAccountChoice] = Field(default_factory=list, max_length=100)
+    bank_operations: list[BankOperationChoice] = Field(default_factory=list, max_length=5000)
 
     @field_validator("schema_version")
     @classmethod
     def exact_version(cls, value: int) -> int:
-        if value not in (1, 2):
+        if value not in (1, 2, 3):
             raise ValueError("unsupported manifest schema")
         return value
 
@@ -116,6 +141,25 @@ def _safe_manifest(value: object) -> ImportSourceManifestCandidate:
             linked = [(row.record_type, row.target_id) for row in request.rows if row.target_id]
             if len(set(linked)) != len(linked):
                 raise ValueError("multiple source records cannot silently share a target")
+        if request.schema_version != 3:
+            if request.bank_accounts or request.bank_operations:
+                raise ValueError("bank decisions require schema v3")
+        else:
+            if not request.bank_accounts:
+                raise ValueError("bank import requires an explicit account decision")
+            accounts = request.bank_accounts
+            operations = request.bank_operations
+            if (len({x.source_id for x in accounts}) != len(accounts)
+                or len({x.source_key for x in operations}) != len(operations)
+                or len({x.target_id for x in accounts if x.target_id}) != sum(bool(x.target_id) for x in accounts)
+                or len({x.target_id for x in operations if x.target_id}) != sum(bool(x.target_id) for x in operations)):
+                raise ValueError("duplicate bank source or target")
+            if any((x.decision == "link") != (x.target_id is not None) or
+                   (x.decision == "add") != (x.account_kind is not None) for x in accounts):
+                raise ValueError("every bank account requires a complete decision")
+            if any((x.decision == "link") != (x.target_id is not None) or
+                   (x.decision == "link" and x.reviewed_transaction_ids) for x in operations):
+                raise ValueError("every bank operation requires a complete decision")
         # A SHA from client input is an *unverified claim* until the true
         # encrypted source is recovered and independently matched to it.
         return request
@@ -134,18 +178,23 @@ def import_batch_id(scope: VerifiedFinanceScope,
     )
     if request.preserve_zero_account_id is not None:
         identity += ":preserve-zero:" + request.preserve_zero_account_id
-    if request.schema_version == 2:
+    if request.schema_version in (2, 3):
         decisions = sorted((r.record_type, r.source_record_id, r.decision, r.target_id or "")
                            for r in request.rows)
         identity += ":merge-v2:" + sha256(json.dumps(
             decisions, ensure_ascii=False, separators=(",", ":")
         ).encode("utf-8")).hexdigest()
+    if request.schema_version == 3:
+        bank = {"accounts": [x.model_dump() for x in sorted(request.bank_accounts, key=lambda x: x.source_id)],
+                "operations": [x.model_dump() for x in sorted(request.bank_operations, key=lambda x: x.source_key)]}
+        identity += ":bank-v3:" + sha256(json.dumps(bank, ensure_ascii=False, sort_keys=True,
+                                                  separators=(",", ":")).encode("utf-8")).hexdigest()
     return uuid5(scope.profile_id, identity)
 
 
 def mapped_target(scope: VerifiedFinanceScope, request: ImportSourceManifestCandidate,
                   row: ImportRowCandidate) -> UUID:
-    if request.schema_version == 2:
+    if request.schema_version in (2, 3):
         if row.target_id is not None:
             return UUID(row.target_id)
         identity = ("financial-horizon:legacy-record:v2:" + request.source_scope + ":" +

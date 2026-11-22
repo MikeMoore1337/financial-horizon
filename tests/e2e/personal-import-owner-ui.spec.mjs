@@ -176,15 +176,16 @@ test('#69 bank review shows an individually reversed server row as cancelled',as
   occurred_on:'2026-11-01',amount_minor:500,description:'Synthetic reversed payment',category:null,status:'committed'}]};
  await page.route('**/api/auth/email/finance/session',route=>route.fulfill({json:{ok:true,profile_id:profile}}));
  await page.route('**/api/finance/v1/state**',route=>route.fulfill({json:snapshot,headers:{ETag:'"synthetic"'}}));
- await page.route('**/api/finance/v2/bank-import/rows',route=>route.fulfill({json:history,headers:{ETag:'"synthetic"'}}));
+ await page.route('**/api/finance/v1/import/bank/rows',route=>route.fulfill({json:history,headers:{ETag:'"synthetic"'}}));
  await page.locator('[data-action="cloud-import"]').click();
  await page.locator('#cloud-import-file').setInputFiles(await backup.path());
  await page.locator('#password-form [name="password"]').fill('Synthetic-passphrase-2026!');
  await page.locator('#password-form button[type="submit"]').click();
  await expect(page.locator('#cloud-import-heading')).toHaveText('Сравнение банковской истории');
- await page.locator('#cloud-import-comparison summary').nth(2).click();
+ const bankGroup=page.locator('#cloud-import-comparison details').filter({hasText:'Серверная банковская история'});
+ await bankGroup.locator('summary').click();
  await expect(page.locator('#cloud-import-comparison')).toContainText('Synthetic reversed payment');
- await expect(page.locator('#cloud-import-comparison li').filter({hasText:'Synthetic reversed payment'}))
+ await expect(bankGroup.locator('li').filter({hasText:'Synthetic reversed payment'}))
   .toContainText('отменена');
  await expect(page.locator('[data-action="confirm-cloud-import"]')).toBeDisabled();
 });

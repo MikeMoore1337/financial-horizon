@@ -5,7 +5,7 @@ import {encryptBackup} from '../backup.js';
 import {verifyLiveLegacyBackup} from '../src/security/live-legacy-preflight.ts';
 import {planLiveLegacyImportPreviewCandidate} from '../src/cloud/live-legacy-import-preview-candidate.mjs';
 import {prepareLivePersonalImportCandidate, preparePersonalMergeReviewCandidate, executeConfirmedPersonalImportCandidate} from '../src/cloud/personal-import-transport-candidate.mjs';
-import {addGuestBankAccount,commitGuestBankBatch} from '../src/importers/bank-statements/guest-ledger.js';
+import {addGuestBankAccount,commitGuestBankBatch,undoGuestBankBatch} from '../src/importers/bank-statements/guest-ledger.js';
 
 const accountA = 'a'.repeat(32);
 const accountB = 'b'.repeat(32);
@@ -84,7 +84,7 @@ const verify = (selection, backupText, extra={}) => verifyLiveLegacyBackup({
   selection,backupText,backupPassword,consent,...extra,
 });
 
-test('bank history shows a read-only comparison and rejects mismatched server revisions',async()=>{
+test('bank history shows an unsent comparison and rejects mismatched server revisions',async()=>{
   const source=createSampleState(), accountId='11111111-1111-4111-8111-111111111111';
   addGuestBankAccount(source,{id:accountId,name:'Synthetic bank',openingMinor:20000},source.revision);source.revision++;
   const operation={sourceKey:'a'.repeat(64),fingerprint:'b'.repeat(64),externalId:'SYN',
@@ -106,15 +106,113 @@ test('bank history shows a read-only comparison and rejects mismatched server re
   const input={verifiedActorUserId:accountA,backupText,backupPassword,fetchImpl,
     origin:'https://fin-horizon.example',signal:new AbortController().signal,explicitConsent:true};
   const result=await prepareLivePersonalImportCandidate(input);
-  assert.equal(result.preview.status,'BANK_REVIEW_ONLY');
+  assert.equal(result.preview.status,'NEEDS_CONFLICT_DECISION');
+  assert.equal(result.preview.bankTransfer,true);
   assert.equal(result.bankComparison.sourceAccounts[0].balanceMinor,19500);
   assert.equal(result.bankComparison.operations.length,1);
   assert.equal(result.payload,undefined);
   assert.deepEqual(calls,[['/api/auth/email/finance/session','POST'],
-    ['/api/finance/v1/state','GET'],['/api/finance/v2/bank-import/rows','GET']]);
+    ['/api/finance/v1/state','GET'],['/api/finance/v1/import/bank/rows','GET']]);
   stale=true;
   await assert.rejects(prepareLivePersonalImportCandidate(input),/IMPORT_HOLD/);
   assert.deepEqual(db.values.get('account-state-v2:'+accountA),original);
+  assert.equal(db.writeCount,0);
+});
+
+for(const sourceKind of ['guest','account'])for(const cancelled of [false,true])
+test(`${sourceKind} bank transfer verifies receipt and cancellation=${cancelled}`,async()=>{
+  const source=createSampleState(),accountId='11111111-1111-4111-8111-111111111111';
+  addGuestBankAccount(source,{id:accountId,name:'Synthetic bank',openingMinor:20000},source.revision);source.revision++;
+  const operation={sourceKey:'a'.repeat(64),fingerprint:'b'.repeat(64),externalId:'SYN',
+    date:'2026-11-01',amountCents:500,kind:'expense',description:'Synthetic bank row',
+    accountId,targetAccountId:null,category:null,currency:'RUB'};
+  commitGuestBankBatch(source,{batchKey:'c'.repeat(64),sourceKeys:[operation.sourceKey],
+    operations:[operation],expectedOperationCount:1},'d'.repeat(64),source.revision);source.revision++;
+  if(cancelled){undoGuestBankBatch(source,'c'.repeat(64),source.revision);source.revision++;}
+  const backupText=await encryptBackup(source,backupPassword),original=clone(source);
+  const sourceKey=sourceKind==='guest'?'guest-state-v2':'account-state-v2:'+accountA;
+  const db=mount({[sourceKey]:source,'legacy-account-claim-v2':accountA});
+  const profile='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',signal=new AbortController().signal;
+  const fetchImpl=async(url,init)=>{
+    const path=new URL(url).pathname;
+    const body=path.endsWith('/session')?{ok:true,profile_id:profile}:
+      path.endsWith('/rows')?{schema_version:1,revision:0,rows:[]}:
+      {schema_version:1,profile_id:profile,revision:0,currency:'RUB',entities:[]};
+    return new Response(JSON.stringify(body),{status:200,headers:{'Content-Type':'application/json',ETag:'"synthetic"'}});
+  };
+  const prepared=await prepareLivePersonalImportCandidate({verifiedActorUserId:accountA,backupText,backupPassword,
+    fetchImpl,origin:'https://fin-horizon.example',signal,explicitConsent:true,sourceKind,
+    explicitGuestTransfer:sourceKind==='guest'});
+  assert.equal(prepared.preview.bankTransfer,true);
+  assert.equal(prepared.preview.status,'NEEDS_CONFLICT_DECISION');
+  const decisions=Object.entries(prepared.comparison.groups).flatMap(([kind,group])=>
+    group.local.map(row=>({kind,sourceId:row.sourceId,action:'add'})));
+  const bankDecisions={accounts:[{sourceId:accountId,action:'add',accountKind:'bank'}],
+    operations:[{sourceKey:operation.sourceKey,action:'add',reviewedTransactionIds:[]}]};
+  await assert.rejects(preparePersonalMergeReviewCandidate({prepared,verifiedActorUserId:accountA,
+    currentLocalSnapshotMatches:true,decisions,bankDecisions:{...bankDecisions,operations:[]},signal}),/IMPORT_HOLD/);
+  const reviewed=await preparePersonalMergeReviewCandidate({prepared,verifiedActorUserId:accountA,
+    currentLocalSnapshotMatches:true,decisions,bankDecisions,signal});
+  assert.equal(reviewed.payload.manifest.schema_version,3);
+  assert.deepEqual(reviewed.bankCounts,{accountsAdded:1,accountsLinked:0,operationsAdded:1,operationsLinked:0,
+    postings:cancelled?2:1,reversalTransactions:cancelled?1:0,revisionIncrement:cancelled?2:1});
+  await assert.rejects(executeConfirmedPersonalImportCandidate({prepared:reviewed,verifiedActorUserId:accountA,
+    currentLocalSnapshotMatches:true,explicitFinalConsent:false,fetchImpl,signal}),/IMPORT_HOLD/);
+  let attempts=0;
+  await assert.rejects(executeConfirmedPersonalImportCandidate({prepared:reviewed,verifiedActorUserId:accountA,
+    currentLocalSnapshotMatches:true,explicitFinalConsent:true,explicitGuestTransfer:sourceKind==='guest',signal,
+    fetchImpl:async()=>{attempts++;throw Error('synthetic timeout after sending');}}),/IMPORT_HOLD/);
+  assert.equal(attempts,1);
+  const calls=[],serverAccount='22222222-2222-4222-8222-222222222222';
+  const serverTx='33333333-3333-4333-8333-333333333333',reversal='44444444-4444-4444-8444-444444444444';
+  let corruptBalance=false,extraEntity=false;
+  const send=async(url)=>{
+    const path=new URL(url).pathname;calls.push(path);
+    if(path.endsWith('/restore'))return new Response(reviewed.payload.source_canonical_json,
+      {status:200,headers:{'Content-Type':'application/json'}});
+    if(path.endsWith('/state')){
+      const balance=cancelled?20000:19500;
+      const entities=[{kind:'account',id:serverAccount,entity_revision:cancelled?3:2,data:{name:'Synthetic bank',
+        type:'bank',currency:'RUB',opening_minor:20000,balance_minor:balance+(corruptBalance?1:0),
+        reserved_minor:0,available_minor:balance+(corruptBalance?1:0),archived_at:null}},
+       {kind:'transaction',id:serverTx,entity_revision:1,data:{kind:'expense',occurred_on:operation.date,
+        note:operation.description,postings:[{account_id:serverAccount,signed_minor:-500}]}}];
+      let sequence=1;
+      for(const [kind,count] of Object.entries(reviewed.mergeCounts.add))for(let i=0;i<count;i++){
+        const names={entries:'obligation',loans:'loan',settlements:'settlement',loanPayments:'loan_payment'};
+        entities.push({kind:names[kind],id:String(sequence++).padStart(8,'0')+'-0000-4000-8000-000000000000',
+          entity_revision:1,data:{}});
+      }
+      if(cancelled)entities.push({kind:'transaction',id:reversal,entity_revision:1,data:{kind:'reversal',
+        reversed_transaction_id:serverTx,postings:[{account_id:serverAccount,signed_minor:500}]}});
+      if(extraEntity)entities.push({kind:'obligation',id:'99999999-9999-4999-8999-999999999999',entity_revision:1,data:{}});
+      return new Response(JSON.stringify({schema_version:1,profile_id:profile,revision:cancelled?2:1,
+        currency:'RUB',entities}),{status:200,headers:{'Content-Type':'application/json',ETag:'"after"'}});
+    }
+    if(path.endsWith('/rows'))return new Response(JSON.stringify({schema_version:1,revision:cancelled?2:1,rows:[{
+      source_key:operation.sourceKey,fingerprint:operation.fingerprint,external_id:operation.externalId,
+      account_id:serverAccount,target_account_id:null,transaction_id:serverTx,kind:'expense',occurred_on:operation.date,
+      amount_minor:500,description:operation.description,category:null,status:cancelled?'cancelled':'committed'}]}),
+      {status:200,headers:{'Content-Type':'application/json',ETag:'"after"'}});
+    return new Response(JSON.stringify({status:'COMMITTED',batch_id:'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      revision:cancelled?2:1,record_count:reviewed.preview.recordCount,source_sha256:reviewed.preview.sourceSha256,
+      source_original_preserved:true,cash_postings_created:cancelled?2:1,created_counts:reviewed.mergeCounts.add,
+      linked_counts:reviewed.mergeCounts.link,bank_accounts_created:1,bank_accounts_linked:0,
+      bank_operations_created:1,bank_operations_linked:0,bank_account_targets:{[accountId]:serverAccount},
+      bank_operation_targets:{[operation.sourceKey]:serverTx}}),{status:201,headers:{'Content-Type':'application/json'}});
+  };
+  const result=await executeConfirmedPersonalImportCandidate({prepared:reviewed,verifiedActorUserId:accountA,
+    currentLocalSnapshotMatches:true,explicitFinalConsent:true,explicitGuestTransfer:sourceKind==='guest',fetchImpl:send,signal});
+  assert.equal(result.cashPostingsCreated,cancelled?2:1);
+  assert.deepEqual(calls,['/api/finance/v1/import/commit','/api/finance/v1/import/restore',
+    '/api/finance/v1/state','/api/finance/v1/import/bank/rows']);
+  corruptBalance=true;
+  await assert.rejects(executeConfirmedPersonalImportCandidate({prepared:reviewed,verifiedActorUserId:accountA,
+    currentLocalSnapshotMatches:true,explicitFinalConsent:true,explicitGuestTransfer:sourceKind==='guest',fetchImpl:send,signal}),/IMPORT_HOLD/);
+  corruptBalance=false;extraEntity=true;
+  await assert.rejects(executeConfirmedPersonalImportCandidate({prepared:reviewed,verifiedActorUserId:accountA,
+    currentLocalSnapshotMatches:true,explicitFinalConsent:true,explicitGuestTransfer:sourceKind==='guest',fetchImpl:send,signal}),/IMPORT_HOLD/);
+  assert.deepEqual(db.values.get(sourceKey),original);
   assert.equal(db.writeCount,0);
 });
 

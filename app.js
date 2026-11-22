@@ -798,14 +798,17 @@ async function prepareCloudImport(password){
    throw Error('Сессия изменилась во время проверки импорта');
   pendingCloudImport=prepared;
   if(prepared.bankComparison){
-   renderCloudBankHistory(prepared);
+   if(prepared.preview.bankTransfer)renderCloudImportComparison(prepared);
+   renderCloudBankHistory(prepared,Boolean(prepared.preview.bankTransfer));
    $('#cloud-import-heading').textContent='Сравнение банковской истории';
    $('#cloud-import-summary').textContent='Просмотр без записи: счетов '+prepared.bankComparison.sourceAccounts.length+
     ', операций '+prepared.bankComparison.operations.length+'. Совпадения требуют ручной проверки. '+
-    'Перенос банковской истории ещё не доступен; исходные данные сохранены.';
+    (prepared.preview.bankTransfer?'Выберите действие для каждой записи, счёта и операции. Исходные данные сохранены.':
+     'Перенос банковской истории ещё не доступен; исходные данные сохранены.');
    $('#cloud-import-final-consent').closest('label').hidden=true;
-   $('#cloud-import-dialog [data-action="prepare-cloud-merge"]').hidden=true;
-   $('#cloud-import-preserve-row').hidden=true;$('#cloud-import-guest-row').hidden=true;
+   $('#cloud-import-dialog [data-action="prepare-cloud-merge"]').hidden=!prepared.preview.bankTransfer;
+   $('#cloud-import-preserve-row').hidden=true;$('#cloud-import-guest-row').hidden=!prepared.guestSource;
+   $('#cloud-import-guest-consent').checked=false;
    cloudImportFile=null;return;
   }
   renderCloudImportComparison(prepared);
@@ -840,34 +843,111 @@ async function prepareCloudImport(password){
   throw error;
  }finally{cloudImportBusy=false;}
 }
-function renderCloudBankHistory(prepared){
- const root=$('#cloud-import-comparison');root.replaceChildren();
+function renderCloudBankHistory(prepared,editable=false){
+ const root=$('#cloud-import-comparison');if(!editable)root.replaceChildren();
  const ledger=prepared.snapshot.bankStatements,entities=new Map(prepared.serverEntities.map(row=>[row.id,row]));
  const bankRows=new Map(prepared.bankHistory.rows.map(row=>[row.transaction_id,row]));
  const accounts=new Map(ledger.accounts.map(row=>[row.id,row]));
+ const serverNumbers=new Map();
+ for(const kind of ['account','transaction'])prepared.serverEntities.filter(x=>x.kind===kind).map(x=>x.id).sort()
+  .forEach((id,index)=>serverNumbers.set(id,index+1));
  const kind=value=>({income:'доход',expense:'расход',transfer:'перевод'}[value]||'операция');
- const add=(title,lines)=>{
+ const add=(title,lines,control)=>{
   const group=document.createElement('details'),summary=document.createElement('summary'),list=document.createElement('ul');
-  summary.textContent=title;for(const text of lines){const item=document.createElement('li');item.textContent=text;list.append(item);}
+  summary.textContent=title;for(const [index,text] of lines.entries()){
+   const item=document.createElement('li');item.textContent=text;
+   if(control)item.append(control(index));list.append(item);
+  }
   group.append(summary,list);root.append(group);
  };
- add('Локальные счета и текущие остатки',prepared.bankComparison.sourceAccounts.map(row=>{
+ add('Локальные счета и текущие остатки',prepared.bankComparison.sourceAccounts.map((row,index)=>{
   const source=accounts.get(row.sourceId),matches=row.candidateIds.map(id=>entities.get(id)?.data?.name||'Счёт');
-  return `${source.name} · начальный ${rubles(row.openingMinor)} · остаток ${rubles(row.balanceMinor)} · `+
+  return `Счёт №${index+1}: ${source.name} · начальный ${rubles(row.openingMinor)} · остаток ${rubles(row.balanceMinor)} · `+
    (matches.length?'Возможные серверные счета: '+matches.join(', '):'Похожих серверных счетов не найдено');
- }));
+ }),editable?index=>{
+  const row=prepared.bankComparison.sourceAccounts[index],source=accounts.get(row.sourceId);
+  const select=document.createElement('select');select.dataset.bankAccount=row.sourceId;
+  select.setAttribute('aria-label','Действие для счёта '+source.name);
+  const option=(value,label)=>{const el=document.createElement('option');el.value=value;el.textContent=label;select.append(el);};
+  option('','Выберите действие');
+  for(const [type,label] of [['bank','банк'],['card','карта'],['cash','наличные'],['savings','накопительный'],['other','другой']])
+   option('add:'+type,'Добавить: '+label);
+  for(const id of row.candidateIds){
+   const target=entities.get(id)?.data;
+   if(target?.name===source.name&&target.opening_minor===source.openingMinor&&target.archived_at==null)
+    option('link:'+id,'Связать с серверным счётом №'+serverNumbers.get(id)+' '+target.name+' · остаток '+rubles(target.balance_minor));
+  }
+  return select;
+ }:null);
  const localOperations=new Map(ledger.operations.map(row=>[row.sourceKey,row]));
- add('Локальные банковские операции',prepared.bankComparison.operations.map(row=>{
+ let similarCount=0;
+ add('Локальные банковские операции',prepared.bankComparison.operations.map((row,index)=>{
   const source=localOperations.get(row.sourceKey),target=accounts.get(source.targetAccountId);
   const matches=row.candidateIds.map(id=>bankRows.get(id)).filter(Boolean);
-  return `${source.date} · ${source.description||'Без описания'} · ${kind(source.kind)} · ${rubles(source.amountCents)} · `+
+  const similar=editable?bankReviewMatches(prepared,source,null,null):[];
+  similarCount+=similar.length;
+  if(similar.length>100||similarCount>10000)throw Error('Слишком много похожих операций для безопасного просмотра');
+  return `Операция №${index+1}: ${source.date} · ${source.description||'Без описания'} · ${kind(source.kind)} · ${rubles(source.amountCents)} · категория ${source.category||'нет'} · `+
    `${accounts.get(source.accountId)?.name||'Счёт'}${target?' → '+target.name:''} · `+
    `${row.status==='cancelled'?'отменена':'действует'} · `+
-   (row.identityConflict?'конфликт идентичности; требуется проверка':`возможных совпадений: ${matches.length}`);
- }));
+   (row.identityConflict?'конфликт идентичности; требуется проверка':`возможных банковских совпадений: ${matches.length}`)+
+   (similar.length?' · Похожие серверные движения: '+similar.map(item=>
+    `№${serverNumbers.get(item.id)} ${item.data.occurred_on} ${item.data.note||'без описания'} (${item.data.kind}; `+
+    item.data.postings.map(p=>`счёт №${serverNumbers.get(p.account_id)} ${entities.get(p.account_id)?.data?.name||'Счёт'} ${rubles(p.signed_minor)}`).join(', ')+')').join('; '):'');
+ }),editable?index=>{
+  const row=prepared.bankComparison.operations[index],source=localOperations.get(row.sourceKey);
+  const select=document.createElement('select');select.dataset.bankOperation=row.sourceKey;
+  select.setAttribute('aria-label','Действие для операции '+(source.description||source.date));
+  const option=(value,label)=>{const el=document.createElement('option');el.value=value;el.textContent=label;select.append(el);};
+  option('','Выберите действие');option('add','Добавить отдельную операцию');
+  if(!row.identityConflict)for(const id of row.candidateIds){
+   const target=bankRows.get(id);if(target)option('link:'+id,'Связать с операцией №'+serverNumbers.get(id)+': '+target.occurred_on+' · '+
+    (target.description||'Без описания')+' · '+rubles(target.amount_minor)+' · '+
+    (entities.get(target.account_id)?.data?.name||'Счёт'));
+  }
+  return select;
+ }:null);
  add('Серверная банковская история',prepared.bankHistory.rows.map(row=>
-  `${row.occurred_on} · ${row.description||'Без описания'} · ${kind(row.kind)} · ${rubles(row.amount_minor)} · `+
-  `${entities.get(row.account_id)?.data?.name||'Счёт'}${row.target_account_id?' → '+(entities.get(row.target_account_id)?.data?.name||'Счёт'):''} · ${prepared.bankComparison.serverStatuses[row.transaction_id]==='cancelled'?'отменена':'сохранена'}`));
+  `Операция №${serverNumbers.get(row.transaction_id)}: ${row.occurred_on} · ${row.description||'Без описания'} · ${kind(row.kind)} · ${rubles(row.amount_minor)} · категория ${row.category||'нет'} · `+
+  `счёт №${serverNumbers.get(row.account_id)} ${entities.get(row.account_id)?.data?.name||'Счёт'}${row.target_account_id?' → счёт №'+serverNumbers.get(row.target_account_id)+' '+(entities.get(row.target_account_id)?.data?.name||'Счёт'):''} · ${prepared.bankComparison.serverStatuses[row.transaction_id]==='cancelled'?'отменена':'сохранена'}`));
+}
+function bankReviewMatches(prepared,source,accountId,targetId){
+ const transactions=prepared.serverEntities.filter(x=>x.kind==='transaction');
+ const reversed=new Set(transactions.map(x=>x.data.reversed_transaction_id).filter(Boolean));
+ const signed=source.kind==='income'?source.amountCents:-source.amountCents;
+ return transactions.filter(item=>{
+  const d=item.data;
+  if(d.kind==='reversal'||reversed.has(item.id)||d.occurred_on!==source.date||!Array.isArray(d.postings))return false;
+  if(!d.postings.some(p=>(!accountId||p.account_id===accountId)&&p.signed_minor===signed))return false;
+  if(source.kind==='transfer')return d.kind==='transfer'&&(!targetId||
+   d.postings.some(p=>p.account_id===targetId&&p.signed_minor===source.amountCents));
+  return true;
+ });
+}
+function previewBankBalances(prepared,decisions){
+ const ledger=prepared.snapshot.bankStatements,entities=new Map(prepared.serverEntities.map(x=>[x.id,x]));
+ const operations=new Map(decisions.operations.map(x=>[x.sourceKey,x]));
+ const batches=new Map(ledger.batches.map(x=>[x.batchKey,x]));
+ const rows=new Map(decisions.accounts.map(choice=>{
+  const source=ledger.accounts.find(x=>x.id===choice.sourceId),target=entities.get(choice.targetId)?.data;
+  const before=choice.action==='link'?target?.balance_minor:source?.openingMinor;
+  const reserved=choice.action==='link'?target?.reserved_minor:0;
+  if(!source||!Number.isSafeInteger(before)||!Number.isSafeInteger(reserved))
+   throw Error('Нельзя рассчитать итоговый остаток счёта');
+  return [source.id,{name:source.name,action:choice.action,before,after:before,reserved}];
+ }));
+ for(const op of ledger.operations){
+  if(operations.get(op.sourceKey)?.action!=='add'||batches.get(op.batchKey)?.cancelledStateRevision!==null)continue;
+  const account=rows.get(op.accountId),target=op.targetAccountId?rows.get(op.targetAccountId):null;
+  if(!account||(op.targetAccountId&&!target))throw Error('Не сопоставлены счета банковской операции');
+  account.after+=op.kind==='income'?op.amountCents:-op.amountCents;
+  if(target)target.after+=op.amountCents;
+  if(!Number.isSafeInteger(account.after)||(target&&!Number.isSafeInteger(target.after)))
+   throw Error('Превышен безопасный остаток счёта');
+ }
+ for(const row of rows.values())if(row.reserved>0&&row.after<row.reserved)
+  throw Error('После переноса остаток меньше уже зарезервированной суммы');
+ return [...rows.values()];
 }
 function renderCloudImportComparison(prepared){
  const root=$('#cloud-import-comparison');root.replaceChildren();
@@ -982,12 +1062,48 @@ async function prepareCloudMergeReview(){
  if(cloudImportBusy||!pendingCloudImport||pendingCloudImport.preview.status!=='NEEDS_CONFLICT_DECISION')
   throw Error('Сначала проверьте обе финансовые базы');
  const prepared=pendingCloudImport, actor=prepared.actor;
- const choices=[...$('#cloud-import-comparison').querySelectorAll('select')];
+ const choices=[...$('#cloud-import-comparison').querySelectorAll('select[data-merge-kind]')];
  if(choices.length!==prepared.preview.recordCount||choices.some(select=>!select.value))
   throw Error('Откройте все разделы и выберите действие для каждой локальной записи');
  const decisions=choices.map(select=>({kind:select.dataset.mergeKind,sourceId:select.dataset.sourceId,
   action:select.value==='add'?'add':'link',...(select.value==='add'?{}:{targetId:select.value.slice(5)})}));
- for(const select of choices)select.disabled=true;
+ const bankChoices=[...$('#cloud-import-comparison').querySelectorAll('select[data-bank-account],select[data-bank-operation]')];
+ let bankDecisions=null,bankBalances=null;
+ if(prepared.preview.bankTransfer){
+  if(bankChoices.length!==prepared.snapshot.bankStatements.accounts.length+prepared.snapshot.bankStatements.operations.length||
+     bankChoices.some(select=>!select.value))throw Error('Выберите действие для каждого счёта и банковской операции');
+  const bankAccounts=bankChoices.filter(select=>select.dataset.bankAccount).map(select=>({
+   sourceId:select.dataset.bankAccount,action:select.value.startsWith('add:')?'add':'link',
+   ...(select.value.startsWith('add:')?{accountKind:select.value.slice(4)}:{targetId:select.value.slice(5)})}));
+  const mapped=new Map(bankAccounts.map(x=>[x.sourceId,x.action==='link'?x.targetId:null]));
+  const bankOperations=bankChoices.filter(select=>select.dataset.bankOperation).map(select=>{
+   const source=prepared.snapshot.bankStatements.operations.find(x=>x.sourceKey===select.dataset.bankOperation);
+   if(select.value.startsWith('link:'))return {sourceKey:source.sourceKey,action:'link',targetId:select.value.slice(5)};
+   if(source.kind==='expense'||source.kind==='income'){
+    const local=prepared.snapshot,entries=new Map(local.entries.map(x=>[x.id,x]));
+    const same=x=>x.date===source.date&&x.amountCents===source.amountCents&&!x.voidedAt;
+    const localPaid=(source.kind==='expense'&&local.loanPayments.some(same))||
+     local.settlements.some(x=>same(x)&&entries.get(x.entryId)?.kind===source.kind);
+    const remote=new Map(prepared.serverEntities.map(x=>[x.id,x]));
+    const remotePaid=prepared.serverEntities.some(x=>['settlement','loan_payment'].includes(x.kind)&&
+     !x.data.voided_at&&x.data.paid_on===source.date&&x.data.amount_minor===source.amountCents&&
+     (x.kind==='loan_payment'?source.kind==='expense':remote.get(x.data.obligation_id)?.data?.direction===source.kind));
+    if(localPaid||remotePaid)throw Error('Банковская операция совпадает с фактической записью. Сначала выполните ручную сверку.');
+   }
+   const account=mapped.get(source.accountId),target=source.targetAccountId?mapped.get(source.targetAccountId):null;
+   if(prepared.bankHistory.rows.some(row=>row.source_key===source.sourceKey||
+      (account&&source.externalId!==null&&row.account_id===account&&row.external_id===source.externalId)))
+    throw Error('Эта банковская операция уже есть на сервере. Выберите связь или разрешите конфликт.');
+   const matches=account&&(source.kind!=='transfer'||target)?bankReviewMatches(prepared,source,account,target):[];
+   if(matches.length>32||matches.some(x=>x.data.kind==='payment'||x.data.payment_link)||
+      (source.kind==='transfer'&&matches.length))
+    throw Error('Похожие серверные платежи или переводы требуют ручной сверки до переноса');
+   return {sourceKey:source.sourceKey,action:'add',reviewedTransactionIds:matches.map(x=>x.id)};
+  });
+  bankDecisions={accounts:bankAccounts,operations:bankOperations};
+  bankBalances=previewBankBalances(prepared,bankDecisions);
+ }
+ for(const select of [...choices,...bankChoices])select.disabled=true;
  cloudImportBusy=true;
  let finished=false;
  try{
@@ -995,19 +1111,30 @@ async function prepareCloudMergeReview(){
    throw Error('Сессия изменилась. Проверка остановлена.');
   const reviewed=await withStableImportSnapshot(current=>sameFinancialJSON(current,prepared.snapshot),
    signal=>preparePersonalMergeReviewCandidate({prepared,verifiedActorUserId:actor,
-    currentLocalSnapshotMatches:true,decisions,signal}),
+    currentLocalSnapshotMatches:true,decisions,bankDecisions,signal}),
    {signal:cloudImportController?.signal,...(prepared.guestSource?{guestSource:prepared.guestSource}:{})});
   if(cloudImportController?.signal.aborted||guestMode||activeUserId!==actor||emailSession.userId!==actor)
    throw Error('Сессия изменилась. Проверка остановлена.');
   pendingCloudImport=reviewed;
-  for(const select of choices){
+  for(const select of [...choices,...bankChoices]){
    const decision=document.createElement('p');decision.textContent=select.selectedOptions[0].textContent;
    select.hidden=true;select.after(decision);
+  }
+  if(bankBalances){
+   const details=document.createElement('details'),summary=document.createElement('summary'),list=document.createElement('ul');
+   summary.textContent='Итог после переноса по счетам';details.open=true;
+   bankBalances.forEach((row,index)=>{const item=document.createElement('li');
+    item.textContent=`Счёт №${index+1} ${row.name}: ${row.action==='link'?'серверный остаток':'начальный остаток'} ${rubles(row.before)} → итог ${rubles(row.after)} · резерв ${rubles(row.reserved)}`;
+    list.append(item);});
+   details.append(summary,list);$('#cloud-import-comparison').append(details);
   }
   $('#cloud-import-heading').textContent='Проверьте план переноса';
   $('#cloud-import-summary').textContent='План подготовлен. Добавить: '+
    Object.values(reviewed.mergeCounts.add).reduce((a,b)=>a+b,0)+', связать с сервером: '+
    Object.values(reviewed.mergeCounts.link).reduce((a,b)=>a+b,0)+
+   (reviewed.bankCounts?'. Счета: добавить '+reviewed.bankCounts.accountsAdded+', связать '+reviewed.bankCounts.accountsLinked+
+    '; банковские операции: добавить '+reviewed.bankCounts.operationsAdded+', связать '+reviewed.bankCounts.operationsLinked+
+    '; проводок '+reviewed.bankCounts.postings:'')+
    '. Все существующие серверные счета, резервы и операции сохраняются. '+
    'Исходная копия сохраняется целиком; дополнительные поля из неё могут быть доступны только в архиве. Сервер повторно проверит связи и ревизию до записи. Пока ничего не отправлено.';
   $('#cloud-import-final-consent').closest('label').hidden=false;
@@ -1016,7 +1143,7 @@ async function prepareCloudMergeReview(){
   $('#cloud-import-dialog [data-action="confirm-cloud-import"]').disabled=false;
   $('#cloud-import-dialog .dialog-body').scrollTop=0;
   finished=true;
- }finally{if(!finished)for(const select of choices)select.disabled=false;cloudImportBusy=false;}
+ }finally{if(!finished)for(const select of [...choices,...bankChoices])select.disabled=false;cloudImportBusy=false;}
 }
 async function confirmCloudImport(){
  if(cloudImportBusy||busy||!financeImportEnabled||!pendingCloudImport)
@@ -1061,7 +1188,11 @@ async function confirmCloudImport(){
   $('#cloud-import-summary').textContent=
    (result.mergeCounts?'Добавлено '+Object.values(result.mergeCounts.add).reduce((a,b)=>a+b,0)+
     ', сопоставлено '+Object.values(result.mergeCounts.link).reduce((a,b)=>a+b,0)+'. ':'Перенесено '+result.recordCount+' записей. ')+
+   (result.bankCounts?'Банковские счета: добавлено '+result.bankCounts.accountsAdded+', сопоставлено '+
+    result.bankCounts.accountsLinked+'; операции: добавлено '+result.bankCounts.operationsAdded+', сопоставлено '+
+    result.bankCounts.operationsLinked+'; проводок '+result.bankCounts.postings+'. ':'')+
    'Сервер вернул точную копию исходных данных. '+
+   (result.bankCounts?'Остатки и банковские операции сверены с сервером. ':'')+
    'Локальная бухгалтерия не удалена. Пока синхронизация не включена, '+
    'не ведите параллельные изменения на разных устройствах.'+
    (changedDuringTransfer?' Локальные данные изменились во время переноса: требуется новое сравнение.':'');

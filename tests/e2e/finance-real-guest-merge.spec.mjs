@@ -72,7 +72,7 @@ test('#69 confirmed guest source merges without changing guest or account local 
  await guest.close();
 });
 
-test('#69 guest bank history is visible but cannot be sent as a partial import',async({page,context})=>{
+for(const cancelled of [false,true])test(`#69 guest bank history is reviewed and transferred atomically; cancelled=${cancelled}`,async({page,context})=>{
  test.setTimeout(120_000);
  if(process.env.FH_E2E_REAL_FINANCE!=='yes')test.skip();
  const created=await context.request.post('/__e2e__/personal-session');
@@ -82,7 +82,7 @@ test('#69 guest bank history is visible but cannot be sent as a partial import',
  const guest=await context.newPage();
  await visitGuest(guest);
  await addEntry(guest,'Synthetic bank source',{amount:'2.00'});
- await guest.evaluate(async()=>{
+ await guest.evaluate(async(cancelled)=>{
   const db=await new Promise((resolve,reject)=>{const request=indexedDB.open('financial-horizon-browser-v1',1);
    request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
   await new Promise((resolve,reject)=>{
@@ -96,12 +96,13 @@ test('#69 guest bank history is visible but cannot be sent as a partial import',
       category:null,batchKey:'c'.repeat(64)}],
      batches:[{batchKey:'c'.repeat(64),fileDigest:'d'.repeat(64),operationCount:1,
       committedStateRevision:revision,cancelledStateRevision:null}]};
+    if(cancelled){value.revision++;value.bankStatements.batches[0].cancelledStateRevision=value.revision;}
     store.put(value,'guest-state-v2');
    };
    tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
   });
   db.close();
- });
+ },cancelled);
  await guest.reload();
  await expect(guest.locator('#save-indicator')).toHaveText('Локальная база готова');
  const guestBefore=await scopedState(guest,'guest-state-v2');
@@ -119,14 +120,88 @@ test('#69 guest bank history is visible but cannot be sent as a partial import',
  await page.locator('#password-form [name="password"]').fill('Synthetic-guest-passphrase-2026!');
  await page.locator('#password-form button[type="submit"]').click();
  await expect(page.locator('#cloud-import-heading')).toHaveText('Сравнение банковской истории');
- await expect(page.locator('#cloud-import-summary')).toContainText('Перенос банковской истории ещё не доступен');
- await page.locator('#cloud-import-comparison summary').nth(0).click();
- await page.locator('#cloud-import-comparison summary').nth(1).click();
+ await expect(page.locator('#cloud-import-summary')).toContainText('Выберите действие для каждой записи');
+ const groups=page.locator('#cloud-import-comparison summary');
+ for(let index=0;index<await groups.count();index++)await groups.nth(index).click();
  await expect(page.locator('#cloud-import-comparison')).toContainText('Synthetic bank account');
  await expect(page.locator('#cloud-import-comparison')).toContainText('Synthetic bank operation');
  await expect(page.locator('[data-action="confirm-cloud-import"]')).toBeDisabled();
  expect(posts).toEqual([]);
+ const planner=page.locator('select[data-merge-kind]');
+ for(let index=0;index<await planner.count();index++)await planner.nth(index).selectOption('add');
+ await page.locator('select[data-bank-account]').selectOption('add:bank');
+ await page.locator('select[data-bank-operation]').selectOption('add');
+ await page.locator('[data-action="prepare-cloud-merge"]').click();
+ await expect(page.locator('#cloud-import-heading')).toHaveText('Проверьте план переноса');
+ await expect(page.locator('#cloud-import-summary')).toContainText('проводок '+(cancelled?2:1));
+ await expect(page.locator('#cloud-import-comparison')).toContainText('Итог после переноса по счетам');
+ await expect(page.locator('#cloud-import-comparison')).toContainText(cancelled?'итог 100':'итог 95');
+ expect(posts).toEqual([]);
+ await page.locator('#cloud-import-final-consent').check();
+ await page.locator('[data-action="confirm-cloud-import"]').click();
+ await expect(page.locator('#toast')).toContainText('Отдельно подтвердите перенос гостевой копии');
+ expect(posts).toEqual([]);
+ await page.locator('#cloud-import-guest-consent').check();
+ await page.locator('[data-action="confirm-cloud-import"]').click();
+ await expect(page.locator('#cloud-import-summary')).toContainText('Сервер вернул точную копию исходных данных');
+ expect(posts).toEqual(['/api/finance/v1/import/commit','/api/finance/v1/import/restore']);
+ const result=await snapshot(context.request);
+ const account=result.body.entities.find(x=>x.kind==='account'&&x.data.name==='Synthetic bank account');
+ expect(account.data.opening_minor).toBe(10000);
+ expect(account.data.balance_minor).toBe(cancelled?10000:9500);
+ expect(result.body.entities.filter(x=>x.kind==='transaction')).toHaveLength(cancelled?2:1);
  expect(await scopedState(guest,'guest-state-v2')).toEqual(guestBefore);
+ const history=await context.request.get('/api/finance/v2/bank-import/rows');
+ expect(history.status()).toBe(200);
+ const bankRow=(await history.json()).rows[0];
+ await page.locator('[data-action="cancel-cloud-import"]').first().click();
+ await guest.evaluate(async()=>{
+  const db=await new Promise((resolve,reject)=>{const request=indexedDB.open('financial-horizon-browser-v1',1);
+   request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+  await new Promise((resolve,reject)=>{
+   const tx=db.transaction('finance','readwrite'),store=tx.objectStore('finance'),request=store.get('guest-state-v2');
+   request.onsuccess=()=>{const state=request.result;state.revision++;
+    state.audit.push({description:'Synthetic replay',date:'2026-11-15'});
+    store.put(state,'guest-state-v2');};
+   tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
+  });db.close();
+ });
+ await visitGuest(guest);await view(guest,'settings');
+ await guest.locator('[data-action="backup"]').click();
+ await guest.locator('#password-form [name="password"]').fill('Synthetic-guest-passphrase-2026!');
+ const secondDownload=guest.waitForEvent('download');
+ await guest.locator('#password-form button[type="submit"]').click();
+ const secondBackup=await secondDownload;
+ await page.locator('[data-action="cloud-import-guest"]').click();
+ await page.locator('#cloud-import-file').setInputFiles(await secondBackup.path());
+ await page.locator('#password-form [name="password"]').fill('Synthetic-guest-passphrase-2026!');
+ await page.locator('#password-form button[type="submit"]').click();
+ await expect(page.locator('#cloud-import-heading')).toHaveText('Сравнение банковской истории');
+ const againGroups=page.locator('#cloud-import-comparison summary');
+ for(let index=0;index<await againGroups.count();index++)await againGroups.nth(index).click();
+ const previousObligation=result.body.entities.find(x=>x.kind==='obligation'&&x.data.title==='Synthetic bank source');
+ expect(previousObligation).toBeTruthy();
+ const replayPlanner=page.locator('select[data-merge-kind]');
+ expect(await replayPlanner.count()).toBe(1);
+ await replayPlanner.selectOption('link:'+previousObligation.id);
+ await page.locator('select[data-bank-account]').selectOption('link:'+account.id);
+ await page.locator('select[data-bank-operation]').selectOption('add');
+ await page.locator('[data-action="prepare-cloud-merge"]').click();
+ await expect(page.locator('#toast')).toContainText('уже есть на сервере');
+ expect(posts).toEqual(['/api/finance/v1/import/commit','/api/finance/v1/import/restore']);
+ await page.locator('select[data-bank-operation]').selectOption('link:'+bankRow.transaction_id);
+ await page.locator('[data-action="prepare-cloud-merge"]').click();
+ await expect(page.locator('#cloud-import-summary')).toContainText('банковские операции: добавить 0, связать 1');
+ await expect(page.locator('#cloud-import-comparison')).toContainText(cancelled?'итог 100':'итог 95');
+ await page.locator('#cloud-import-final-consent').check();
+ await page.locator('#cloud-import-guest-consent').check();
+ await page.locator('[data-action="confirm-cloud-import"]').click();
+ await expect(page.locator('#cloud-import-summary')).toContainText('Сервер вернул точную копию исходных данных');
+ const afterReplay=await snapshot(context.request);
+ expect(afterReplay.body.entities.filter(x=>x.kind==='transaction')).toHaveLength(cancelled?2:1);
+ expect(afterReplay.body.entities.find(x=>x.kind==='account'&&x.id===account.id).data.balance_minor).toBe(cancelled?10000:9500);
+ expect(posts).toEqual(['/api/finance/v1/import/commit','/api/finance/v1/import/restore',
+  '/api/finance/v1/import/commit','/api/finance/v1/import/restore']);
  await guest.close();
 });
 

@@ -103,6 +103,82 @@ def test_personal_import_feature_disabled_by_default(env):
                   headers={"Origin": ORIGIN}, json={}).status_code == 404
 
 
+def test_incomplete_bank_import_protocol_fails_without_writes(personal_import):
+    uid, token = personal_import["first"]
+    client = personal_import["client_import"](token)
+    before = client.get("/api/finance/v1/state")
+    manifest, raw = bundle(uid)
+    manifest.update(schema_version=3,source_scope="guest:local-guest-v1",explicit_guest_transfer=True,
+                    rows=[{**row,"decision":"add"} for row in manifest["rows"]],
+                    bank_accounts=[{"source_id":"11111111-1111-4111-8111-111111111111",
+                                    "decision":"add","account_kind":"bank"}],bank_operations=[])
+    assert write(client,"manifest",before,{"manifest":manifest}).status_code == 422
+    assert write(client,"commit",before,{"manifest":manifest,"source_canonical_json":raw}).status_code == 422
+    after = client.get("/api/finance/v1/state")
+    assert after.headers["etag"] == before.headers["etag"]
+    assert after.json()["entities"] == before.json()["entities"]
+    assert after.json()["revision"] == before.json()["revision"]
+
+
+def test_bank_import_rejects_other_account_scope(personal_import):
+    from backend.finance_db.tests.test_legacy_bank_import import _ledger
+    uid, token = personal_import["first"]
+    client = personal_import["client_import"](token)
+    before = client.get("/api/finance/v1/state")
+    state = source();state["revision"] = 5;state["bankStatements"] = _ledger()
+    manifest, raw = bundle(uid,state)
+    manifest.update(schema_version=3,source_scope="account:"+"f"*32,source_revision=5,
+                    rows=[{**row,"decision":"add"} for row in manifest["rows"]],
+                    bank_accounts=[{"source_id":a["id"],"decision":"add","account_kind":"bank"}
+                                   for a in state["bankStatements"]["accounts"]],
+                    bank_operations=[{"source_key":o["sourceKey"],"decision":"add"}
+                                     for o in state["bankStatements"]["operations"]])
+    result = write(client,"commit",before,{"manifest":manifest,"source_canonical_json":raw})
+    assert result.status_code == 403
+    assert client.get("/api/finance/v1/state").headers["etag"] == before.headers["etag"]
+
+
+@pytest.mark.parametrize("guest", [False, True])
+def test_bank_import_commits_and_restores_through_http(personal_import, guest):
+    from backend.finance_db.tests.test_legacy_bank_import import _ledger
+    uid, token = personal_import["first"]
+    client = personal_import["client_import"](token)
+    before = client.get("/api/finance/v1/state")
+    bank_rows = client.get("/api/finance/v1/import/bank/rows")
+    assert bank_rows.status_code == 200 and bank_rows.json()["rows"] == []
+    assert bank_rows.headers["etag"] == before.headers["etag"]
+    assert client.get("/api/finance/v1/import/bank/rows?unexpected=1").status_code == 422
+    assert client.get("/api/finance/v2/bank-import/rows").status_code == 404
+    anonymous = TestClient(personal_import["app_import"],base_url=ORIGIN,raise_server_exceptions=False)
+    assert anonymous.get("/api/finance/v1/import/bank/rows").status_code == 401
+    state = source()
+    state["revision"] = 5
+    state["bankStatements"] = _ledger()
+    manifest, raw = bundle(uid,state)
+    manifest.update(schema_version=3,source_scope="guest:local-guest-v1" if guest else "account:"+uid,
+                    source_revision=5,explicit_guest_transfer=guest,
+                    rows=[{**row,"decision":"add"} for row in manifest["rows"]],
+                    bank_accounts=[{"source_id":a["id"],"decision":"add","account_kind":"bank"}
+                                   for a in state["bankStatements"]["accounts"]],
+                    bank_operations=[{"source_key":o["sourceKey"],"decision":"add"}
+                                     for o in state["bankStatements"]["operations"]])
+    assert write(client,"manifest",before,{"manifest":manifest}).status_code == 422
+    result = write(client,"commit",before,{"manifest":manifest,"source_canonical_json":raw})
+    assert result.status_code == 201, result.text
+    body = result.json()
+    assert body["bank_accounts_created"] == 2 and body["bank_operations_created"] == 1
+    assert body["cash_postings_created"] == 2 and body["revision"] == 1
+    bank_rows = client.get("/api/finance/v1/import/bank/rows")
+    assert bank_rows.status_code == 200 and len(bank_rows.json()["rows"]) == 1
+    after = client.get("/api/finance/v1/state").json()
+    assert sorted(x["data"]["balance_minor"] for x in after["entities"] if x["kind"] == "account") == [500,4000]
+    replay = write(client,"commit",before,{"manifest":manifest,"source_canonical_json":raw})
+    assert replay.status_code == 200 and replay.json()["replayed"] is True
+    restored = client.post("/api/finance/v1/import/restore",headers={"Origin":ORIGIN},json={
+        "batch_id":body["batch_id"],"source_sha256":manifest["source_sha256"],"confirm_restore":True})
+    assert restored.status_code == 200 and restored.text == raw
+
+
 def test_import_http_stage_commit_replay_restore_without_minting_cash(personal_import):
     uid, token = personal_import["first"]
     c = personal_import["client_import"](token)

@@ -97,8 +97,8 @@ export function compareGuestBankHistory({ledger,sourceRevision,snapshot,bankHist
   candidatePairs+=candidates.size;if(candidatePairs>100_000)hold();
   const conflict=Boolean(exact && (exact.fingerprint!==op.fingerprint || exact.external_id!==op.externalId ||
    exact.kind!==op.kind || exact.occurred_on!==op.date || exact.amount_minor!==op.amountCents ||
-   exact.description!==op.description || exact.category!==op.category || exact.status!==status ||
-   (status==='committed' && reversals.has(exact.transaction_id))));
+   exact.description!==op.description || exact.category!==op.category ||
+   (reversals.has(exact.transaction_id)?'cancelled':exact.status)!==status));
   return {sourceKey:op.sourceKey,status,identityConflict:conflict,candidateIds:[...candidates].sort()};
  });
  const serverStatuses=Object.fromEntries(bankHistory.rows.map(row=>
