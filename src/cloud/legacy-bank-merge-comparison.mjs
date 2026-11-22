@@ -101,5 +101,7 @@ export function compareGuestBankHistory({ledger,sourceRevision,snapshot,bankHist
    (status==='committed' && reversals.has(exact.transaction_id))));
   return {sourceKey:op.sourceKey,status,identityConflict:conflict,candidateIds:[...candidates].sort()};
  });
- return {status:'NEEDS_OWNER_DECISIONS',revision:snapshot.revision,sourceAccounts,operations,candidatePairs};
+ const serverStatuses=Object.fromEntries(bankHistory.rows.map(row=>
+  [row.transaction_id,reversals.has(row.transaction_id)?'cancelled':row.status]));
+ return {status:'NEEDS_OWNER_DECISIONS',revision:snapshot.revision,sourceAccounts,operations,candidatePairs,serverStatuses};
 }

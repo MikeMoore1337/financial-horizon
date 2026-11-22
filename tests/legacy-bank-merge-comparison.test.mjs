@@ -76,6 +76,15 @@ test('cancelled history requires the exact compensating postings and stays a con
  assert.throws(()=>run(input),/IMPORT_HOLD/);
 });
 
+test('an individually reversed bank row is shown as cancelled even if its batch is committed',()=>{
+ const input=fixture();
+ input.snapshot.entities.push({kind:'transaction',id:'44444444-4444-4444-8444-444444444444',entity_revision:3,
+  data:{kind:'reversal',reversed_transaction_id:txId,postings:[{account_id:remoteId,signed_minor:500}]}});
+ const comparison=run(input);
+ assert.equal(comparison.serverStatuses[txId],'cancelled');
+ assert.equal(comparison.operations[0].identityConflict,true);
+});
+
 test('external identity without exact source key is only a candidate',()=>{
  const input=fixture();input.bankHistory.rows[0].source_key=hash('e');
  const row=run(input).operations[0];

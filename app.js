@@ -867,7 +867,7 @@ function renderCloudBankHistory(prepared){
  }));
  add('Серверная банковская история',prepared.bankHistory.rows.map(row=>
   `${row.occurred_on} · ${row.description||'Без описания'} · ${kind(row.kind)} · ${rubles(row.amount_minor)} · `+
-  `${entities.get(row.account_id)?.data?.name||'Счёт'}${row.target_account_id?' → '+(entities.get(row.target_account_id)?.data?.name||'Счёт'):''} · ${row.status==='cancelled'?'отменена':'сохранена'}`));
+  `${entities.get(row.account_id)?.data?.name||'Счёт'}${row.target_account_id?' → '+(entities.get(row.target_account_id)?.data?.name||'Счёт'):''} · ${prepared.bankComparison.serverStatuses[row.transaction_id]==='cancelled'?'отменена':'сохранена'}`));
 }
 function renderCloudImportComparison(prepared){
  const root=$('#cloud-import-comparison');root.replaceChildren();

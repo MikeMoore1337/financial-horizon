@@ -123,3 +123,69 @@ test('#69 populated profile shows a read-only inventory and cannot submit',async
  await page.getByRole('button',{name:'Отмена'}).click();
  await expect(page.locator('#cloud-import-comparison')).toBeEmpty();
 });
+
+test.describe('synthetic bank response',()=>{
+test.use({serviceWorkers:'block'});
+test('#69 bank review shows an individually reversed server row as cancelled',async({page,context})=>{
+ await visitGuest(page);
+ const created=await context.request.post('/__e2e__/personal-session?enable_finance_stub=true');
+ expect(created.status()).toBe(200);
+ const owner=(await created.json()).user;
+ await page.goto('/?auth=success');
+ await expect(page.locator('#save-indicator')).toHaveText('Локальная база готова');
+ await addEntry(page,'Synthetic local owner entry',{amount:'1.00'});
+ await page.evaluate(async(userId)=>{
+  const db=await new Promise((resolve,reject)=>{const request=indexedDB.open('financial-horizon-browser-v1',1);
+   request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+  await new Promise((resolve,reject)=>{
+   const tx=db.transaction('finance','readwrite'),store=tx.objectStore('finance');
+   const key='account-state-v2:'+userId,request=store.get(key);
+   request.onsuccess=()=>{
+    const state=request.result;
+    state.revision++;
+    state.bankStatements={version:1,accounts:[{id:'11111111-1111-4111-8111-111111111111',
+     name:'Synthetic local bank',currency:'RUB',openingMinor:10000}],operations:[],batches:[]};
+    store.put(state,key);
+   };
+   tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);
+  });
+  db.close();
+ },owner.id);
+ await page.reload();
+ await expect(page.locator('#save-indicator')).toHaveText('Локальная база готова');
+ await view(page,'settings');
+ await page.locator('[data-action="backup"]').click();
+ await page.locator('#password-form [name="password"]').fill('Synthetic-passphrase-2026!');
+ const download=page.waitForEvent('download');
+ await page.locator('#password-form button[type="submit"]').click();
+ const backup=await download;
+ const profile='aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+ const account='22222222-2222-4222-8222-222222222222';
+ const transaction='33333333-3333-4333-8333-333333333333';
+ const reversal='44444444-4444-4444-8444-444444444444';
+ const snapshot={schema_version:1,profile_id:profile,revision:3,currency:'RUB',entities:[
+  {kind:'account',id:account,entity_revision:4,data:{name:'Synthetic server bank',currency:'RUB',
+   opening_minor:10000,balance_minor:10000,reserved_minor:0,available_minor:10000}},
+  {kind:'transaction',id:transaction,entity_revision:1,data:{kind:'expense',occurred_on:'2026-11-01',
+   note:'Synthetic reversed payment',postings:[{account_id:account,signed_minor:-500}]}},
+  {kind:'transaction',id:reversal,entity_revision:1,data:{kind:'reversal',
+   reversed_transaction_id:transaction,postings:[{account_id:account,signed_minor:500}]}},
+ ]};
+ const history={schema_version:1,revision:3,rows:[{source_key:'a'.repeat(64),fingerprint:'b'.repeat(64),
+  external_id:null,account_id:account,target_account_id:null,transaction_id:transaction,kind:'expense',
+  occurred_on:'2026-11-01',amount_minor:500,description:'Synthetic reversed payment',category:null,status:'committed'}]};
+ await page.route('**/api/auth/email/finance/session',route=>route.fulfill({json:{ok:true,profile_id:profile}}));
+ await page.route('**/api/finance/v1/state**',route=>route.fulfill({json:snapshot,headers:{ETag:'"synthetic"'}}));
+ await page.route('**/api/finance/v2/bank-import/rows',route=>route.fulfill({json:history,headers:{ETag:'"synthetic"'}}));
+ await page.locator('[data-action="cloud-import"]').click();
+ await page.locator('#cloud-import-file').setInputFiles(await backup.path());
+ await page.locator('#password-form [name="password"]').fill('Synthetic-passphrase-2026!');
+ await page.locator('#password-form button[type="submit"]').click();
+ await expect(page.locator('#cloud-import-heading')).toHaveText('Сравнение банковской истории');
+ await page.locator('#cloud-import-comparison summary').nth(2).click();
+ await expect(page.locator('#cloud-import-comparison')).toContainText('Synthetic reversed payment');
+ await expect(page.locator('#cloud-import-comparison li').filter({hasText:'Synthetic reversed payment'}))
+  .toContainText('отменена');
+ await expect(page.locator('[data-action="confirm-cloud-import"]')).toBeDisabled();
+});
+});
