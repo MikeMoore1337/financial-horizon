@@ -178,10 +178,34 @@ test(`${sourceKind} bank transfer verifies receipt and cancellation=${cancelled}
        {kind:'transaction',id:serverTx,entity_revision:1,data:{kind:'expense',occurred_on:operation.date,
         note:operation.description,postings:[{account_id:serverAccount,signed_minor:-500}]}}];
       let sequence=1;
+      const plannerIds=new Map();
+      for(const kind of ['entries','loans','settlements','loanPayments'])
+        for(const row of reviewed.snapshot[kind])
+          plannerIds.set(JSON.stringify([kind,row.id]),String(sequence++).padStart(8,'0')+'-0000-4000-8000-000000000000');
       for(const [kind,count] of Object.entries(reviewed.mergeCounts.add))for(let i=0;i<count;i++){
+        const row=reviewed.snapshot[kind][i];
         const names={entries:'obligation',loans:'loan',settlements:'settlement',loanPayments:'loan_payment'};
-        entities.push({kind:names[kind],id:String(sequence++).padStart(8,'0')+'-0000-4000-8000-000000000000',
-          entity_revision:1,data:{}});
+        const utc=value=>value==null?null:new Date(value).toISOString();
+        const data=kind==='entries'?{
+          title:row.title,direction:row.kind,amount_minor:row.amountCents,starts_on:row.date,
+          timezone:'UTC',recurrence_unit:{once:'none',monthly:'month',yearly:'year'}[row.recurrence],
+          recurrence_every:1,category:row.category??null,deleted_at:utc(row.deletedAt),
+        }:kind==='loans'?{
+          title:row.title,opening_minor:row.openingCents,payment_minor:row.paymentCents,
+          apr_basis_points:Math.round(row.apr*100),term_months:row.termMonths,due_day:row.dueDay,
+          as_of_date:row.asOfDate,calculation_version:1,imported_schedule:row.schedule??null,
+          deleted_at:utc(row.deletedAt),
+        }:kind==='settlements'?{
+          obligation_id:plannerIds.get(JSON.stringify(['entries',row.entryId])),
+          occurrence_on:row.occurrence+'-01',paid_on:row.date,amount_minor:row.amountCents,
+          voided_at:utc(row.voidedAt),
+        }:{
+          loan_id:plannerIds.get(JSON.stringify(['loans',row.loanId])),
+          paid_on:row.date,amount_minor:row.amountCents,strategy:row.strategy,
+          voided_at:utc(row.voidedAt),
+        };
+        entities.push({kind:names[kind],id:plannerIds.get(JSON.stringify([kind,row.id])),
+          entity_revision:1,data});
       }
       if(cancelled)entities.push({kind:'transaction',id:reversal,entity_revision:1,data:{kind:'reversal',
         reversed_transaction_id:serverTx,postings:[{account_id:serverAccount,signed_minor:500}]}});
@@ -205,7 +229,7 @@ test(`${sourceKind} bank transfer verifies receipt and cancellation=${cancelled}
     currentLocalSnapshotMatches:true,explicitFinalConsent:true,explicitGuestTransfer:sourceKind==='guest',fetchImpl:send,signal});
   assert.equal(result.cashPostingsCreated,cancelled?2:1);
   assert.deepEqual(calls,['/api/finance/v1/import/commit','/api/finance/v1/import/restore',
-    '/api/finance/v1/state','/api/finance/v1/import/bank/rows']);
+    '/api/finance/v1/state','/api/finance/v1/state','/api/finance/v1/import/bank/rows']);
   corruptBalance=true;
   await assert.rejects(executeConfirmedPersonalImportCandidate({prepared:reviewed,verifiedActorUserId:accountA,
     currentLocalSnapshotMatches:true,explicitFinalConsent:true,explicitGuestTransfer:sourceKind==='guest',fetchImpl:send,signal}),/IMPORT_HOLD/);
