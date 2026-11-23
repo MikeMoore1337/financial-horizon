@@ -10,7 +10,7 @@
 - A single native IndexedDB readwrite transaction writes both stores; a failed/aborted transaction commits **neither** store. A second writer cannot silently replace an existing scope; an existing stage is decrypted and compared before an idempotent retry can report `already-staged`.
 - A migration is a **copy**, never a destructive move. Existing `financial-horizon-browser-v1` and its legacy account/guest keys are not even opened by this module. No cloud upload, login side effect, automatic key rotation, key caching in `localStorage` or automatic activation.
 - Snapshot staging and backup equality checks reject values that JSON would discard or change, such as undefined fields, non-finite numbers, sparse arrays and non-JSON objects. A rejected source must be retained for an explicit recovery path; it must not be treated as a verified backup or silently converted.
-- Backup export pins the validated snapshot before key derivation, rejects output too large for the v1 importer, and rechecks the selected scope before creating a download. In a mixed legacy cache without the scope lease, export refuses and requests an online update.
+- Backup export pins the validated snapshot before key derivation, rejects output too large for the v1 importer, and rechecks the selected scope before creating a download. Verification and restore also recheck the same scope after asynchronous steps, including confirmation, so a stale result cannot replace another profile. In a mixed legacy cache without the scope lease, export and restore refuse and request an online update.
 
 ## Required preflight (`stageVerifiedLegacyBackup`)
 

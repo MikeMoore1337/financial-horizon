@@ -753,13 +753,17 @@ async function performBackup(password){
 }
 async function performVerifyBackup(password){
  if(!verifyBackupFile)throw Error('Выберите сохранённый зашифрованный файл');
+ const assertCurrentScope=captureStateScope(),file=verifyBackupFile;
  const actor=activeUserId,wasGuest=guestMode;
  const original=await readState();
+ assertCurrentScope();
  if(actor!==activeUserId||wasGuest!==guestMode||!state)
   throw Error('Сессия сменилась во время проверки копии');
+ const backupText=await file.text();assertCurrentScope();
  const result=await verifySavedFinancialBackupReadOnly({
-  backupText:await verifyBackupFile.text(),password,currentSnapshot:original,
+  backupText,password,currentSnapshot:original,
  });
+ assertCurrentScope();
  if(actor!==activeUserId||wasGuest!==guestMode||!state)
   throw Error('Сессия сменилась во время проверки копии');
  const counts=result.recordCounts;
@@ -773,9 +777,14 @@ async function performVerifyBackup(password){
    : 'Содержимое отличается от текущей локальной бухгалтерии. Для переноса создайте и проверьте новую копию. Данные не менялись.');
 }
 async function performRestore(password){
+ const assertCurrentScope=captureStateScope(),file=restoreFile;
+ if(!file)throw Error('Выберите сохранённую резервную копию');
  const originalRevision=state?.revision;
- const decrypted=await decryptBackup(await restoreFile.text(),password);
- if(!await requireConfirm('Заменить локальные данные?', 'Импорт заменит всю текущую бухгалтерию данными из резервной копии. При необходимости сохраните текущую копию перед продолжением.'))return;
+ const backupText=await file.text();assertCurrentScope();
+ const decrypted=await decryptBackup(backupText,password);assertCurrentScope();
+ const confirmed=await requireConfirm('Заменить локальные данные?', 'Импорт заменит всю текущую бухгалтерию данными из резервной копии. При необходимости сохраните текущую копию перед продолжением.');
+ assertCurrentScope();
+ if(!confirmed)return;
  await mutate(s=>{for(const key of Object.keys(s))delete s[key];Object.assign(s,structuredClone(decrypted));audit(s,'restore-backup','Восстановлена резервная копия');},'Данные восстановлены',originalRevision);
 }
 
