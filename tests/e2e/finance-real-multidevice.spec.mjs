@@ -1,8 +1,33 @@
 import {randomUUID} from 'node:crypto';
+import {readFileSync} from 'node:fs';
+import ts from 'typescript';
 import {test, expect} from '@playwright/test';
 import {ORIGIN, observe, loginViaUi, view, logoutViaUi} from './helpers.mjs';
 
 const month = '2026-11-12';
+const testModules = {
+  vault: '/__e2e_138_vault__.js', session: '/__e2e_138_session__.js',
+  atomic: '/__e2e_138_atomic__.js', delta: '/__e2e_138_delta__.js',
+  cache: '/__e2e_138_cache__.js', outbox: '/__e2e_138_outbox__.js',
+};
+const source = path => readFileSync(new URL(path, import.meta.url), 'utf8');
+const compile = path => ts.transpileModule(source(path), {
+  compilerOptions: {module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022},
+}).outputText;
+const testModuleSources = new Map([
+  [testModules.vault, compile('../../src/security/local-vault.ts')],
+  [testModules.session, compile('../../src/security/local-budget-session.ts')
+    .replaceAll("'./local-vault.ts'", JSON.stringify(testModules.vault))],
+  [testModules.atomic, compile('../../src/security/protected-atomic-candidate.ts')
+    .replaceAll("'./local-vault.ts'", JSON.stringify(testModules.vault))],
+  [testModules.delta, source('../../src/cloud/verified-delta-candidate.mjs')],
+  [testModules.cache, source('../../src/cloud/encrypted-cloud-cache-candidate.mjs')
+    .replaceAll("'../security/protected-atomic-candidate.ts'", JSON.stringify(testModules.atomic))
+    .replaceAll("'./verified-delta-candidate.mjs'", JSON.stringify(testModules.delta))],
+  [testModules.outbox, source('../../src/cloud/encrypted-command-outbox-candidate.mjs')
+    .replaceAll("'../security/protected-atomic-candidate.ts'", JSON.stringify(testModules.atomic))
+    .replaceAll("'./verified-delta-candidate.mjs'", JSON.stringify(testModules.delta))],
+]);
 async function state(context) {
   const response = await context.request.get(ORIGIN + '/api/finance/v1/state?limit_entities=5000');
   expect(response.status(), 'Only the signed-in owner may read the live SQL snapshot').toBe(200);
@@ -61,7 +86,21 @@ test('#68 true FH SQLite + PostgreSQL: two browser devices converge on money and
   const secondWatch = await observe(second, p2);
   const p3 = await third.newPage();
   const thirdWatch = await observe(third, p3);
+  let proofPage;
   try {
+    await context.route('**/__e2e_138_*.js', route => route.fulfill({
+      status: 200, contentType: 'text/javascript',
+      body: testModuleSources.get(new URL(route.request().url()).pathname),
+      headers: {'Cache-Control': 'no-store'},
+    }));
+    // Load test-only modules before the app installs its root-scoped service
+    // worker. WebKit may otherwise route those modules through that worker.
+    proofPage = await context.newPage();
+    await proofPage.goto('/__e2e__/ready');
+    await proofPage.evaluate(async () => {
+      await Promise.all([import('/__e2e_138_atomic__.js'), import('/__e2e_138_session__.js'),
+        import('/__e2e_138_cache__.js'), import('/__e2e_138_outbox__.js')]);
+    });
     const created = await context.request.post('/__e2e__/personal-session');
     expect(created.status()).toBe(200);
     const owner = (await created.json()).user;
@@ -163,6 +202,31 @@ test('#68 true FH SQLite + PostgreSQL: two browser devices converge on money and
       [obligationId]: versionOf(beforePayment, obligationId),
     };
     const paymentMutation = randomUUID();
+    await proofPage.evaluate(async ({ownerId, profile, snapshot, mutation, payload, versions}) => {
+      const atomic = await import('/__e2e_138_atomic__.js');
+      const {LocalBudgetSession} = await import('/__e2e_138_session__.js');
+      const {initializeEncryptedCloudCacheCandidate} = await import('/__e2e_138_cache__.js');
+      const outbox = await import('/__e2e_138_outbox__.js');
+      const scope = 'account:' + ownerId;
+      const passphrase = 'synthetic isolated payment test';
+      await atomic.createAtomicEncryptedCandidate(scope, passphrase,
+        {snapshot: {version: 2, revision: 0}, outbox: [], conflicts: []}, 2);
+      const session = new LocalBudgetSession(); session.selectScope(scope);
+      await session.unlock(await atomic.getAtomicEncryptedKeyset(scope), {passphrase});
+      const identity = {scope, profileId: profile, generation: session.lifecycleVersion,
+        epoch: 'e'.repeat(32), signal: session.lifecycleSignal};
+      await initializeEncryptedCloudCacheCandidate({scope, session, identity,
+        pages: [{cursorSent: null, body: snapshot.body}], expectedEpoch: 0,
+        confirmedAccountCacheInitialization: true});
+      const command = {schema_version: 2, client_mutation_id: mutation,
+        base_revision: snapshot.revision, action: 'settlement.payment.record',
+        expected_entity_revisions: versions, payload};
+      const queued = await outbox.enqueueEncryptedFinanceCommandCandidate({
+        scope, session, identity, command, ifMatch: snapshot.etag, expectedEpoch: 1});
+      if (queued.status !== 'QUEUED_ENCRYPTED') throw Error('Payment was not queued');
+      globalThis.__fh138Proof = {scope, session, identity, outbox, atomic};
+    }, {ownerId: owner.id, profile: profileA, snapshot: beforePayment,
+      mutation: paymentMutation, payload: paymentPayload, versions: paymentVersions});
     const paid = await submit(
       context, beforePayment, 'settlement.payment.record', paymentPayload,
       paymentVersions, 2, paymentMutation,
@@ -178,6 +242,16 @@ test('#68 true FH SQLite + PostgreSQL: two browser devices converge on money and
     );
     expect(paymentReplayResponse.status()).toBe(200);
     expect((await paymentReplayResponse.json()).replayed).toBe(true);
+    const paymentDeltaResponse = await context.request.get(
+      ORIGIN + '/api/finance/v1/changes?since_revision=' + beforePayment.revision + '&limit_revisions=1');
+    expect(paymentDeltaResponse.status()).toBe(200);
+    const paymentProof = await proofPage.evaluate(async ({receipt, deltaPage}) => {
+      const p = globalThis.__fh138Proof;
+      return p.outbox.persistAuthenticatedFinanceReceiptCandidate({
+        scope: p.scope, session: p.session, identity: p.identity, expectedEpoch: 2,
+        receipt, deltaPage, commandHttpStatus: 200, deltaHttpStatus: 200});
+    }, {receipt: await paymentReplayResponse.json(), deltaPage: await paymentDeltaResponse.json()});
+    expect(paymentProof.status).toBe('DURABLY_CONFIRMED');
 
     const afterPayment = await state(second);
     expect(afterPayment.revision).toBe(beforePayment.revision + 1);
@@ -193,6 +267,16 @@ test('#68 true FH SQLite + PostgreSQL: two browser devices converge on money and
       [factId]: versionOf(afterPayment, factId),
     };
     const voidMutation = randomUUID();
+    await proofPage.evaluate(async ({snapshot, mutation, payload, versions}) => {
+      const p = globalThis.__fh138Proof;
+      const command = {schema_version: 2, client_mutation_id: mutation,
+        base_revision: snapshot.revision, action: 'settlement.payment.void',
+        expected_entity_revisions: versions, payload};
+      const queued = await p.outbox.enqueueEncryptedFinanceCommandCandidate({
+        scope: p.scope, session: p.session, identity: p.identity, command,
+        ifMatch: snapshot.etag, expectedEpoch: 3});
+      if (queued.status !== 'QUEUED_ENCRYPTED') throw Error('Reversal was not queued');
+    }, {snapshot: afterPayment, mutation: voidMutation, payload: voidPayload, versions: voidVersions});
     const voided = await submit(
       second, afterPayment, 'settlement.payment.void', voidPayload,
       voidVersions, 2, voidMutation,
@@ -207,6 +291,19 @@ test('#68 true FH SQLite + PostgreSQL: two browser devices converge on money and
     );
     expect(voidReplayResponse.status()).toBe(200);
     expect((await voidReplayResponse.json()).replayed).toBe(true);
+    const voidDeltaResponse = await context.request.get(
+      ORIGIN + '/api/finance/v1/changes?since_revision=' + afterPayment.revision + '&limit_revisions=1');
+    expect(voidDeltaResponse.status()).toBe(200);
+    const reversalProof = await proofPage.evaluate(async ({receipt, deltaPage}) => {
+      const p = globalThis.__fh138Proof;
+      const result = await p.outbox.persistAuthenticatedFinanceReceiptCandidate({
+        scope: p.scope, session: p.session, identity: p.identity, expectedEpoch: 4,
+        receipt, deltaPage, commandHttpStatus: 200, deltaHttpStatus: 200});
+      const stored = await p.atomic.readAtomicEncryptedCandidate(p.scope, p.session);
+      return {status: result.status, pending: stored.outbox.length,
+        balance: stored.snapshot.cloudFinance.entities.find(e => e.id === receipt.changes[0].payload.accounts[0].id).data.balance_minor};
+    }, {receipt: await voidReplayResponse.json(), deltaPage: await voidDeltaResponse.json()});
+    expect(reversalProof).toEqual({status: 'DURABLY_CONFIRMED', pending: 0, balance: 100_000});
 
     const afterVoid = await state(context);
     expect(afterVoid.revision).toBe(afterPayment.revision + 1);
@@ -224,6 +321,91 @@ test('#68 true FH SQLite + PostgreSQL: two browser devices converge on money and
     );
     expect(rejectedSecondVoid.status()).toBe(409);
     expect((await state(second)).revision).toBe(afterVoid.revision);
+
+    // A reserve-linked payment and reversal must each reconcile their real
+    // PostgreSQL receipt, complete delta, cash balance and allocation once.
+    const reserveId = randomUUID();
+    const reserveCreated = await submit(context, afterVoid, 'reserve.create', {
+      id: reserveId, obligation_id: obligationId, account_id: firstId,
+      title: 'Синтетический резерв', target_minor: 5500, opened_on: '2026-10-12',
+      first_due_on: month, period_months: 1, due_day: 12,
+      contribution_mode: 'auto', opening_reserved_minor: 3000,
+    }, {[firstId]: versionOf(afterVoid, firstId), [obligationId]: versionOf(afterVoid, obligationId)});
+    expect(reserveCreated.status()).toBe(201);
+    const reserveState = await state(context);
+    const reserveDelta = await context.request.get(
+      ORIGIN + '/api/finance/v1/changes?since_revision=' + afterVoid.revision + '&limit_revisions=1');
+    expect(reserveDelta.status()).toBe(200);
+    const cachedReserve = await proofPage.evaluate(async page => {
+      const p = globalThis.__fh138Proof;
+      const {persistEncryptedCloudDeltaCandidate} = await import('/__e2e_138_cache__.js');
+      return persistEncryptedCloudDeltaCandidate({scope: p.scope, session: p.session,
+        identity: p.identity, expectedEpoch: 5, page});
+    }, await reserveDelta.json());
+    expect(cachedReserve.status).toBe('ENCRYPTED_DELTA_SAVED');
+    const reservePayment = {account_id: firstId, obligation_id: obligationId,
+      amount_minor: 2000, paid_on: month, occurrence_on: month,
+      reserve_id: reserveId, reserved_used_minor: 1500};
+    const reserveVersions = {[firstId]: versionOf(reserveState, firstId),
+      [obligationId]: versionOf(reserveState, obligationId), [reserveId]: versionOf(reserveState, reserveId)};
+    const reserveMutation = randomUUID();
+    await proofPage.evaluate(async ({snapshot, payload, versions, mutation}) => {
+      const p = globalThis.__fh138Proof;
+      const command = {schema_version: 2, client_mutation_id: mutation, base_revision: snapshot.revision,
+        action: 'settlement.payment.record', expected_entity_revisions: versions, payload};
+      await p.outbox.enqueueEncryptedFinanceCommandCandidate({scope: p.scope, session: p.session,
+        identity: p.identity, command, ifMatch: snapshot.etag, expectedEpoch: 6});
+    }, {snapshot: reserveState, payload: reservePayment, versions: reserveVersions, mutation: reserveMutation});
+    expect((await submit(context, reserveState, 'settlement.payment.record', reservePayment,
+      reserveVersions, 2, reserveMutation)).status()).toBe(201);
+    const reserveReplay = await submit(context, reserveState, 'settlement.payment.record',
+      reservePayment, reserveVersions, 2, reserveMutation);
+    expect(reserveReplay.status()).toBe(200);
+    const reserveReceipt = await reserveReplay.json();
+    const reservePayDelta = await context.request.get(
+      ORIGIN + '/api/finance/v1/changes?since_revision=' + reserveState.revision + '&limit_revisions=1');
+    expect(reservePayDelta.status()).toBe(200);
+    const reserveProof = await proofPage.evaluate(async ({receipt, deltaPage}) => {
+      const p = globalThis.__fh138Proof;
+      return p.outbox.persistAuthenticatedFinanceReceiptCandidate({scope: p.scope, session: p.session,
+        identity: p.identity, expectedEpoch: 7, receipt, deltaPage, commandHttpStatus: 200, deltaHttpStatus: 200});
+    }, {receipt: reserveReceipt, deltaPage: await reservePayDelta.json()});
+    expect(reserveProof.status).toBe('DURABLY_CONFIRMED');
+    const afterReservePayment = await state(second);
+    expect(entity(afterReservePayment, firstId).data.balance_minor).toBe(98_000);
+    expect(entity(afterReservePayment, firstId).data.reserved_minor).toBe(1500);
+    const reserveVoid = {account_id: firstId, transaction_id: reserveReceipt.changes[0].entity_id,
+      fact_id: reserveReceipt.changes[1].entity_id, reserve_id: reserveId, reason: 'Отмена резервной оплаты'};
+    const reserveVoidVersions = Object.fromEntries([firstId, reserveVoid.transaction_id, reserveVoid.fact_id, reserveId]
+      .map(id => [id, versionOf(afterReservePayment, id)]));
+    const reserveVoidMutation = randomUUID();
+    await proofPage.evaluate(async ({snapshot, payload, versions, mutation}) => {
+      const p = globalThis.__fh138Proof;
+      const command = {schema_version: 2, client_mutation_id: mutation, base_revision: snapshot.revision,
+        action: 'settlement.payment.void', expected_entity_revisions: versions, payload};
+      await p.outbox.enqueueEncryptedFinanceCommandCandidate({scope: p.scope, session: p.session,
+        identity: p.identity, command, ifMatch: snapshot.etag, expectedEpoch: 8});
+    }, {snapshot: afterReservePayment, payload: reserveVoid, versions: reserveVoidVersions, mutation: reserveVoidMutation});
+    expect((await submit(second, afterReservePayment, 'settlement.payment.void', reserveVoid,
+      reserveVoidVersions, 2, reserveVoidMutation)).status()).toBe(201);
+    const reserveVoidReplay = await submit(second, afterReservePayment, 'settlement.payment.void',
+      reserveVoid, reserveVoidVersions, 2, reserveVoidMutation);
+    expect(reserveVoidReplay.status()).toBe(200);
+    const reserveVoidDelta = await context.request.get(
+      ORIGIN + '/api/finance/v1/changes?since_revision=' + afterReservePayment.revision + '&limit_revisions=1');
+    expect(reserveVoidDelta.status()).toBe(200);
+    const reserveVoidProof = await proofPage.evaluate(async ({receipt, deltaPage}) => {
+      const p = globalThis.__fh138Proof;
+      const result = await p.outbox.persistAuthenticatedFinanceReceiptCandidate({scope: p.scope, session: p.session,
+        identity: p.identity, expectedEpoch: 9, receipt, deltaPage, commandHttpStatus: 200, deltaHttpStatus: 200});
+      const data = await p.atomic.readAtomicEncryptedCandidate(p.scope, p.session);
+      p.session.logout();
+      return {status: result.status, pending: data.outbox.length};
+    }, {receipt: await reserveVoidReplay.json(), deltaPage: await reserveVoidDelta.json()});
+    expect(reserveVoidProof).toEqual({status: 'DURABLY_CONFIRMED', pending: 0});
+    const afterReserveVoid = await state(context);
+    expect(entity(afterReserveVoid, firstId).data.balance_minor).toBe(100_000);
+    expect(entity(afterReserveVoid, firstId).data.reserved_minor).toBe(3000);
     // Refresh the actual React screen, which must derive values from SQL.
     await p2.getByRole('button', {name: /К обзору/}).click();
     await openAccounts(p2);
@@ -245,15 +427,16 @@ test('#68 true FH SQLite + PostgreSQL: two browser devices converge on money and
     }, {[firstId]: versionOf(afterVoid, firstId)});
     expect(crossProfileWrite.status()).toBe(409);
     const ownerAfterIntrusion = await state(second);
-    expect(ownerAfterIntrusion.revision).toBe(afterVoid.revision);
+    expect(ownerAfterIntrusion.revision).toBe(afterReserveVoid.revision);
     expect(entity(ownerAfterIntrusion, firstId).data.name).toBe('Счёт А');
 
     await logoutViaUi(page);
     const denied = await context.request.get(ORIGIN + '/api/finance/v1/state');
     expect(denied.status()).toBe(401);
-    expect((await state(second)).revision).toBe(afterVoid.revision);
+    expect((await state(second)).revision).toBe(afterReserveVoid.revision);
     ownerWatch.assertClean(); secondWatch.assertClean(); thirdWatch.assertClean();
   } finally {
+    await proofPage?.close();
     await second.close();
     await third.close();
   }
@@ -346,6 +529,166 @@ test('#38 real PostgreSQL + FH cookies: authenticated CSV bank import, replay an
     expect(latest.revision).toBe(reversed.revision);
     expect(entity(latest,accountB).data.balance_minor).toBe(10000);
     observeFirst.assertClean();observeSecond.assertClean();
+  } finally {
+    await second.close();
+  }
+});
+
+test('#138 online payment center survives a lost response and synchronizes two devices', async ({page, context, browser}) => {
+  test.setTimeout(45_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  const second = await browser.newContext();
+  const other = await second.newPage();
+  const exceptions = [];
+  page.on('pageerror', error => exceptions.push(error.message));
+  other.on('pageerror', error => exceptions.push(error.message));
+  try {
+    await page.clock.setFixedTime(new Date('2026-11-12T12:00:00'));
+    await other.clock.setFixedTime(new Date('2026-11-12T12:00:00'));
+    // Send the real request, then lose the response at the browser boundary.
+    // Unlike network routing this also works when WebKit has a Service Worker.
+    await page.addInitScript(() => {
+      const nativeFetch = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const response = await nativeFetch(input, init);
+        if (window.__fhLoseNextPayment && String(input).includes('/api/finance/v2/commands') && init?.method === 'POST') {
+          window.__fhLoseNextPayment = false;
+          if (response.status !== 201) throw Error('Expected committed synthetic payment');
+          throw new TypeError('Synthetic lost response after server commit');
+        }
+        return response;
+      };
+    });
+    const created = await context.request.post('/__e2e__/personal-session');
+    expect(created.status()).toBe(200);
+    const owner = (await created.json()).user;
+    await page.goto('/?fh_reserves_e2e=1');
+    await loginViaUi(other, owner.email);
+    await other.goto('/?fh_reserves_e2e=1');
+    const profile = await bootstrap(context);
+    expect(await bootstrap(second)).toBe(profile);
+    const accountId = randomUUID();
+    let current = await state(context);
+    expect((await submit(context, current, 'account.create', {
+      id: accountId, name: 'Синтетический счёт оплаты', kind: 'bank', currency: 'RUB', opening_minor: 10000,
+    })).status()).toBe(201);
+    const openDue = async target => {
+      await view(target, 'obligations');
+      await target.locator('.fh-reserve-tabs').first().getByRole('button', {name:'К оплате'}).click();
+      await expect(target.getByRole('button', {name:'В аккаунте'})).toHaveAttribute('aria-pressed','true');
+    };
+    await openDue(page);
+    await expect(page.locator('#storage-context-chip')).toHaveText('На сервере');
+    await page.getByRole('button',{name:'На устройстве'}).click();
+    await expect(page.locator('#storage-context-chip')).toHaveText('Локально');
+    await page.getByRole('button',{name:'В аккаунте'}).click();
+    await expect(page.locator('#storage-context-chip')).toHaveText('На сервере');
+    await page.getByRole('button',{name:'Добавить обязательство в аккаунт'}).click();
+    const create = page.locator('form').filter({has:page.getByRole('heading',{name:'Новое обязательство'})});
+    await create.getByLabel('Название').fill('Синтетическая синхронизированная оплата');
+    await create.getByLabel('Сумма, ₽').fill('55');
+    await create.getByLabel('Повторять').selectOption('none');
+    await create.getByRole('button',{name:'Сохранить обязательство'}).click();
+    await expect(create).toHaveCount(0);
+    expect((await state(context)).body.entities.filter(e=>e.kind==='obligation')).toHaveLength(1);
+    await openDue(other);
+    const card = target => target.locator('[data-server-payment-id]').filter({hasText:'Синтетическая синхронизированная оплата'});
+    await expect(card(page)).toContainText('55');
+    await expect(card(other)).toContainText('55');
+    await card(other).getByRole('button',{name:'Отметить оплату'}).click();
+    await card(other).getByLabel('Сумма, ₽').fill('50');
+    await card(page).getByRole('button',{name:'Отметить оплату'}).click();
+    await card(page).getByLabel('Сумма, ₽').fill('20');
+    await context.setOffline(true);
+    await card(page).getByRole('button',{name:'Подтвердить оплату'}).click();
+    await expect(page.getByRole('alert')).toContainText('недоступен');
+    expect((await state(second)).body.entities.filter(e=>e.kind==='settlement')).toHaveLength(0);
+    await context.setOffline(false);
+    await page.evaluate(() => { window.__fhLoseNextPayment = true; });
+    await card(page).getByRole('button',{name:'Подтвердить оплату'}).dblclick();
+    await expect(page.getByRole('button',{name:'Сверить оплату'})).toBeVisible();
+    expect(entity(await state(second),accountId).data.balance_minor).toBe(8000);
+    await page.reload();
+    await openDue(page);
+    await page.getByRole('button',{name:'Сверить оплату'}).click();
+    await expect(page.getByRole('button',{name:'Сверить оплату'})).toHaveCount(0);
+    await expect(card(page)).toContainText('35');
+    await view(page,'overview');
+    await expect(page.locator('#storage-context-chip')).toHaveText('На сервере');
+    await expect(page.locator('.kpi-grid')).toContainText(/Оплачено:.*20/);
+    await view(page,'calendar');
+    await expect(page.locator('#storage-context-chip')).toHaveText('На сервере');
+    await page.locator('.cal-day[data-date="2026-11-12"]').click();
+    await expect(page.locator('.cal-layout .plain-list')).toContainText('Синтетическая синхронизированная оплата');
+    await expect(page.locator('.cal-layout .plain-list')).toContainText('факт 20');
+    await expect(page.locator('.cal-layout')).toContainText(/Подтверждённый поток:.*20/);
+    await page.getByRole('button',{name:'Открыть центр оплат: Синтетическая синхронизированная оплата'}).click();
+    await expect(card(page)).toContainText('35');
+    // The other device still has a stale larger tranche; it cannot overpay.
+    await card(other).locator('form').evaluate(form => form.requestSubmit());
+    await expect(other.getByRole('alert')).toContainText('Данные изменились');
+    await expect(other.getByRole('button',{name:'Сверить оплату'})).toHaveCount(0);
+    expect(entity(await state(second),accountId).data.balance_minor).toBe(8000);
+    await other.reload();
+    await openDue(other);
+    await expect(card(other)).toContainText('35');
+    await card(other).getByRole('button',{name:'Отметить оплату'}).click();
+    await expect(card(other).getByLabel('Сумма, ₽')).toHaveValue('35.00');
+    await card(other).getByRole('button',{name:'Подтвердить оплату'}).click();
+    await expect(card(other)).toHaveCount(0);
+    await page.reload();
+    await openDue(page);
+    await expect(card(page)).toHaveCount(0);
+    // A lost reply during cancellation is reconciled with the same mutation.
+    const history = other.getByRole('region',{name:'История оплат аккаунта'});
+    const lastPayment = history.locator('article').filter({hasText:'35'});
+    await other.addInitScript(() => {
+      const nativeFetch = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const response = await nativeFetch(input, init);
+        if (window.__fhLoseNextPayment && String(input).includes('/api/finance/v2/commands') && init?.method === 'POST') {
+          window.__fhLoseNextPayment = false;
+          if (response.status !== 201) throw Error('Expected committed synthetic reversal');
+          throw new TypeError('Synthetic lost response after server commit');
+        }
+        return response;
+      };
+    });
+    await other.reload();
+    await openDue(other);
+    await other.evaluate(() => { window.__fhLoseNextPayment = true; });
+    await expect(lastPayment).toHaveCount(1);
+    await expect(lastPayment.getByRole('button',{name:'Отменить оплату'})).toBeEnabled();
+    other.once('dialog', dialog => dialog.accept());
+    await lastPayment.getByRole('button',{name:'Отменить оплату'}).click();
+    await expect(other.getByRole('button',{name:'Сверить оплату'})).toBeVisible();
+    expect(entity(await state(context),accountId).data.balance_minor).toBe(8000);
+    await other.reload();
+    await openDue(other);
+    await other.getByRole('button',{name:'Сверить оплату'}).click();
+    await expect(other.getByRole('button',{name:'Сверить оплату'})).toHaveCount(0);
+    await expect(card(other)).toContainText('35');
+    await card(other).getByRole('button',{name:'Отметить оплату'}).click();
+    await card(other).getByRole('button',{name:'Подтвердить оплату'}).click();
+    await expect(card(other)).toHaveCount(0);
+    await page.reload();
+    await openDue(page);
+    await expect(card(page)).toHaveCount(0);
+    const final = await state(context);
+    expect(entity(final,accountId).data.balance_minor).toBe(4500);
+    expect(final.body.entities.filter(e=>e.kind==='settlement')).toHaveLength(3);
+    expect(final.body.entities.filter(e=>e.kind==='settlement' && e.data.voided_at)).toHaveLength(1);
+    expect(final.body.entities.filter(e=>e.kind==='transaction')).toHaveLength(4);
+    // In-memory profile reuse must not outlive the real authenticated session.
+    const logout = await context.request.post('/api/auth/email/logout', {
+      headers:{Origin:ORIGIN,'Content-Type':'application/json'}, data:{},
+    });
+    expect(logout.status()).toBe(200);
+    await page.locator('.sidebar-nav [data-view="overview"]').evaluate(button => button.click());
+    await expect.poll(async () => page.url().includes('/account.html') ||
+      await page.getByRole('alert').filter({hasText:'Не удалось загрузить обзор аккаунта'}).isVisible()).toBe(true);
+    expect((await second.request.get(ORIGIN + '/api/finance/v1/state')).status()).toBe(200);
+    expect(exceptions).toEqual([]);
   } finally {
     await second.close();
   }

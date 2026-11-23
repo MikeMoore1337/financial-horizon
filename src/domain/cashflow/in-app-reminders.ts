@@ -92,6 +92,8 @@ export interface ReminderInput {
   readonly settings: ReminderSettings;
   /** Can include previous unpaid cycles; each row is one confirmed occurrence. */
   readonly payments: readonly ConfirmedMonthOccurrence[];
+  /** Server payment center also includes one-time obligations. */
+  readonly includeOneTime?: boolean;
   /** Only verified server-backed #6 ReserveProjection objects. */
   readonly reserves?: readonly ReserveProjection[];
   readonly maxAlerts?: number;
@@ -225,7 +227,7 @@ export function buildInAppReminders(input: ReminderInput): ReminderResult {
     if (row.kind !== 'expense' && row.kind !== 'income') {
       throw new RangeError('Неизвестное направление операции');
     }
-    if (row.kind === 'income' || (row.source === 'entry' && row.recurrence === 'once')) continue;
+    if (row.kind === 'income' || (!input.includeOneTime && row.source === 'entry' && row.recurrence === 'once')) continue;
     identifier(row.id, 'Платёж');
     if (typeof row.title !== 'string' || !row.title.trim()) {
       throw new RangeError('У платежа нет названия');

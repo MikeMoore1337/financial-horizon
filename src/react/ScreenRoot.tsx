@@ -1,8 +1,10 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
-import { Calendar, type CalendarProps } from './Calendar';
-import { Overview, type OverviewProps } from './Overview';
+import { type CalendarProps } from './Calendar';
+import { ConnectedCalendar } from './ConnectedCalendar';
+import { type OverviewProps } from './Overview';
+import { ConnectedOverview } from './ConnectedOverview';
 import { Obligations, type ObligationsProps } from './Obligations';
 import { Loans, type LoansProps } from './Loans';
 import { Settings, type SettingsProps } from './Settings';
@@ -35,9 +37,9 @@ export function createScreenRoot(
           <StrictMode>
             <AuthBoundary access={getAccess()}>
               {screen.view === 'calendar' ? (
-                <Calendar {...screen.props} />
+                <ConnectedCalendar {...screen.props} />
               ) : screen.view === 'overview' ? (
-                <Overview {...screen.props} />
+                <ConnectedOverview {...screen.props} />
               ) : screen.view === 'obligations' ? (
                 <Obligations {...screen.props} />
               ) : screen.view === 'loans' ? (

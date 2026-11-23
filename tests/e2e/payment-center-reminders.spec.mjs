@@ -31,6 +31,53 @@ async function openDue(page) {
   await expect(page.getByRole('heading', { name: 'Центр оплат' })).toBeVisible();
 }
 
+test('#138 older unpaid occurrences remain individually actionable', async ({page}) => {
+  await page.clock.setFixedTime(new Date('2026-11-20T12:00:00'));
+  await visitGuest(page);
+  await addScheduledExpense(page, 'Историческое обязательство #138', '2025-01-15', '100');
+  await openDue(page);
+  const older = page.locator('.fh-center-event[data-payment-occurrence="2025-01"]')
+    .filter({hasText: 'Историческое обязательство #138'});
+  const newer = page.locator('.fh-center-event[data-payment-occurrence="2026-10"]')
+    .filter({hasText: 'Историческое обязательство #138'});
+  await expect(older).toBeVisible();
+  await expect(newer).toBeVisible();
+  await older.getByRole('button', {name: 'Отметить оплату'}).click();
+  await page.locator('#settlement-form [name="amount"]').fill('20');
+  await page.locator('#settlement-form [name="date"]').fill('2026-11-20');
+  await page.locator('#settlement-form button[type="submit"]').click();
+  await expect(older).toContainText('Частично оплачено');
+  await expect(newer).not.toContainText('Частично оплачено');
+  expect((await scopedState(page, 'state')).settlements[0]).toMatchObject({
+    occurrence: '2025-01', date: '2026-11-20', amountCents: 2000,
+  });
+});
+
+test('#138 guest: partial amount, overpayment rejection and remaining payment', async ({ page }) => {
+  await visitGuest(page);
+  await addScheduledExpense(page, 'Оплата частями #138', plusDays(1), '100.01');
+  await openDue(page);
+  const card = page.locator('.fh-center-event').filter({ hasText: 'Оплата частями #138' });
+  await card.getByRole('button', { name: 'Отметить оплату' }).click();
+  const form = page.locator('#settlement-form');
+  await expect(form.locator('[name="date"]')).toHaveValue(iso(new Date()));
+  await form.locator('[name="amount"]').fill('30');
+  await form.locator('button[type="submit"]').click();
+  await expect(page.locator('#settlement-dialog')).not.toBeVisible();
+  await card.getByRole('button', { name: 'Отметить оплату' }).click();
+  await expect(form.locator('[name="amount"]')).toHaveValue('70.01');
+  await expect(form.locator('#settlement-description')).toContainText('Осталось:');
+  await form.locator('[name="amount"]').fill('70.02');
+  await form.locator('button[type="submit"]').click();
+  await expect(page.locator('#settlement-dialog')).toBeVisible();
+  expect((await scopedState(page, 'state')).settlements).toHaveLength(1);
+  await form.locator('[name="amount"]').fill('70.01');
+  await form.locator('button[type="submit"]').click();
+  await expect(card).toHaveCount(0);
+  const state = await scopedState(page, 'state');
+  expect(state.settlements.map((payment) => payment.amountCents)).toEqual([3000, 7001]);
+});
+
 test('#40 real guest: persisted 1/3/7 preferences, partial and full confirmed payment', async ({ page, context }) => {
   const watch = await observe(context, page);
   await page.setViewportSize({ width: 393, height: 852 });

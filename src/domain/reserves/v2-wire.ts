@@ -57,12 +57,12 @@ const shapes: Readonly<Record<ReserveV2Action, readonly [readonly string[], read
   'reserve.cycle.void': [['reserve_id', 'occurred_on', 'reason'], []],
   'reserve.event.void': [['reserve_id', 'account_id', 'target_event_id', 'occurred_on', 'reason'], []],
   'settlement.payment.record': [[
-    'transaction_id', 'fact_id', 'account_id', 'obligation_id', 'amount_minor', 'paid_on',
-    'occurrence_on', 'reserve_id', 'reserved_used_minor',
-  ], []],
+    'account_id', 'obligation_id', 'amount_minor', 'paid_on',
+    'occurrence_on',
+  ], ['reserve_id', 'reserved_used_minor']],
   'settlement.payment.void': [[
-    'transaction_id', 'fact_id', 'account_id', 'reserve_id', 'reason',
-  ], []],
+    'transaction_id', 'fact_id', 'account_id', 'reason',
+  ], ['reserve_id']],
 };
 
 function uuid(value: unknown): string {
@@ -117,6 +117,10 @@ function checkPayload(action: ReserveV2Action, p: Readonly<Record<string, unknow
   if (Object.hasOwn(p, 'delta_minor') && safeInt(p.delta_minor, -MAX_MINOR, MAX_MINOR) === 0) {
     throw new RangeError('Нулевое движение резерва');
   }
+  if (action === 'settlement.payment.record' &&
+      Object.hasOwn(p, 'reserve_id') !== Object.hasOwn(p, 'reserved_used_minor')) {
+    throw new RangeError('Резерв и его сумма должны быть указаны вместе');
+  }
   if (Object.hasOwn(p, 'reserved_used_minor')) {
     const used = safeInt(p.reserved_used_minor, 0, MAX_MINOR);
     if (used > safeInt(p.amount_minor, 1, MAX_MINOR)) throw new RangeError('Резерв больше оплаты');
@@ -154,10 +158,12 @@ function checkPayload(action: ReserveV2Action, p: Readonly<Record<string, unknow
     case 'reserve.allocate':
     case 'reserve.event.void': return [uuid(p.account_id), uuid(p.reserve_id)];
     case 'settlement.payment.record': return [
-      uuid(p.account_id), uuid(p.obligation_id), uuid(p.reserve_id),
+      uuid(p.account_id), uuid(p.obligation_id),
+      ...(Object.hasOwn(p, 'reserve_id') ? [uuid(p.reserve_id)] : []),
     ];
     case 'settlement.payment.void': return [
-      uuid(p.transaction_id), uuid(p.fact_id), uuid(p.account_id), uuid(p.reserve_id),
+      uuid(p.transaction_id), uuid(p.fact_id), uuid(p.account_id),
+      ...(Object.hasOwn(p, 'reserve_id') ? [uuid(p.reserve_id)] : []),
     ];
     default: return [uuid(p.reserve_id)];
   }

@@ -104,8 +104,11 @@ export function isActive(record) { return !record.deletedAt; }
 export function entryDueDate(entry, month) {
   if (!isActive(entry)) return null;
   if (entry.recurrence==='once') return monthKey(entry.date) === month ? entry.date : null;
-  if (entry.recurrence==='monthly' && monthIndex(month)>=monthIndex(monthKey(entry.date))) return dayInMonth(month, Number(entry.date.slice(-2)));
-  if (entry.recurrence==='yearly' && monthIndex(month)>=monthIndex(monthKey(entry.date)) && month.slice(-2)===entry.date.slice(5,7)) return dayInMonth(month, Number(entry.date.slice(-2)));
+  const every=entry.recurrenceEvery??1;
+  if(!Number.isSafeInteger(every)||every<1||every>120)throw Error('Некорректная периодичность обязательства');
+  const elapsed=monthIndex(month)-monthIndex(monthKey(entry.date));
+  if (entry.recurrence==='monthly' && elapsed>=0 && elapsed%every===0) return dayInMonth(month, Number(entry.date.slice(-2)));
+  if (entry.recurrence==='yearly' && elapsed>=0 && elapsed%(12*every)===0) return dayInMonth(month, Number(entry.date.slice(-2)));
   return null;
 }
 export function loanRate(loan) { return Number(loan.apr || 0) / 1200; }
@@ -184,11 +187,72 @@ export function getMonthEvents(state,month){
  }).filter(Boolean);
  return [...entries,...loans].sort((a,b)=>a.date.localeCompare(b.date)||a.title.localeCompare(b.title,'ru'));
 }
-export function monthTotals(events){const incomes=events.filter(x=>x.kind==='income'),expenses=events.filter(x=>x.kind!=='income');return {
+/** Reuse the calendar's occurrence model for every outstanding historical period. */
+export function getReminderMonthEvents(state,currentMonth){
+ if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(currentMonth))throw Error('Некорректный период напоминаний');
+ const base=monthIndex(currentMonth),starts=[];
+ for(const entry of state.entries){
+  if(!isActive(entry)||entry.kind!=='expense'||entry.recurrence==='once')continue;
+  const month=monthKey(entry.date);
+  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))throw Error('Некорректная дата обязательства');
+  starts.push(monthIndex(month));
+ }
+ for(const loan of state.loans){
+  if(!isActive(loan))continue;
+  const month=monthKey(loan.asOfDate);
+  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))throw Error('Некорректная дата кредита');
+  starts.push(monthIndex(month));
+ }
+ const first=starts.reduce((minimum,index)=>Math.min(minimum,index),base-12);
+ const months=base+2-first;
+ // Refuse oversized histories instead of silently presenting an incomplete list.
+ const perMonth=state.entries.length*(state.settlements.length+1)+
+  state.loans.length*(state.loanPayments.length+1)+1;
+ if(!Number.isSafeInteger(perMonth)||months>1200||months*perMonth>10_000_000)
+  throw Error('История обязательств слишком велика для расчёта напоминаний');
+ const events=[];
+ for(let offset=first-base;offset<=1;offset++){
+  for(const item of getMonthEvents(state,shiftMonth(currentMonth,offset))){
+   if(item.kind==='expense')events.push(item);
+   if(events.length>5000)throw Error('Слишком много экземпляров для расчёта напоминаний');
+  }
+ }
+ return events;
+}
+function actualMonthAmounts(state,month){
+ if(!state||!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))throw Error('Некорректный период фактических операций');
+ const entries=new Map(state.entries.map(entry=>[entry.id,entry]));
+ const loans=new Set(state.loans.map(loan=>loan.id));
+ if(entries.size!==state.entries.length||loans.size!==state.loans.length)
+  throw Error('Повторный идентификатор финансовой записи');
+ let income=0,expense=0;
+ const add=(amount,sign)=>{
+  if(!Number.isSafeInteger(amount)||amount<0||
+     !Number.isSafeInteger((sign===1?income:expense)+amount))
+   throw Error('Некорректная сумма фактической операции');
+  if(sign===1)income+=amount;else expense+=amount;
+ };
+ for(const fact of state.settlements){
+  if(fact.voidedAt||monthKey(fact.date)!==month)continue;
+  const entry=entries.get(fact.entryId);
+  if(!entry||!['income','expense'].includes(entry.kind))throw Error('Не найдена запись фактической операции');
+  add(fact.amountCents,entry.kind==='income'?1:-1);
+ }
+ for(const fact of state.loanPayments){
+  if(fact.voidedAt||monthKey(fact.date)!==month)continue;
+  if(!loans.has(fact.loanId))throw Error('Не найден кредит фактической операции');
+  add(fact.amountCents,-1);
+ }
+ if(!Number.isSafeInteger(income-expense))throw Error('Некорректный итог фактических операций');
+ return {income,expense};
+}
+export function monthTotals(events,state,month){const incomes=events.filter(x=>x.kind==='income'),expenses=events.filter(x=>x.kind!=='income');
+ const actual=state===undefined&&month===undefined?{income:incomes.reduce((a,x)=>a+x.paidCents,0),expense:expenses.reduce((a,x)=>a+x.paidCents,0)}:actualMonthAmounts(state,month);
+ return {
   incomeCents:incomes.reduce((a,x)=>a+x.plannedCents,0),expenseCents:expenses.reduce((a,x)=>a+x.plannedCents,0),
-  incomePaidCents:incomes.reduce((a,x)=>a+x.paidCents,0),expensePaidCents:expenses.reduce((a,x)=>a+x.paidCents,0),
+  incomePaidCents:actual.income,expensePaidCents:actual.expense,
   netPlanCents:incomes.reduce((a,x)=>a+x.plannedCents,0)-expenses.reduce((a,x)=>a+x.plannedCents,0),
-  netFactCents:incomes.reduce((a,x)=>a+x.paidCents,0)-expenses.reduce((a,x)=>a+x.paidCents,0)
+  netFactCents:actual.income-actual.expense
 };}
 export function createSampleState() {
  const asOf='2026-11-01'; return {

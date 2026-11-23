@@ -14,6 +14,7 @@ export interface ReserveHighlightsProps {
   readonly verifiedActorUserId: string;
   readonly currentDate: string;
   readonly month?: string;
+  readonly providedView?: ReservesServerView | null;
 }
 
 function displayDate(value: string) {
@@ -37,12 +38,14 @@ export function ReserveHighlights({
   verifiedActorUserId,
   currentDate,
   month,
+  providedView,
 }: ReserveHighlightsProps) {
   const gateway = useMemo(() => new ReservesFinanceGateway(), [verifiedActorUserId]);
   const [view, setView] = useState<ReservesServerView | null>(null);
   const [error, setError] = useState(false);
 
   useEffect(() => {
+    if (providedView !== undefined) return;
     const abort = new AbortController();
     setView(null);
     setError(false);
@@ -58,23 +61,24 @@ export function ReserveHighlights({
       abort.abort();
       gateway.invalidate();
     };
-  }, [gateway, verifiedActorUserId, currentDate]);
+  }, [gateway, verifiedActorUserId, currentDate, providedView]);
 
-  if (error) {
+  const visibleView = providedView === undefined ? view : providedView;
+  if (providedView === undefined && error) {
     return (
       <div className="surface fh-reserve-highlight-error" role="status">
         Информация о накоплениях сейчас недоступна.
       </div>
     );
   }
-  if (!view)
+  if (!visibleView)
     return (
       <div className="surface fh-reserve-highlight-loading" role="status">
         Загрузка накоплений…
       </div>
     );
 
-  const entries = view.reserves
+  const entries = visibleView.reserves
     .filter((row) => !row.archived && (!month || row.projection.dueDate.startsWith(month)))
     .sort((a, b) => a.projection.dueDate.localeCompare(b.projection.dueDate))
     .slice(0, 6);

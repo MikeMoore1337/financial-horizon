@@ -61,7 +61,7 @@ test('reserve ETag, idempotency and entity revision gates fail closed', () => {
   for(const variant of invalid) assert.throws(()=>encodeReserveV2({...original,...variant}));
 });
 test('linked payment requires explicit reserve, account, obligation and exact amount', () => {
-  const p={transaction_id:idD,fact_id:mutation,account_id:idA,obligation_id:idB,reserve_id:idC,
+  const p={account_id:idA,obligation_id:idB,reserve_id:idC,
     amount_minor:6000,reserved_used_minor:3000,paid_on:'2027-11-16',occurrence_on:'2027-11-16'};
   const command={...original,action:'settlement.payment.record',payload:p,
     expectedEntityRevisions:{[idA]:3,[idB]:1,[idC]:5}};
@@ -71,11 +71,11 @@ test('linked payment requires explicit reserve, account, obligation and exact am
   assert.throws(()=>encodeReserveV2({...command,payload:{...p,reserved_used_minor:6001}}));
   assert.throws(()=>encodeReserveV2({...command,payload:{...p,reserve_id:undefined}}));
   assert.throws(()=>encodeReserveV2({...command,payload:{...p,actor_user_id:idD}}));
-  assert.throws(()=>encodeReserveV2({...command,payload:{...p,transaction_id:undefined}}));
-  assert.throws(()=>encodeReserveV2({...command,payload:{...p,fact_id:undefined}}));
+  assert.throws(()=>encodeReserveV2({...command,payload:{...p,transaction_id:idD}}));
+  assert.throws(()=>encodeReserveV2({...command,payload:{...p,fact_id:mutation}}));
 });
 test('zero-reserve-use payment and exact void are valid, other ledger actions excluded', () => {
-  const p={transaction_id:idD,fact_id:mutation,account_id:idA,obligation_id:idB,reserve_id:idC,
+  const p={account_id:idA,obligation_id:idB,reserve_id:idC,
     amount_minor:6000,reserved_used_minor:0,paid_on:'2027-11-16',occurrence_on:'2027-11-16'};
   assert.equal(encodeReserveV2({...original,action:'settlement.payment.record',payload:p,
     expectedEntityRevisions:{[idA]:3,[idB]:1,[idC]:5}}).body.payload.reserved_used_minor,0);
@@ -109,4 +109,14 @@ test('cycle and event commands require a bounded date, reason and revs', () => {
     assert.equal(encodeReserveV2({...original,action,payload,
       expectedEntityRevisions:expected}).body.action,action);
   }
+});
+
+test('ordinary online payment uses account and obligation revisions without a reserve', () => {
+  const payload={account_id:idA,obligation_id:idB,amount_minor:100,
+    paid_on:'2027-11-16',occurrence_on:'2027-11-16'};
+  const command={...original,action:'settlement.payment.record',payload,
+    expectedEntityRevisions:{[idA]:3,[idB]:1}};
+  assert.deepEqual(encodeReserveV2(command).body.payload,payload);
+  assert.throws(()=>encodeReserveV2({...command,payload:{...payload,reserve_id:idC}}));
+  assert.throws(()=>encodeReserveV2({...command,payload:{...payload,reserved_used_minor:1}}));
 });

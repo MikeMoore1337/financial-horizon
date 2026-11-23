@@ -124,6 +124,7 @@ def test_session_bridge_is_scoped_cookie_and_logout_revokes_entire_finance_acces
     result = bootstrap(client)
     assert result.status_code == 200
     assert result.json()["ok"] is True
+    assert result.json()["payment_guard_v1"] is False
     cookies = list(client.cookies.jar)
     finance = next(c for c in cookies if c.name == "fh_finance_session")
     auth = next(c for c in cookies if c.name == "fh_email_session")

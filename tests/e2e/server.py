@@ -116,16 +116,17 @@ def local_app(directory):
             raise HTTPException(422)
         # Isolate tests running consecutively against the SAME disposable
         # localhost AuthStore. A previous browser project must not consume
-        # the next test's finance-session quota (HTTP 429). Do not change the
+        # the next test's finance quotas (HTTP 429). Do not change the
         # production FH limiter or exempt requests inside any single test.
         if real_finance:
             client_ip = request.client.host if request.client else "unknown"
-            keys = (
-                limit_key(config.rate_secret, "finance-session-global", "all"),
-                limit_key(config.rate_secret, "finance-session-ip", client_ip),
+            keys = tuple(
+                limit_key(config.rate_secret, action + suffix, identity)
+                for action in ("finance-session", "finance-read", "finance-write")
+                for suffix, identity in (("-global", "all"), ("-ip", client_ip))
             )
             with store._db() as db:
-                db.execute("DELETE FROM counters WHERE key IN (?, ?)", keys)
+                db.executemany("DELETE FROM counters WHERE key = ?", ((key,) for key in keys))
         email = "personal-" + uuid4().hex + "@example.invalid"
         token = store.create_account(email)
         if not token:
@@ -164,7 +165,8 @@ def local_app(directory):
                 path="/api/finance/v2", httponly=True, secure=False, samesite="strict",
             )
         finance_requests[user["id"]]["session"] += 1
-        return {"ok": True, "profile_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}
+        return {"ok": True, "profile_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "payment_guard_v1": reserves_stub.exists(user["id"])}
 
     @app.get("/api/finance/v1/state")
     def synthetic_finance_state(request: Request):

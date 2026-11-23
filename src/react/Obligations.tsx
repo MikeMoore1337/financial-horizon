@@ -50,6 +50,7 @@ export interface ObligationsProps {
   focusReserveId?: string | null;
   importSuggestions?: readonly XlsxReservePreview[];
   onReserveSectionChange?: (next: 'payments' | 'due' | 'reserves') => void;
+  onPaymentSourceChange?: (source: 'server' | 'local') => void;
 }
 
 function Recurrence({ value }: { value: ObligationItem['recurrence'] }) {
@@ -286,6 +287,7 @@ export function Obligations({
   focusReserveId = null,
   importSuggestions = [],
   onReserveSectionChange,
+  onPaymentSourceChange,
 }: ObligationsProps) {
   return (
     <>
@@ -370,6 +372,7 @@ export function Obligations({
           rubles={rubles}
           formatDate={formatDate}
           onSettingsChange={onReminderSettingsChange}
+          onSourceChange={onPaymentSourceChange}
         />
       ) : reserveSection === 'reserves' ? (
         financeEnabled ? (

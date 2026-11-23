@@ -4,7 +4,10 @@ Synthetic profiles only. This test suite must never run against production.
 """
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
+import subprocess
 from uuid import uuid4
 
 import pytest
@@ -259,6 +262,59 @@ def test_invalid_plan_rejected_before_sql(financial_context):
         assert exc.value.code == "invalid_command"
     assert snapshot(engine, scope).body["revision"] == before.body["revision"]
 
+
+
+def test_reserved_payment_rejects_other_cycle_without_cash_or_reserve_change(financial_context):
+    engine, scope, account_id, obligation_id = financial_context
+    plan = reserve_input(account_id, obligation_id, opening=9000)
+    submit(engine, scope, "reserve.create", plan, [account_id, obligation_id])
+    before = snapshot(engine, scope)
+    payload = {
+        "account_id": account_id, "obligation_id": obligation_id,
+        "amount_minor": 6000, "occurrence_on": "2028-11-16",
+        "paid_on": "2027-11-16", "reserve_id": plan["id"],
+        "reserved_used_minor": 6000,
+    }
+    with pytest.raises(FinanceCommandError) as exc:
+        submit(engine, scope, "settlement.payment.record", payload,
+               [account_id, obligation_id, plan["id"]])
+    assert exc.value.code == "semantic_conflict"
+    assert snapshot(engine, scope).body["revision"] == before.body["revision"]
+    account = entities(engine, scope)[account_id]["data"]
+    assert account["balance_minor"] == 10_000 and account["reserved_minor"] == 9_000
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        assert session.execute(text("SELECT count(*) FROM settlements")).scalar_one() == 0
+        assert session.execute(text("SELECT count(*) FROM ledger_transactions")).scalar_one() == 0
+
+
+def test_reserved_payment_counts_imported_fact_in_same_cycle(financial_context):
+    engine, scope, account_id, obligation_id = financial_context
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        session.execute(text("""
+            INSERT INTO settlements(profile_id,id,obligation_id,occurrence_on,paid_on,amount_minor)
+            VALUES (:p,:id,:obligation,'2027-11-01','2027-11-01',3000)
+        """), {"p": scope.profile_id, "id": uuid4(), "obligation": obligation_id})
+    plan = reserve_input(account_id, obligation_id, opening=9000)
+    submit(engine, scope, "reserve.create", plan, [account_id, obligation_id])
+    before = snapshot(engine, scope)
+    payload = {
+        "account_id": account_id, "obligation_id": obligation_id,
+        "amount_minor": 6001, "occurrence_on": "2027-11-16",
+        "paid_on": "2027-11-16", "reserve_id": plan["id"],
+        "reserved_used_minor": 6001,
+    }
+    with pytest.raises(FinanceCommandError) as exc:
+        submit(engine, scope, "settlement.payment.record", payload,
+               [account_id, obligation_id, plan["id"]])
+    assert exc.value.code == "semantic_conflict"
+    assert snapshot(engine, scope).body["revision"] == before.body["revision"]
+    account = entities(engine, scope)[account_id]["data"]
+    assert account["balance_minor"] == 10_000 and account["reserved_minor"] == 9_000
+    payload.update(amount_minor=6000, reserved_used_minor=6000)
+    assert submit(engine, scope, "settlement.payment.record", payload,
+                  [account_id, obligation_id, plan["id"]]).status == 201
 
 
 def test_reserved_payment_and_void_are_one_cash_write_each(financial_context):
@@ -704,3 +760,60 @@ def test_zero_funded_reserve_allows_signed_negative_account_without_cash_movemen
                              profile_id=scope.profile_id) as session:
         assert session.execute(text("SELECT count(*) FROM reserve_allocations")).scalar_one() == 0
         assert session.execute(text("SELECT count(*) FROM ledger_transactions")).scalar_one() == 0
+
+
+def test_reserve_payment_actual_typescript_wire_and_server_receipt(financial_context):
+    """The browser encoder must match the real API and accept only server-minted IDs."""
+    engine, scope, account_id, obligation_id = financial_context
+    reserve = reserve_input(account_id, obligation_id)
+    reserve_id = reserve["id"]
+    submit(engine, scope, "reserve.create", reserve, [account_id, obligation_id])
+    state = snapshot(engine, scope)
+    versions = {item["id"]: item["entity_revision"] for item in state.body["entities"]}
+    payload = {
+        "account_id": account_id, "obligation_id": obligation_id, "reserve_id": reserve_id,
+        "amount_minor": 2000, "reserved_used_minor": 1500,
+        "paid_on": "2027-11-16", "occurrence_on": "2027-11-16",
+    }
+    mutation = str(uuid4())
+    source = """
+import {encodeReserveV2} from './src/domain/reserves/v2-wire.ts';
+const data = JSON.parse(process.argv[1]);
+process.stdout.write(JSON.stringify(encodeReserveV2(data)));
+"""
+    encoded = subprocess.run(  # noqa: S603 - fixed executable and script, synthetic input
+        ["node", "--disable-warning=ExperimentalWarning", "--input-type=module", "-e", source,
+         json.dumps({"action": "settlement.payment.record", "payload": payload,
+                     "clientMutationId": mutation, "baseRevision": state.body["revision"],
+                     "ifMatch": state.etag, "expectedEntityRevisions": {
+                         key: versions[key] for key in (account_id, obligation_id, reserve_id)}})],
+        cwd=Path(__file__).resolve().parents[3], capture_output=True, text=True, timeout=8, check=True,
+    )
+    wire = json.loads(encoded.stdout)
+    assert "transaction_id" not in wire["body"]["payload"]
+    assert "fact_id" not in wire["body"]["payload"]
+    kwargs = {"engine": engine, "scope": scope, "command": wire["body"],
+              "if_match": wire["headers"]["If-Match"], "idempotency_key": mutation}
+    posted = submit_account_v2_candidate(**kwargs)
+    replay = submit_account_v2_candidate(**kwargs)
+    assert posted.status == 201 and replay.status == 200 and replay.body["replayed"] is True
+    assert [change["entity_id"] for change in posted.body["changes"]] == [
+        change["entity_id"] for change in replay.body["changes"]]
+    proof_source = """
+import {paymentReceiptIds} from './src/react/reserves-finance-gateway.ts';
+const data = JSON.parse(process.argv[1]);
+process.stdout.write(JSON.stringify(paymentReceiptIds(data.changes, data.payload, data.revision)));
+"""
+    proof = subprocess.run(  # noqa: S603 - fixed script, synthetic receipt only
+        ["node", "--disable-warning=ExperimentalWarning", "--input-type=module", "-e", proof_source,
+         json.dumps({"changes": posted.body["changes"], "payload": payload,
+                     "revision": posted.body["revision"]})],
+        cwd=Path(__file__).resolve().parents[3], capture_output=True, text=True, timeout=8, check=True,
+    )
+    proved = json.loads(proof.stdout)
+    assert proved["transaction_id"] == posted.body["changes"][0]["entity_id"]
+    assert proved["fact_id"] == posted.body["changes"][1]["entity_id"]
+    after = entities(engine, scope)
+    assert after[account_id]["data"]["balance_minor"] == 8000
+    assert after[account_id]["data"]["reserved_minor"] == 1500
+    assert len([item for item in after.values() if item["kind"] == "settlement"]) == 1

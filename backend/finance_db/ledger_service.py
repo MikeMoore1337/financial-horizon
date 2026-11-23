@@ -640,6 +640,20 @@ def _next_reserve_due(first_due: date, period_months: int, anchor_day: int, cycl
     return date(year, month, min(anchor_day, monthrange(year, month)[1]))
 
 
+def _is_obligation_occurrence(starts: date, unit: str, every: int, occurrence: date) -> bool:
+    """Validate an anchored occurrence; February never shifts the later anchor."""
+    from calendar import monthrange
+
+    if occurrence < starts or every < 1:
+        return False
+    if unit == "none":
+        return occurrence == starts
+    months = (occurrence.year - starts.year) * 12 + occurrence.month - starts.month
+    period = every if unit == "month" else every * 12 if unit == "year" else 0
+    return bool(period and months % period == 0 and
+                occurrence.day == min(starts.day, monthrange(occurrence.year, occurrence.month)[1]))
+
+
 def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any],
            versions: Mapping[str, int], new_revision: int) -> dict[str, Any]:
     p = scope.profile_id
@@ -792,7 +806,8 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
         fact_source = _uuid(payload["obligation_id"] if is_settlement else payload["loan_id"])
         if is_settlement:
             source = session.execute(text("""
-                SELECT direction,entity_revision,deleted_at FROM obligations
+                SELECT direction,entity_revision,deleted_at,amount_minor,starts_on,
+                       recurrence_unit,recurrence_every FROM obligations
                 WHERE profile_id=:p AND id=:id FOR UPDATE
             """), {"p": p, "id": fact_source}).mappings().one_or_none()
             if not source or source["deleted_at"] is not None:
@@ -812,6 +827,26 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
                     raise FinanceCommandError(
                         "semantic_conflict",
                         "Подтвердите оплату через действующий резерв обязательства", 409,
+                    )
+            if "reserve_id" not in payload:
+                if not _is_obligation_occurrence(
+                    source["starts_on"], source["recurrence_unit"],
+                    int(source["recurrence_every"]), occurrence,
+                ):
+                    raise FinanceCommandError(
+                        "semantic_conflict", "Неверный период обязательства", 409,
+                    )
+                # Imports preserve legacy month identities as YYYY-MM-01; newer
+                # commands use the anchored due date. Both refer to one cycle.
+                paid = int(session.execute(text("""
+                    SELECT COALESCE(SUM(amount_minor),0) FROM settlements
+                    WHERE profile_id=:p AND obligation_id=:obligation AND voided_at IS NULL
+                      AND occurrence_on >= date_trunc('month', CAST(:occurrence AS date))
+                      AND occurrence_on < date_trunc('month', CAST(:occurrence AS date)) + INTERVAL '1 month'
+                """), {"p": p, "obligation": fact_source, "occurrence": occurrence}).scalar_one())
+                if paid + amount > int(source["amount_minor"]):
+                    raise FinanceCommandError(
+                        "semantic_conflict", "Оплата превышает остаток обязательства", 409,
                     )
             signed = amount if source["direction"] == "income" else -amount
             session.execute(text("""
@@ -885,7 +920,7 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
             used_minor = _integer(payload["reserved_used_minor"], 0, amount)
             plan = session.execute(text("""
                 SELECT entity_revision,obligation_id,account_id,archived_at,
-                       period_months,opened_on,cycle_number,target_minor
+                       period_months,opened_on,cycle_number,target_minor,target_on
                 FROM reserves WHERE profile_id=:p AND id=:id FOR UPDATE
             """), {"p": p, "id": reserve_id}).mappings().one_or_none()
             if (plan is None or plan["archived_at"] is not None
@@ -893,10 +928,27 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
                 or plan["obligation_id"] != fact_source or plan["account_id"] != acc):
                 raise FinanceCommandError("semantic_conflict", "Резерв не связан с этим платежом", 409)
             _require_revision(versions, reserve_id, plan["entity_revision"])
+            if occurrence != plan["target_on"]:
+                raise FinanceCommandError(
+                    "semantic_conflict", "Период оплаты не совпадает с текущим циклом резерва", 409,
+                )
             if paid_on < plan["opened_on"]:
                 raise _reject("Подтверждённая оплата раньше открытия накопления")
             already_paid = _reserve_paid_this_cycle(session, p, reserve_id, int(plan["cycle_number"]))
             if already_paid + amount > int(plan["target_minor"]):
+                raise FinanceCommandError(
+                    "semantic_conflict", "Оплата превышает остаток обязательства в цикле", 409,
+                )
+            # The newly inserted fact is visible in this transaction. Include
+            # legacy imported facts and earlier non-reserve payments as well as
+            # this reserve's events, without debiting any of them again.
+            cycle_total = int(session.execute(text("""
+                SELECT COALESCE(SUM(amount_minor),0) FROM settlements
+                WHERE profile_id=:p AND obligation_id=:obligation AND voided_at IS NULL
+                  AND occurrence_on >= date_trunc('month', CAST(:occurrence AS date))
+                  AND occurrence_on < date_trunc('month', CAST(:occurrence AS date)) + INTERVAL '1 month'
+            """), {"p": p, "obligation": fact_source, "occurrence": occurrence}).scalar_one())
+            if cycle_total > int(plan["target_minor"]):
                 raise FinanceCommandError(
                     "semantic_conflict", "Оплата превышает остаток обязательства в цикле", 409,
                 )

@@ -1,4 +1,4 @@
-import {isActive,previewLoanPayment,rubles} from './finance.js';
+import {entryDueDate,isActive,previewLoanPayment,rubles} from './finance.js';
 const defaultId=()=>crypto.randomUUID();
 const defaultNow=()=>new Date().toISOString();
 
@@ -53,13 +53,36 @@ export function applyLoanPayment(state,{loanId,paymentId='',amountCents,date,str
  return id;
 }
 export function applySettlement(state,{id='',entryId,occurrence,date,amountCents},{idFactory=defaultId,now=defaultNow}={}){
- if(!state.entries.some(entry=>entry.id===entryId&&isActive(entry)))throw Error('Запись недоступна');
+ const entry=state.entries.find(item=>item.id===entryId&&isActive(item));
+ if(!entry)throw Error('Запись недоступна');
+ const validMonth=typeof occurrence==='string'&&/^\d{4}-(0[1-9]|1[0-2])$/.test(occurrence);
+ const parsedDate=typeof date==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(date)?new Date(`${date}T00:00:00.000Z`):null;
+ if(!validMonth||!parsedDate||!Number.isFinite(parsedDate.getTime())||parsedDate.toISOString().slice(0,10)!==date||
+    !Number.isSafeInteger(amountCents)||amountCents<=0||amountCents>1_000_000_000_000)
+  throw Error('Укажите корректные период, дату и положительную сумму');
+ const existing=id?state.settlements.find(item=>item.id===id):null;
+ if(id&&(!existing||existing.voidedAt||existing.entryId!==entryId||existing.occurrence!==occurrence))
+  throw Error('Исходная операция или её период недоступны');
+ // Historical facts remain editable after a schedule change; new facts must target a real occurrence.
+ if(!id&&!entryDueDate(entry,occurrence))throw Error('В выбранном периоде нет этого обязательства');
+ if(!Number.isSafeInteger(entry.amountCents)||entry.amountCents<0)throw Error('Некорректная плановая сумма');
+ let paid=0;
+ for(const item of state.settlements){
+  if(item.entryId!==entryId||item.occurrence!==occurrence||item.voidedAt||item.id===id)continue;
+  if(!Number.isSafeInteger(item.amountCents)||item.amountCents<=0||!Number.isSafeInteger(paid+item.amountCents))
+   throw Error('Не удалось проверить ранее внесённые суммы');
+  paid+=item.amountCents;
+ }
+ if(amountCents>entry.amountCents-paid)throw Error('Сумма превышает остаток обязательства');
  if(id){
-  const existing=state.settlements.find(item=>item.id===id);
-  if(!existing||existing.voidedAt)throw Error('Операция не найдена');
-  Object.assign(existing,{amountCents,date,updatedAt:now()});
-  audit(state,'fact-update',`Исправлена фактическая сумма: ${rubles(amountCents)}`,{id:idFactory,now});
-  return id;
+  const replacementId=idFactory();
+  if(state.settlements.some(item=>item.id===replacementId))throw Error('Повторный идентификатор операции');
+  const changedAt=now();
+  existing.voidedAt=changedAt;
+  state.settlements.push({id:replacementId,entryId,occurrence,date,amountCents,createdAt:changedAt});
+  audit(state,'fact-update','Исправлена фактическая сумма; исходная операция сохранена', {id:idFactory,now});
+  Object.assign(state.audit[state.audit.length-1],{originalSettlementId:id,replacementSettlementId:replacementId});
+  return replacementId;
  }
  const newId=idFactory();
  state.settlements.push({id:newId,entryId,occurrence,date,amountCents,createdAt:now()});

@@ -212,7 +212,8 @@ def mount_finance_routes(
                 secure=secure_cookie, httponly=True, samesite="strict",
             )
         response.headers["Cache-Control"] = "private, no-store"
-        return {"ok": True, "profile_id": str(verified.profile_id)}
+        return {"ok": True, "profile_id": str(verified.profile_id),
+                "payment_guard_v1": bool(enable_account_v2_candidate)}
 
     router = APIRouter(prefix="/api/finance/v1", include_in_schema=False)
 
