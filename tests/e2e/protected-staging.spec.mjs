@@ -10,6 +10,38 @@ const vaultJs=compile('../../src/security/local-vault.ts');
 const stagingJs=compile('../../src/security/protected-staging.ts')
  .replace("from './local-vault.ts'","from '/__e2e_crypto_vault__.js'");
 
+test('native IndexedDB source with lossy JSON is rejected before staging',async({page})=>{
+ await page.route('**/__e2e_crypto_vault__.js',route=>route.fulfill({status:200,contentType:'text/javascript',body:vaultJs}));
+ await page.route('**/__e2e_protected_staging__.js',route=>route.fulfill({status:200,contentType:'text/javascript',body:stagingJs}));
+ await page.goto('/__e2e__/ready');
+ const result=await page.evaluate(async()=>{
+  const stage=await import('/__e2e_protected_staging__.js');
+  const db=await new Promise((resolve,reject)=>{
+   const req=indexedDB.open('fh34-lossy-source',1);
+   req.onupgradeneeded=()=>req.result.createObjectStore('finance');
+   req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);
+  });
+  const initial={version:2,revision:1,unknown:{value:NaN}};
+  await new Promise((resolve,reject)=>{
+   const tx=db.transaction('finance','readwrite');
+   tx.objectStore('finance').put(initial,'state');
+   tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error);
+  });
+  const source=await new Promise((resolve,reject)=>{
+   const tx=db.transaction('finance','readonly'),req=tx.objectStore('finance').get('state');
+   tx.oncomplete=()=>resolve(req.result);tx.onabort=()=>reject(tx.error);
+  });
+  let rejected=false;
+  try{await stage.stageProtectedSnapshot('guest:lossy-browser',source,
+   {kind:'snapshot',recordId:'state',schemaVersion:2,revision:1},'synthetic test phrase 2026');}
+  catch{rejected=true}
+  const sourceStillPresent=Number.isNaN(source.unknown.value);
+  db.close();
+  return {rejected,sourceStillPresent};
+ });
+ expect(result).toEqual({rejected:true,sourceStillPresent:true});
+});
+
 test('protected staging: browser-native IndexedDB, rollback, metadata tampering and offline restore',async({page,context})=>{
  const errors=[];
  page.on('pageerror',err=>errors.push(err.message));

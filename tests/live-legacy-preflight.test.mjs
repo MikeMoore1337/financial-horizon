@@ -84,6 +84,16 @@ const verify = (selection, backupText, extra={}) => verifyLiveLegacyBackup({
   selection,backupText,backupPassword,consent,...extra,
 });
 
+test('preflight rejects a backup that silently lost an existing non-JSON field',async()=>{
+  const source=legacy();
+  source.unknownFutureField=undefined;
+  const backupText=await encryptBackup(source,backupPassword);
+  const db=mount({state:source});
+  await assert.rejects(()=>verify(guest(),backupText),/JSON|данн/);
+  assert.ok(Object.hasOwn(db.values.get('state'),'unknownFutureField'));
+  assert.equal(db.writeCount,0);
+});
+
 test('bank history shows an unsent comparison and rejects mismatched server revisions',async()=>{
   const source=createSampleState(), accountId='11111111-1111-4111-8111-111111111111';
   addGuestBankAccount(source,{id:accountId,name:'Synthetic bank',openingMinor:20000},source.revision);source.revision++;

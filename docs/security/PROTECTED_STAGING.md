@@ -9,6 +9,7 @@
 - `records[scope]` contains a wrapper `{format:'financial-horizon.staged-snapshot',version:1,scope,record:<AES-GCM sealed record>}`. The plaintext snapshot, account titles, amounts, schedules, and audit entries reside **only** in AES-256-GCM ciphertext. The exposed scope/revision/schema/key ID/IV are metadata bound by authenticated AAD, not secret.
 - A single native IndexedDB readwrite transaction writes both stores; a failed/aborted transaction commits **neither** store. A second writer cannot silently replace an existing scope; an existing stage is decrypted and compared before an idempotent retry can report `already-staged`.
 - A migration is a **copy**, never a destructive move. Existing `financial-horizon-browser-v1` and its legacy account/guest keys are not even opened by this module. No cloud upload, login side effect, automatic key rotation, key caching in `localStorage` or automatic activation.
+- Snapshot staging and backup equality checks reject values that JSON would discard or change, such as undefined fields, non-finite numbers, sparse arrays and non-JSON objects. A rejected source must be retained for an explicit recovery path; it must not be treated as a verified backup or silently converted.
 
 ## Required preflight (`stageVerifiedLegacyBackup`)
 

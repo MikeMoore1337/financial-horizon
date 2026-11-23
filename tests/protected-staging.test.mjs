@@ -1,12 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readStagedSnapshot,stageProtectedSnapshot,PROTECTED_STAGING_DB} from '../src/security/protected-staging.ts';
+import {readStagedSnapshot,stageProtectedSnapshot,PROTECTED_STAGING_DB, sameFinancialJSON} from '../src/security/protected-staging.ts';
 
 const pass = 'synthetic protected staging passphrase';
 const userA = 'account:'+'a'.repeat(32), userB = 'account:'+'b'.repeat(32);
 const context = {kind:'snapshot',recordId:'state',schemaVersion:2,revision:9};
 const source = {version:2,revision:9,entries:[{title:'PRIVATE_TITLE_STAGING_TEST',amountCents:9571327}]};
 const clone = v => structuredClone(v);
+
+test('lossy JSON is never accepted as an equal or safely staged snapshot', async () => {
+ const db=fakeIndexedDb();globalThis.indexedDB=db.global;
+ const sparse = []; sparse.length=1; sparse.extra='hidden by JSON';
+ for (const bad of [{extra:undefined},{extra:NaN},{extra:Infinity},{extra:-0},
+  {extra:new Date(0)}, {extra:[undefined]}, {extra:sparse}]) {
+  assert.throws(()=>sameFinancialJSON(bad,JSON.parse(JSON.stringify(bad))),/JSON|данн/);
+  await assert.rejects(()=>stageProtectedSnapshot(userA,{...source,...bad},context,pass),/JSON|данн/);
+  assert.equal(db.tables.get('records').size,0);
+  assert.equal(db.tables.get('keysets').size,0);
+ }
+ assert.equal(sameFinancialJSON({b:2,a:{z:3}}, {a:{z:3},b:2}),true);
+ const getter = {};
+ Object.defineProperty(getter,'extra',{enumerable:true,get(){throw Error('must not execute')}});
+ assert.throws(()=>sameFinancialJSON(getter,{}),/JSON/);
+});
 
 function fakeIndexedDb(){
  const tables = new Map([['keysets',new Map()],['records',new Map()]]);
