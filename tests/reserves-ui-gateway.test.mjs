@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ReservesFinanceGateway } from '../src/react/reserves-finance-gateway.ts';
+import { ReservesFinanceGateway, paymentReceiptIds } from '../src/react/reserves-finance-gateway.ts';
 
 const ACTOR='a'.repeat(32);
 const PROFILE='00000000-0000-4000-8000-0000000000aa';
@@ -203,4 +203,33 @@ test('#6 a valid receipt and advanced ETag do NOT prove a missing reserve alloca
   await gateway.refresh(ACTOR,DATE);
   assert.equal(gateway.writeBlocked,true);
   assert.equal(fetcher.calls.length,5);
+});
+
+
+test('#138 reserve payment receipt binds server-minted ids to exact payment intent',()=>{
+  const transaction='00000000-0000-4000-8000-0000000000b1';
+  const fact='00000000-0000-4000-8000-0000000000b2';
+  const payload={account_id:ACCOUNT,obligation_id:OBLIGATION,reserve_id:RESERVE,
+    amount_minor:6000,reserved_used_minor:3000,paid_on:DATE,occurrence_on:'2027-11-16'};
+  const tx={id:transaction,kind:'transaction',entity_revision:1,data:{kind:'payment',
+    occurred_on:DATE,postings:[{account_id:ACCOUNT,signed_minor:-6000}],
+    payment_link:{settlement_id:fact,loan_payment_id:null}}};
+  const settled={id:fact,kind:'settlement',entity_revision:1,data:{
+    obligation_id:OBLIGATION,amount_minor:6000,paid_on:DATE,
+    occurrence_on:'2027-11-16',voided_at:null}};
+  const change=(kind,entity)=>({kind,revision:2,entity_id:entity.id,
+    entity_revision:entity.entity_revision,payload:{entity}});
+  const changes=[change('ledger_posted',tx),change('upsert',settled)];
+  assert.deepEqual(paymentReceiptIds(changes,payload,2),
+    {...payload,transaction_id:transaction,fact_id:fact});
+  const invalid=[
+    [change('ledger_posted',{...tx,data:{...tx.data,postings:[{account_id:ACCOUNT,signed_minor:-5999}]}}),changes[1]],
+    [changes[0],change('upsert',{...settled,data:{...settled.data,obligation_id:ACCOUNT}})],
+    [changes[0],change('upsert',{...settled,data:{...settled.data,occurrence_on:'2028-11-16'}})],
+    [{...changes[0],entity_id:fact},changes[1]],
+    [changes[0],changes[1],changes[1]],
+    [changes[0]],
+  ];
+  for(const altered of invalid)assert.throws(()=>paymentReceiptIds(altered,payload,2));
+  assert.throws(()=>paymentReceiptIds(changes,payload,3));
 });

@@ -57,7 +57,7 @@ const shapes: Readonly<Record<ReserveV2Action, readonly [readonly string[], read
   'reserve.cycle.void': [['reserve_id', 'occurred_on', 'reason'], []],
   'reserve.event.void': [['reserve_id', 'account_id', 'target_event_id', 'occurred_on', 'reason'], []],
   'settlement.payment.record': [[
-    'transaction_id', 'fact_id', 'account_id', 'obligation_id', 'amount_minor', 'paid_on',
+    'account_id', 'obligation_id', 'amount_minor', 'paid_on',
     'occurrence_on', 'reserve_id', 'reserved_used_minor',
   ], []],
   'settlement.payment.void': [[

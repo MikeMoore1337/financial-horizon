@@ -7,7 +7,7 @@ against HTTP without fabricating a production write.
 import copy
 import threading
 from datetime import date
-from uuid import uuid4
+from uuid import UUID, uuid4, uuid5
 
 PROFILE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 ACCOUNT = "11111111-1111-4111-8111-111111111111"
@@ -164,13 +164,15 @@ class ReserveStub:
             elif action == "settlement.payment.record":
                 amount = payload.get("amount_minor")
                 used = payload.get("reserved_used_minor")
-                transaction_id = payload.get("transaction_id")
-                fact_id = payload.get("fact_id")
+                seed = f"financial-horizon:payment:v2:{action}:{mutation}"
+                transaction_id = str(uuid5(UUID(PROFILE), seed + ":transaction"))
+                fact_id = str(uuid5(UUID(PROFILE), seed + ":fact"))
                 if (not isinstance(amount, int) or amount != 900000 or
                     not isinstance(used, int) or used < 0 or
                     used > amount or used > reserve["data"]["allocated_minor"] or
                     state["balance"] < amount or
-                    not isinstance(transaction_id, str) or not isinstance(fact_id, str) or
+                    set(payload) != {"account_id", "obligation_id", "amount_minor", "paid_on",
+                                     "occurrence_on", "reserve_id", "reserved_used_minor"} or
                     payload.get("account_id") != ACCOUNT or
                     payload.get("obligation_id") != HOSTING_OBLIGATION):
                     return 422, {"code": "invalid_command"}, None
@@ -231,5 +233,14 @@ class ReserveStub:
                 "revision": state["revision"], "replayed": False,
                 "changes": [{"kind": "upsert", "revision": state["revision"]}],
             }
+            if action == "settlement.payment.record":
+                transaction, fact = state["transactions"][-1], state["facts"][-1]
+                acknowledgement["changes"] = [
+                    {"kind": kind, "revision": state["revision"], "ordinal": ordinal,
+                     "entity_id": entity["id"], "entity_revision": entity["entity_revision"],
+                     "payload": {"entity": copy.deepcopy(entity)}}
+                    for ordinal, (kind, entity) in enumerate([
+                        ("ledger_posted", transaction), ("upsert", fact)])
+                ]
             state["mutations"][mutation] = copy.deepcopy(acknowledgement)
             return 201, acknowledgement, self.etag(state["revision"])

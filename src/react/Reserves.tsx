@@ -576,8 +576,6 @@ export function ConnectedReserves({
     await write(
       'settlement.payment.record',
       {
-        transaction_id: crypto.randomUUID(),
-        fact_id: crypto.randomUUID(),
         account_id: selected.accountId,
         obligation_id: selected.obligationId,
         amount_minor: paymentImpact.expenseCents,

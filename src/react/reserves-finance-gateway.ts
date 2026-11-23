@@ -40,6 +40,32 @@ export class ReservesFinanceError extends Error {
 function object(raw: unknown): raw is JsonObject {
   return !!raw && typeof raw === 'object' && !Array.isArray(raw);
 }
+// The server mints the payment and ledger IDs. Match its receipt to the
+// requested payment before accepting either identifier for the snapshot proof.
+export function paymentReceiptIds(changes: unknown[], payload: JsonObject, revision: number): JsonObject {
+  const transactions = changes.filter((item) => object(item) && item.kind === 'ledger_posted' &&
+    object(item.payload) && object(item.payload.entity) && item.payload.entity.kind === 'transaction');
+  const facts = changes.filter((item) => object(item) && item.kind === 'upsert' &&
+    object(item.payload) && object(item.payload.entity) && item.payload.entity.kind === 'settlement');
+  if (transactions.length !== 1 || facts.length !== 1) throw new ReservesFinanceError('error');
+  const txChange = transactions[0] as JsonObject, factChange = facts[0] as JsonObject;
+  const tx = (txChange.payload as JsonObject).entity as JsonObject;
+  const fact = (factChange.payload as JsonObject).entity as JsonObject;
+  if (!object(tx.data) || !object(fact.data) || !object(tx.data.payment_link) ||
+      txChange.revision !== revision || factChange.revision !== revision ||
+      txChange.entity_id !== tx.id || factChange.entity_id !== fact.id ||
+      txChange.entity_revision !== tx.entity_revision || factChange.entity_revision !== fact.entity_revision ||
+      !UUID.test(String(tx.id)) || !UUID.test(String(fact.id)) || tx.id === fact.id ||
+      tx.data.kind !== 'payment' || tx.data.occurred_on !== payload.paid_on ||
+      tx.data.payment_link.settlement_id !== fact.id || tx.data.payment_link.loan_payment_id !== null ||
+      !Array.isArray(tx.data.postings) || tx.data.postings.length !== 1 ||
+      !object(tx.data.postings[0]) || tx.data.postings[0].account_id !== payload.account_id ||
+      tx.data.postings[0].signed_minor !== -(payload.amount_minor as number) ||
+      fact.data.obligation_id !== payload.obligation_id || fact.data.amount_minor !== payload.amount_minor ||
+      fact.data.paid_on !== payload.paid_on || fact.data.occurrence_on !== payload.occurrence_on ||
+      fact.data.voided_at !== null) throw new ReservesFinanceError('error');
+  return {...payload, transaction_id: tx.id, fact_id: fact.id};
+}
 function entityId(raw: unknown): string {
   if (typeof raw !== 'string' || !UUID.test(raw)) throw new ReservesFinanceError('error');
   return raw;
@@ -487,10 +513,13 @@ export class ReservesFinanceGateway {
           !response.etag || !ETAG.test(response.etag)) {
         throw new ReservesFinanceError('error');
       }
+      const proofPayload = action === 'settlement.payment.record'
+        ? paymentReceiptIds(response.body.changes, payload, response.body.revision as number)
+        : payload;
       const after = await this.load(actor, asOfDate, undefined, true);
       if (epoch !== this.generation ||
           after.revision !== response.body.revision || this.etag !== response.etag ||
-          !verifyReservePostcondition(before, after, action, payload)) {
+          !verifyReservePostcondition(before, after, action, proofPayload)) {
         throw new ReservesFinanceError('conflict');
       }
       this.uncertain = false;
