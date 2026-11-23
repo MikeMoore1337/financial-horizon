@@ -2,6 +2,16 @@
 
 **Status: candidate preparation only. No active IndexedDB cutover. No user data deletion, sync or upload.** The functionality is implemented in `src/security/verified-atomic-staging.ts`. It composes the read-only [legacy preflight](LIVE_LEGACY_PREFLIGHT.md), [atomic encrypted candidate](ATOMIC_ENCRYPTED_CANDIDATE.md), [local unlock controller](APPROVED_LOCAL_UNLOCK_FLOW.md) and Web Crypto. This file is not imported by `app.js`, `storage.js`, React, Service Worker or the FastAPI backend.
 
+For an account, preparation refuses to proceed while that account has an
+`online-payment-pending-v1` record: a v1 backup does not contain that separate
+recovery record, so an empty candidate outbox would not represent it. The
+check runs in the same readonly transaction as the source snapshot and is
+repeated after candidate creation; an operation appearing after creation
+prevents a verified receipt and the one-time recovery key is still returned.
+This is not a writer lock: a payment can still appear after the final check.
+A future cutover must freeze all writers and reconcile the final source and
+all pending operations after the barrier is durable.
+
 ## Required consent and verification
 
 1. Obtain a fresh, **separately saved, encrypted legacy backup v1** file and its backup password. Verify the correct currently authenticated account or explicit guest scope, rather than trusting an identifier from the backup file. The account's login password/cookie must never be used as a local encryption key.

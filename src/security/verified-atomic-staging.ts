@@ -65,7 +65,7 @@ export async function prepareVerifiedAtomicCandidate(input: {
   // This checks claim/source key, decrypts the independently saved v1 backup
   // and reads the real original DB a second time after backup PBKDF2.
   const verified = await verifyLiveLegacyBackup({
-    selection, backupText, backupPassword, consent,
+    selection, backupText, backupPassword, consent, requireNoPendingOnlinePayment:true,
   });
 
   // Never overwrite a previously-created keyset or drop a previous recovery
@@ -105,7 +105,7 @@ export async function prepareVerifiedAtomicCandidate(input: {
     let latest: Awaited<ReturnType<typeof verifyLiveLegacyBackup>>;
     try {
       latest = await verifyLiveLegacyBackup({
-        selection, backupText, backupPassword, consent,
+        selection, backupText, backupPassword, consent, requireNoPendingOnlinePayment:true,
       });
     } catch (error) {
       // A changed source must not be mistaken for an approved candidate.

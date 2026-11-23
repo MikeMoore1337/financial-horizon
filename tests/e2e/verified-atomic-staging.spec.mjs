@@ -54,18 +54,34 @@ test('verified external backup stages inactive encrypted candidate with offline 
     await new Promise((resolve,reject)=>{
       const tx=db.transaction('finance','readwrite');
       tx.objectStore('finance').put(state,'account-state-v2:'+id);
+      tx.objectStore('finance').put({mutationId:'SYNTHETIC_PENDING'},'online-payment-pending-v1:'+id);
       tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);
     });
-    db.close();
     const backupPassword='independent encrypted backup password 2026';
     const localPassphrase='separate local unlock phrase 2026';
     const backupText=await encryptBackup(state,backupPassword);
-    const receipt=await prepareVerifiedAtomicCandidate({
+    const input={
       selection:{kind:'account',verifiedUserId:id},
       backupText,backupPassword,localPassphrase,
       consent:{savedEncryptedBackupOutsideThisBrowser:true,confirmedReadOnlyPreflight:true,
         confirmedSeparateEncryptedCandidate:true,acknowledgedOneTimeRecovery:true},
+    };
+    let pendingRejected=false;
+    try{await prepareVerifiedAtomicCandidate(input);}catch{pendingRejected=true;}
+    const pendingPreserved=await new Promise((resolve,reject)=>{
+      const tx=db.transaction('finance','readonly');
+      const request=tx.objectStore('finance').get('online-payment-pending-v1:'+id);
+      tx.oncomplete=()=>resolve(request.result?.mutationId==='SYNTHETIC_PENDING');
+      tx.onerror=()=>reject(tx.error);
     });
+    // Simulated reconciliation for this isolated fixture only.
+    await new Promise((resolve,reject)=>{
+      const tx=db.transaction('finance','readwrite');
+      tx.objectStore('finance').delete('online-payment-pending-v1:'+id);
+      tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);
+    });
+    db.close();
+    const receipt=await prepareVerifiedAtomicCandidate(input);
     const session=new LocalBudgetSession();
     session.selectScope(scope);
     await session.unlock(await getAtomicEncryptedKeyset(scope),{recoveryKey:receipt.recoveryKey});
@@ -84,7 +100,7 @@ test('verified external backup stages inactive encrypted candidate with offline 
       tx.onerror=()=>reject(tx.error);
     });
     protectedDb.close();
-    return {status:receipt.status,active:receipt.active,revision:receipt.sourceRevision,
+    return {pendingRejected,pendingPreserved,status:receipt.status,active:receipt.active,revision:receipt.sourceRevision,
       keyLen:receipt.recoveryKey.length,entries:copy.snapshot.entries.length,
       sameTitle:copy.snapshot.entries[0].title===state.entries[0].title,
       queue:copy.outbox.length,conflicts:copy.conflicts.length,
@@ -92,7 +108,7 @@ test('verified external backup stages inactive encrypted candidate with offline 
         !sealed.includes(localPassphrase) && !sealed.includes(receipt.recoveryKey) &&
         !sealed.includes(String(state.entries[0].amountCents))};
   });
-  expect(first).toEqual({status:'prepared',active:false,revision:0,keyLen:43,
+  expect(first).toEqual({pendingRejected:true,pendingPreserved:true,status:'prepared',active:false,revision:0,keyLen:43,
     entries:first.entries,sameTitle:true,queue:0,conflicts:0,safe:true});
   expect(first.entries).toBeGreaterThan(0);
 
