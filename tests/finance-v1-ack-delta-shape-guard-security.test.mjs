@@ -1,0 +1,175 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { checkV1AckDeltaShape as guard } from '../src/security/finance-v1-ack-delta-shape-guard.js';
+
+// All fixtures are synthetic, in-memory only. The guard is not imported by the PWA.
+const mutationId = '00000000-0000-4000-8000-0000000000a1';
+const entityId = '00000000-0000-4000-8000-0000000000b1';
+const event = (revision, value) => ({
+  revision, ordinal: 0, kind: 'upsert', entity_id: entityId,
+  entity_revision: 1, payload: { details: { values: [value] } },
+});
+const fixture = () => ({
+  startCursor: 3, mutationId,
+  pages: [
+    { schema_version: 1, from_revision: 3, to_revision: 5,
+      next_since_revision: 4, has_more: true, changes: [event(4, 1)] },
+    { schema_version: 1, from_revision: 4, to_revision: 5,
+      next_since_revision: 5, has_more: false, changes: [event(5, 2)] },
+  ],
+  ack: { schema_version: 1, client_mutation_id: mutationId, revision: 4,
+    replayed: true, changes: [event(4, 1)] },
+});
+
+test('ordinary JSON ACK matches an intact two-page delta', () => {
+  assert.equal(guard(JSON.stringify(fixture())), 'MATCHED_STRUCTURALLY');
+});
+
+test('P2: altered payload cannot override Array.every through a forged prototype', () => {
+  const input = fixture();
+  const values = input.ack.changes[0].payload.details.values;
+  values[0] = 999;
+  Object.setPrototypeOf(values, { every: () => true });
+  assert.equal(guard(input), 'RECOVERY_HOLD');
+});
+
+test('P2: getters on ACK/page/event envelopes fail closed, not throw', () => {
+  for (const mutate of [
+    x => Object.defineProperty(x.ack, 'revision', {
+      enumerable: true, get() { throw new Error('untrusted getter'); },
+    }),
+    x => Object.defineProperty(x.pages[0], 'has_more', {
+      enumerable: true, get() { throw new Error('untrusted getter'); },
+    }),
+    x => Object.defineProperty(x.pages[0].changes[0], 'revision', {
+      enumerable: true, get() { throw new Error('untrusted getter'); },
+    }),
+  ]) {
+    const input = fixture();
+    mutate(input);
+    assert.equal(guard(input), 'RECOVERY_HOLD');
+  }
+});
+
+test('P2: shadowed iterator, holes and inherited events are rejected', () => {
+  const input = fixture();
+  Object.defineProperty(input.pages[0].changes, Symbol.iterator, {
+    value: function* () { yield event(4, 1); },
+  });
+  assert.equal(guard(input), 'RECOVERY_HOLD');
+  const sparse = fixture();
+  sparse.ack.changes = new Array(1);
+  assert.equal(guard(sparse), 'RECOVERY_HOLD');
+  const inherited = fixture();
+  inherited.ack.changes = Object.assign(Object.create([]), { 0: event(4, 1), length: 1 });
+  assert.equal(guard(inherited), 'RECOVERY_HOLD');
+});
+
+test('P2: shared-reference DAG and cycle cannot cause exponential traversal', () => {
+  const branching = fixture();
+  let nested = { amount_minor: 1 };
+  for (let depth = 0; depth < 12; depth++) {
+    const parent = {};
+    for (let child = 0; child < 8; child++) parent['c' + child] = nested;
+    nested = parent;
+  }
+  branching.pages[1].changes[0].payload = nested;
+  assert.equal(guard(branching), 'RECOVERY_HOLD');
+  const cyclic = fixture();
+  cyclic.pages[1].changes[0].payload.circular = cyclic.pages[1].changes[0].payload;
+  assert.equal(guard(cyclic), 'RECOVERY_HOLD');
+});
+
+test('valid events in unacknowledged pages must still be ordinary JSON', () => {
+  const input = fixture();
+  input.pages[1].changes[0].payload = { attack: Number.POSITIVE_INFINITY };
+  assert.equal(guard(input), 'RECOVERY_HOLD');
+});
+
+test('P2 Proxy: caller object, nested Proxy and mutation traps are never touched', () => {
+  let traps = 0;
+  const attack = new Proxy({ amount_minor: 999 }, {
+    get() { traps++; return 100; },
+    getPrototypeOf() { traps++; return Object.prototype; },
+    ownKeys() { traps++; return ['amount_minor']; },
+    getOwnPropertyDescriptor() { traps++; return { value: 100, enumerable: true, configurable: true }; },
+  });
+  const input = fixture();
+  input.ack.changes[0].payload = attack;
+  assert.equal(guard(input), 'RECOVERY_HOLD');
+  assert.equal(traps, 0);
+  const proxiedEnvelope = new Proxy(fixture(), {
+    get() { traps++; throw new Error('must not read input'); },
+    getPrototypeOf() { traps++; throw new Error('must not inspect input'); },
+  });
+  assert.equal(guard(proxiedEnvelope), 'RECOVERY_HOLD');
+  assert.equal(traps, 0);
+  const differing = fixture();
+  differing.ack.changes[0].payload.details.values[0] = 999;
+  assert.equal(guard(JSON.stringify(differing)), 'RECOVERY_HOLD');
+});
+
+// Before this guard, different wire integers above 2^53 collapsed to the
+// same JS Number, incorrectly producing MATCHED_STRUCTURALLY.
+test('rejects unsafe integer precision collision in ACK versus delta wire JSON', () => {
+  const raw = JSON.stringify(fixture());
+  const token = '"values":[1]';
+  const first = raw.replace(token, '"values":[9007199254740992]');
+  const last = first.lastIndexOf(token);
+  assert.notEqual(last, -1);
+  const ambiguous = first.slice(0, last) + '"values":[9007199254740993]' +
+    first.slice(last + token.length);
+  assert.equal(JSON.parse('9007199254740992'), JSON.parse('9007199254740993'));
+  assert.equal(guard(ambiguous), 'RECOVERY_HOLD');
+  const both = JSON.stringify(fixture()).replaceAll(token, '"values":[9007199254740992]');
+  assert.equal(guard(both), 'RECOVERY_HOLD');
+});
+
+// Precision cannot be recovered after JSON.parse: require canonical numeric
+// tokens in the *original* wire text, not just safe integer parsed values.
+test('rejects rounded fractional and underflow ACK/delta numeric collisions', () => {
+  const token = '"values":[1]';
+  const inject = (delta, ack) => {
+    const first = JSON.stringify(fixture()).replace(token, '"values":[' + delta + ']');
+    const last = first.lastIndexOf(token);
+    assert.notEqual(last, -1);
+    return first.slice(0, last) + '"values":[' + ack + ']' +
+      first.slice(last + token.length);
+  };
+  for (const [delta, ack] of [
+    ['100', '100.000000000000001'],
+    ['9007199254740991', '9007199254740991.1'],
+    ['0', '1e-400'],
+  ]) {
+    assert.equal(Number(delta), Number(ack)); // proves parser precision collapse
+    assert.equal(guard(inject(delta, ack)), 'RECOVERY_HOLD');
+  }
+  const valid = fixture();
+  valid.pages[0].changes[0].payload.details.values[0] = 0.1;
+  valid.ack.changes[0].payload.details.values[0] = 0.1;
+  assert.equal(guard(JSON.stringify(valid)), 'MATCHED_STRUCTURALLY');
+  const quoted = fixture();
+  quoted.pages[0].changes[0].payload.details.values[0] = '1e-400';
+  quoted.ack.changes[0].payload.details.values[0] = '1e-400';
+  assert.equal(guard(JSON.stringify(quoted)), 'MATCHED_STRUCTURALLY');
+});
+
+test('P2: duplicate JSON object keys are rejected before JSON.parse discards first value', () => {
+  const raw = JSON.stringify(fixture());
+  const marker = '"values":[1]';
+  assert.equal(guard(raw), 'MATCHED_STRUCTURALLY');
+  const ordinaryDuplicate = raw.replace(marker, '"values":[999],"values":[1]');
+  assert.equal(JSON.parse(ordinaryDuplicate).pages[0].changes[0].payload.details.values[0], 1);
+  assert.equal(guard(ordinaryDuplicate), 'RECOVERY_HOLD');
+  const escapedDuplicate = raw.replace(marker, '"values":[999],"\\u0076alues":[1]');
+  assert.equal(JSON.parse(escapedDuplicate).pages[0].changes[0].payload.details.values[0], 1);
+  assert.equal(guard(escapedDuplicate), 'RECOVERY_HOLD');
+  // Duplicates in unrelated pages should also fail closed, not be ignored.
+  const anotherPage = raw.replace('"values":[2]', '"values":[999],"values":[2]');
+  assert.equal(guard(anotherPage), 'RECOVERY_HOLD');
+  // Names repeated in different objects are legal and ordinary text is inert.
+  const valid = fixture();
+  valid.pages[0].changes[0].payload.details.values[0] = 'quoted "values":{}';
+  valid.ack.changes[0].payload.details.values[0] = 'quoted "values":{}';
+  assert.equal(guard(JSON.stringify(valid)), 'MATCHED_STRUCTURALLY');
+});
