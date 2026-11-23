@@ -288,6 +288,7 @@ export async function compareAndSwapAtomicEncryptedCandidate(
   safeInteger(expectedEpoch, 0, Number.MAX_SAFE_INTEGER - 1, 'expectedEpoch');
   safeInteger(schemaVersion, 1, 65535, 'schemaVersion');
   const lease = session.lifecycleVersion;
+  const signal = session.lifecycleSignal;
   activeSession(session, scope, lease);
   const nextEpoch = expectedEpoch + 1;
   const records = await sealParts(session, contents, nextEpoch, schemaVersion);
@@ -296,8 +297,14 @@ export async function compareAndSwapAtomicEncryptedCandidate(
   const next = newBundle(scope, keyId, nextEpoch, schemaVersion, records);
   const db = await openDb();
   try {
+    activeSession(session, scope, lease);
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction([KEYSETS, BUNDLES], 'readwrite');
+      const stopPending = () => {
+        try { tx.abort(); } catch { /* transaction already committed or aborted */ }
+      };
+      const cleanup = () => signal.removeEventListener('abort', stopPending);
+      signal.addEventListener('abort', stopPending, {once: true});
       const keyReq = tx.objectStore(KEYSETS).get(scope);
       const oldReq = tx.objectStore(BUNDLES).get(scope);
       let cause: Error | null = null;
@@ -318,11 +325,16 @@ export async function compareAndSwapAtomicEncryptedCandidate(
         }
       };
       tx.oncomplete = () => {
+        cleanup();
         try { activeSession(session, scope, lease); resolve(); }
         catch (error) { reject(error); } // A concurrent logout must not publish success.
       };
-      tx.onerror = () => reject(cause || tx.error || Error('Ошибка записи защищённой копии'));
-      tx.onabort = () => reject(cause || tx.error || Error('Запись защищённой копии отменена'));
+      tx.onerror = () => { cleanup(); reject(cause || tx.error || Error('Ошибка записи защищённой копии')); };
+      tx.onabort = () => {
+        cleanup();
+        reject(cause || (signal.aborted ? Error('Локальный бюджет заблокирован') : null) ||
+          tx.error || Error('Запись защищённой копии отменена'));
+      };
     });
   } finally { db.close(); }
   return nextEpoch;

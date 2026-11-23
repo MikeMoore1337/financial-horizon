@@ -32,7 +32,7 @@ const clone = value => structuredClone(value);
 function fakeIndexedDb() {
   const tables = new Map([['keysets', new Map()], ['bundles', new Map()]]);
   let failBundlePut = false, failKeysetPut = false;
-  let logoutAfterKeysetPut = null;
+  let logoutAfterKeysetPut = null, logoutAfterBundlePut = null;
   const db = {
     close(){},
     onversionchange: null,
@@ -74,6 +74,11 @@ function fakeIndexedDb() {
                 // deterministically reproducing the reviewer-found race.
                 queueMicrotask(() => selected.logout());
               }
+              if (name === 'bundles' && logoutAfterBundlePut) {
+                const selected = logoutAfterBundlePut;
+                logoutAfterBundlePut = null;
+                queueMicrotask(() => selected.logout());
+              }
               return {};
             },
           };
@@ -101,6 +106,7 @@ function fakeIndexedDb() {
   return {tables, set failBundlePut(value){failBundlePut=value;},
     set failKeysetPut(value){failKeysetPut=value;},
     set logoutAfterKeysetPut(value){logoutAfterKeysetPut=value;},
+    set logoutAfterBundlePut(value){logoutAfterBundlePut=value;},
     open(name, version){
       assert.equal(name, ATOMIC_ENCRYPTED_DB);
       assert.equal(version, 1);
@@ -232,6 +238,20 @@ test('logout invalidates a crypto write still in flight, preserves prior epoch',
   const reopened = await unlock(USER_A);
   assert.equal((await readAtomicEncryptedCandidate(USER_A, reopened)).epoch, 0);
   assert.deepEqual((await readAtomicEncryptedCandidate(USER_A, reopened)).snapshot, SOURCE.snapshot);
+});
+
+test('logout after bundle put aborts the pending transaction and preserves all prior data', async () => {
+  const db = mount();
+  await createAtomicEncryptedCandidate(USER_A, PASS, SOURCE);
+  const previous = clone(db.tables.get('bundles').get(USER_A));
+  const session = await unlock(USER_A);
+  db.logoutAfterBundlePut = session;
+  await assert.rejects(() => compareAndSwapAtomicEncryptedCandidate(USER_A, session, 0, 2,
+    {...clone(SOURCE), outbox: [{id: 'MUST_NOT_COMMIT'}]}), /заблокирован|отменена/);
+  assert.deepEqual(db.tables.get('bundles').get(USER_A), previous);
+  const reopened = await unlock(USER_A);
+  assert.deepEqual(await readAtomicEncryptedCandidate(USER_A, reopened),
+    {...SOURCE, epoch: 0, schemaVersion: 2});
 });
 
 test('failed update transaction preserves old snapshot and pending operations', async () => {
