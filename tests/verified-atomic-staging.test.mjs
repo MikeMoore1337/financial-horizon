@@ -122,7 +122,7 @@ async function setup(rows, options={}) {
 }
 const invoke=(backupText,extra={})=>prepareVerifiedAtomicCandidate({
   selection,backupText,backupPassword:PASSWORD,
-  localPassphrase:LOCAL_PASSWORD,consent,...extra,
+  localPassphrase:LOCAL_PASSWORD,consent,signal:new AbortController().signal,...extra,
 });
 
 test('verified v1 backup makes an inactive atomic candidate; existing ledger intact',async()=>{
@@ -216,6 +216,15 @@ test('independent staging requires all explicit confirmations before DB access',
   assert.equal(db.atomicOpens,0);
 });
 
+test('staging rejects missing or already revoked profile lifecycle before DB access',async()=>{
+  const {db,backupText}=await setup();
+  await assert.rejects(()=>invoke(backupText,{signal:undefined}),/отзыв доступа/);
+  const controller=new AbortController();controller.abort();
+  await assert.rejects(()=>invoke(backupText,{signal:controller.signal}),/отозван/);
+  assert.equal(db.legacyOpens,0);
+  assert.equal(db.atomicOpens,0);
+});
+
 test('pre-existing candidate cannot be overwritten or silently rotate its keys',async()=>{
   const {db,backupText}=await setup();
   const first=await invoke(backupText);
@@ -258,7 +267,7 @@ test('corrupted postcommit readback returns unverified but preserves recovery ke
 test('input scope, credentials and consent cannot redirect account during KDF',async()=>{
   const {db,backupText}=await setup();
   const input={selection:{...selection},backupText,backupPassword:PASSWORD,
-    localPassphrase:LOCAL_PASSWORD,consent:{...consent}};
+    localPassphrase:LOCAL_PASSWORD,consent:{...consent},signal:new AbortController().signal};
   const inflight=prepareVerifiedAtomicCandidate(input);
   input.selection.verifiedUserId=USER_B;
   input.localPassphrase='tampered local password 2026';

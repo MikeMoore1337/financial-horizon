@@ -7,7 +7,8 @@ For an account, preparation refuses to proceed while that account has an
 recovery record, so an empty candidate outbox would not represent it. The
 check runs in the same readonly transaction as the source snapshot and is
 repeated after candidate creation; an operation appearing after creation
-prevents a verified receipt and the one-time recovery key is still returned.
+prevents a verified receipt; the one-time recovery key is returned only while
+the originating profile's lifecycle remains valid.
 This is not a writer lock: a payment can still appear after the final check.
 A future cutover must freeze all writers and reconcile the final source and
 all pending operations after the barrier is durable.
@@ -16,18 +17,27 @@ all pending operations after the barrier is durable.
 
 1. Obtain a fresh, **separately saved, encrypted legacy backup v1** file and its backup password. Verify the correct currently authenticated account or explicit guest scope, rather than trusting an identifier from the backup file. The account's login password/cookie must never be used as a local encryption key.
 2. Collect four explicit confirmations: external backup saved, read-only source preflight, independent encrypted candidate creation, and one-time recovery-key handling. These flags are representations of real user actions, not evidence of physical file retention. UI + physical restore verification are separate gates.
-3. Pin the selected identity, backup ciphertext, backup password and **distinct** local passphrase before any async KDF operation. Validate source snapshot and legacy claim before and after backup decrypt via `verifyLiveLegacyBackup`.
+3. Pin the selected identity, backup ciphertext, backup password and **distinct** local passphrase before any async KDF operation. The caller must supply an `AbortSignal` tied to this exact selected-profile lifecycle and revoke it on lock, logout or profile change. Validate source snapshot and legacy claim before and after backup decrypt via `verifyLiveLegacyBackup`.
 4. Create a **new**, separate encrypted atomic candidate containing the migrated v2 snapshot with empty legacy outbox/conflict arrays. This legacy schema has no outbox, but the future #68 sync schema must supply all actual pending operations before its own cutover. **Never silently overwrite** a pre-existing protected keyset.
-5. After the initial encrypted IDB transaction is committed, return a one-time recovery receipt even if verification later fails. Re-open the candidate in a fresh local in-memory session with the user's local passphrase, decrypt its snapshot, compare all financial values and ensure outbox/conflicts are empty and epoch 0. Recheck the original legacy source/backup a final time to detect writes during staging.
+5. After the initial encrypted IDB transaction is committed, return a one-time recovery receipt even if ordinary verification later fails, provided the originating profile was not revoked. Re-open the candidate in a fresh local in-memory session with the user's local passphrase, decrypt its snapshot, compare all financial values and ensure outbox/conflicts are empty and epoch 0. Recheck the original legacy source/backup a final time to detect writes during staging.
 
 ## Receipt and failure handling
 
-Every committed candidate receipt has `active:false` and one of:
+Every returned candidate receipt has `active:false` and one of:
 - `prepared`: encrypted copy decrypted and matched an independently verified legacy source at the last read. **Not** permission to cut over; active legacy writers may still edit later.
 - `stale-source`: the original source changed during preparation; the encrypted candidate **remains inactive**. It and its recovery key must be preserved for a future operator-guided reconciliation, not silently deleted.
 - `unverified`: read-back, keyset, password, source or metadata verification after commit failed. The copy remains inactive. The recovery key is still returned; never throw it away or claim success.
 
 Before the initial atomic commit, errors (invalid consent, backup mismatch, lost source, wrong password, duplicate scope, quota/abort) reject without creating an active protected source. **No automatic retry can overwrite a previous keyset or rotate its recovery secret.** Future application integration needs a clearly reviewed abort/restart path for a stale candidate and proof of independent recovery, without deleting original financial records.
+
+Revocation cancels a pending native write when the transaction is still active
+and prevents a recovery receipt from being returned to the former profile. If
+the transaction already committed, it cannot be rolled back: the inactive
+candidate remains and the one-time secret is not returned. The unchanged
+local passphrase can unlock that candidate and reissue a recovery key after
+fresh profile verification. This is a recovery mechanism, not a completed UI
+or authorization provider; the future host must actually bind the signal and
+perform the reissue flow.
 
 ## What is deliberately NOT implemented
 

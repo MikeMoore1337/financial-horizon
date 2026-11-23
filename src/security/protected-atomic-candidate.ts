@@ -208,8 +208,12 @@ function activeSession(session: LocalBudgetSession, scope: LocalScope, lease: nu
  */
 export async function createAtomicEncryptedCandidate(
   scope: LocalScope, passphrase: string, contents: ProtectedAtomicContents,
-  schemaVersion = 2,
+  schemaVersion = 2, signal?: AbortSignal,
 ): Promise<{epoch: 0; recoveryKey: string}> {
+  const checkActive = () => {
+    if (signal?.aborted) throw Error('Создание защищённой копии отменено');
+  };
+  checkActive();
   validScope(scope);
   safeInteger(schemaVersion, 1, 65535, 'schemaVersion');
   // Reject invisible/symbol fields and class instances BEFORE structuredClone
@@ -219,16 +223,25 @@ export async function createAtomicEncryptedCandidate(
   validContents(pinnedContents);
   const {keyset, recoveryKey, vault} = await createLocalKeyset(scope, passphrase);
   try {
+    checkActive();
     const records = await sealParts(vault, pinnedContents, 0, schemaVersion);
+    checkActive();
     const bundle = newBundle(scope, keyset.keyId, 0, schemaVersion, records);
     const db = await openDb();
     try {
+      checkActive();
       await new Promise<void>((resolve, reject) => {
         const tx = db.transaction([KEYSETS, BUNDLES], 'readwrite');
+        const stopPending = () => {
+          try { tx.abort(); } catch { /* already committed or aborted */ }
+        };
+        const cleanup = () => signal?.removeEventListener('abort', stopPending);
+        signal?.addEventListener('abort', stopPending, {once:true});
         const oldKey = tx.objectStore(KEYSETS).get(scope);
         const oldBundle = tx.objectStore(BUNDLES).get(scope);
         let cause: Error | null = null;
         oldBundle.onsuccess = () => {
+          if (signal?.aborted) { stopPending(); return; }
           if (oldKey.result !== undefined || oldBundle.result !== undefined) {
             cause = Error('Локальная зашифрованная копия уже существует');
             tx.abort();
@@ -239,14 +252,18 @@ export async function createAtomicEncryptedCandidate(
             tx.objectStore(BUNDLES).put(bundle, scope);
           } catch (error) {
             cause = error instanceof Error ? error : Error('Ошибка атомарной записи');
-            tx.abort();
+            stopPending();
           }
         };
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(cause || tx.error || Error('Ошибка атомарной записи'));
-        tx.onabort = () => reject(cause || tx.error || Error('Создание защищённой копии отменено'));
+        tx.oncomplete = () => {
+          cleanup();
+          try { checkActive(); resolve(); } catch (error) { reject(error); }
+        };
+        tx.onerror = () => { cleanup(); reject(cause || tx.error || Error('Ошибка атомарной записи')); };
+        tx.onabort = () => { cleanup(); reject(cause || tx.error || Error('Создание защищённой копии отменено')); };
       });
     } finally { db.close(); }
+    checkActive();
     return {epoch: 0, recoveryKey};
   } finally { vault.lock(); }
 }
