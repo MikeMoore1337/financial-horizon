@@ -394,6 +394,88 @@ def test_settlement_payment_posts_exact_signed_income_and_expense_once(context):
     assert state.body["entities"][0]["data"]["balance_minor"] == 11_300
 
 
+def test_settlement_rejects_overpayment_and_includes_imported_month_fact(context):
+    engine, scope = context
+    account, _ = add_account(engine, scope, opening=50_000)
+    obligation = uuid4()
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        session.execute(text("""
+            INSERT INTO obligations(profile_id,id,title,direction,amount_minor,starts_on,
+                                    recurrence_unit,recurrence_every)
+            VALUES (:p,:id,'Synthetic monthly expense','expense',10000,'2024-01-31','month',1)
+        """), {"p": scope.profile_id, "id": obligation})
+        # Existing imports encode the occurrence as the first day of the month.
+        session.execute(text("""
+            INSERT INTO settlements(profile_id,id,obligation_id,occurrence_on,paid_on,amount_minor)
+            VALUES (:p,:id,:obligation,'2024-02-01','2024-02-12',3000)
+        """), {"p": scope.profile_id, "id": uuid4(), "obligation": obligation})
+    snap = get_account_snapshot(engine, scope=scope)
+    def command(amount, occurrence="2024-02-29"):
+        return make_command(snap.body["revision"], "settlement.payment.record", {
+            "transaction_id": str(uuid4()), "fact_id": str(uuid4()),
+            "account_id": account, "obligation_id": str(obligation),
+            "amount_minor": amount, "paid_on": "2024-03-04",
+            "occurrence_on": occurrence,
+        }, {account: 1, str(obligation): 1})
+    before = ledger_counts(engine, scope)
+    with pytest.raises(FinanceCommandError) as error:
+        call(engine, scope, command(7001), snap.etag)
+    assert error.value.code == "semantic_conflict"
+    assert ledger_counts(engine, scope) == before
+    with pytest.raises(FinanceCommandError):
+        call(engine, scope, command(1, "2024-02-28"), snap.etag)
+    assert ledger_counts(engine, scope) == before
+    payment = command(7000)
+    result = call(engine, scope, payment, snap.etag)
+    assert result.status == 201
+    assert call(engine, scope, payment, snap.etag).body["replayed"] is True
+    current = get_account_snapshot(engine, scope=scope)
+    assert current.body["entities"][0]["data"]["balance_minor"] == 43_000
+    next_cmd = make_command(current.body["revision"], "settlement.payment.record", {
+        "transaction_id": str(uuid4()), "fact_id": str(uuid4()),
+        "account_id": account, "obligation_id": str(obligation),
+        "amount_minor": 1, "paid_on": "2024-03-05", "occurrence_on": "2024-02-29",
+    }, {account: current.body["entities"][0]["entity_revision"], str(obligation): 1})
+    with pytest.raises(FinanceCommandError):
+        call(engine, scope, next_cmd, current.etag)
+
+
+def test_two_distinct_tranches_cannot_race_past_occurrence_limit(context):
+    engine, scope = context
+    account, _ = add_account(engine, scope, opening=50_000)
+    obligation = uuid4()
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        session.execute(text("""
+            INSERT INTO obligations(profile_id,id,title,direction,amount_minor,starts_on)
+            VALUES (:p,:id,'Synthetic expense','expense',10000,'2026-11-08')
+        """), {"p": scope.profile_id, "id": obligation})
+    snap = get_account_snapshot(engine, scope=scope)
+    def command():
+        return make_command(snap.body["revision"], "settlement.payment.record", {
+            "transaction_id": str(uuid4()), "fact_id": str(uuid4()),
+            "account_id": account, "obligation_id": str(obligation),
+            "amount_minor": 7000, "paid_on": "2026-11-08", "occurrence_on": "2026-11-08",
+        }, {account: 1, str(obligation): 1})
+    def send(cmd):
+        try:
+            return call(engine, scope, cmd, snap.etag).status
+        except FinanceCommandError as exc:
+            return exc.status
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(send, [command(), command()])) == [201, 412]
+    current = get_account_snapshot(engine, scope=scope)
+    assert current.body["entities"][0]["data"]["balance_minor"] == 43_000
+    retry = command()
+    retry["base_revision"] = current.body["revision"]
+    retry["expected_entity_revisions"] = {
+        account: current.body["entities"][0]["entity_revision"], str(obligation): 1,
+    }
+    with pytest.raises(FinanceCommandError):
+        call(engine, scope, retry, current.etag)
+
+
 def test_loan_payment_debits_cash_atomically_and_blocks_invalid_strategy(context):
     engine, scope = context
     a, _ = add_account(engine, scope, opening=15_000)

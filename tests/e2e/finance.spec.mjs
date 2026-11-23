@@ -28,11 +28,15 @@ test('income/expense CRUD, fact edit and void through actual UI',async({page,con
  await page.locator('.records-mobile [data-action="edit-settlement"]').first().click();
  await page.locator('#settlement-form [name="amount"]').fill('600');
  await page.locator('#settlement-form button[type="submit"]').click();
- await expect.poll(async()=> (await scopedState(page,'state')).settlements[0].amountCents).toBe(60000);
+ await expect.poll(async()=> (await scopedState(page,'state')).settlements.length).toBe(2);
+ state=await scopedState(page,'state');
+ expect(state.settlements[0].amountCents).toBe(75000);
+ expect(state.settlements[0].voidedAt).toBeTruthy();
+ expect(state.settlements[1].amountCents).toBe(60000);
  await page.locator('.records-mobile [data-action="void-settlement"]').first().click();
  await expect(page.locator('#confirmation-dialog')).toBeVisible();
  await page.locator('#confirm-yes').click();
- await expect.poll(async()=>Boolean((await scopedState(page,'state')).settlements[0].voidedAt)).toBe(true);
+ await expect.poll(async()=>Boolean((await scopedState(page,'state')).settlements[1].voidedAt)).toBe(true);
  watcher.assertClean();
 });
 

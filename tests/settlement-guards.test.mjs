@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {emptyState, getMonthEvents} from '../finance.js';
 import {applySettlement} from '../ledger-operations.js';
+import {encryptBackup,decryptBackup} from '../backup.js';
 
 function fixture(recurrence='monthly',date='2024-01-31') {
  const state=emptyState();
@@ -52,10 +53,28 @@ test('correction respects other payments and cancellation restores the available
  const id=applySettlement(state,{...base,amountCents:400000},options);
  applySettlement(state,{...base,amountCents:500000},options);
  assert.throws(()=>applySettlement(state,{...base,id,amountCents:500001},options));
- applySettlement(state,{...base,id,amountCents:300000},options);
+ const replacementId=applySettlement(state,{...base,id,amountCents:300000},options);
+ assert.equal(state.settlements[0].amountCents,400000);
+ assert.equal(state.settlements[0].date,'2025-01-02');
+ assert.ok(state.settlements[0].voidedAt);
+ assert.equal(state.settlements.find(item=>item.id===replacementId).amountCents,300000);
+ assert.equal(state.audit.at(-1).originalSettlementId,id);
+ assert.equal(state.audit.at(-1).replacementSettlementId,replacementId);
  assert.equal(getMonthEvents(state,'2024-12')[0].paidCents,800000);
  state.settlements[1].voidedAt='2025-01-03T12:00:00.000Z';
  assert.equal(getMonthEvents(state,'2024-12')[0].paidCents,300000);
  applySettlement(state,{...base,amountCents:700000},options);
  assert.equal(getMonthEvents(state,'2024-12')[0].paidCents,1000000);
+});
+
+test('encrypted backup preserves the original and replacement of a corrected fact',async()=>{
+ const {state,options}=fixture();
+ const input={entryId:'expense',occurrence:'2024-02',date:'2024-03-01'};
+ const original=applySettlement(state,{...input,amountCents:4500},options);
+ const replacement=applySettlement(state,{...input,id:original,amountCents:3500},options);
+ const restored=await decryptBackup(await encryptBackup(state,'synthetic-passphrase'),'synthetic-passphrase');
+ assert.deepEqual(restored.settlements,state.settlements);
+ assert.equal(restored.audit.at(-1).originalSettlementId,original);
+ assert.equal(restored.audit.at(-1).replacementSettlementId,replacement);
+ assert.equal(getMonthEvents(restored,'2024-02')[0].paidCents,3500);
 });

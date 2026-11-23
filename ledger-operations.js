@@ -75,9 +75,14 @@ export function applySettlement(state,{id='',entryId,occurrence,date,amountCents
  }
  if(amountCents>entry.amountCents-paid)throw Error('Сумма превышает остаток обязательства');
  if(id){
-  Object.assign(existing,{amountCents,date,updatedAt:now()});
-  audit(state,'fact-update',`Исправлена фактическая сумма: ${rubles(amountCents)}`,{id:idFactory,now});
-  return id;
+  const replacementId=idFactory();
+  if(state.settlements.some(item=>item.id===replacementId))throw Error('Повторный идентификатор операции');
+  const changedAt=now();
+  existing.voidedAt=changedAt;
+  state.settlements.push({id:replacementId,entryId,occurrence,date,amountCents,createdAt:changedAt});
+  audit(state,'fact-update','Исправлена фактическая сумма; исходная операция сохранена', {id:idFactory,now});
+  Object.assign(state.audit[state.audit.length-1],{originalSettlementId:id,replacementSettlementId:replacementId});
+  return replacementId;
  }
  const newId=idFactory();
  state.settlements.push({id:newId,entryId,occurrence,date,amountCents,createdAt:now()});
