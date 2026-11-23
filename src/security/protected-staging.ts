@@ -64,7 +64,9 @@ function assertFinancialJson(value: unknown, depth = 0, ancestors = new Set<obje
   for (const name of names) {
     if (array && name === 'length') continue;
     const descriptor = descriptors[name];
-    if (!descriptor.enumerable || !('value' in descriptor)) throw Error('Недопустимое свойство финансового JSON');
+    if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) {
+      throw Error('Недопустимое свойство финансового JSON');
+    }
     assertFinancialJson(descriptor.value, depth + 1, ancestors);
   }
   ancestors.delete(value);
