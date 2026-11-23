@@ -101,6 +101,7 @@ test('legacy confirmation resolves false when revoked and closed externally',asy
  assert.ok(start>=0&&end>start);
  let onClose;
  const dialog={open:false,addEventListener(type,fn){if(type==='close')onClose=fn;},
+  removeEventListener(type,fn){if(type==='close'&&onClose===fn)onClose=null;},
   showModal(){this.open=true;},close(){this.open=false;onClose?.();}};
  const items={'#confirmation-dialog':dialog,'#confirmation-title':{},'#confirmation-text':{},
   '#confirm-yes':{},'#confirm-cancel':{}};
@@ -108,4 +109,24 @@ test('legacy confirmation resolves false when revoked and closed externally',asy
   {$:selector=>items[selector]});
  dialog.close();
  assert.equal(await pending,false);
+});
+
+test('an earlier delayed close event cannot cancel a newly opened legacy confirmation',async()=>{
+ const app=readFileSync(new URL('../legacy/app.js',import.meta.url),'utf8');
+ const start=app.indexOf('function requireConfirm(title,text){');
+ const end=app.indexOf('\nasync function handleAction(',start);
+ const listeners=new Set(),events=[];
+ const dialog={open:false,
+  addEventListener(type,fn){if(type==='close')listeners.add(fn);},
+  removeEventListener(type,fn){if(type==='close')listeners.delete(fn);},
+  showModal(){this.open=true;},
+  close(){this.open=false;events.push(()=>{for(const listener of [...listeners])listener();});},
+ };
+ const yes={},items={'#confirmation-dialog':dialog,'#confirmation-title':{},'#confirmation-text':{},
+  '#confirm-yes':yes,'#confirm-cancel':{}};
+ const create=runInNewContext(app.slice(start,end)+'\nrequireConfirm',{$:selector=>items[selector]});
+ const first=create('one','one');yes.onclick();assert.equal(await first,true);
+ const second=create('two','two');events.shift()();
+ assert.equal(dialog.open,true,'old close event must not close the new dialog');
+ yes.onclick();assert.equal(await second,true);
 });

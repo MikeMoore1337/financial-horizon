@@ -277,8 +277,9 @@ function openSettlement(entryId,occurrence=ui.month,paymentId=null){
 function requireConfirm(title,text){return new Promise(resolve=>{
  const dialog=$('#confirmation-dialog');$('#confirmation-title').textContent=title;$('#confirmation-text').textContent=text;
  let done=false;
- const finish=value=>{if(done)return;done=true;if(dialog.open)dialog.close();resolve(value);};
- dialog.addEventListener('close',()=>finish(false),{once:true});
+ const onClose=()=>{if(!dialog.open)finish(false);};
+ const finish=value=>{if(done)return;done=true;dialog.removeEventListener('close',onClose);if(dialog.open)dialog.close();resolve(value);};
+ dialog.addEventListener('close',onClose);
  const yes=$('#confirm-yes'),no=$('#confirm-cancel');
  yes.onclick=()=>finish(true);no.onclick=()=>finish(false);
  dialog.oncancel=e=>{e.preventDefault();finish(false);};
