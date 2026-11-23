@@ -1,6 +1,7 @@
 /**
- * Staging-only encrypted IndexedDB. Deliberately not imported by storage.js, UI,
- * auth, sync or the Service Worker. It NEVER reads, modifies or deletes legacy DBs.
+ * Staging-only encrypted IndexedDB. The JSON comparison helper is also used by
+ * active import flows; staging itself is not an active finance source and NEVER
+ * reads, modifies or deletes legacy DBs.
  *
  * A caller MUST first validate the financial schema, decrypt & independently
  * verify the user's saved legacy backup, and obtain explicit opt-in. Those gates

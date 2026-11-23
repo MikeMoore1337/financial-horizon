@@ -1,6 +1,6 @@
 # Financial Horizon #34 - isolated IndexedDB migration staging
 
-**Status: implementation candidate, NOT an enabled storage migration.** This code has no imports from `storage.js`, `app.js`, the UI, cloud sync, or the Service Worker and does not change existing production state. It is designed to remain inert until a separate reviewed integration is approved.
+**Status: staging candidate, NOT an enabled storage migration.** The shared `sameFinancialJSON` helper is imported by `app.js` and the personal-import flow for snapshot comparison. The staging database is not the active finance source: creating a protected candidate does not switch or delete legacy data. Migration activation requires a separately reviewed integration.
 
 ## Boundaries and data format
 
