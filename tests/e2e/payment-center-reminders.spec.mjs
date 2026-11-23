@@ -31,6 +31,28 @@ async function openDue(page) {
   await expect(page.getByRole('heading', { name: 'Центр оплат' })).toBeVisible();
 }
 
+test('#138 older unpaid occurrences remain individually actionable', async ({page}) => {
+  await page.clock.setFixedTime(new Date('2026-11-20T12:00:00'));
+  await visitGuest(page);
+  await addScheduledExpense(page, 'Историческое обязательство #138', '2025-01-15', '100');
+  await openDue(page);
+  const older = page.locator('.fh-center-event[data-payment-occurrence="2025-01"]')
+    .filter({hasText: 'Историческое обязательство #138'});
+  const newer = page.locator('.fh-center-event[data-payment-occurrence="2026-10"]')
+    .filter({hasText: 'Историческое обязательство #138'});
+  await expect(older).toBeVisible();
+  await expect(newer).toBeVisible();
+  await older.getByRole('button', {name: 'Отметить оплату'}).click();
+  await page.locator('#settlement-form [name="amount"]').fill('20');
+  await page.locator('#settlement-form [name="date"]').fill('2026-11-20');
+  await page.locator('#settlement-form button[type="submit"]').click();
+  await expect(older).toContainText('Частично оплачено');
+  await expect(newer).not.toContainText('Частично оплачено');
+  expect((await scopedState(page, 'state')).settlements[0]).toMatchObject({
+    occurrence: '2025-01', date: '2026-11-20', amountCents: 2000,
+  });
+});
+
 test('#138 guest: partial amount, overpayment rejection and remaining payment', async ({ page }) => {
   await visitGuest(page);
   await addScheduledExpense(page, 'Оплата частями #138', plusDays(1), '100.01');

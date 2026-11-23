@@ -1,4 +1,4 @@
-import {cents,rubles,numberInput,monthKey,monthIndex,shiftMonth,monthLabel,dayInMonth,loanLedger,previewLoanPayment,getMonthEvents,monthTotals,createSampleState,isActive,emptyState,payoffMonths,MAX_QR_BYTES,validQrData,safePaymentUrl,upsertPaymentMethod,deletePaymentMethod,choosePrimaryPaymentMethod} from './finance.js';
+import {cents,rubles,numberInput,monthKey,shiftMonth,monthLabel,dayInMonth,loanLedger,previewLoanPayment,getMonthEvents,getReminderMonthEvents,monthTotals,createSampleState,isActive,emptyState,payoffMonths,MAX_QR_BYTES,validQrData,safePaymentUrl,upsertPaymentMethod,deletePaymentMethod,choosePrimaryPaymentMethod} from './finance.js';
 import {readState,updateState,replaceState,withStableImportSnapshot,askPersistentStorage,storageStatus,selectStateScope,revokeStateScope} from './storage.js?rev=auth-scopes-v18';
 import {encryptBackup,decryptBackup} from './backup.js';
 import {parseSchedule} from './schedule.js';
@@ -80,12 +80,7 @@ const monthEvents=()=>getMonthEvents(state,ui.month);
 // Read-only: reuse the same monthly event oracle as Calendar, including confirmed
 // settlements and loan payments. Do not create a duplicate payment ledger.
 function currentPaymentReminders(currentDate){
- const baseMonth=monthKey(currentDate),payments=[];
- for(let step=-12;step<=1;step++){
-  for(const item of getMonthEvents(state,shiftMonth(baseMonth,step))){
-   if(item.kind==='expense')payments.push(item);
-  }
- }
+ const payments=getReminderMonthEvents(state,monthKey(currentDate));
  return buildInAppReminders({
   scopeKey:guestMode?'guest-state-v2':'account-state-v2:'+activeUserId,
   currentDate,settings:readReminderSettings(state.settings?.paymentReminders),
@@ -174,7 +169,9 @@ function render(){
    const totals=monthTotals(monthEvents()),currentDate=today();
    let reminderResult=null,reminderError=null;
    try{reminderResult=currentPaymentReminders(currentDate);}
-   catch{reminderError='Не удалось проверить напоминания';}
+   catch(error){reminderError=['История обязательств слишком велика для расчёта напоминаний',
+    'Слишком много экземпляров для расчёта напоминаний'].includes(error?.message)?error.message:
+    'Не удалось рассчитать напоминания из сохранённых платежей.';}
    const reminderSettings=readReminderSettings(state.settings?.paymentReminders);
    const paymentMethods=Object.fromEntries(state.entries.filter(isActive)
     .map(entry=>[entry.id,entry.paymentMethods||[]]));

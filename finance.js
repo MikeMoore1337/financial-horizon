@@ -184,6 +184,38 @@ export function getMonthEvents(state,month){
  }).filter(Boolean);
  return [...entries,...loans].sort((a,b)=>a.date.localeCompare(b.date)||a.title.localeCompare(b.title,'ru'));
 }
+/** Reuse the calendar's occurrence model for every outstanding historical period. */
+export function getReminderMonthEvents(state,currentMonth){
+ if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(currentMonth))throw Error('Некорректный период напоминаний');
+ const base=monthIndex(currentMonth),starts=[];
+ for(const entry of state.entries){
+  if(!isActive(entry)||entry.kind!=='expense'||entry.recurrence==='once')continue;
+  const month=monthKey(entry.date);
+  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))throw Error('Некорректная дата обязательства');
+  starts.push(monthIndex(month));
+ }
+ for(const loan of state.loans){
+  if(!isActive(loan))continue;
+  const month=monthKey(loan.asOfDate);
+  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))throw Error('Некорректная дата кредита');
+  starts.push(monthIndex(month));
+ }
+ const first=starts.reduce((minimum,index)=>Math.min(minimum,index),base-12);
+ const months=base+2-first;
+ // Refuse oversized histories instead of silently presenting an incomplete list.
+ const perMonth=state.entries.length*(state.settlements.length+1)+
+  state.loans.length*(state.loanPayments.length+1)+1;
+ if(!Number.isSafeInteger(perMonth)||months>1200||months*perMonth>10_000_000)
+  throw Error('История обязательств слишком велика для расчёта напоминаний');
+ const events=[];
+ for(let offset=first-base;offset<=1;offset++){
+  for(const item of getMonthEvents(state,shiftMonth(currentMonth,offset))){
+   if(item.kind==='expense')events.push(item);
+   if(events.length>5000)throw Error('Слишком много экземпляров для расчёта напоминаний');
+  }
+ }
+ return events;
+}
 function actualMonthNet(state,month){
  if(!state||!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))throw Error('Некорректный период фактических операций');
  const entries=new Map(state.entries.map(entry=>[entry.id,entry]));

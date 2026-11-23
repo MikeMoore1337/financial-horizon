@@ -591,7 +591,7 @@ export function PaymentCenter({
       )}
       {error ? (
         <div className="surface fh-center-empty" role="alert">
-          Не удалось рассчитать напоминания из сохранённых платежей.
+          {error}
         </div>
       ) : (
         <div className="fh-center-grid">

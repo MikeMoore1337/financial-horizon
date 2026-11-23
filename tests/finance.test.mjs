@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {cents,rubles,loanLedger,payoffMonths,annuityMonthly,previewLoanPayment,getMonthEvents,monthTotals,createSampleState,emptyState,entryDueDate,shiftMonth} from '../finance.js';
+import {cents,rubles,loanLedger,payoffMonths,annuityMonthly,previewLoanPayment,getMonthEvents,getReminderMonthEvents,monthTotals,createSampleState,emptyState,entryDueDate,shiftMonth} from '../finance.js';
 import {parseCsv,parseSchedule} from '../schedule.js';
 const loan={id:'m',openingCents:210000000,paymentCents:3020000,apr:9.5,termMonths:245,dueDay:16,asOfDate:'2026-11-01'};
 test('exact cent arithmetic and input validation',()=>{
@@ -70,6 +70,16 @@ test('yearly and monthly recurring dates clamp to February',()=>{
  assert.equal(entryDueDate(entry,'2028-02'),'2028-02-29');
  assert.equal(entryDueDate(entry,'2027-02'),'2027-02-28');
  assert.equal(shiftMonth('2026-12',1),'2027-01');
+});
+test('reminder history retains old occurrences and fails closed when history is too large',()=>{
+ const state=emptyState();
+ state.entries.push({id:'bill',title:'Расход',kind:'expense',recurrence:'monthly',date:'2025-01-31',amountCents:10000});
+ state.settlements.push({id:'partial',entryId:'bill',occurrence:'2025-02',date:'2026-11-20',amountCents:1});
+ const events=getReminderMonthEvents(state,'2026-11');
+ assert.equal(events.find(event=>event.date==='2025-02-28').paidCents,1);
+ assert.equal(events.find(event=>event.date==='2025-01-31').paidCents,0);
+ state.entries[0].date='1900-01-31';
+ assert.throws(()=>getReminderMonthEvents(state,'2026-11'),/слишком велика/);
 });
 test('CSV schedule import supports quoted delimiter and Russian headers',()=>{
  const text='Дата;Платёж;Проценты;Основной долг;Остаток\n16.11.2026;"30 200,00";"16 625,00";"13 575,00";"2 086 425,00"\n16.12.2026;30200;16500;13700;2072725\n';
