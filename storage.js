@@ -30,6 +30,11 @@ function currentScope(){
  assertScope(epoch,key);
  return {key,epoch,signal};
 }
+/** Pin the currently selected scope for async work that runs outside IDB. */
+export function captureStateScope(){
+ const {key,epoch}=currentScope();
+ return ()=>assertScope(epoch,key);
+}
 function abortOnScopeChange(tx,signal){
  const stop=()=>{try{tx.abort();}catch{}};
  signal.addEventListener('abort',stop,{once:true});

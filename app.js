@@ -1,5 +1,5 @@
 import {cents,rubles,numberInput,monthKey,shiftMonth,monthLabel,dayInMonth,loanLedger,previewLoanPayment,getMonthEvents,getReminderMonthEvents,monthTotals,createSampleState,isActive,emptyState,payoffMonths,MAX_QR_BYTES,validQrData,safePaymentUrl,upsertPaymentMethod,deletePaymentMethod,choosePrimaryPaymentMethod} from './finance.js';
-import {readState,updateState,replaceState,withStableImportSnapshot,askPersistentStorage,storageStatus,selectStateScope,revokeStateScope} from './storage.js?rev=auth-scopes-v18';
+import {readState,updateState,replaceState,withStableImportSnapshot,askPersistentStorage,storageStatus,selectStateScope,revokeStateScope,captureStateScope} from './storage.js?rev=auth-scopes-v18';
 import {encryptBackup,decryptBackup} from './backup.js';
 import {parseSchedule} from './schedule.js';
 import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.js';
@@ -745,7 +745,10 @@ async function saveSettlement(form){
  $('#settlement-dialog').close();
 }
 async function performBackup(password){
- const file=await encryptBackup(await readState(),password);const url=URL.createObjectURL(new Blob([file],{type:'application/json'}));
+ const assertCurrentScope=captureStateScope();
+ const source=await readState();assertCurrentScope();
+ const file=await encryptBackup(source,password);assertCurrentScope();
+ const url=URL.createObjectURL(new Blob([file],{type:'application/json'}));
  const a=document.createElement('a');a.href=url;a.download=`finansovyi-gorizont-${today()}-encrypted.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),12000);toast('Шифрованная резервная копия подготовлена');
 }
 async function performVerifyBackup(password){
@@ -1233,14 +1236,15 @@ async function onFormSubmit(event){
    if(form.isConnected)form.reset();
   }
   if(form.getAttribute('id')==='password-form'){
-   const password=form.elements.password.value;
+   const passwordInput=form.elements.password,password=passwordInput.value;
    if(password.length<12)throw Error('Пароль должен содержать не менее 12 символов');
    try{
     if(passwordMode==='export')await performBackup(password);
     else if(passwordMode==='verify')await performVerifyBackup(password);
     else if(passwordMode==='cloud')await prepareCloudImport(password);
     else await performRestore(password);
-   }finally{form.elements.password.value='';}
+   }finally{passwordInput.value='';}
+   if(!form.isConnected)return;
    $('#password-dialog').close();
    if(passwordMode==='cloud'&&pendingCloudImport){
     $('#cloud-import-dialog [data-action="confirm-cloud-import"]').disabled=
@@ -1248,7 +1252,7 @@ async function onFormSubmit(event){
     openDialog('#cloud-import-dialog');
    }
   }
- }catch(e){fail(e);}
+ }catch(e){if(state)fail(e);}
 }
 function bindEvents(){
  // Safari does not always focus clicked buttons; retain the actual dialog trigger.

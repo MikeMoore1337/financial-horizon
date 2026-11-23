@@ -86,8 +86,8 @@ const verify = (selection, backupText, extra={}) => verifyLiveLegacyBackup({
 
 test('preflight rejects a backup that silently lost an existing non-JSON field',async()=>{
   const source=legacy();
-  source.unknownFutureField=undefined;
   const backupText=await encryptBackup(source,backupPassword);
+  source.unknownFutureField=undefined;
   const db=mount({state:source});
   await assert.rejects(()=>verify(guest(),backupText),/JSON|данн/);
   assert.ok(Object.hasOwn(db.values.get('state'),'unknownFutureField'));

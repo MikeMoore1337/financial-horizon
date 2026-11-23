@@ -188,3 +188,13 @@ test('explicit session-loss or logout revocation blocks the old legacy budget un
  await s.selectStateScope(accountA);
  assert.equal((await s.readState()).entries[0].title,'private-before-logout');
 });
+
+test('a captured scope lease is revoked even by reselection of the same account',async()=>{
+ const mock=browserDatabase();globalThis.indexedDB=mock;
+ const s=await import('../storage.js?scope-lease-reselection');
+ await s.selectStateScope(accountA);
+ const lease=s.captureStateScope();assert.doesNotThrow(lease);
+ await s.selectStateScope(accountA);
+ assert.throws(lease,/профиль изменён/);
+ assert.doesNotThrow(s.captureStateScope());
+});

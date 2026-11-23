@@ -432,7 +432,12 @@ async function saveSettlement(form){
  $('#settlement-dialog').close();
 }
 async function performBackup(password){
- const file=await encryptBackup(await readState(),password);const url=URL.createObjectURL(new Blob([file],{type:'application/json'}));
+ if(typeof legacyStorage.captureStateScope!=='function')
+  throw Error('Обновите приложение через интернет для безопасного создания резервной копии');
+ const assertCurrentScope=legacyStorage.captureStateScope();
+ const source=await readState();assertCurrentScope();
+ const file=await encryptBackup(source,password);assertCurrentScope();
+ const url=URL.createObjectURL(new Blob([file],{type:'application/json'}));
  const a=document.createElement('a');a.href=url;a.download=`finansovyi-gorizont-${today()}-encrypted.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),12000);toast('Шифрованная резервная копия подготовлена');
 }
 async function performRestore(password){
@@ -458,12 +463,14 @@ async function onFormSubmit(event){
    await mutate(s=>{s.categories.push(title);audit(s,'category',`Добавлена категория: ${title}`);},'Категория добавлена');
   }
   if(form.getAttribute('id')==='password-form'){
-   const password=form.elements.password.value;
+   const passwordInput=form.elements.password,password=passwordInput.value;
    if(password.length<12)throw Error('Пароль должен содержать не менее 12 символов');
-   if(passwordMode==='export')await performBackup(password);else await performRestore(password);
-   form.elements.password.value='';$('#password-dialog').close();
+   try{if(passwordMode==='export')await performBackup(password);else await performRestore(password);}
+   finally{passwordInput.value='';}
+   if(!form.isConnected)return;
+   $('#password-dialog').close();
   }
- }catch(e){fail(e);}
+ }catch(e){if(state)fail(e);}
 }
 function bindEvents(){
  // Safari does not always focus clicked buttons; retain the actual dialog trigger.

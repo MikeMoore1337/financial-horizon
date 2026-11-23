@@ -12,6 +12,7 @@ import {
   type LocalKeysetV1, type LocalScope, type RecordContext,
   type EncryptedLocalRecordV1,
 } from './local-vault.ts';
+import {assertFinancialJson} from '../../backup.js';
 
 export const PROTECTED_STAGING_DB = 'financial-horizon-protected-staging-v1';
 const KEYSETS = 'keysets', RECORDS = 'records';
@@ -39,37 +40,6 @@ function validateScope(value: unknown): asserts value is LocalScope {
     !/^(?:account:[a-f0-9]{32}|guest:[A-Za-z0-9_-]{4,64})$/.test(value)) {
     throw Error('Некорректный финансовый профиль');
   }
-}
-/** Reject values that JSON would omit, rewrite, or obtain through accessors. */
-function assertFinancialJson(value: unknown, depth = 0, ancestors = new Set<object>()): void {
-  if (depth > 96) throw Error('Слишком глубокие финансовые данные');
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
-  if (typeof value === 'number' && Number.isFinite(value) && !Object.is(value, -0)) return;
-  if (typeof value !== 'object' || ancestors.has(value)) throw Error('Недопустимое значение финансового JSON');
-  ancestors.add(value);
-  const array = Array.isArray(value);
-  const prototype = Object.getPrototypeOf(value);
-  if ((array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) ||
-    Object.getOwnPropertySymbols(value).length) throw Error('Недопустимое значение финансового JSON');
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  const names = Object.keys(descriptors);
-  if (array && (names.length !== value.length + 1 || !names.includes('length'))) {
-    throw Error('Недопустимый финансовый массив JSON');
-  }
-  if (array) {
-    for (let index = 0; index < value.length; index++) {
-      if (!Object.hasOwn(descriptors, index)) throw Error('Недопустимый финансовый массив JSON');
-    }
-  }
-  for (const name of names) {
-    if (array && name === 'length') continue;
-    const descriptor = descriptors[name];
-    if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) {
-      throw Error('Недопустимое свойство финансового JSON');
-    }
-    assertFinancialJson(descriptor.value, depth + 1, ancestors);
-  }
-  ancestors.delete(value);
 }
 /** Canonical JSON equivalence: object key order is not data; array order is. */
 export function sameFinancialJSON(a: unknown, b: unknown): boolean {

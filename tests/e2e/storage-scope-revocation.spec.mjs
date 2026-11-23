@@ -1,5 +1,24 @@
 import {test,expect} from '@playwright/test';
 
+test('native async backup scope lease rejects completion after same-account reselection',async({page})=>{
+ await page.goto('/__e2e__/ready');
+ const observed=await page.evaluate(async()=>{
+  const storage=await import('/storage.js?scope-lease-native');
+  const {encryptBackup}=await import('/backup.js');
+  const account='a'.repeat(32);
+  await storage.selectStateScope(account);
+  const lease=storage.captureStateScope();
+  const state=await storage.readState();
+  const encrypted=encryptBackup(state,'synthetic scope lease phrase 2026');
+  await storage.selectStateScope(account);
+  await encrypted;
+  let rejected=false;
+  try{lease()}catch{rejected=true}
+  return {rejected,current:storage.captureStateScope() instanceof Function};
+ });
+ expect(observed).toEqual({rejected:true,current:true});
+});
+
 // Synthetic values, native IndexedDB and real WebKit/Chromium transaction abort.
 test('account switch during an in-flight write aborts old scope without exposing it to the next account',async({page})=>{
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
