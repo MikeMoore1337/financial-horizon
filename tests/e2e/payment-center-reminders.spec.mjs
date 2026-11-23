@@ -234,6 +234,12 @@ function syntheticQrPng() {
 
 test('#137 real browser: QR, other methods, focus, 320-1280 and unchanged settlements', async ({ page, context }) => {
   const watch = await observe(context, page);
+  // Production permits local data images but intentionally disallows blob: URLs.
+  await page.route('**/?guest=1', async route => {
+    const response = await route.fetch();
+    await route.fulfill({response, headers: {...response.headers(),
+      'content-security-policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"}});
+  });
   await visitGuest(page);
   const title = 'Синтетический платёж #137';
   await addScheduledExpense(page, title, plusDays(1), '1240');

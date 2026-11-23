@@ -419,19 +419,16 @@ async function localQrImage(file){
   reader.readAsDataURL(file);
  });
  if(!validQrData(data))throw Error('Содержимое QR-файла не соответствует его формату');
- const blobUrl=URL.createObjectURL(file);
- try{
-  await new Promise((resolve,reject)=>{
-   const img=new Image();
-   img.onload=()=>{
-    if(!img.naturalWidth||!img.naturalHeight||img.naturalWidth>4096||img.naturalHeight>4096)
-     reject(Error('Недопустимые размеры QR-изображения'));
-    else resolve();
-   };
-   img.onerror=()=>reject(Error('QR-изображение повреждено'));
-   img.src=blobUrl;
-  });
- }finally{URL.revokeObjectURL(blobUrl);}
+ await new Promise((resolve,reject)=>{
+  const img=new Image();
+  img.onload=()=>{
+   if(!img.naturalWidth||!img.naturalHeight||img.naturalWidth>4096||img.naturalHeight>4096)
+    reject(Error('Недопустимые размеры QR-изображения'));
+   else resolve();
+  };
+  img.onerror=()=>reject(Error('QR-изображение повреждено'));
+  img.src=data;
+ });
  return data;
 }
 async function savePaymentMethodForm(form){
