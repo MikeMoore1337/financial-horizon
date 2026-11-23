@@ -56,6 +56,8 @@ test('actual monthly flow follows payment dates while planned occurrences retain
  assert.equal(actual('2024-01'),-2500);
  assert.equal(actual('2024-02'),0);
  assert.equal(actual('2024-03'),-2500);
+ assert.equal(monthTotals(getMonthEvents(state,'2024-03'),state,'2024-03').incomePaidCents,5000);
+ assert.equal(monthTotals(getMonthEvents(state,'2024-03'),state,'2024-03').expensePaidCents,7500);
  state.entries[0].deletedAt='2024-04-01';
  assert.equal(actual('2024-03'),-2500,'archiving must not erase historical cash flow');
  state.loans.push({id:'loan',openingCents:100000,paymentCents:10000,apr:0,termMonths:10,

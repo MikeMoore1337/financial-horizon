@@ -58,6 +58,10 @@
                     "profile_id": {
                       "type": "string",
                       "format": "uuid"
+                    },
+                    "payment_guard_v1": {
+                      "type": "boolean",
+                      "description": "The server supports the current guarded v2 payment contract. Missing means not supported."
                     }
                   }
                 }

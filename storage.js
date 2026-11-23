@@ -132,6 +132,42 @@ export async function selectStateScope(userId=null){
  return key;
 }
 
+// One in-flight online payment per signed-in account. It is a recovery
+// record for an already requested server command, not an offline payment ledger.
+export async function pendingOnlinePayment(userId,action,value){
+ const {key,epoch,signal}=currentScope();
+ if(typeof userId!=='string'||!/^[a-f0-9]{32}$/.test(userId)||key!=='account-state-v2:'+userId)
+  throw Error('Финансовый аккаунт изменился');
+ if(!['read','create','clear'].includes(action))throw Error('Неверное действие');
+ const db=await openDb();assertScope(epoch,key);
+ return new Promise((resolve,reject)=>{
+  const tx=db.transaction(STORE,'readwrite'),object=tx.objectStore(STORE);
+  const cleanup=abortOnScopeChange(tx,signal);
+  const pendingKey='online-payment-pending-v1:'+userId;
+  const fence=object.get(FENCE_PREFIX+key),request=object.get(pendingKey);
+  let result=null,failure=null;
+  request.onsuccess=()=>{
+   try{
+    assertScope(epoch,key);
+    if(fence.result!==undefined)throw Error(FENCED_MESSAGE);
+    const prior=request.result;
+    if(action==='read'){result=prior??null;return;}
+    if(action==='create'){
+     if(prior!==undefined)throw Error('Предыдущая оплата ожидает сверки');
+     if(!value||typeof value!=='object')throw Error('Нет данных операции для сверки');
+     object.add(structuredClone(value),pendingKey);result=value;return;
+    }
+    if(!prior||typeof value!=='string'||prior.mutationId!==value)
+     throw Error('Ожидающая оплата изменилась');
+    object.delete(pendingKey);
+   }catch(error){failure=error;try{tx.abort();}catch{}}
+  };
+  tx.oncomplete=()=>{cleanup();try{assertScope(epoch,key);resolve(result);}catch(error){reject(error);}};
+  tx.onerror=()=>{cleanup();reject(failure||tx.error||Error('Не удалось сохранить проверку оплаты'));};
+  tx.onabort=()=>{cleanup();reject(failure||tx.error||Error(REVOKED_MESSAGE));};
+ });
+}
+
 // Every migration and its version marker commit in ONE IndexedDB transaction.
 // Never resolve a migration before the transaction has actually committed.
 export async function readState(){

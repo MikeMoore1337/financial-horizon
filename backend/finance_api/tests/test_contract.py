@@ -81,6 +81,8 @@ def test_protocol_documents_auth_rate_bounds_pagination_and_exact_conflicts():
     assert paths["/api/auth/email/finance/session"]["post"]["security"] == [
         {"authBootstrap": []}
     ]
+    bootstrap_schema = paths["/api/auth/email/finance/session"]["post"]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert bootstrap_schema["properties"]["payment_guard_v1"]["type"] == "boolean"
     for path, verb in [
         ("/api/finance/v1/state", "get"),
         ("/api/finance/v1/changes", "get"),

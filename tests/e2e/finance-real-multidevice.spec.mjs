@@ -533,3 +533,163 @@ test('#38 real PostgreSQL + FH cookies: authenticated CSV bank import, replay an
     await second.close();
   }
 });
+
+test('#138 online payment center survives a lost response and synchronizes two devices', async ({page, context, browser}) => {
+  test.setTimeout(45_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  const second = await browser.newContext();
+  const other = await second.newPage();
+  const exceptions = [];
+  page.on('pageerror', error => exceptions.push(error.message));
+  other.on('pageerror', error => exceptions.push(error.message));
+  try {
+    await page.clock.setFixedTime(new Date('2026-11-12T12:00:00'));
+    await other.clock.setFixedTime(new Date('2026-11-12T12:00:00'));
+    // Send the real request, then lose the response at the browser boundary.
+    // Unlike network routing this also works when WebKit has a Service Worker.
+    await page.addInitScript(() => {
+      const nativeFetch = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const response = await nativeFetch(input, init);
+        if (window.__fhLoseNextPayment && String(input).includes('/api/finance/v2/commands') && init?.method === 'POST') {
+          window.__fhLoseNextPayment = false;
+          if (response.status !== 201) throw Error('Expected committed synthetic payment');
+          throw new TypeError('Synthetic lost response after server commit');
+        }
+        return response;
+      };
+    });
+    const created = await context.request.post('/__e2e__/personal-session');
+    expect(created.status()).toBe(200);
+    const owner = (await created.json()).user;
+    await page.goto('/?fh_reserves_e2e=1');
+    await loginViaUi(other, owner.email);
+    await other.goto('/?fh_reserves_e2e=1');
+    const profile = await bootstrap(context);
+    expect(await bootstrap(second)).toBe(profile);
+    const accountId = randomUUID();
+    let current = await state(context);
+    expect((await submit(context, current, 'account.create', {
+      id: accountId, name: 'Синтетический счёт оплаты', kind: 'bank', currency: 'RUB', opening_minor: 10000,
+    })).status()).toBe(201);
+    const openDue = async target => {
+      await view(target, 'obligations');
+      await target.locator('.fh-reserve-tabs').first().getByRole('button', {name:'К оплате'}).click();
+      await expect(target.getByRole('button', {name:'В аккаунте'})).toHaveAttribute('aria-pressed','true');
+    };
+    await openDue(page);
+    await expect(page.locator('#storage-context-chip')).toHaveText('На сервере');
+    await page.getByRole('button',{name:'На устройстве'}).click();
+    await expect(page.locator('#storage-context-chip')).toHaveText('Локально');
+    await page.getByRole('button',{name:'В аккаунте'}).click();
+    await expect(page.locator('#storage-context-chip')).toHaveText('На сервере');
+    await page.getByRole('button',{name:'Добавить обязательство в аккаунт'}).click();
+    const create = page.locator('form').filter({has:page.getByRole('heading',{name:'Новое обязательство'})});
+    await create.getByLabel('Название').fill('Синтетическая синхронизированная оплата');
+    await create.getByLabel('Сумма, ₽').fill('55');
+    await create.getByLabel('Повторять').selectOption('none');
+    await create.getByRole('button',{name:'Сохранить обязательство'}).click();
+    await expect(create).toHaveCount(0);
+    expect((await state(context)).body.entities.filter(e=>e.kind==='obligation')).toHaveLength(1);
+    await openDue(other);
+    const card = target => target.locator('[data-server-payment-id]').filter({hasText:'Синтетическая синхронизированная оплата'});
+    await expect(card(page)).toContainText('55');
+    await expect(card(other)).toContainText('55');
+    await card(other).getByRole('button',{name:'Отметить оплату'}).click();
+    await card(other).getByLabel('Сумма, ₽').fill('50');
+    await card(page).getByRole('button',{name:'Отметить оплату'}).click();
+    await card(page).getByLabel('Сумма, ₽').fill('20');
+    await context.setOffline(true);
+    await card(page).getByRole('button',{name:'Подтвердить оплату'}).click();
+    await expect(page.getByRole('alert')).toContainText('недоступен');
+    expect((await state(second)).body.entities.filter(e=>e.kind==='settlement')).toHaveLength(0);
+    await context.setOffline(false);
+    await page.evaluate(() => { window.__fhLoseNextPayment = true; });
+    await card(page).getByRole('button',{name:'Подтвердить оплату'}).dblclick();
+    await expect(page.getByRole('button',{name:'Сверить оплату'})).toBeVisible();
+    expect(entity(await state(second),accountId).data.balance_minor).toBe(8000);
+    await page.reload();
+    await openDue(page);
+    await page.getByRole('button',{name:'Сверить оплату'}).click();
+    await expect(page.getByRole('button',{name:'Сверить оплату'})).toHaveCount(0);
+    await expect(card(page)).toContainText('35');
+    await view(page,'overview');
+    await expect(page.locator('#storage-context-chip')).toHaveText('На сервере');
+    await expect(page.locator('.kpi-grid')).toContainText(/Оплачено:.*20/);
+    await view(page,'calendar');
+    await expect(page.locator('#storage-context-chip')).toHaveText('На сервере');
+    await page.locator('.cal-day[data-date="2026-11-12"]').click();
+    await expect(page.locator('.cal-layout .plain-list')).toContainText('Синтетическая синхронизированная оплата');
+    await expect(page.locator('.cal-layout .plain-list')).toContainText('факт 20');
+    await expect(page.locator('.cal-layout')).toContainText(/Подтверждённый поток:.*20/);
+    await page.getByRole('button',{name:'Открыть центр оплат: Синтетическая синхронизированная оплата'}).click();
+    await expect(card(page)).toContainText('35');
+    // The other device still has a stale larger tranche; it cannot overpay.
+    await card(other).locator('form').evaluate(form => form.requestSubmit());
+    await expect(other.getByRole('alert')).toContainText('Данные изменились');
+    await expect(other.getByRole('button',{name:'Сверить оплату'})).toHaveCount(0);
+    expect(entity(await state(second),accountId).data.balance_minor).toBe(8000);
+    await other.reload();
+    await openDue(other);
+    await expect(card(other)).toContainText('35');
+    await card(other).getByRole('button',{name:'Отметить оплату'}).click();
+    await expect(card(other).getByLabel('Сумма, ₽')).toHaveValue('35.00');
+    await card(other).getByRole('button',{name:'Подтвердить оплату'}).click();
+    await expect(card(other)).toHaveCount(0);
+    await page.reload();
+    await openDue(page);
+    await expect(card(page)).toHaveCount(0);
+    // A lost reply during cancellation is reconciled with the same mutation.
+    const history = other.getByRole('region',{name:'История оплат аккаунта'});
+    const lastPayment = history.locator('article').filter({hasText:'35'});
+    await other.addInitScript(() => {
+      const nativeFetch = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const response = await nativeFetch(input, init);
+        if (window.__fhLoseNextPayment && String(input).includes('/api/finance/v2/commands') && init?.method === 'POST') {
+          window.__fhLoseNextPayment = false;
+          if (response.status !== 201) throw Error('Expected committed synthetic reversal');
+          throw new TypeError('Synthetic lost response after server commit');
+        }
+        return response;
+      };
+    });
+    await other.reload();
+    await openDue(other);
+    await other.evaluate(() => { window.__fhLoseNextPayment = true; });
+    await expect(lastPayment).toHaveCount(1);
+    await expect(lastPayment.getByRole('button',{name:'Отменить оплату'})).toBeEnabled();
+    other.once('dialog', dialog => dialog.accept());
+    await lastPayment.getByRole('button',{name:'Отменить оплату'}).click();
+    await expect(other.getByRole('button',{name:'Сверить оплату'})).toBeVisible();
+    expect(entity(await state(context),accountId).data.balance_minor).toBe(8000);
+    await other.reload();
+    await openDue(other);
+    await other.getByRole('button',{name:'Сверить оплату'}).click();
+    await expect(other.getByRole('button',{name:'Сверить оплату'})).toHaveCount(0);
+    await expect(card(other)).toContainText('35');
+    await card(other).getByRole('button',{name:'Отметить оплату'}).click();
+    await card(other).getByRole('button',{name:'Подтвердить оплату'}).click();
+    await expect(card(other)).toHaveCount(0);
+    await page.reload();
+    await openDue(page);
+    await expect(card(page)).toHaveCount(0);
+    const final = await state(context);
+    expect(entity(final,accountId).data.balance_minor).toBe(4500);
+    expect(final.body.entities.filter(e=>e.kind==='settlement')).toHaveLength(3);
+    expect(final.body.entities.filter(e=>e.kind==='settlement' && e.data.voided_at)).toHaveLength(1);
+    expect(final.body.entities.filter(e=>e.kind==='transaction')).toHaveLength(4);
+    // In-memory profile reuse must not outlive the real authenticated session.
+    const logout = await context.request.post('/api/auth/email/logout', {
+      headers:{Origin:ORIGIN,'Content-Type':'application/json'}, data:{},
+    });
+    expect(logout.status()).toBe(200);
+    await page.locator('.sidebar-nav [data-view="overview"]').evaluate(button => button.click());
+    await expect.poll(async () => page.url().includes('/account.html') ||
+      await page.getByRole('alert').filter({hasText:'Не удалось загрузить обзор аккаунта'}).isVisible()).toBe(true);
+    expect((await second.request.get(ORIGIN + '/api/finance/v1/state')).status()).toBe(200);
+    expect(exceptions).toEqual([]);
+  } finally {
+    await second.close();
+  }
+});

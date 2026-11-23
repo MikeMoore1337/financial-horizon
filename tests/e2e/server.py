@@ -164,7 +164,8 @@ def local_app(directory):
                 path="/api/finance/v2", httponly=True, secure=False, samesite="strict",
             )
         finance_requests[user["id"]]["session"] += 1
-        return {"ok": True, "profile_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}
+        return {"ok": True, "profile_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "payment_guard_v1": reserves_stub.exists(user["id"])}
 
     @app.get("/api/finance/v1/state")
     def synthetic_finance_state(request: Request):

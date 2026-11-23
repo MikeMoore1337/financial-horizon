@@ -10,6 +10,7 @@ import {
 } from '../domain/cashflow/in-app-reminders.ts';
 import type { PaymentMethod } from '../types/finance';
 import { ReservesFinanceGateway } from './reserves-finance-gateway';
+import { ServerPaymentCenter } from './ServerPaymentCenter';
 import type { ReserveProjection } from '../domain/reserves/index.ts';
 import './payment-center.css';
 
@@ -25,6 +26,7 @@ export interface PaymentCenterProps {
   readonly rubles: (value: number) => string;
   readonly formatDate: (date: string) => string;
   readonly onSettingsChange: (settings: ReminderSettings) => Promise<void>;
+  readonly onSourceChange?: (source: 'server' | 'local') => void;
 }
 
 function statusLabel(item: DuePayment): string {
@@ -389,6 +391,8 @@ interface ReserveAlertsProps {
   readonly settings: ReminderSettings;
   readonly rubles: PaymentCenterProps['rubles'];
   readonly formatDate: PaymentCenterProps['formatDate'];
+  readonly providedRows?: readonly ReserveProjection[] | null;
+  readonly providedError?: boolean;
 }
 
 export function ReserveAlerts({
@@ -398,12 +402,15 @@ export function ReserveAlerts({
   settings,
   rubles,
   formatDate,
+  providedRows,
+  providedError = false,
 }: ReserveAlertsProps) {
   const [rows, setRows] = useState<readonly ReserveProjection[] | null>(null);
   const [error, setError] = useState(false);
   const gateway = useMemo(() => (actor ? new ReservesFinanceGateway() : null), [actor]);
 
   useEffect(() => {
+    if (providedRows !== undefined) return;
     if (!actor || !gateway) {
       setRows(null);
       setError(false);
@@ -447,8 +454,10 @@ export function ReserveAlerts({
       window.removeEventListener('online', onOnline);
       window.removeEventListener('fh-reserves-updated', reload);
     };
-  }, [actor, gateway, currentDate]);
+  }, [actor, gateway, currentDate, providedRows]);
 
+  const visibleRows = providedRows === undefined ? rows : providedRows;
+  const visibleError = providedRows === undefined ? error : providedError;
   if (!actor) {
     return (
       <div className="surface fh-center-empty" role="status">
@@ -456,14 +465,14 @@ export function ReserveAlerts({
       </div>
     );
   }
-  if (error) {
+  if (visibleError) {
     return (
       <div className="surface fh-center-empty" role="status">
         Не удалось получить подтверждённые данные резервов. Проверьте подключение.
       </div>
     );
   }
-  if (!rows)
+  if (!visibleRows)
     return (
       <div className="surface fh-center-empty" role="status">
         Загрузка резервов…
@@ -474,7 +483,7 @@ export function ReserveAlerts({
     currentDate,
     scopeKey,
     payments: [],
-    reserves: rows,
+    reserves: visibleRows,
     settings,
   });
   const visible = reminders.alerts.filter(
@@ -546,7 +555,7 @@ export function ReserveAlerts({
   );
 }
 
-export function PaymentCenter({
+function LocalPaymentCenter({
   result,
   error,
   settings,
@@ -658,5 +667,70 @@ export function PaymentCenter({
         </div>
       ) : null}
     </section>
+  );
+}
+
+export function PaymentCenter(props: PaymentCenterProps) {
+  const serverAvailable = Boolean(props.financeEnabled && props.verifiedActorUserId);
+  const [source, setSource] = useState<'server' | 'local'>(serverAvailable ? 'server' : 'local');
+  useEffect(() => {
+    setSource(serverAvailable ? 'server' : 'local');
+  }, [serverAvailable, props.verifiedActorUserId]);
+  return (
+    <>
+      {serverAvailable && (
+        <div className="fh-reserve-tabs" role="group" aria-label="Источник обязательств">
+          <button
+            type="button"
+            className={source === 'server' ? 'selected' : ''}
+            aria-pressed={source === 'server'}
+            onClick={() => {
+              setSource('server');
+              props.onSourceChange?.('server');
+            }}
+          >
+            В аккаунте
+          </button>
+          <button
+            type="button"
+            className={source === 'local' ? 'selected' : ''}
+            aria-pressed={source === 'local'}
+            onClick={() => {
+              setSource('local');
+              props.onSourceChange?.('local');
+            }}
+          >
+            На устройстве
+          </button>
+        </div>
+      )}
+      {serverAvailable && source === 'server' && props.verifiedActorUserId ? (
+        <>
+          <ServerPaymentCenter
+            actor={props.verifiedActorUserId}
+            currentDate={props.currentDate}
+            settings={props.settings}
+            rubles={props.rubles}
+            formatDate={props.formatDate}
+            renderReserves={(rows, hasError) => (
+              <div className="fh-center-reserve-section">
+                <ReserveAlerts
+                  actor={props.verifiedActorUserId ?? null}
+                  currentDate={props.currentDate}
+                  scopeKey={props.scopeKey}
+                  settings={props.settings}
+                  rubles={props.rubles}
+                  formatDate={props.formatDate}
+                  providedRows={rows}
+                  providedError={hasError}
+                />
+              </div>
+            )}
+          />
+        </>
+      ) : (
+        <LocalPaymentCenter {...props} />
+      )}
+    </>
   );
 }

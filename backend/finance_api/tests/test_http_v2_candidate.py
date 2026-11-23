@@ -43,6 +43,7 @@ def v2_env(env):
         login = c.post("/api/auth/email/finance/session",
                        headers={"Origin": ORIGIN}, json={})
         assert login.status_code == 200, login.text
+        assert login.json()['payment_guard_v1'] is True
         # The existing auth middleware enforces no-store for bootstrap.
         assert login.headers["cache-control"] == "no-store"
         return c

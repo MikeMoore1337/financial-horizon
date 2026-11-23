@@ -233,3 +233,18 @@ test('#138 reserve payment receipt binds server-minted ids to exact payment inte
   for(const altered of invalid)assert.throws(()=>paymentReceiptIds(altered,payload,2));
   assert.throws(()=>paymentReceiptIds(changes,payload,3));
 });
+
+test('#138 older server without payment guard cannot receive a payment',async()=>{
+  const fetcher=transport(json({ok:true,profile_id:PROFILE}),json(snapshot()));
+  const gateway=new ReservesFinanceGateway(fetcher,'https://fh.example',()=>MUTATION);
+  await gateway.open(ACTOR,DATE);
+  assert.equal(gateway.supportsPaymentGuard,false);
+  await assert.rejects(()=>gateway.confirmOnlinePayment({accountId:ACCOUNT,obligationId:OBLIGATION,
+    amountMinor:100,paidOn:DATE,occurrenceOn:'2027-11-16'},DATE),{kind:'error'});
+  await assert.rejects(()=>gateway.resumeOnlinePayment(DATE),{kind:'error'});
+  await assert.rejects(()=>gateway.execute('settlement.payment.record',{
+    account_id:ACCOUNT,obligation_id:OBLIGATION,reserve_id:RESERVE,
+    amount_minor:100,reserved_used_minor:100,paid_on:DATE,occurrence_on:'2027-11-16',
+  },DATE),{kind:'error'});
+  assert.equal(fetcher.calls.length,2,'No payment request is sent to the old backend');
+});

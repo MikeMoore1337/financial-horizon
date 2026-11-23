@@ -110,3 +110,13 @@ test('cycle and event commands require a bounded date, reason and revs', () => {
       expectedEntityRevisions:expected}).body.action,action);
   }
 });
+
+test('ordinary online payment uses account and obligation revisions without a reserve', () => {
+  const payload={account_id:idA,obligation_id:idB,amount_minor:100,
+    paid_on:'2027-11-16',occurrence_on:'2027-11-16'};
+  const command={...original,action:'settlement.payment.record',payload,
+    expectedEntityRevisions:{[idA]:3,[idB]:1}};
+  assert.deepEqual(encodeReserveV2(command).body.payload,payload);
+  assert.throws(()=>encodeReserveV2({...command,payload:{...payload,reserve_id:idC}}));
+  assert.throws(()=>encodeReserveV2({...command,payload:{...payload,reserved_used_minor:1}}));
+});

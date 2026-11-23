@@ -34,7 +34,7 @@ const financeImportEnabled=financeAccountsEnabled&&document.querySelector('meta[
 // #38 signed bank import needs an independently approved production backend.
 const bankImportEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-bank-import"]')?.content==='enabled';
 const financeReservesEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-reserves"]')?.content==='enabled';
-let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null,obligationsSection:'payments',focusReserveId:null,reserveSuggestions:[]},passwordMode='export',restoreFile=null,verifyBackupFile=null,cloudImportFile=null,pendingCloudImport=null,cloudImportController=null,cloudImportBusy=false,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
+let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),filter:'all',selectedLoan:null,expandedEntry:null,obligationsSection:'payments',paymentSource:'local',calendarSource:'local',overviewSource:'local',focusReserveId:null,reserveSuggestions:[]},passwordMode='export',restoreFile=null,verifyBackupFile=null,cloudImportFile=null,pendingCloudImport=null,cloudImportController=null,cloudImportBusy=false,scheduleLoanId=null,channel=null,toastTimer=null,busy=false,installPrompt=null,pendingExcelImport=null;
 const emailSession=createEmailSession();
 let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
 let cloudImportSourceKind='account';
@@ -97,12 +97,16 @@ function stampFormRevision(form){form.dataset.stateRevision=String(state.revisio
 function revisionForForm(form){const revision=Number(form.dataset.stateRevision);if(!Number.isSafeInteger(revision)||revision<0)throw Error('Не удалось определить версию записи. Откройте форму повторно.');return revision;}
 function themeSet(mode){document.documentElement.dataset.theme=mode;document.body.dataset.theme=mode;try{localStorage.setItem('fh-theme',mode);}catch{};$('#theme-color').content=mode==='dark'?'#172336':'#ffffff';if(!navRoots){const toggle=$('#theme-toggle');if(toggle){toggle.innerHTML=svg(mode==='dark'?'sun':'moon');toggle.setAttribute('aria-label',mode==='dark'?'Включить светлую тему':'Включить тёмную тему');}}}
 function syncStorageContext(){
- const serverAccounts=(ui.view==='accounts-connected'||ui.view==='bank-import')&&financeAccountsEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId;
+ const eligible=financeAccountsEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId;
+ const serverPayments=eligible&&ui.view==='obligations'&&ui.obligationsSection==='due'&&ui.paymentSource==='server';
+ const serverCalendar=eligible&&ui.view==='calendar'&&ui.calendarSource==='server';
+ const serverOverview=eligible&&ui.view==='overview'&&ui.overviewSource==='server';
+ const serverAccounts=eligible&&((ui.view==='accounts-connected'||ui.view==='bank-import')||serverPayments||serverCalendar||serverOverview);
  const labels=[
   ['storage-context-chip',serverAccounts?'На сервере':'Локально'],
-  ['storage-context-title',serverAccounts?'Счета в аккаунте':'Хранится на устройстве'],
+  ['storage-context-title',serverOverview?'Обзор аккаунта':serverCalendar?'Календарь аккаунта':serverPayments?'Оплаты в аккаунте':serverAccounts?'Счета в аккаунте':'Хранится на устройстве'],
   ['storage-context-detail',serverAccounts?'Локальный бюджет отдельно':'Без банковских подключений'],
-  ['storage-context-footnote',serverAccounts?'Счета хранятся на сервере. Локальная бухгалтерия остаётся в этом браузере.':'Данные остаются в этом браузере. Делайте резервные копии.'],
+  ['storage-context-footnote',serverOverview||serverCalendar||serverPayments?'Данные хранятся в аккаунте. Локальные записи остаются в этом браузере.':serverAccounts?'Счета хранятся на сервере. Локальная бухгалтерия остаётся в этом браузере.':'Данные остаются в этом браузере. Делайте резервные копии.'],
  ];
  for(const [id,value] of labels){
   const element=document.getElementById(id);
@@ -120,6 +124,8 @@ function syncStorageContext(){
 function navigation(view){
  if(view==='accounts-connected'&&(!financeAccountsEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId))return;
  if(view==='bank-import'&&!guestMode&&(!bankImportEnabled||!activeUserId||emailSession.userId!==activeUserId))return;
+ if(view==='calendar'&&ui.view!=='calendar')ui.calendarSource=financeReservesEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId?'server':'local';
+ if(view==='overview'&&ui.view!=='overview')ui.overviewSource=financeReservesEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId?'server':'local';
  ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings'){void renderStorageStatus();if(!guestMode)void refreshEmailSession();}}
 function render(){
  if(!state)return;
@@ -155,7 +161,7 @@ function render(){
    }});
   }else if(ui.view==='calendar'){
    const events=monthEvents(),totals=monthTotals(events,state,ui.month);
-   screenRoot.render({view:'calendar',props:{events,month:ui.month,selectedDate:ui.selectedDate,currentDate:today(),monthTitle:monthLabel(ui.month),netPlanCents:totals.netPlanCents,netFactCents:totals.netFactCents,formatDate,rubles,financeEnabled:financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId,verifiedActorUserId:emailSession.userId||null}});
+   screenRoot.render({view:'calendar',props:{events,month:ui.month,selectedDate:ui.selectedDate,currentDate:today(),monthTitle:monthLabel(ui.month),netPlanCents:totals.netPlanCents,netFactCents:totals.netFactCents,formatDate,rubles,financeEnabled:financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId,verifiedActorUserId:emailSession.userId||null,onSourceChange:source=>{ui.calendarSource=source;syncStorageContext();syncAccountControls();}}});
   }else if(ui.view==='overview'){
    const currentDate=today(),events=monthEvents(),totals=monthTotals(events);
    const upcoming=events.filter(event=>event.date>=currentDate).slice(0,4);
@@ -163,7 +169,7 @@ function render(){
    const loan=state.loans.find(isActive)||null;
    const snapshot=loan?loanLedger(loan,state.loanPayments):null;
    const loanSummary=projectOverviewLoan(loan,snapshot);
-   screenRoot.render({view:'overview',props:{currentDate,monthTitle:monthLabel(ui.month),hasData:hasData(),totals,categories,upcoming,loan:loanSummary,rubles,formatDate,financeEnabled:financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId,verifiedActorUserId:emailSession.userId||null}});
+   screenRoot.render({view:'overview',props:{currentDate,month:ui.month,monthTitle:monthLabel(ui.month),hasData:hasData(),totals,categories,upcoming,loan:loanSummary,rubles,formatDate,financeEnabled:financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId,verifiedActorUserId:emailSession.userId||null,onSourceChange:source=>{ui.overviewSource=source;syncStorageContext();syncAccountControls();}}});
   }else if(ui.view==='obligations'){
    const rows=projectObligationRows(state.entries,state.settlements,ui.month,ui.filter,dayInMonth);
    const totals=monthTotals(monthEvents()),currentDate=today();
@@ -188,8 +194,10 @@ function render(){
       audit(s,'reminder-settings','Изменены локальные настройки напоминаний');
      },'Настройки напоминаний сохранены');
     },
-    focusReserveId:ui.focusReserveId,importSuggestions:ui.reserveSuggestions,onReserveSectionChange:next=>{
-     ui.obligationsSection=next;ui.focusReserveId=null;render();
+    focusReserveId:ui.focusReserveId,importSuggestions:ui.reserveSuggestions,
+    onPaymentSourceChange:source=>{ui.paymentSource=source;syncStorageContext();syncAccountControls();},
+    onReserveSectionChange:next=>{
+     ui.obligationsSection=next;ui.paymentSource=next==='due'&&financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId?'server':'local';ui.focusReserveId=null;render();
     }}});
   }else if(ui.view==='loans'){
    const loans=state.loans.filter(isActive);
@@ -535,6 +543,7 @@ async function handleAction(button){
  if(type==='edit-loan'){openLoan(id);return;}
  if(type==='pay'){openPayment(id);return;}
  if(type==='edit-payment'){const p=state.loanPayments.find(x=>x.id===id&&!x.voidedAt);if(p)openPayment(p.loanId,id);return;}
+ if(type==='open-server-payments'){if(financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId){ui.obligationsSection='due';ui.paymentSource='server';navigation('obligations');}return;}
  if(type==='settle'){openSettlement(id,button.dataset.month||ui.month);return;}
  if(type==='edit-settlement'){const p=state.settlements.find(x=>x.id===id&&!x.voidedAt);if(p)openSettlement(p.entryId,p.occurrence,id);return;}
  if(type==='expand-entry'){ui.expandedEntry=ui.expandedEntry===id?null:id;render();return;}
@@ -1414,8 +1423,9 @@ async function init(){
    }catch{}
   }
   state=await readState();
+  ui.overviewSource=financeReservesEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId?'server':'local';
   render();
-  $('#save-indicator').textContent='Локальная база готова';
+  $('#save-indicator').textContent=ui.overviewSource==='server'?'Серверный раздел':'Локальная база готова';
  }catch(e){onErrorNoStorage(e);return;}
  if(ui.view==='settings')renderStorageStatus();
 }
