@@ -17,7 +17,10 @@ test('email registration, true browser cookie, logout and repeat login',async({p
  expect((await currentUser(page))).toBeNull();
  await page.goto('/');
  await expect(page).toHaveURL(ORIGIN+'/account.html');
- await loginViaUi(page,email);
+ // The redirect already opened this page. A second immediate navigation can
+ // replace it while /me starts, triggering WebKit's caught-fetch pageerror:
+ // https://github.com/microsoft/playwright/issues/44015
+ await loginViaUi(page,email,TEST_PASSWORD,{reuseAccountPage:true});
  expect((await currentUser(page)).id).toBe(user.id);
  expect((await scopedState(page,'account-state-v2:'+user.id)).entries.some(e=>e.title==='E2E authenticated budget')).toBe(true);
  watcher.assertClean();
