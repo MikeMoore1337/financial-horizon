@@ -939,6 +939,19 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
                 raise FinanceCommandError(
                     "semantic_conflict", "Оплата превышает остаток обязательства в цикле", 409,
                 )
+            # The newly inserted fact is visible in this transaction. Include
+            # legacy imported facts and earlier non-reserve payments as well as
+            # this reserve's events, without debiting any of them again.
+            cycle_total = int(session.execute(text("""
+                SELECT COALESCE(SUM(amount_minor),0) FROM settlements
+                WHERE profile_id=:p AND obligation_id=:obligation AND voided_at IS NULL
+                  AND occurrence_on >= date_trunc('month', CAST(:occurrence AS date))
+                  AND occurrence_on < date_trunc('month', CAST(:occurrence AS date)) + INTERVAL '1 month'
+            """), {"p": p, "obligation": fact_source, "occurrence": occurrence}).scalar_one())
+            if cycle_total > int(plan["target_minor"]):
+                raise FinanceCommandError(
+                    "semantic_conflict", "Оплата превышает остаток обязательства в цикле", 409,
+                )
             available = _safe_balance(session.execute(text("""
                 SELECT COALESCE(SUM(delta_minor),0) FROM reserve_allocations
                 WHERE profile_id=:p AND reserve_id=:reserve AND account_id=:account

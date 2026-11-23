@@ -285,6 +285,35 @@ def test_reserved_payment_rejects_other_cycle_without_cash_or_reserve_change(fin
         assert session.execute(text("SELECT count(*) FROM ledger_transactions")).scalar_one() == 0
 
 
+def test_reserved_payment_counts_imported_fact_in_same_cycle(financial_context):
+    engine, scope, account_id, obligation_id = financial_context
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        session.execute(text("""
+            INSERT INTO settlements(profile_id,id,obligation_id,occurrence_on,paid_on,amount_minor)
+            VALUES (:p,:id,:obligation,'2027-11-01','2027-11-01',3000)
+        """), {"p": scope.profile_id, "id": uuid4(), "obligation": obligation_id})
+    plan = reserve_input(account_id, obligation_id, opening=9000)
+    submit(engine, scope, "reserve.create", plan, [account_id, obligation_id])
+    before = snapshot(engine, scope)
+    payload = {
+        "account_id": account_id, "obligation_id": obligation_id,
+        "amount_minor": 6001, "occurrence_on": "2027-11-16",
+        "paid_on": "2027-11-16", "reserve_id": plan["id"],
+        "reserved_used_minor": 6001,
+    }
+    with pytest.raises(FinanceCommandError) as exc:
+        submit(engine, scope, "settlement.payment.record", payload,
+               [account_id, obligation_id, plan["id"]])
+    assert exc.value.code == "semantic_conflict"
+    assert snapshot(engine, scope).body["revision"] == before.body["revision"]
+    account = entities(engine, scope)[account_id]["data"]
+    assert account["balance_minor"] == 10_000 and account["reserved_minor"] == 9_000
+    payload.update(amount_minor=6000, reserved_used_minor=6000)
+    assert submit(engine, scope, "settlement.payment.record", payload,
+                  [account_id, obligation_id, plan["id"]]).status == 201
+
+
 def test_reserved_payment_and_void_are_one_cash_write_each(financial_context):
     from backend.finance_db.snapshot import get_finance_delta
 
