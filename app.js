@@ -159,7 +159,7 @@ function render(){
     },
    }});
   }else if(ui.view==='calendar'){
-   const events=monthEvents(),totals=monthTotals(events);
+   const events=monthEvents(),totals=monthTotals(events,state,ui.month);
    screenRoot.render({view:'calendar',props:{events,month:ui.month,selectedDate:ui.selectedDate,currentDate:today(),monthTitle:monthLabel(ui.month),netPlanCents:totals.netPlanCents,netFactCents:totals.netFactCents,formatDate,rubles,financeEnabled:financeReservesEnabled&&!guestMode&&emailSession.userId===activeUserId,verifiedActorUserId:emailSession.userId||null}});
   }else if(ui.view==='overview'){
    const currentDate=today(),events=monthEvents(),totals=monthTotals(events);

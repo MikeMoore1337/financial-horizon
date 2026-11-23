@@ -41,6 +41,30 @@ test('plan/fact recurring and leap-year dates',()=>{
  assert.equal(t.expenseCents,1250000+280000+3000000+3020000);
  assert.equal(t.netPlanCents,10450000);
 });
+test('actual monthly flow follows payment dates while planned occurrences retain their own periods',()=>{
+ const state=emptyState();
+ state.entries.push({id:'bill',kind:'expense',recurrence:'monthly',date:'2024-01-31',amountCents:10000});
+ state.entries.push({id:'income',kind:'income',recurrence:'once',date:'2024-02-20',amountCents:5000});
+ state.settlements.push(
+  {id:'early',entryId:'bill',occurrence:'2024-02',date:'2024-01-29',amountCents:2500},
+  {id:'late',entryId:'bill',occurrence:'2024-02',date:'2024-03-03',amountCents:7500},
+  {id:'salary',entryId:'income',occurrence:'2024-02',date:'2024-03-01',amountCents:5000},
+  {id:'cancelled',entryId:'bill',occurrence:'2024-02',date:'2024-03-04',amountCents:500,voidedAt:'2024-03-05'}
+ );
+ assert.equal(getMonthEvents(state,'2024-02').find(row=>row.id==='bill').paidCents,10000);
+ const actual=month=>monthTotals(getMonthEvents(state,month),state,month).netFactCents;
+ assert.equal(actual('2024-01'),-2500);
+ assert.equal(actual('2024-02'),0);
+ assert.equal(actual('2024-03'),-2500);
+ state.entries[0].deletedAt='2024-04-01';
+ assert.equal(actual('2024-03'),-2500,'archiving must not erase historical cash flow');
+ state.loans.push({id:'loan',openingCents:100000,paymentCents:10000,apr:0,termMonths:10,
+  dueDay:10,asOfDate:'2024-01-01',deletedAt:'2024-04-01'});
+ state.loanPayments.push({id:'loan-payment',loanId:'loan',date:'2024-03-09',amountCents:1000,createdAt:'2024-03-09T12:00:00Z'});
+ assert.equal(actual('2024-03'),-3500);
+ state.loanPayments.push({id:'bad',loanId:'missing',date:'2024-03-10',amountCents:1});
+ assert.throws(()=>actual('2024-03'),/Не найден кредит/);
+});
 test('yearly and monthly recurring dates clamp to February',()=>{
  const entry={id:'e',kind:'expense',recurrence:'monthly',date:'2026-01-31',amountCents:10000};
  assert.equal(entryDueDate(entry,'2028-02'),'2028-02-29');

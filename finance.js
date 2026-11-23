@@ -184,11 +184,37 @@ export function getMonthEvents(state,month){
  }).filter(Boolean);
  return [...entries,...loans].sort((a,b)=>a.date.localeCompare(b.date)||a.title.localeCompare(b.title,'ru'));
 }
-export function monthTotals(events){const incomes=events.filter(x=>x.kind==='income'),expenses=events.filter(x=>x.kind!=='income');return {
+function actualMonthNet(state,month){
+ if(!state||!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))throw Error('Некорректный период фактических операций');
+ const entries=new Map(state.entries.map(entry=>[entry.id,entry]));
+ const loans=new Set(state.loans.map(loan=>loan.id));
+ if(entries.size!==state.entries.length||loans.size!==state.loans.length)
+  throw Error('Повторный идентификатор финансовой записи');
+ let total=0;
+ const add=(amount,sign)=>{
+  if(!Number.isSafeInteger(amount)||amount<0||!Number.isSafeInteger(total+sign*amount))
+   throw Error('Некорректная сумма фактической операции');
+  total+=sign*amount;
+ };
+ for(const fact of state.settlements){
+  if(fact.voidedAt||monthKey(fact.date)!==month)continue;
+  const entry=entries.get(fact.entryId);
+  if(!entry||!['income','expense'].includes(entry.kind))throw Error('Не найдена запись фактической операции');
+  add(fact.amountCents,entry.kind==='income'?1:-1);
+ }
+ for(const fact of state.loanPayments){
+  if(fact.voidedAt||monthKey(fact.date)!==month)continue;
+  if(!loans.has(fact.loanId))throw Error('Не найден кредит фактической операции');
+  add(fact.amountCents,-1);
+ }
+ return total;
+}
+export function monthTotals(events,state,month){const incomes=events.filter(x=>x.kind==='income'),expenses=events.filter(x=>x.kind!=='income');return {
   incomeCents:incomes.reduce((a,x)=>a+x.plannedCents,0),expenseCents:expenses.reduce((a,x)=>a+x.plannedCents,0),
   incomePaidCents:incomes.reduce((a,x)=>a+x.paidCents,0),expensePaidCents:expenses.reduce((a,x)=>a+x.paidCents,0),
   netPlanCents:incomes.reduce((a,x)=>a+x.plannedCents,0)-expenses.reduce((a,x)=>a+x.plannedCents,0),
-  netFactCents:incomes.reduce((a,x)=>a+x.paidCents,0)-expenses.reduce((a,x)=>a+x.paidCents,0)
+  netFactCents:state===undefined&&month===undefined?
+   incomes.reduce((a,x)=>a+x.paidCents,0)-expenses.reduce((a,x)=>a+x.paidCents,0):actualMonthNet(state,month)
 };}
 export function createSampleState() {
  const asOf='2026-11-01'; return {
