@@ -1,9 +1,9 @@
 /**
- * #68 - INACTIVE, account-scoped encrypted offline command queue.
+ * #68 - account-scoped encrypted offline command queue.
  *
- * No HTTP calls, automatic replay, optimistic cash postings, feature flag,
- * local-first migration or exposed browser entrypoint. Queue operations are
- * encrypted with the existing #34 snapshot/outbox/conflict native IDB CAS.
+ * This module makes no HTTP calls or optimistic cash postings. Queue operations
+ * are encrypted with the existing #34 snapshot/outbox/conflict native IDB CAS;
+ * the authenticated controller owns dispatch and its browser lifecycle.
  * The server remains authoritative for confirmed account balances.
  */
 import {
@@ -19,6 +19,7 @@ const STRONG_ETAG = /^"[^"\r\n]{1,254}"$/;
 const MAX_BYTES = 32768;
 const MAX_QUEUE = 1000;
 const ACTION_FIELDS = Object.freeze({
+  'account.transfer': ['from_account_id', 'to_account_id', 'amount_minor', 'occurred_on'],
   'account.create': ['id', 'name', 'kind', 'currency', 'opening_minor'],
   'account.update': ['account_id', 'name', 'kind'],
   'account.archive': ['account_id'],
@@ -385,10 +386,11 @@ function validateCommand(command) {
     'schema_version', 'client_mutation_id', 'base_revision',
     'action', 'expected_entity_revisions', 'payload',
   ]);
-  if (dto.schema_version !== 2 || !UUID.test(dto.client_mutation_id) ||
+  if (![1, 2].includes(dto.schema_version) || !UUID.test(dto.client_mutation_id) ||
       !integer(dto.base_revision) ||
       typeof dto.action !== 'string' ||
-      !Object.hasOwn(ACTION_FIELDS, dto.action)) {
+      !Object.hasOwn(ACTION_FIELDS, dto.action) ||
+      (dto.schema_version === 1) !== (dto.action === 'account.transfer')) {
     hold('Недопустимая версия или действие команды');
   }
   keysExactly(dto.payload, ACTION_FIELDS[dto.action], OPTIONAL_FIELDS[dto.action] || []);
@@ -409,6 +411,8 @@ function validateCommand(command) {
   let requiredRevisions;
   if (dto.action === 'account.create') {
     requiredRevisions = [];
+  } else if (dto.action === 'account.transfer') {
+    requiredRevisions = [dto.payload.from_account_id, dto.payload.to_account_id];
   } else if (dto.action === 'settlement.payment.record') {
     requiredRevisions = [dto.payload.account_id, dto.payload.obligation_id];
     if (Object.hasOwn(dto.payload, 'reserve_id')) requiredRevisions.push(dto.payload.reserve_id);
@@ -480,13 +484,66 @@ function validateCommand(command) {
     if (name === 'amount_minor' && !integer(value, 1, 1_000_000_000_000)) {
       hold('Недопустимая сумма');
     }
-    if ((name === 'account_id' || name === 'obligation_id' ||
+    if ((name === 'account_id' || name === 'from_account_id' || name === 'to_account_id' || name === 'obligation_id' ||
          name === 'loan_id' || name === 'transaction_id' ||
          name === 'fact_id' || name === 'reserve_id' || name === 'id') && !UUID.test(value)) {
       hold('Недопустимый идентификатор');
     }
   }
   return dto;
+}
+
+function verifyTransferReceipt(command, changes, entities, previouslyApplied) {
+  if (command.action !== 'account.transfer') return;
+  const p = command.payload;
+  if (changes.length !== 1 || changes[0].kind !== 'ledger_posted') hold('Не подтверждён перевод');
+  const event = changes[0].payload, transaction = event?.entity;
+  if (!plain(event) || event.from_account_id !== p.from_account_id ||
+      event.to_account_id !== p.to_account_id || event.amount_minor !== p.amount_minor ||
+      event.transaction_kind !== 'transfer' || transaction?.kind !== 'transaction' ||
+      transaction.id !== changes[0].entity_id ||
+      transaction.entity_revision !== changes[0].entity_revision ||
+      transaction.data?.kind !== 'transfer' || transaction.data.occurred_on !== p.occurred_on ||
+      !Array.isArray(transaction.data.postings) || transaction.data.postings.length !== 2 ||
+      !Array.isArray(event.accounts) || event.accounts.length !== 2) {
+    hold('Квитанция перевода не соответствует команде');
+  }
+  for (const [id, amount] of [[p.from_account_id, -p.amount_minor], [p.to_account_id, p.amount_minor]]) {
+    const postings = transaction.data.postings.filter(x => x?.account_id === id && x.signed_minor === amount);
+    const updated = event.accounts.filter(x => x?.kind === 'account' && x.id === id);
+    if (postings.length !== 1 || updated.length !== 1) hold('Проводки перевода не подтверждены');
+    if (!previouslyApplied) {
+      const previous = entities.filter(x => x?.kind === 'account' && x.id === id);
+      if (previous.length !== 1 || previous[0].entity_revision !== command.expected_entity_revisions[id] ||
+          updated[0].entity_revision !== previous[0].entity_revision + 1 ||
+          updated[0].data?.balance_minor !== previous[0].data?.balance_minor + amount ||
+          updated[0].data?.reserved_minor !== previous[0].data?.reserved_minor) {
+        hold('Изменение остатка перевода не подтверждено');
+      }
+    }
+  }
+}
+
+function verifyTransferDependencies(command, entities) {
+  if (command.action !== 'account.transfer') return;
+  if (!Array.isArray(entities)) hold('Снимок счетов недоступен');
+  const {from_account_id: from, to_account_id: to, amount_minor: amount} = command.payload;
+  for (const id of [from, to]) {
+    const matches = entities.filter(x => x?.kind === 'account' && x.id === id &&
+      x.entity_revision === command.expected_entity_revisions[id]);
+    if (matches.length !== 1 || matches[0].data?.archived_at !== null) {
+      hold('Счёт или его подтверждённая ревизия недоступны');
+    }
+    const balance = matches[0].data.balance_minor;
+    const delta = id === from ? -amount : amount;
+    if (!Number.isSafeInteger(balance) || !Number.isSafeInteger(balance + delta)) {
+      hold('Остаток после перевода недопустим');
+    }
+    if (id === from && matches[0].data.reserved_minor > 0 &&
+        matches[0].data.available_minor < amount) {
+      hold('Перевод затронет зарезервированные средства');
+    }
+  }
 }
 function active(scope, session, identity) {
   if (!SCOPE.test(scope) || !identity ||
@@ -573,7 +630,11 @@ export async function enqueueEncryptedFinanceCommandCandidate({
   // verified server deltas advance the cursor. A NEW mutation must still
   // start from the exact latest authoritative server revision.
   if (cloud.revision !== pinned.base_revision) hold('Серверная версия изменилась');
+  if (cloud.serverEtag !== undefined && cloud.serverEtag !== ifMatch) {
+    hold('Условие записи не соответствует сохранённому серверному снимку');
+  }
   verifySettlementDependencies(pinned, cloud.entities);
+  verifyTransferDependencies(pinned, cloud.entities);
   if (current.outbox.length >= MAX_QUEUE) hold('Достигнут лимит офлайн-операций');
   const item = {
     scope, profileId: identity.profileId,
@@ -641,7 +702,7 @@ export async function persistAuthenticatedFinanceReceiptCandidate({
   }
   const ack = safeJson(receipt);
   const delta = safeJson(deltaPage);
-  if (!plain(ack) || ack.schema_version !== 2 ||
+  if (!plain(ack) || ![1, 2].includes(ack.schema_version) ||
       !UUID.test(ack.client_mutation_id) ||
       !integer(ack.revision, 1) ||
       typeof ack.replayed !== 'boolean' ||
@@ -674,7 +735,7 @@ export async function persistAuthenticatedFinanceReceiptCandidate({
     scope, identity.profileId, first.ifMatch, first.command,
   );
   active(scope, session, identity);
-  if (first.fingerprint !== digest || first.command.schema_version !== 2) {
+  if (first.fingerprint !== digest || first.command.schema_version !== ack.schema_version) {
     hold('Финансовая команда изменилась после записи');
   }
   // The accepted v1 API pages changes by whole PostgreSQL revisions.
@@ -702,6 +763,7 @@ export async function persistAuthenticatedFinanceReceiptCandidate({
   }
   verifySettlementReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   verifySettlementReversalReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
+  verifyTransferReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   let checked;
   if (previouslyApplied) {
     // The authenticated cloud image already contains revision ack.revision.
@@ -817,7 +879,7 @@ export async function recordEncryptedFinanceRetryCandidate({
  */
 export async function persistEncryptedFinanceHoldCandidate({
   scope, session, identity, expectedEpoch, mutationId,
-  httpStatus, decision, source,
+  httpStatus, decision, source, negativeAck = null,
 }) {
   active(scope, session, identity);
   if (!integer(expectedEpoch) || !UUID.test(mutationId) ||
@@ -828,6 +890,7 @@ export async function persistEncryptedFinanceHoldCandidate({
       !['command', 'delta'].includes(source)) {
     hold('Некорректная причина остановки синхронизации');
   }
+  const pinnedNegativeAck = negativeAck === null ? null : safeJson(negativeAck);
   const current = await readAtomicEncryptedCandidate(scope, session);
   active(scope, session, identity);
   if (!current || current.epoch !== expectedEpoch ||
@@ -870,6 +933,14 @@ export async function persistEncryptedFinanceHoldCandidate({
     mutationId, httpStatus, decision, source,
     baseRevision: head.command.base_revision,
   };
+  // Only the authenticated transport may supply this parsed server response.
+  // A bare HTTP status, including a proxy-generated 412, is not sufficient
+  // to release or replace a financial command.
+  if (httpStatus === 412 && source === 'command' &&
+      plain(pinnedNegativeAck) && pinnedNegativeAck.code === 'stale_revision' &&
+      integer(pinnedNegativeAck.server_revision, head.command.base_revision + 1)) {
+    entry.verifiedStaleRevision = pinnedNegativeAck.server_revision;
+  }
   const nextEpoch = await compareAndSwapAtomicEncryptedCandidate(
     scope, session, expectedEpoch, 2, {
       snapshot: current.snapshot,
@@ -979,4 +1050,93 @@ export async function recordManualFinanceConflictChoiceCandidate({
     status: 'MANUAL_CHOICE_STAGED', bundleEpoch: nextEpoch,
     queuePreserved: true, conflictStillHeld: true, sent: false,
   });
+}
+
+/** Resolve only an authenticated 412 hold. A 409 may indicate an already
+ * used idempotency key and a 410 may follow a committed POST, so neither is
+ * evidence that the command did not run. Preserve the entire original
+ * request and its fingerprint in the encrypted conflict history. */
+export async function resolveStaleFinanceConflict({
+  scope, session, identity, expectedEpoch, mutationId, observedRevision,
+  choice, replacementCommand = null, explicitUserChoice = false,
+}) {
+  active(scope, session, identity);
+  if (!integer(expectedEpoch) || !integer(observedRevision) ||
+      !UUID.test(mutationId) || explicitUserChoice !== true ||
+      !['ACCEPT_SERVER', 'REAPPLY'].includes(choice) ||
+      (choice === 'ACCEPT_SERVER' && replacementCommand !== null)) {
+    hold('Не подтверждено решение финансового конфликта');
+  }
+  // Pin and validate the replacement before any asynchronous operation.
+  const replacement = choice === 'REAPPLY' ? validateCommand(replacementCommand) : null;
+  const current = await readAtomicEncryptedCandidate(scope, session);
+  active(scope, session, identity);
+  if (!current || current.epoch !== expectedEpoch || current.schemaVersion !== 2 ||
+      current.snapshot?.version !== 2 || !Array.isArray(current.conflicts)) {
+    hold('Зашифрованное состояние конфликта изменилось');
+  }
+  const cloud = current.snapshot.cloudFinance;
+  const tag = typeof cloud?.serverEtag === 'string'
+    ? /^"fh\.1\.(0|[1-9]\d*)\.[a-f0-9]{16}"$/.exec(cloud.serverEtag) : null;
+  if (!plain(cloud) || cloud.schemaVersion !== 1 || cloud.scope !== scope ||
+      cloud.profileId !== identity.profileId || cloud.epoch !== identity.epoch ||
+      cloud.revision !== observedRevision || !Array.isArray(cloud.entities) ||
+      !tag || tag[1] !== String(observedRevision)) {
+    hold('Нужен актуальный подтверждённый серверный снимок');
+  }
+  existingQueue(current.outbox, scope, identity);
+  const head = current.outbox[0];
+  const matches = current.conflicts.filter(x => plain(x) &&
+    x.kind === 'finance_sync_hold' && x.mutationId === mutationId);
+  if (!head || head.mutationId !== mutationId || matches.length !== 1 ||
+      matches[0].scope !== scope || matches[0].profileId !== identity.profileId ||
+      matches[0].httpStatus !== 412 || matches[0].decision !== 'CONFLICT_HOLD' ||
+      matches[0].source !== 'command' ||
+      !integer(matches[0].verifiedStaleRevision, head.command.base_revision + 1) ||
+      observedRevision < matches[0].verifiedStaleRevision ||
+      matches[0].baseRevision !== head.command.base_revision ||
+      observedRevision <= head.command.base_revision) {
+    hold('Нет подтверждённого отказа из-за устаревшей версии');
+  }
+  const originalFingerprint = await fingerprint(scope, identity.profileId, head.ifMatch, head.command);
+  active(scope, session, identity);
+  if (originalFingerprint !== head.fingerprint) hold('Исходная операция изменилась');
+  let nextItem = null;
+  if (replacement) {
+    if (replacement.client_mutation_id === mutationId ||
+        replacement.action !== head.command.action || replacement.base_revision !== cloud.revision ||
+        current.outbox.some(x => x.mutationId === replacement.client_mutation_id) ||
+        !Array.isArray(cloud.appliedReceipts) ||
+        cloud.appliedReceipts.some(x => x?.mutationId === replacement.client_mutation_id) ||
+        current.conflicts.some(x => x?.mutationId === replacement.client_mutation_id)) {
+      hold('Новая команда не соответствует решению конфликта');
+    }
+    for (const [id, rev] of Object.entries(replacement.expected_entity_revisions)) {
+      if (cloud.entities.filter(x => x?.id === id && x.entity_revision === rev).length !== 1) {
+        hold('Ревизия изменённой сущности не подтверждена');
+      }
+    }
+    if (replacement.action === 'account.create' &&
+        cloud.entities.some(x => x?.id === replacement.payload.id)) {
+      hold('Новый счёт уже существует');
+    }
+    verifySettlementDependencies(replacement, cloud.entities);
+    verifyTransferDependencies(replacement, cloud.entities);
+    const digest = await fingerprint(scope, identity.profileId, cloud.serverEtag, replacement);
+    active(scope, session, identity);
+    nextItem = {scope, profileId: identity.profileId, generation: identity.generation,
+      epoch: identity.epoch, mutationId: replacement.client_mutation_id,
+      fingerprint: digest, ifMatch: cloud.serverEtag, command: replacement,
+      status: 'pending', attempts: 0};
+  }
+  const resolution = {...matches[0], kind: 'finance_sync_resolution',
+    original: structuredClone(head), choice, observedRevision,
+    replacementMutationId: nextItem?.mutationId ?? null};
+  const conflicts = current.conflicts.map(x => x === matches[0] ? resolution : x);
+  const outbox = nextItem ? [nextItem, ...current.outbox.slice(1)] : current.outbox.slice(1);
+  const nextEpoch = await compareAndSwapAtomicEncryptedCandidate(scope, session, expectedEpoch, 2,
+    {snapshot: current.snapshot, outbox, conflicts});
+  active(scope, session, identity);
+  return Object.freeze({status: 'CONFLICT_RESOLVED', bundleEpoch: nextEpoch,
+    pending: outbox.length, sent: false, originalPreserved: true});
 }

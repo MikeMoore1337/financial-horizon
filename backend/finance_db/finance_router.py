@@ -168,7 +168,14 @@ def mount_finance_routes(
         return user["id"]
 
     def scope(request: Request) -> VerifiedFinanceScope:
-        return derive_verified_scope(require_user(request, finance_cookie=True), namespace)
+        verified = derive_verified_scope(require_user(request, finance_cookie=True), namespace)
+        # A stale browser tab can share cookies with a newly signed-in user.
+        # This optional precondition never grants access: it only rejects a
+        # mismatch against the profile derived from the verified FH cookie.
+        expected = request.headers.getlist("x-fh-expected-profile")
+        if len(expected) > 1 or (expected and expected[0] != str(verified.profile_id)):
+            raise HTTPException(status_code=403, detail="Финансовый профиль изменился")
+        return verified
 
     def rate(request: Request, action: str) -> None:
         if rate_limiter is None:
@@ -213,7 +220,8 @@ def mount_finance_routes(
             )
         response.headers["Cache-Control"] = "private, no-store"
         return {"ok": True, "profile_id": str(verified.profile_id),
-                "payment_guard_v1": bool(enable_account_v2_candidate)}
+                "payment_guard_v1": bool(enable_account_v2_candidate),
+                "sync_profile_fence_v1": True}
 
     router = APIRouter(prefix="/api/finance/v1", include_in_schema=False)
 

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   initializeEncryptedCloudCacheCandidate,
   persistEncryptedCloudDeltaCandidate,
+  refreshEncryptedCloudSnapshot,
 } from '../src/cloud/encrypted-cloud-cache-candidate.mjs';
 import {
   enqueueEncryptedFinanceCommandCandidate,
@@ -10,6 +11,7 @@ import {
   persistAuthenticatedFinanceReceiptCandidate,
   persistEncryptedFinanceHoldCandidate,
   recordManualFinanceConflictChoiceCandidate,
+  resolveStaleFinanceConflict,
 } from '../src/cloud/encrypted-command-outbox-candidate.mjs';
 import {dispatchOneEncryptedFinanceCommandCandidate} from '../src/cloud/finance-offline-dispatch-candidate.mjs';
 import {LocalBudgetSession} from '../src/security/local-budget-session.ts';
@@ -661,6 +663,153 @@ async function preparedOfflineQueue() {
   });
   return {db, session, identity};
 }
+
+async function heldOfflineCommand(status = 412, includeNegativeAck = true) {
+  const state = await preparedOfflineQueue();
+  const {session, identity} = state;
+  await enqueueEncryptedFinanceCommandCandidate({scope: USER_A, session, identity,
+    command: pendingCommand(), ifMatch: CLOUD_ETAG, expectedEpoch: 1});
+  await persistEncryptedFinanceHoldCandidate({scope: USER_A, session, identity,
+    expectedEpoch: 2, mutationId: PENDING_ID, httpStatus: status,
+    decision: status === 410 ? 'SNAPSHOT_REQUIRED_HOLD' : 'CONFLICT_HOLD',
+    source: 'command', negativeAck: status === 412 && includeNegativeAck
+      ? {code: 'stale_revision', server_revision: 1} : null});
+  const pages = cloudPages();
+  pages[0].body.revision = 1;
+  await refreshEncryptedCloudSnapshot({scope: USER_A, session, identity,
+    pages, etag: '"fh.1.1.0123456789abcdef"', expectedEpoch: 3});
+  return state;
+}
+
+test('#68 accepting server after 412 archives the unmodified command atomically', async () => {
+  const {db, session, identity} = await heldOfflineCommand();
+  const before = await readAtomicEncryptedCandidate(USER_A, session);
+  const args = {scope: USER_A, session, identity, expectedEpoch: 4,
+    mutationId: PENDING_ID, observedRevision: 1, choice: 'ACCEPT_SERVER',
+    explicitUserChoice: true};
+  db.failBundlePut = true;
+  await assert.rejects(() => resolveStaleFinanceConflict(args));
+  assert.deepEqual(await readAtomicEncryptedCandidate(USER_A, session), before);
+  db.failBundlePut = false;
+  const result = await resolveStaleFinanceConflict(args);
+  assert.equal(result.status, 'CONFLICT_RESOLVED');
+  assert.equal(result.pending, 0);
+  session.logout();
+  const reopened = await unlock(USER_A);
+  const after = await readAtomicEncryptedCandidate(USER_A, reopened);
+  assert.deepEqual(after.outbox, []);
+  assert.equal(after.conflicts[0].choice, 'ACCEPT_SERVER');
+  assert.deepEqual(after.conflicts[0].original, before.outbox[0]);
+  assert.equal(after.snapshot.cloudFinance.revision, 1);
+  reopened.logout();
+});
+
+test('#68 reapply requires a new UUID and current preconditions; 409 and 410 remain held', async () => {
+  const {session, identity} = await heldOfflineCommand();
+  const nextId = 'd0000000-0000-4000-8000-000000000002';
+  const replacement = {...pendingCommand(200, nextId), base_revision: 1};
+  const args = {scope: USER_A, session, identity, expectedEpoch: 4,
+    mutationId: PENDING_ID, observedRevision: 1, choice: 'REAPPLY',
+    replacementCommand: replacement, explicitUserChoice: true};
+  await assert.rejects(() => resolveStaleFinanceConflict({...args,
+    replacementCommand: {...replacement, client_mutation_id: PENDING_ID}}), /SYNC_HOLD/);
+  const before = await readAtomicEncryptedCandidate(USER_A, session);
+  const result = await resolveStaleFinanceConflict(args);
+  assert.equal(result.pending, 1);
+  const after = await readAtomicEncryptedCandidate(USER_A, session);
+  assert.equal(after.outbox[0].mutationId, nextId);
+  assert.equal(after.outbox[0].ifMatch, '"fh.1.1.0123456789abcdef"');
+  assert.deepEqual(after.conflicts[0].original, before.outbox[0]);
+  assert.equal(after.conflicts[0].replacementMutationId, nextId);
+  session.logout();
+  for (const [status, includeNegativeAck] of [[409, true], [410, true], [412, false]]) {
+    const held = await heldOfflineCommand(status, includeNegativeAck);
+    const old = await readAtomicEncryptedCandidate(USER_A, held.session);
+    await assert.rejects(() => resolveStaleFinanceConflict({...args,
+      session: held.session, identity: held.identity}), /SYNC_HOLD/);
+    assert.deepEqual(await readAtomicEncryptedCandidate(USER_A, held.session), old);
+    held.session.logout();
+  }
+});
+
+test('#68 snapshot recovery preserves the encrypted pending command and rejects stale images', async () => {
+  const {db, session, identity} = await preparedOfflineQueue();
+  await enqueueEncryptedFinanceCommandCandidate({
+    scope: USER_A, session, identity, command: pendingCommand(),
+    ifMatch: CLOUD_ETAG, expectedEpoch: 1,
+  });
+  const before = await readAtomicEncryptedCandidate(USER_A, session);
+  const newer = cloudPages();
+  newer[0].body.revision = 1;
+  newer[0].body.entities = [cloudAccount(2, 9_500)];
+  const result = await refreshEncryptedCloudSnapshot({
+    scope: USER_A, session, identity, pages: newer,
+    etag: '"fh.1.1.0123456789abcdef"', expectedEpoch: 2,
+  });
+  assert.equal(result.serverRevision, 1);
+  const after = await readAtomicEncryptedCandidate(USER_A, session);
+  assert.deepEqual(after.outbox, before.outbox);
+  assert.deepEqual(after.conflicts, before.conflicts);
+  assert.equal(after.snapshot.cloudFinance.entities[0].data.balance_minor, 9_500);
+  assert.equal(after.snapshot.cloudFinance.serverEtag, '"fh.1.1.0123456789abcdef"');
+  assert.equal(after.snapshot.title, before.snapshot.title);
+  const second = pendingCommand(22, 'd0000000-0000-4000-8000-000000000002');
+  second.base_revision = 1;
+  await assert.rejects(() => enqueueEncryptedFinanceCommandCandidate({
+    scope: USER_A, session, identity, command: second,
+    ifMatch: '"fh.1.1.fedcba9876543210"', expectedEpoch: 3,
+  }), /SYNC_HOLD/);
+  await assert.rejects(() => refreshEncryptedCloudSnapshot({
+    scope: USER_A, session, identity, pages: newer,
+    etag: '"fh.1.2.0123456789abcdef"', expectedEpoch: 3,
+  }), /SYNC_HOLD/);
+  await assert.rejects(() => refreshEncryptedCloudSnapshot({
+    scope: USER_A, session, identity, pages: newer,
+    etag: '"fh.1.1.fedcba9876543210"', expectedEpoch: 3,
+  }), /SYNC_HOLD/);
+  await assert.rejects(() => refreshEncryptedCloudSnapshot({
+    scope: USER_A, session, identity, pages: cloudPages(),
+    etag: '"fh.1.0.0123456789abcdef"', expectedEpoch: 3,
+  }), /SYNC_HOLD/);
+  assert.deepEqual(await readAtomicEncryptedCandidate(USER_A, session), after);
+  db.failBundlePut = true;
+  const latest = cloudPages();
+  latest[0].body.revision = 2;
+  await assert.rejects(() => refreshEncryptedCloudSnapshot({
+    scope: USER_A, session, identity, pages: latest,
+    etag: '"fh.1.2.0123456789abcdef"', expectedEpoch: 3,
+  }));
+  assert.deepEqual(await readAtomicEncryptedCandidate(USER_A, session), after);
+  session.logout();
+});
+
+test('#68 snapshot recovery keeps receipts and conflict history across a fresh unlock', async () => {
+  const {session, identity} = await preparedOfflineQueue();
+  const state = await readAtomicEncryptedCandidate(USER_A, session);
+  const proof = {mutationId: PENDING_ID, fingerprint: 'a'.repeat(64), revision: 1};
+  state.snapshot.cloudFinance.revision = 1;
+  state.snapshot.cloudFinance.appliedReceipts = [proof];
+  const conflicts = [{kind: 'synthetic-conflict', mutationId: PENDING_ID}];
+  await compareAndSwapAtomicEncryptedCandidate(USER_A, session, 1, 2, {
+    snapshot: state.snapshot, outbox: state.outbox, conflicts,
+  });
+  session.logout();
+  const reopened = await unlock(USER_A);
+  const newer = cloudPages();
+  newer[0].body.revision = 2;
+  await refreshEncryptedCloudSnapshot({
+    scope: USER_A, session: reopened, identity: cloudAuth(reopened), pages: newer,
+    etag: '"fh.1.2.0123456789abcdef"', expectedEpoch: 2,
+  });
+  const saved = await readAtomicEncryptedCandidate(USER_A, reopened);
+  assert.deepEqual(saved.snapshot.cloudFinance.appliedReceipts, [proof]);
+  assert.deepEqual(saved.conflicts, conflicts);
+  await assert.rejects(() => refreshEncryptedCloudSnapshot({
+    scope: USER_A, session, identity, pages: newer,
+    etag: '"fh.1.2.0123456789abcdef"', expectedEpoch: 3,
+  }), /SYNC_HOLD/);
+  reopened.logout();
+});
 
 test('#68 offline v2 command is encrypted and never changes confirmed account balance', async () => {
   const {db, session, identity} = await preparedOfflineQueue();
@@ -1546,6 +1695,33 @@ function mockFinanceJson(body, status = 200) {
       'Cache-Control': 'no-store'},
   });
 }
+test('#68 only a parsed stale-revision server response can authorize 412 resolution', async () => {
+  for (const [body, canResolve] of [
+    [{code: 'stale_revision', server_revision: 1}, true],
+    [{code: 'stale_revision'}, false],
+    [{code: 'other', server_revision: 1}, false],
+  ]) {
+    const {session, identity} = await pendingAccountCreate();
+    await dispatchOneEncryptedFinanceCommandCandidate({
+      lockManager: TEST_LOCKS, scope: USER_A, session, identity, expectedEpoch: 2,
+      origin: TEST_ORIGIN, explicitNetworkCandidateConsent: true,
+      fetchImpl: async () => mockFinanceJson(body, 412),
+    });
+    const pages = cloudPages(); pages[0].body.revision = 1;
+    await refreshEncryptedCloudSnapshot({scope: USER_A, session, identity, pages,
+      etag: '"fh.1.1.0123456789abcdef"', expectedEpoch: 3});
+    const args = {scope: USER_A, session, identity, expectedEpoch: 4,
+      mutationId: PENDING_ID, observedRevision: 1, choice: 'ACCEPT_SERVER',
+      explicitUserChoice: true};
+    if (canResolve) assert.equal((await resolveStaleFinanceConflict(args)).status, 'CONFLICT_RESOLVED');
+    else {
+      const before = await readAtomicEncryptedCandidate(USER_A, session);
+      await assert.rejects(() => resolveStaleFinanceConflict(args), /SYNC_HOLD/);
+      assert.deepEqual(await readAtomicEncryptedCandidate(USER_A, session), before);
+    }
+    session.logout();
+  }
+});
 test('#68 dispatcher is inert without separate explicit network candidate consent', async () => {
   const {session, identity} = await pendingAccountCreate();
   let networkCalls = 0;
@@ -1704,7 +1880,7 @@ test('#68 transient retries retain encrypted identity and exponential backoff ac
     fetchImpl: offline,
   });
   assert.equal(first.status, 'RETRY_SAME_UUID');
-  assert.equal(first.retryDelayMs, 1000);
+  assert.ok(first.retryDelayMs >= 500 && first.retryDelayMs <= 1000);
   assert.equal(first.bundleEpoch, 3);
   const stored = await readAtomicEncryptedCandidate(USER_A, session);
   assert.equal(stored.outbox[0].attempts, 1);
@@ -1721,7 +1897,7 @@ test('#68 transient retries retain encrypted identity and exponential backoff ac
     explicitNetworkCandidateConsent: true, fetchImpl: offline,
   });
   assert.equal(next.status, 'RETRY_SAME_UUID');
-  assert.equal(next.retryDelayMs, 2000);
+  assert.ok(next.retryDelayMs >= 1000 && next.retryDelayMs <= 2000);
   assert.equal(next.bundleEpoch, 4);
   assert.equal(calls, 2);
   const after = await readAtomicEncryptedCandidate(USER_A, recovered);
@@ -1732,6 +1908,26 @@ test('#68 transient retries retain encrypted identity and exponential backoff ac
   assert.deepEqual(after.outbox[0].command, stored.outbox[0].command);
   assert.deepEqual(after.snapshot, stored.snapshot);
   recovered.logout();
+});
+
+test('#68 invalid jitter preserves a bounded retry and the original command', async () => {
+  const {session, identity} = await pendingAccountCreate();
+  const originalRandom = Math.random;
+  Math.random = () => Number.NaN;
+  try {
+    const result = await dispatchOneEncryptedFinanceCommandCandidate({
+      lockManager: TEST_LOCKS, scope: USER_A, session, identity, expectedEpoch: 2,
+      origin: TEST_ORIGIN, explicitNetworkCandidateConsent: true,
+      fetchImpl: async () => { throw Error('synthetic network failure'); },
+    });
+    assert.equal(result.retryDelayMs, 1000);
+    const saved = await readAtomicEncryptedCandidate(USER_A, session);
+    assert.equal(saved.outbox[0].mutationId, PENDING_ID);
+    assert.equal(saved.outbox[0].ifMatch, CLOUD_ETAG);
+  } finally {
+    Math.random = originalRandom;
+    session.logout();
+  }
 });
 
 

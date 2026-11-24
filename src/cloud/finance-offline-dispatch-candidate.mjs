@@ -37,7 +37,8 @@ function authority(origin) {
   let host;
   try { host = new URL(origin); }
   catch { hold('Неверный адрес финансового сервера'); }
-  if (host.protocol !== 'https:' || host.origin !== origin ||
+  if ((host.protocol !== 'https:' &&
+       !(host.protocol === 'http:' && host.hostname === '127.0.0.1')) || host.origin !== origin ||
       host.username || host.password || host.pathname !== '/' ||
       host.search || host.hash) {
     hold('Требуется точный HTTPS origin без учётных данных');
@@ -83,8 +84,16 @@ function control(action, delay = null, bundleEpoch = null) {
     bundleEpoch, sentByThisCall: true, queuePreserved: true,
     serverCommitNotYetReconciled: true});
 }
+function retryJitter(delay) {
+  let sample;
+  try { sample = Math.random(); } catch { return delay; }
+  // Keep every retry bounded even if the random source is unavailable or
+  // unexpectedly replaced by host code. No financial value feeds the jitter.
+  if (!Number.isFinite(sample) || sample < 0 || sample > 1) return delay;
+  return Math.floor(delay * (0.5 + sample * 0.5));
+}
 async function retryAfterTransientFailure({
-  scope, session, identity, expectedEpoch, item, httpStatus,
+  scope, session, identity, expectedEpoch, item, httpStatus, negativeAck = null,
 }) {
   const policy = classifyFinanceOutboxResponseCandidate(
     httpStatus, item.attempts,
@@ -94,7 +103,7 @@ async function retryAfterTransientFailure({
     const stopped = await persistEncryptedFinanceHoldCandidate({
       scope, session, identity, expectedEpoch,
       mutationId: item.mutationId, httpStatus,
-      decision: policy.decision, source: 'command',
+      decision: policy.decision, source: 'command', negativeAck,
     });
     return control(stopped.status, null, stopped.bundleEpoch);
   }
@@ -106,7 +115,7 @@ async function retryAfterTransientFailure({
   const saved = await recordEncryptedFinanceRetryCandidate({
     scope, session, identity, expectedEpoch, mutationId: item.mutationId,
   });
-  return control(policy.decision, policy.retryDelayMs, saved.bundleEpoch);
+  return control(policy.decision, retryJitter(policy.retryDelayMs), saved.bundleEpoch);
 }
 
 /**
@@ -152,7 +161,7 @@ async function dispatchWithoutNetworkLease({
       item.epoch !== identity.epoch || item.status !== 'pending' ||
       !UUID.test(item.mutationId) ||
       !STRONG_ETAG.test(item.ifMatch) ||
-      item.command?.schema_version !== 2 ||
+      ![1, 2].includes(item.command?.schema_version) ||
       item.command.client_mutation_id !== item.mutationId ||
       !safeRevision(item.command.base_revision)) {
     hold('Повреждена ожидающая финансовая операция');
@@ -177,6 +186,7 @@ async function dispatchWithoutNetworkLease({
     redirect: 'error', cache: 'no-store', referrerPolicy: 'same-origin',
     headers: {
       'Content-Type': 'application/json',
+      'X-FH-Expected-Profile': identity.profileId,
       'If-Match': item.ifMatch,
       'Idempotency-Key': item.mutationId,
     },
@@ -185,7 +195,7 @@ async function dispatchWithoutNetworkLease({
   };
   let posted;
   try {
-    posted = await fetchImpl(server + '/api/finance/v2/commands', postOptions);
+    posted = await fetchImpl(server + '/api/finance/v' + item.command.schema_version + '/commands', postOptions);
     active(scope, session, identity);
   } catch {
     if (session.lifecycleSignal.aborted || identity.signal?.aborted) {
@@ -196,9 +206,15 @@ async function dispatchWithoutNetworkLease({
     });
   }
   if (posted.status !== 200 && posted.status !== 201) {
+    let negativeAck = null;
+    if (posted.status === 412 && !posted.redirected &&
+        (!posted.url || new URL(posted.url).origin === server)) {
+      try { negativeAck = await jsonResponse(posted); } catch { /* Hold without proof. */ }
+      active(scope, session, identity);
+    }
     return retryAfterTransientFailure({
       scope, session, identity, expectedEpoch, item,
-      httpStatus: posted.status,
+      httpStatus: posted.status, negativeAck,
     });
   }
   let receipt;
@@ -221,7 +237,7 @@ async function dispatchWithoutNetworkLease({
       sinceRevision + '&limit_revisions=1',
       {method: 'GET', credentials: 'same-origin', mode: 'same-origin',
        redirect: 'error', cache: 'no-store', referrerPolicy: 'same-origin',
-       headers: {'Accept': 'application/json'},
+       headers: {'Accept': 'application/json', 'X-FH-Expected-Profile': identity.profileId},
        signal: session.lifecycleSignal},
     );
     active(scope, session, identity);

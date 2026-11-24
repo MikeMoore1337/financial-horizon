@@ -38,7 +38,7 @@ function assertBundle(bundle, expectedEpoch) {
     hold('Зашифрованный локальный бюджет изменился');
   }
 }
-function cloudImage(verified, appliedReceipts = []) {
+function cloudImage(verified, appliedReceipts = [], serverEtag = null) {
   return {
     schemaVersion: 1, scope: verified.scope,
     profileId: verified.profileId,
@@ -46,11 +46,76 @@ function cloudImage(verified, appliedReceipts = []) {
     epoch: verified.epoch,
     revision: verified.revision,
     entities: verified.entities,
+    ...(serverEtag === null ? {} : {serverEtag}),
     // A delta may arrive after an earlier durable ACK was reconciled.
     // Never erase those encrypted idempotency proofs by overwriting the
     // cloud sidecar with only the latest server image.
     appliedReceipts,
   };
+}
+
+function checkedSnapshotEtag(etag, revision) {
+  // The server implementation encodes the revision in its strong opaque tag.
+  // Accepting a tag from a different snapshot would poison offline writes.
+  const match = typeof etag === 'string' && /^"fh\.1\.(0|[1-9]\d*)\.[a-f0-9]{16}"$/.exec(etag);
+  if (!match || match[1] !== String(revision)) hold('ETag не соответствует ревизии снимка');
+  return etag;
+}
+
+function validatedReceipts(value) {
+  if (!Array.isArray(value) || value.length > 2000 ||
+      value.some(x => !x || typeof x !== 'object' ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(x.mutationId) ||
+        !/^[a-f0-9]{64}$/.test(x.fingerprint) ||
+        !Number.isSafeInteger(x.revision) || x.revision < 1)) {
+    hold('История подтверждённых операций повреждена');
+  }
+  return structuredClone(value);
+}
+
+/** Replace only a confirmed cloud image with a complete newer server image.
+ * Pending commands, conflicts and receipt proofs remain in the same CAS.
+ * A snapshot alone never proves that an uncertain command was committed.
+ * The caller must obtain pages and ETag from the authenticated, same-origin
+ * snapshot downloader in the same live session; this function does no HTTP. */
+export async function refreshEncryptedCloudSnapshot({
+  scope, session, identity, pages, etag, expectedEpoch,
+}) {
+  active(scope, session, identity);
+  const verified = verifyFinanceSnapshotPagesCandidate(pages, identity);
+  const serverEtag = checkedSnapshotEtag(etag, verified.revision);
+  const bundle = await readAtomicEncryptedCandidate(scope, session);
+  active(scope, session, identity);
+  assertBundle(bundle, expectedEpoch);
+  const before = bundle.snapshot.cloudFinance;
+  if (!before || before.schemaVersion !== 1 || before.scope !== scope ||
+      before.profileId !== identity.profileId || before.epoch !== identity.epoch ||
+      !Number.isSafeInteger(before.revision) || before.revision < 0 ||
+      verified.revision < before.revision) {
+    hold('Серверный финансовый снимок устарел или не совпадает с профилем');
+  }
+  const proofs = validatedReceipts(before.appliedReceipts || []);
+  if (verified.revision === before.revision && before.serverEtag !== undefined &&
+      before.serverEtag !== serverEtag) {
+    hold('ETag изменился без новой ревизии');
+  }
+  // A revision identifies one authoritative state. Do not replace the
+  // existing encrypted image at the same revision with an unproven variant.
+  if (verified.revision === before.revision && before.serverEtag === serverEtag) {
+    return Object.freeze({status: 'NO_NEW_REVISION', bundleEpoch: expectedEpoch,
+      serverRevision: verified.revision, pending: bundle.outbox.length});
+  }
+  const snapshot = structuredClone(bundle.snapshot);
+  snapshot.cloudFinance = verified.revision === before.revision
+    ? {...before, serverEtag}
+    : cloudImage(verified, proofs, serverEtag);
+  const nextEpoch = await compareAndSwapAtomicEncryptedCandidate(
+    scope, session, expectedEpoch, 2,
+    {snapshot, outbox: bundle.outbox, conflicts: bundle.conflicts},
+  );
+  active(scope, session, identity);
+  return Object.freeze({status: 'ENCRYPTED_SNAPSHOT_REFRESHED', bundleEpoch: nextEpoch,
+    serverRevision: verified.revision, pending: bundle.outbox.length});
 }
 /**
  * Explicit **read-only cloud cache** initialization. Refuses existing cloud
@@ -58,7 +123,7 @@ function cloudImage(verified, appliedReceipts = []) {
  * entries/loans/payment history, uploads money or enables a sync loop.
  */
 export async function initializeEncryptedCloudCacheCandidate({
-  scope, session, identity, pages, expectedEpoch,
+  scope, session, identity, pages, etag = null, expectedEpoch,
   confirmedAccountCacheInitialization,
 }) {
   if (confirmedAccountCacheInitialization !== true) {
@@ -67,6 +132,7 @@ export async function initializeEncryptedCloudCacheCandidate({
   active(scope, session, identity);
   // Fail-closed verification occurs before any IDB write or encryption.
   const verified = verifyFinanceSnapshotPagesCandidate(pages, identity);
+  const serverEtag = etag === null ? null : checkedSnapshotEtag(etag, verified.revision);
   const bundle = await readAtomicEncryptedCandidate(scope, session);
   active(scope, session, identity);
   assertBundle(bundle, expectedEpoch);
@@ -75,7 +141,7 @@ export async function initializeEncryptedCloudCacheCandidate({
     hold('Уже существует облачная копия или неподтверждённые локальные правки');
   }
   const snapshot = structuredClone(bundle.snapshot);
-  snapshot.cloudFinance = cloudImage(verified);
+  snapshot.cloudFinance = cloudImage(verified, [], serverEtag);
   const nextEpoch = await compareAndSwapAtomicEncryptedCandidate(
     scope, session, expectedEpoch, 2,
     {snapshot, outbox: bundle.outbox, conflicts: bundle.conflicts},
@@ -124,15 +190,8 @@ export async function persistEncryptedCloudDeltaCandidate({
     });
   }
   const snapshot = structuredClone(bundle.snapshot);
-  const proofs = before.appliedReceipts || [];
-  if (!Array.isArray(proofs) || proofs.length > 2000 ||
-      proofs.some(x => !x || typeof x !== 'object' ||
-        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(x.mutationId) ||
-        !/^[a-f0-9]{64}$/.test(x.fingerprint) ||
-        !Number.isSafeInteger(x.revision) || x.revision < 1)) {
-    hold('История подтверждённых операций повреждена');
-  }
-  snapshot.cloudFinance = cloudImage(checked, structuredClone(proofs));
+  const proofs = validatedReceipts(before.appliedReceipts || []);
+  snapshot.cloudFinance = cloudImage(checked, proofs);
   const nextEpoch = await compareAndSwapAtomicEncryptedCandidate(
     scope, session, expectedEpoch, 2,
     {snapshot, outbox: bundle.outbox, conflicts: bundle.conflicts},

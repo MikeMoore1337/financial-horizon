@@ -206,6 +206,32 @@ def test_fresh_login_cannot_inherit_stale_finance_cookie_from_another_user(auth_
     assert alice_view.json()["profile_id"] == before.json()["profile_id"]
 
 
+def test_expected_profile_rejects_a_stale_tab_after_account_switch(auth_finance):
+    client, _, mail, _, _, _ = auth_finance
+    authenticate(client, mail, "fence-a@example.invalid")
+    first = bootstrap(client)
+    assert first.json()["sync_profile_fence_v1"] is True
+    profile_a = first.json()["profile_id"]
+    authenticate(client, mail, "fence-b@example.invalid")
+    second = bootstrap(client)
+    profile_b = second.json()["profile_id"]
+    assert profile_a != profile_b
+    header = {"X-FH-Expected-Profile": profile_a}
+    assert client.get("/api/finance/v1/state", headers=header).status_code == 403
+    assert client.get("/api/finance/v1/changes?since_revision=0", headers=header).status_code == 403
+    assert client.post("/api/finance/v1/commands", headers={**header, "Origin": ORIGIN},
+                       json={}).status_code == 403
+    state = client.get("/api/finance/v1/state", headers={"X-FH-Expected-Profile": profile_b})
+    assert state.status_code == 200
+    assert state.json()["revision"] == 0
+    assert state.json()["entities"] == []
+    duplicate = client.get("/api/finance/v1/state", headers=[
+        ("X-FH-Expected-Profile", profile_b), ("X-FH-Expected-Profile", profile_a),
+    ])
+    assert duplicate.status_code == 403
+    assert client.get("/api/finance/v1/state").status_code == 200  # Existing clients remain compatible.
+
+
 def test_v1_transfer_idempotency_and_revision_conflict_from_real_authenticated_browser(auth_finance):
     client, _, mail, _, engine, namespace = auth_finance
     uid = authenticate(client, mail)

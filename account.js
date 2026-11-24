@@ -279,6 +279,10 @@ async function submit(event){
    if(!await refreshSession()){
     throw Error("Вход выполнен, но браузер не подтвердил сессию. Проверьте настройки cookies и повторите вход.");
    }
+   // A different tab may still display the previous authenticated account.
+   // Notify it only after the new cookie has been verified.
+   try{const channel=new BroadcastChannel('fh-auth-session-v2');
+    channel.postMessage({type:'session-changed'});channel.close();}catch{}
    token=null;
    if(changeToken){
     await confirmEmailChange();

@@ -9,6 +9,8 @@ const testModules = {
   vault: '/__e2e_138_vault__.js', session: '/__e2e_138_session__.js',
   atomic: '/__e2e_138_atomic__.js', delta: '/__e2e_138_delta__.js',
   cache: '/__e2e_138_cache__.js', outbox: '/__e2e_138_outbox__.js',
+  pull: '/__e2e_138_pull__.js', dispatch: '/__e2e_138_dispatch__.js',
+  controller: '/__e2e_138_controller__.js',
 };
 const source = path => readFileSync(new URL(path, import.meta.url), 'utf8');
 const compile = path => ts.transpileModule(source(path), {
@@ -27,6 +29,18 @@ const testModuleSources = new Map([
   [testModules.outbox, source('../../src/cloud/encrypted-command-outbox-candidate.mjs')
     .replaceAll("'../security/protected-atomic-candidate.ts'", JSON.stringify(testModules.atomic))
     .replaceAll("'./verified-delta-candidate.mjs'", JSON.stringify(testModules.delta))],
+  [testModules.pull, source('../../src/cloud/authenticated-snapshot-pull-candidate.mjs')
+    .replaceAll("'./verified-delta-candidate.mjs'", JSON.stringify(testModules.delta))],
+  [testModules.dispatch, source('../../src/cloud/finance-offline-dispatch-candidate.mjs')
+    .replaceAll("'../security/protected-atomic-candidate.ts'", JSON.stringify(testModules.atomic))
+    .replaceAll("'./encrypted-command-outbox-candidate.mjs'", JSON.stringify(testModules.outbox))],
+  [testModules.controller, source('../../src/cloud/finance-sync-controller.mjs')
+    .replaceAll("'../security/local-budget-session.ts'", JSON.stringify(testModules.session))
+    .replaceAll("'../security/protected-atomic-candidate.ts'", JSON.stringify(testModules.atomic))
+    .replaceAll("'./authenticated-snapshot-pull-candidate.mjs'", JSON.stringify(testModules.pull))
+    .replaceAll("'./encrypted-cloud-cache-candidate.mjs'", JSON.stringify(testModules.cache))
+    .replaceAll("'./encrypted-command-outbox-candidate.mjs'", JSON.stringify(testModules.outbox))
+    .replaceAll("'./finance-offline-dispatch-candidate.mjs'", JSON.stringify(testModules.dispatch))],
 ]);
 async function state(context) {
   const response = await context.request.get(ORIGIN + '/api/finance/v1/state?limit_entities=5000');
@@ -75,6 +89,481 @@ async function openAccounts(page) {
   await expect(page.locator('#toolbar-title')).toHaveText('Счета и кошельки');
   await expect(page.locator('.fh-accounts-total')).toBeVisible();
 }
+
+test('#68 active UI retains an offline queued command across reload and later unlock', async ({page, context}) => {
+  test.setTimeout(120_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  expect((await context.request.post('/__e2e__/personal-session')).status()).toBe(200);
+  await page.goto('/');
+  await expect(page.locator('#save-indicator')).toHaveText(/Локальная база готова|Серверный раздел/);
+  await page.evaluate(() => navigator.serviceWorker.ready);
+  await openAccounts(page);
+  await page.getByRole('button', {name:'Офлайн-синхронизация'}).click();
+  await page.getByLabel('Парольная фраза', {exact:true}).fill('synthetic persistent phrase issue sixty eight');
+  await page.getByRole('button', {name:'Создать копию'}).click();
+  const originalRecovery = await page.locator('output').textContent();
+  expect(originalRecovery).toHaveLength(43);
+  await page.getByLabel('Я сохранил ключ вне браузера').check();
+  await page.getByRole('button', {name:'Разблокировать'}).click();
+  await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible();
+  await page.getByText('Ключ восстановления', {exact:true}).click();
+  await page.getByLabel('Парольная фраза для нового ключа').fill('synthetic persistent phrase issue sixty eight');
+  await page.getByLabel('Понимаю, что прежний ключ перестанет действовать').check();
+  await page.getByRole('button', {name:'Выпустить новый ключ'}).click();
+  const recoveryKey = await page.locator('output').textContent();
+  expect(recoveryKey).toHaveLength(43);
+  expect(recoveryKey).not.toBe(originalRecovery);
+  await context.setOffline(true);
+  try {
+    await page.getByRole('button', {name:/Новый счёт/}).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Название').fill('Счёт после перезапуска');
+    await dialog.getByLabel(/Начальный остаток/).fill('20,00');
+    await dialog.getByRole('button', {name:'Сохранить'}).click();
+    await expect(page.getByText('Ожидает отправки', {exact:true})).toBeVisible();
+    await page.reload();
+    // The current app requires a live FH session at startup. Offline reload
+    // fails closed; this test does not claim offline re-unlock support.
+    await expect(page).toHaveURL(/account\.html/);
+  } finally {await context.setOffline(false);}
+  await page.goto('/');
+  await expect(page.locator('#save-indicator')).toHaveText(/Локальная база готова|Серверный раздел/);
+  await openAccounts(page);
+  await page.getByRole('button', {name:'Офлайн-синхронизация'}).click();
+  await page.getByLabel('Способ разблокировки').selectOption('recoveryKey');
+  await page.getByLabel('Ключ восстановления', {exact:true}).fill(originalRecovery);
+  await page.getByRole('button', {name:'Разблокировать'}).click();
+  await expect(page.getByText(/Неверн|не удалось|подтверд/i).first()).toBeVisible();
+  await page.getByLabel('Ключ восстановления', {exact:true}).fill(recoveryKey);
+  await page.getByRole('button', {name:'Разблокировать'}).click();
+  await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible({timeout:30_000});
+  const server = await state(context);
+  expect(server.body.entities.filter(x => x.kind === 'account' && x.data.name === 'Счёт после перезапуска')).toHaveLength(1);
+});
+
+test('#68 active UI clears the previous account when the shared session switches', async ({page, context}) => {
+  test.setTimeout(120_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  const watch = await observe(context, page);
+  const first = await context.request.post('/__e2e__/personal-session');
+  expect(first.status()).toBe(200);
+  const actor = (await first.json()).user.id;
+  await page.goto('/');
+  await expect(page.locator('#save-indicator')).toHaveText(/Локальная база готова|Серверный раздел/);
+  await openAccounts(page);
+  await page.getByRole('button', {name:'Офлайн-синхронизация'}).click();
+  const phrase = 'synthetic session switch phrase sixty eight';
+  await page.getByLabel('Парольная фраза', {exact:true}).fill(phrase);
+  await page.getByRole('button', {name:'Создать копию'}).click();
+  await page.getByLabel('Я сохранил ключ вне браузера').check();
+  await page.getByRole('button', {name:'Разблокировать'}).click();
+  await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible();
+  await page.getByRole('button', {name:/Новый счёт/}).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Название').fill('Счёт первого пользователя');
+  await dialog.getByLabel(/Начальный остаток/).fill('5,00');
+  await dialog.getByRole('button', {name:'Сохранить'}).click();
+  await expect(page.getByRole('heading', {name:'Счёт первого пользователя'})).toBeVisible({timeout:30_000});
+  const second = await context.request.post('/__e2e__/personal-session');
+  expect(second.status()).toBe(200);
+  expect((await second.json()).user.id).not.toBe(actor);
+  await bootstrap(context);
+  await page.getByRole('button', {name:'Обновить с сервера'}).click();
+  await expect(page.getByRole('heading', {name:'Счёт первого пользователя'})).toHaveCount(0);
+  await expect(page.getByRole('heading', {name:'Офлайн-синхронизация'})).toBeVisible();
+  const newState = await state(context);
+  expect(newState.body.entities).toEqual([]);
+  await page.goto('/');
+  await expect(page.locator('#save-indicator')).toHaveText(/Локальная база готова|Серверный раздел/);
+  await openAccounts(page);
+  await page.getByRole('button', {name:'Офлайн-синхронизация'}).click();
+  await page.getByLabel('Парольная фраза', {exact:true}).fill(phrase);
+  await page.getByRole('button', {name:'Разблокировать'}).click();
+  await expect(page.getByText('Сначала создайте зашифрованную копию')).toBeVisible();
+  await expect(page.getByRole('heading', {name:'Счёт первого пользователя'})).toHaveCount(0);
+  expect(watch.exceptions).toEqual([]);
+  expect(watch.unplanned).toEqual([]);
+  expect(watch.consoleErrors).toEqual([
+    'Failed to load resource: the server responded with a status of 403 (Forbidden)',
+  ]);
+});
+
+test('#68 a new login in another tab revokes the previously displayed account', async ({page, context, browser}) => {
+  test.setTimeout(120_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  const separate = await browser.newContext();
+  const registered = await separate.request.post('/__e2e__/personal-session');
+  expect(registered.status()).toBe(200);
+  const other = (await registered.json()).user;
+  await separate.close();
+  expect((await context.request.post('/__e2e__/personal-session')).status()).toBe(200);
+  await page.goto('/');
+  await expect(page.locator('#save-indicator')).toHaveText(/Локальная база готова|Серверный раздел/);
+  await openAccounts(page);
+  await page.getByRole('button', {name:'Офлайн-синхронизация'}).click();
+  await page.getByLabel('Парольная фраза', {exact:true}).fill('synthetic account rotation phrase 68');
+  await page.getByRole('button', {name:'Создать копию'}).click();
+  await page.getByLabel('Я сохранил ключ вне браузера').check();
+  await page.getByRole('button', {name:'Разблокировать'}).click();
+  await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible();
+  await page.getByRole('button', {name:/Новый счёт/}).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Название').fill('Скрытый после смены');
+  await dialog.getByLabel(/Начальный остаток/).fill('1,00');
+  await dialog.getByRole('button', {name:'Сохранить'}).click();
+  await expect(page.getByRole('heading', {name:'Скрытый после смены'})).toBeVisible({timeout:30_000});
+  await context.clearCookies({name:'fh_email_session'});
+  const loginTab = await context.newPage();
+  await loginViaUi(loginTab, other.email);
+  await expect(page).toHaveURL(/account\.html/);
+  await expect(page.getByRole('heading', {name:'Скрытый после смены'})).toHaveCount(0);
+  await loginTab.close();
+});
+
+test('#68 two active tabs preserve both queued operations and resolve the stale second command', async ({page, context}) => {
+  test.setTimeout(120_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  const watch = await observe(context, page);
+  expect((await context.request.post('/__e2e__/personal-session')).status()).toBe(200);
+  await page.goto('/');
+  await expect(page.locator('#save-indicator')).toHaveText(/Локальная база готова|Серверный раздел/);
+  await openAccounts(page);
+  await page.getByRole('button', {name:'Офлайн-синхронизация'}).click();
+  const phrase = 'synthetic shared tabs phrase sixty eight';
+  await page.getByLabel('Парольная фраза', {exact:true}).fill(phrase);
+  await page.getByRole('button', {name:'Создать копию'}).click();
+  await page.getByLabel('Я сохранил ключ вне браузера').check();
+  await page.getByRole('button', {name:'Разблокировать'}).click();
+  await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible();
+  const second = await context.newPage();
+  const secondErrors = [], secondExceptions = [];
+  second.on('pageerror', error => secondExceptions.push(error.message));
+  second.on('console', message => {if (message.type() === 'error') secondErrors.push(message.text());});
+  await second.goto('/');
+  await expect(second.locator('#save-indicator')).toHaveText(/Локальная база готова|Серверный раздел/);
+  await openAccounts(second);
+  await second.getByRole('button', {name:'Офлайн-синхронизация'}).click();
+  await second.getByLabel('Парольная фраза', {exact:true}).fill(phrase);
+  await second.getByRole('button', {name:'Разблокировать'}).click();
+  await expect(second.getByText('Синхронизировано', {exact:true})).toBeVisible();
+  await context.setOffline(true);
+  try {
+    for (const [tab, name] of [[page, 'Первый офлайн счёт'], [second, 'Второй офлайн счёт']]) {
+      await tab.getByRole('button', {name:/Новый счёт/}).click();
+      const dialog = tab.getByRole('dialog');
+      await dialog.getByLabel('Название').fill(name);
+      await dialog.getByLabel(/Начальный остаток/).fill('1,00');
+      await dialog.getByRole('button', {name:'Сохранить'}).click();
+      await expect(tab.getByText('Ожидает отправки', {exact:true})).toBeVisible();
+    }
+    await expect(second.getByText(/В очереди: 2/)).toBeVisible();
+    await expect(page.getByText(/В очереди: 2/)).toBeVisible();
+  } finally {await context.setOffline(false);}
+  let conflicted;
+  await expect.poll(async () => {
+    if (await page.getByText('Конфликт', {exact:true}).isVisible()) {conflicted = page; return true;}
+    if (await second.getByText('Конфликт', {exact:true}).isVisible()) {conflicted = second; return true;}
+    return false;
+  }, {timeout:30_000}).toBe(true);
+  await conflicted.getByRole('button', {name:'Обновить с сервера'}).click();
+  await conflicted.getByRole('button', {name:'Применить заново'}).click();
+  await expect(conflicted.getByText('Синхронизировано', {exact:true})).toBeVisible({timeout:30_000});
+  const final = await state(context);
+  const names = final.body.entities.filter(x => x.kind === 'account').map(x => x.data.name);
+  expect(names.filter(x => x === 'Первый офлайн счёт')).toHaveLength(1);
+  expect(names.filter(x => x === 'Второй офлайн счёт')).toHaveLength(1);
+  expect(final.revision).toBe(2);
+  await second.close();
+  expect(watch.exceptions).toEqual([]);
+  expect(secondExceptions).toEqual([]);
+  expect(watch.unplanned).toEqual([]);
+  expect([...watch.consoleErrors, ...secondErrors]).toEqual([
+    'Failed to load resource: the server responded with a status of 412 (Precondition Failed)',
+  ]);
+});
+
+for (const resolution of ['server', 'reapply']) test(`#68 active accounts UI queues offline and resolves two-device conflict: ${resolution}`, async ({page, context, browser}) => {
+  test.setTimeout(120_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  const watch = await observe(context, page);
+  const created = await context.request.post('/__e2e__/personal-session');
+  expect(created.status()).toBe(200);
+  const owner = (await created.json()).user;
+  const other = await browser.newContext();
+  const otherPage = await other.newPage();
+  await loginViaUi(otherPage, owner.email);
+  await bootstrap(other);
+  await page.goto('/');
+  await openAccounts(page);
+  await page.getByRole('button', {name:'Офлайн-синхронизация'}).click();
+  await page.getByLabel('Парольная фраза', {exact:true}).fill('synthetic local phrase issue sixty eight');
+  await page.getByRole('button', {name:'Создать копию'}).click();
+  await expect(page.locator('output')).toBeVisible();
+  await page.getByLabel('Я сохранил ключ вне браузера').check();
+  await page.getByRole('button', {name:'Разблокировать'}).click();
+  await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible();
+  await context.setOffline(true);
+  try {
+    await page.getByRole('button', {name:/Новый счёт/}).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Название').fill('Синтетический офлайн счёт');
+    await dialog.getByLabel(/Начальный остаток/).fill('10,00');
+    await dialog.getByRole('button', {name:'Сохранить'}).click();
+    await expect(page.getByText('Ожидает отправки', {exact:true})).toBeVisible();
+    await expect(page.getByRole('heading', {name:'Синтетический офлайн счёт'})).toHaveCount(0);
+  } finally {await context.setOffline(false);}
+  await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible({timeout:30_000});
+  await expect(page.getByText('Синтетический офлайн счёт')).toBeVisible();
+  const server = await state(context);
+  const accounts = server.body.entities.filter(x => x.kind === 'account' && x.data.name === 'Синтетический офлайн счёт');
+  expect(accounts).toHaveLength(1);
+  await context.setOffline(true);
+  try {
+    await page.locator('.fh-account-card').filter({hasText:'Синтетический офлайн счёт'})
+      .getByRole('button', {name:'Изменить'}).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Название').fill('Локальное изменение');
+    await dialog.getByRole('button', {name:'Сохранить'}).click();
+    await expect(page.getByText('Ожидает отправки', {exact:true})).toBeVisible();
+    const remote = await state(other);
+    const current = entity(remote, accounts[0].id);
+    const changed = await submit(other, remote, 'account.update', {
+      account_id:accounts[0].id, name:'Версия другого устройства', kind:'bank',
+    }, {[accounts[0].id]:current.entity_revision});
+    expect(changed.status()).toBe(201);
+  } finally {await context.setOffline(false);}
+  await expect(page.getByText('Конфликт', {exact:true})).toBeVisible({timeout:30_000});
+  await page.getByRole('button', {name:'Обновить с сервера'}).click();
+  await expect(page.getByRole('heading', {name:'Версия другого устройства'})).toBeVisible();
+  await page.getByRole('button', {name:resolution === 'server' ? 'Принять серверную версию' : 'Применить заново'}).click();
+  await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible({timeout:30_000});
+  const final = await state(other);
+  expect(entity(final, accounts[0].id).data.name).toBe(resolution === 'server' ? 'Версия другого устройства' : 'Локальное изменение');
+  expect(final.revision).toBe(resolution === 'server' ? 2 : 3);
+  await other.close();
+  expect(watch.exceptions).toEqual([]);
+  expect(watch.unplanned).toEqual([]);
+  expect(watch.consoleErrors).toEqual([
+    'Failed to load resource: the server responded with a status of 412 (Precondition Failed)',
+  ]);
+});
+
+test('#68 controller binds real session, encrypts queue and rejects account switching', async ({page, context}) => {
+  test.setTimeout(120_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  await context.route('**/__e2e_138_*.js', route => route.fulfill({
+    status: 200, contentType: 'text/javascript',
+    body: testModuleSources.get(new URL(route.request().url()).pathname),
+    headers: {'Cache-Control': 'no-store'},
+  }));
+  const created = await context.request.post('/__e2e__/personal-session');
+  expect(created.status()).toBe(200);
+  const actor = (await created.json()).user.id;
+  await page.goto('/__e2e__/ready');
+  const accountId = randomUUID(), mutation = randomUUID();
+  const first = await page.evaluate(async ({actor, accountId, mutation}) => {
+    const {FinanceSyncController} = await import('/__e2e_138_controller__.js');
+    const controller = new FinanceSyncController({verifiedActorUserId:actor, origin:location.origin});
+    const created = await controller.createLocal('synthetic independent local phrase 68', true);
+    const opened = await controller.unlock({passphrase:'synthetic independent local phrase 68'});
+    const queued = await controller.enqueue({schema_version:2, client_mutation_id:mutation,
+      base_revision:opened.cloud.revision, action:'account.create', expected_entity_revisions:{},
+      payload:{id:accountId, name:'synthetic controller account', kind:'cash', currency:'RUB', opening_minor:500}});
+    const sent = await controller.dispatchOnce();
+    const after = await controller.refresh();
+    globalThis.__controller68 = controller;
+    return {key:created.recoveryKey.length, opened:opened.status, queued:queued.status,
+      sent:sent.status, after:after.status, revision:after.cloud.revision, pending:after.outbox.length};
+  }, {actor, accountId, mutation});
+  expect(first).toEqual({key:43, opened:'SYNCHRONIZED', queued:'QUEUED_ENCRYPTED',
+    sent:'DURABLY_CONFIRMED', after:'SYNCHRONIZED', revision:1, pending:0});
+  const oldProfile = (await state(context)).body.profile_id;
+  const switched = await context.request.post('/__e2e__/personal-session');
+  expect(switched.status()).toBe(200);
+  const newActor = (await switched.json()).user.id;
+  expect(newActor).not.toBe(actor);
+  const newProfile = await bootstrap(context);
+  expect(newProfile).not.toBe(oldProfile);
+  const denied = await context.request.get('/api/finance/v1/state', {
+    headers:{'X-FH-Expected-Profile':oldProfile},
+  });
+  expect(denied.status()).toBe(403);
+  const deniedWrite = await context.request.post('/api/finance/v2/commands', {
+    headers:{'Origin':ORIGIN, 'X-FH-Expected-Profile':oldProfile}, data:{},
+  });
+  expect(deniedWrite.status()).toBe(403);
+  expect(await page.evaluate(async () => {
+    try { await globalThis.__controller68.dispatchOnce(); return false; } catch { return true; }
+  })).toBe(true);
+  const afterSwitch = await state(context);
+  expect(afterSwitch.body.entities).toEqual([]);
+});
+
+test('#68 queued v1 transfer reconciles with the real server and replay is idempotent', async ({page, context}) => {
+  test.setTimeout(120_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  await context.route('**/__e2e_138_*.js', route => route.fulfill({
+    status: 200, contentType: 'text/javascript',
+    body: testModuleSources.get(new URL(route.request().url()).pathname),
+    headers: {'Cache-Control': 'no-store'},
+  }));
+  expect((await context.request.post('/__e2e__/personal-session')).status()).toBe(200);
+  await page.goto('/__e2e__/ready');
+  const profile = await bootstrap(context);
+  const one = randomUUID(), two = randomUUID(), mutation = randomUUID();
+  const initial = await state(context);
+  expect((await submit(context, initial, 'account.create', {id: one, name: 'synthetic one',
+    kind: 'bank', currency: 'RUB', opening_minor: 5000})).status()).toBe(201);
+  const next = await state(context);
+  expect((await submit(context, next, 'account.create', {id: two, name: 'synthetic two',
+    kind: 'cash', currency: 'RUB', opening_minor: 0})).status()).toBe(201);
+  const before = await state(context);
+  const versions = {[one]: entity(before, one).entity_revision, [two]: entity(before, two).entity_revision};
+  const payload = {from_account_id: one, to_account_id: two, amount_minor: 1200, occurred_on: month};
+  const result = await page.evaluate(async ({profile, before, versions, payload, mutation}) => {
+    const atomic = await import('/__e2e_138_atomic__.js');
+    const {LocalBudgetSession} = await import('/__e2e_138_session__.js');
+    const cache = await import('/__e2e_138_cache__.js');
+    const outbox = await import('/__e2e_138_outbox__.js');
+    const dispatch = await import('/__e2e_138_dispatch__.js');
+    const me = await (await fetch('/api/auth/email/me', {credentials: 'same-origin'})).json();
+    const scope = 'account:' + me.user.id;
+    const passphrase = 'synthetic transfer phrase for issue 68';
+    await atomic.createAtomicEncryptedCandidate(scope, passphrase,
+      {snapshot: {version: 2, revision: 0}, outbox: [], conflicts: []}, 2);
+    const session = new LocalBudgetSession(); session.selectScope(scope);
+    await session.unlock(await atomic.getAtomicEncryptedKeyset(scope), {passphrase});
+    const identity = {scope, profileId: profile, generation: session.lifecycleVersion,
+      epoch: 'e'.repeat(32), signal: session.lifecycleSignal};
+    await cache.initializeEncryptedCloudCacheCandidate({scope, session, identity,
+      pages: [{cursorSent: null, body: before.body}], etag: before.etag,
+      expectedEpoch: 0, confirmedAccountCacheInitialization: true});
+    let staleRejected = false;
+    try {
+      await outbox.enqueueEncryptedFinanceCommandCandidate({scope, session, identity, expectedEpoch: 1,
+        ifMatch: before.etag, command: {schema_version: 1, client_mutation_id: mutation,
+          base_revision: before.revision, action: 'account.transfer',
+          expected_entity_revisions: {...versions, [payload.from_account_id]: versions[payload.from_account_id] + 1}, payload}});
+    } catch { staleRejected = true; }
+    await outbox.enqueueEncryptedFinanceCommandCandidate({scope, session, identity, expectedEpoch: 1,
+      ifMatch: before.etag, command: {schema_version: 1, client_mutation_id: mutation,
+        base_revision: before.revision, action: 'account.transfer', expected_entity_revisions: versions, payload}});
+    let corruptStage = 0, rejected = false;
+    const transport = async (url, options) => {
+      const response = await fetch(url, options);
+      const corruptReceipt = corruptStage === 0 && url.endsWith('/api/finance/v1/commands') && response.status === 201;
+      const corruptDelta = corruptStage === 1 && url.includes('/api/finance/v1/changes?') && response.status === 200;
+      if (corruptReceipt || corruptDelta) {
+        corruptStage += 1;
+        const body = await response.json();
+        body.changes[0].payload.amount_minor += 1;
+        return new Response(JSON.stringify(body), {status: response.status,
+          headers: {'Content-Type': 'application/json'}});
+      }
+      return response;
+    };
+    try {
+      await dispatch.dispatchOneEncryptedFinanceCommandCandidate({scope, session, identity,
+        expectedEpoch: 2, origin: location.origin, explicitNetworkCandidateConsent: true,
+        fetchImpl: transport});
+    } catch { rejected = true; }
+    const held = await atomic.readAtomicEncryptedCandidate(scope, session);
+    const sent = await dispatch.dispatchOneEncryptedFinanceCommandCandidate({scope, session, identity,
+      expectedEpoch: held.epoch, origin: location.origin, explicitNetworkCandidateConsent: true,
+      fetchImpl: transport});
+    const saved = await atomic.readAtomicEncryptedCandidate(scope, session);
+    session.logout();
+    return {status: sent.status, staleRejected, rejected, held: held.outbox.length, pending: saved.outbox.length,
+      revision: saved.snapshot.cloudFinance.revision, proof: saved.snapshot.cloudFinance.appliedReceipts.length};
+  }, {profile, before, versions, payload, mutation});
+  expect(result).toEqual({status: 'DURABLY_CONFIRMED', staleRejected: true, rejected: true, held: 1,
+    pending: 0, revision: 3, proof: 1});
+  expect((await submit(context, before, 'account.transfer', payload, versions, 1, mutation)).status()).toBe(200);
+  const final = await state(context);
+  expect(final.revision).toBe(3);
+  expect(entity(final, one).data.balance_minor).toBe(3800);
+  expect(entity(final, two).data.balance_minor).toBe(1200);
+});
+
+for (const choice of ['ACCEPT_SERVER', 'REAPPLY']) test(`#68 real PostgreSQL stale command resolution: ${choice}`, async ({page, context}) => {
+  test.setTimeout(120_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  await context.route('**/__e2e_138_*.js', route => route.fulfill({
+    status: 200, contentType: 'text/javascript',
+    body: testModuleSources.get(new URL(route.request().url()).pathname),
+    headers: {'Cache-Control': 'no-store'},
+  }));
+  expect((await context.request.post('/__e2e__/personal-session')).status()).toBe(200);
+  await page.goto('/__e2e__/ready');
+  const profile = await bootstrap(context);
+  const initial = await state(context);
+  const pendingId = randomUUID(), accountId = randomUUID(), replacementId = randomUUID();
+  await page.evaluate(async ({profile, initial, pendingId, accountId}) => {
+    const atomic = await import('/__e2e_138_atomic__.js');
+    const {LocalBudgetSession} = await import('/__e2e_138_session__.js');
+    const cache = await import('/__e2e_138_cache__.js');
+    const outbox = await import('/__e2e_138_outbox__.js');
+    const me = await (await fetch('/api/auth/email/me', {credentials: 'same-origin'})).json();
+    const scope = 'account:' + me.user.id;
+    const passphrase = 'synthetic recovery phrase for issue 68';
+    await atomic.createAtomicEncryptedCandidate(scope, passphrase,
+      {snapshot: {version: 2, revision: 0}, outbox: [], conflicts: []}, 2);
+    const session = new LocalBudgetSession(); session.selectScope(scope);
+    await session.unlock(await atomic.getAtomicEncryptedKeyset(scope), {passphrase});
+    const identity = {scope, profileId: profile, generation: session.lifecycleVersion,
+      epoch: 'e'.repeat(32), signal: session.lifecycleSignal};
+    await cache.initializeEncryptedCloudCacheCandidate({scope, session, identity,
+      pages: [{cursorSent: null, body: initial.body}], etag: initial.etag, expectedEpoch: 0,
+      confirmedAccountCacheInitialization: true});
+    await outbox.enqueueEncryptedFinanceCommandCandidate({scope, session, identity,
+      expectedEpoch: 1, ifMatch: initial.etag,
+      command: {schema_version: 2, client_mutation_id: pendingId, base_revision: initial.revision,
+        action: 'account.create', expected_entity_revisions: {},
+        payload: {id: accountId, name: 'synthetic offline', kind: 'cash', currency: 'RUB', opening_minor: 100}}});
+    globalThis.__real68 = {scope, session, identity, atomic, cache, outbox};
+  }, {profile, initial, pendingId, accountId});
+  const otherId = randomUUID();
+  expect((await submit(context, initial, 'account.create', {
+    id: otherId, name: 'synthetic server', kind: 'bank', currency: 'RUB', opening_minor: 200,
+  })).status()).toBe(201);
+  const result = await page.evaluate(async ({pendingId, replacementId, accountId, choice}) => {
+    const {scope, session, identity, atomic, cache, outbox} = globalThis.__real68;
+    const {dispatchOneEncryptedFinanceCommandCandidate} = await import('/__e2e_138_dispatch__.js');
+    const {downloadVerifiedFinanceSnapshotCandidate} = await import('/__e2e_138_pull__.js');
+    const held = await dispatchOneEncryptedFinanceCommandCandidate({scope, session, identity,
+      expectedEpoch: 2, origin: location.origin, explicitNetworkCandidateConsent: true});
+    const pulled = await downloadVerifiedFinanceSnapshotCandidate({scope, session, identity,
+      origin: location.origin, explicitReadConsent: true});
+    await cache.refreshEncryptedCloudSnapshot({scope, session, identity, pages: pulled.pages,
+      etag: pulled.etag, expectedEpoch: held.bundleEpoch});
+    const before = await atomic.readAtomicEncryptedCandidate(scope, session);
+    const resolved = await outbox.resolveStaleFinanceConflict({scope, session, identity,
+      expectedEpoch: before.epoch, mutationId: pendingId, observedRevision: pulled.serverRevision,
+      choice, explicitUserChoice: true,
+      ...(choice === 'REAPPLY' ? {replacementCommand: {
+        schema_version: 2, client_mutation_id: replacementId, base_revision: pulled.serverRevision,
+        action: 'account.create', expected_entity_revisions: {},
+        payload: {id: accountId, name: 'synthetic offline', kind: 'cash', currency: 'RUB', opening_minor: 100},
+      }} : {})});
+    let sent = null;
+    if (choice === 'REAPPLY') {
+      sent = await dispatchOneEncryptedFinanceCommandCandidate({scope, session, identity,
+        expectedEpoch: resolved.bundleEpoch, origin: location.origin, explicitNetworkCandidateConsent: true});
+    }
+    const after = await atomic.readAtomicEncryptedCandidate(scope, session);
+    session.logout();
+    return {held: held.status, resolved: resolved.status, pending: after.outbox.length,
+      preserved: after.conflicts[0].original.mutationId === pendingId,
+      code: after.conflicts[0].verifiedStaleRevision, revision: after.snapshot.cloudFinance.revision,
+      sent: sent?.status ?? null};
+  }, {pendingId, replacementId, accountId, choice});
+  expect(result).toEqual({held: 'CONFLICT_HOLD', resolved: 'CONFLICT_RESOLVED',
+    pending: 0, preserved: true, code: 1, revision: choice === 'REAPPLY' ? 2 : 1,
+    sent: choice === 'REAPPLY' ? 'DURABLY_CONFIRMED' : null});
+  const final = await state(context);
+  expect(final.body.entities.filter(x => x.id === accountId).length).toBe(choice === 'REAPPLY' ? 1 : 0);
+  expect(final.body.entities.some(x => x.id === otherId)).toBe(true);
+});
 
 test('#68 true FH SQLite + PostgreSQL: two browser devices converge on money and reject stale commands', async ({page, context, browser}) => {
   test.setTimeout(180_000);

@@ -1398,7 +1398,8 @@ async function init(){
  try{
   const url=new URL(window.location.href);
   // A successful OAuth callback replaces guest mode with the verified account.
-  if(url.searchParams.get('auth')==='success'){
+  const oauthSessionChanged=url.searchParams.get('auth')==='success';
+  if(oauthSessionChanged){
    try{sessionStorage.removeItem(GUEST_MODE_KEY);}catch{}
    url.searchParams.delete('auth');
    history.replaceState(null,'',url.pathname+url.search+url.hash);
@@ -1425,11 +1426,13 @@ async function init(){
    try{
     authBroadcast=new BroadcastChannel('fh-auth-session-v2');
     authBroadcast.onmessage=event=>{
-     if(event.data?.type==='logout'&&event.data.userId===activeUserId){
+     if(event.data?.type==='session-changed'||
+        (event.data?.type==='logout'&&event.data.userId===activeUserId)){
       revokeDisplayedLedger();
       window.location.replace('./account.html');
      }
     };
+    if(oauthSessionChanged)authBroadcast.postMessage({type:'session-changed'});
    }catch{}
   }
   state=await readState();

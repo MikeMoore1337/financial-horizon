@@ -1,0 +1,4 @@
+.fh-sync { min-width: 0; display: grid; gap: 12px; }
+.fh-sync output, .fh-sync li, .fh-sync p { overflow-wrap: anywhere; }
+.fh-sync details { min-width: 0; }
+.fh-sync summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; }
