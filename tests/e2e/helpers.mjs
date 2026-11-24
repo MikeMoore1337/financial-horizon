@@ -98,8 +98,10 @@ export async function registerViaUi(page,request,email,password=TEST_PASSWORD){
  await expect(page.locator('#save-indicator')).toHaveText('Локальная база готова');
  await page.waitForLoadState('networkidle');
 }
-export async function loginViaUi(page,email,password=TEST_PASSWORD){
- await page.goto('/account.html');await expect(page.locator('#auth-submit')).toBeEnabled();
+export async function loginViaUi(page,email,password=TEST_PASSWORD,{reuseAccountPage=false}={}){
+ if(reuseAccountPage)await expect(page).toHaveURL(ORIGIN+'/account.html');
+ else await page.goto('/account.html');
+ await expect(page.locator('#auth-submit')).toBeEnabled();
  await page.locator('#email').fill(email);await page.locator('#password').fill(password);
  await page.locator('#auth-submit').click();await expect(page).toHaveURL(ORIGIN+'/');
  await expect(page.locator('#toolbar-title')).toHaveText('Обзор');

@@ -50,6 +50,11 @@ function mount(rows,options={}) {
                 schedule(()=>{req.result=clone(values.get(key));req.onsuccess?.({target:req});});
                 return req;
               },
+              getKey(key){
+                const req={result:undefined,onsuccess:null,onerror:null};
+                schedule(()=>{req.result=values.has(key)?key:undefined;req.onsuccess?.({target:req});});
+                return req;
+              },
               put(value,key){
                 if(mode!=='readwrite')throw Error('readonly');
                 const copy=clone(value);
@@ -117,7 +122,7 @@ async function setup(rows, options={}) {
 }
 const invoke=(backupText,extra={})=>prepareVerifiedAtomicCandidate({
   selection,backupText,backupPassword:PASSWORD,
-  localPassphrase:LOCAL_PASSWORD,consent,...extra,
+  localPassphrase:LOCAL_PASSWORD,consent,signal:new AbortController().signal,...extra,
 });
 
 test('verified v1 backup makes an inactive atomic candidate; existing ledger intact',async()=>{
@@ -154,10 +159,68 @@ test('bad backup cannot create any encrypted keyset or candidate',async()=>{
   assert.equal(db.protectedStores.get('bundles').size,0);
 });
 
+test('pending online payment in the selected account blocks candidate without losing the payment',async()=>{
+  const state=legacy();
+  const pending={mutationId:'synthetic-pending-payment',amountMinor:12345};
+  const backupText=await encryptBackup(state,PASSWORD);
+  const db=mount({['account-state-v2:'+USER_A]:state,
+    ['online-payment-pending-v1:'+USER_A]:pending});
+  await assert.rejects(()=>invoke(backupText),/ожидающ|свер/i);
+  assert.deepEqual(db.old.get('online-payment-pending-v1:'+USER_A),pending);
+  assert.equal(db.protectedStores.get('keysets').size,0);
+  assert.equal(db.protectedStores.get('bundles').size,0);
+  assert.equal(db.legacyWrites,0);
+});
+
+test('malformed pending payment record still blocks candidate',async()=>{
+  const state=legacy();
+  const backupText=await encryptBackup(state,PASSWORD);
+  const db=mount({['account-state-v2:'+USER_A]:state,
+    ['online-payment-pending-v1:'+USER_A]:undefined});
+  await assert.rejects(()=>invoke(backupText),/ожидающ|свер/i);
+  assert.ok(db.old.has('online-payment-pending-v1:'+USER_A));
+  assert.equal(db.protectedStores.get('keysets').size,0);
+});
+
+test('another account pending payment does not block a separate account candidate',async()=>{
+  const state=legacy();
+  const backupText=await encryptBackup(state,PASSWORD);
+  const db=mount({['account-state-v2:'+USER_A]:state,
+    ['online-payment-pending-v1:'+USER_B]:{mutationId:'other-account'}});
+  const result=await invoke(backupText);
+  assert.equal(result.status,'prepared');
+  assert.ok(db.old.has('online-payment-pending-v1:'+USER_B));
+});
+
+test('pending online payment appearing after candidate commit prevents verified status',async()=>{
+  const state=legacy();
+  const backupText=await encryptBackup(state,PASSWORD);
+  const db=mount({['account-state-v2:'+USER_A]:state},{
+    mutateAfterCommit(values){
+      values.set('online-payment-pending-v1:'+USER_A,{mutationId:'new-pending-payment'});
+    },
+  });
+  const result=await invoke(backupText);
+  assert.notEqual(result.status,'prepared');
+  assert.equal(result.active,false);
+  assert.equal(result.recoveryKey.length,43);
+  assert.ok(db.old.has('online-payment-pending-v1:'+USER_A));
+  assert.equal(db.legacyWrites,0);
+});
+
 test('independent staging requires all explicit confirmations before DB access',async()=>{
   const {db,backupText}=await setup();
   await assert.rejects(()=>invoke(backupText,{consent:{...consent,confirmedSeparateEncryptedCandidate:false}}),/Нет подтверждения/);
   await assert.rejects(()=>invoke(backupText,{consent:{...consent,acknowledgedOneTimeRecovery:false}}),/Нет подтверждения/);
+  assert.equal(db.legacyOpens,0);
+  assert.equal(db.atomicOpens,0);
+});
+
+test('staging rejects missing or already revoked profile lifecycle before DB access',async()=>{
+  const {db,backupText}=await setup();
+  await assert.rejects(()=>invoke(backupText,{signal:undefined}),/отзыв доступа/);
+  const controller=new AbortController();controller.abort();
+  await assert.rejects(()=>invoke(backupText,{signal:controller.signal}),/отозван/);
   assert.equal(db.legacyOpens,0);
   assert.equal(db.atomicOpens,0);
 });
@@ -204,7 +267,7 @@ test('corrupted postcommit readback returns unverified but preserves recovery ke
 test('input scope, credentials and consent cannot redirect account during KDF',async()=>{
   const {db,backupText}=await setup();
   const input={selection:{...selection},backupText,backupPassword:PASSWORD,
-    localPassphrase:LOCAL_PASSWORD,consent:{...consent}};
+    localPassphrase:LOCAL_PASSWORD,consent:{...consent},signal:new AbortController().signal};
   const inflight=prepareVerifiedAtomicCandidate(input);
   input.selection.verifiedUserId=USER_B;
   input.localPassphrase='tampered local password 2026';

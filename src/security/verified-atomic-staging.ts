@@ -2,8 +2,8 @@
  * Non-destructive bridge from an independently VERIFIED live backup to an
  * INACTIVE encrypted atomic candidate. It never changes active storage.
  *
- * Important: return a recovery receipt even if verification fails AFTER the
- * new encrypted bundle committed, or the one-time recovery key would be lost.
+ * A revoked profile must never receive the one-time recovery key. If commit
+ * preceded revocation, the local passphrase can unlock and reissue it.
  */
 import {
   verifyLiveLegacyBackup, type ExplicitLegacySelection, type LegacyPreflightConsent,
@@ -40,6 +40,7 @@ export async function prepareVerifiedAtomicCandidate(input: {
   backupPassword: string;
   localPassphrase: string;
   consent: InactiveCandidateConsent;
+  signal: AbortSignal;
 }): Promise<CandidateReceipt> {
   if (!input || input.consent?.savedEncryptedBackupOutsideThisBrowser !== true ||
     input.consent?.confirmedReadOnlyPreflight !== true ||
@@ -47,6 +48,12 @@ export async function prepareVerifiedAtomicCandidate(input: {
     input.consent?.acknowledgedOneTimeRecovery !== true) {
     throw Error('Нет подтверждения внешней копии и отдельной подготовки зашифрованных данных');
   }
+  const signal = input.signal;
+  if (!(signal instanceof AbortSignal)) throw Error('Не задан отзыв доступа к профилю');
+  const checkActive = () => {
+    if (signal.aborted) throw Error('Доступ к профилю отозван');
+  };
+  checkActive();
 
   // Pin all scalar inputs synchronously, prior to IndexedDB and KDF awaits.
   // A caller mutating input between KDF operations cannot change the owner.
@@ -65,8 +72,9 @@ export async function prepareVerifiedAtomicCandidate(input: {
   // This checks claim/source key, decrypts the independently saved v1 backup
   // and reads the real original DB a second time after backup PBKDF2.
   const verified = await verifyLiveLegacyBackup({
-    selection, backupText, backupPassword, consent,
+    selection, backupText, backupPassword, consent, requireNoPendingOnlinePayment:true,
   });
+  checkActive();
 
   // Never overwrite a previously-created keyset or drop a previous recovery
   // secret: createAtomicEncryptedCandidate's transaction fails on duplicates.
@@ -75,8 +83,9 @@ export async function prepareVerifiedAtomicCandidate(input: {
       // migrateState has already validated this plain financial object at runtime.
       snapshot: verified.snapshot as unknown as Record<string, unknown>,
       outbox: [], conflicts: [],
-    }, verified.snapshot.version,
+    }, verified.snapshot.version, signal,
   );
+  checkActive();
   const base = {
     scope: verified.scope,
     sourceKey: verified.sourceKey,
@@ -85,15 +94,21 @@ export async function prepareVerifiedAtomicCandidate(input: {
     active: false as const,
   };
 
-  // After a successful commit, NEVER throw away the one-time recovery key.
-  // A verification or legacy source failure becomes an explicit inert receipt.
+  // Ordinary verification failures preserve the recovery key in an inert
+  // receipt. Revocation takes priority: never return a secret to a stale UI.
   const session = new LocalBudgetSession();
+  const revoke = () => session.logout();
+  signal.addEventListener('abort', revoke, {once:true});
   try {
+    checkActive();
     const keyset = await getAtomicEncryptedKeyset(verified.scope);
+    checkActive();
     if (!keyset) return {...base, status:'unverified'};
     session.selectScope(verified.scope);
     await session.unlock(keyset, {passphrase:localPassphrase});
+    checkActive();
     const restored = await readAtomicEncryptedCandidate(verified.scope, session);
+    checkActive();
     if (!restored || restored.epoch !== 0 ||
       restored.schemaVersion !== verified.snapshot.version ||
       !sameFinancialJSON(restored.snapshot, verified.snapshot) ||
@@ -105,9 +120,10 @@ export async function prepareVerifiedAtomicCandidate(input: {
     let latest: Awaited<ReturnType<typeof verifyLiveLegacyBackup>>;
     try {
       latest = await verifyLiveLegacyBackup({
-        selection, backupText, backupPassword, consent,
+        selection, backupText, backupPassword, consent, requireNoPendingOnlinePayment:true,
       });
     } catch (error) {
+      checkActive();
       // A changed source must not be mistaken for an approved candidate.
       // Preserve the already-committed recovery key in either case.
       const message = error instanceof Error ? error.message : '';
@@ -118,6 +134,7 @@ export async function prepareVerifiedAtomicCandidate(input: {
       }
       return {...base, status:'unverified'};
     }
+    checkActive();
     if (latest.sourceKey !== verified.sourceKey ||
       latest.sourceRevision !== verified.sourceRevision ||
       !sameFinancialJSON(latest.snapshot, verified.snapshot)) {
@@ -125,8 +142,10 @@ export async function prepareVerifiedAtomicCandidate(input: {
     }
     return {...base, status:'prepared'};
   } catch {
+    checkActive();
     return {...base, status:'unverified'};
   } finally {
+    signal.removeEventListener('abort', revoke);
     session.logout();
   }
 }

@@ -14,6 +14,7 @@ const KEY = 'state';
 const CLAIM_KEY = 'legacy-account-claim-v2';
 const GUEST_KEY = 'guest-state-v2';
 const ACCOUNT_KEY = 'account-state-v2:';
+const PENDING_PAYMENT_KEY = 'online-payment-pending-v1:';
 
 export type ExplicitLegacySelection =
   | Readonly<{kind: 'account'; verifiedUserId: string}>
@@ -81,7 +82,7 @@ async function openLegacy(): Promise<IDBDatabase> {
 }
 
 type LegacyRead = {sourceKey: string; claim: string | null; state: unknown};
-async function readLegacy(scope: LocalScope): Promise<LegacyRead> {
+async function readLegacy(scope: LocalScope, requireNoPendingOnlinePayment: boolean): Promise<LegacyRead> {
   const db = await openLegacy();
   try {
     return await new Promise((resolve, reject) => {
@@ -92,10 +93,17 @@ async function readLegacy(scope: LocalScope): Promise<LegacyRead> {
       const claimReq = store.get(CLAIM_KEY);
       const exactAccountKey = scope.startsWith('account:') ? ACCOUNT_KEY + scope.slice(8) : null;
       const accountReq = exactAccountKey ? store.get(exactAccountKey) : null;
+      const pendingPaymentReq = exactAccountKey && requireNoPendingOnlinePayment
+        ? store.getKey(PENDING_PAYMENT_KEY + scope.slice(8)) : null;
       const legacyReq = exactAccountKey ? null : store.get(KEY);
       const guestReq = exactAccountKey ? null : store.get(GUEST_KEY);
       tx.oncomplete = () => {
         try {
+          // A v1 backup contains the state snapshot, not the separate online
+          // payment recovery record. Never represent it as an empty outbox.
+          if (pendingPaymentReq && pendingPaymentReq.result !== undefined) {
+            throw Error('Есть операция оплаты, ожидающая сверки. Сначала завершите её безопасную сверку.');
+          }
           const rawClaim: unknown = claimReq.result;
           if (rawClaim !== undefined &&
             (typeof rawClaim !== 'string' || !/^[a-f0-9]{32}$/.test(rawClaim))) {
@@ -125,6 +133,7 @@ export async function verifyLiveLegacyBackup(input: {
   backupText: string;
   backupPassword: string;
   consent: LegacyPreflightConsent;
+  requireNoPendingOnlinePayment?: boolean;
 }): Promise<VerifiedLegacySnapshot> {
   if (!input || input.consent?.savedEncryptedBackupOutsideThisBrowser !== true ||
     input.consent?.confirmedReadOnlyPreflight !== true) {
@@ -135,11 +144,12 @@ export async function verifyLiveLegacyBackup(input: {
   const scope = selectedScope(input.selection);
   const backupText = input.backupText;
   const backupPassword = input.backupPassword;
+  const requireNoPendingOnlinePayment = input.requireNoPendingOnlinePayment === true;
   if (typeof backupText !== 'string' || typeof backupPassword !== 'string' ||
     backupPassword.length < 12 || backupText.length > 8_000_000) {
     throw Error('Некорректный файл или пароль резервной копии');
   }
-  const first = await readLegacy(scope);
+  const first = await readLegacy(scope, requireNoPendingOnlinePayment);
   const source = migrateState(first.state);
   const restored = migrateState(await decryptBackup(backupText, backupPassword));
   if (!sameFinancialJSON(source, restored)) {
@@ -147,7 +157,7 @@ export async function verifyLiveLegacyBackup(input: {
   }
   // A different tab may have edited a settlement during the backup KDF.
   // This is a snapshot proof, NOT a cross-tab writer lock or final cutover.
-  const second = await readLegacy(scope);
+  const second = await readLegacy(scope, requireNoPendingOnlinePayment);
   if (second.sourceKey !== first.sourceKey || second.claim !== first.claim ||
     !sameFinancialJSON(source, migrateState(second.state))) {
     throw Error('Исходные финансовые данные изменились во время проверки');
