@@ -68,6 +68,12 @@ function operationLabel(command: Command, state: SyncState): string {
       return `Изменить резерв «${String(p.title)}»: цель ${amount(p.target_minor)}`;
     case 'reserve.skip':
       return `Отметить пропущенный взнос за ${String(p.slot_on)}`;
+    case 'reserve.event.void':
+      return `Отменить событие резерва: ${String(p.reason)}`;
+    case 'reserve.cycle.close':
+      return `Завершить цикл резерва от ${String(p.occurred_on)}`;
+    case 'reserve.cycle.void':
+      return `Отменить закрытие цикла: ${String(p.reason)}`;
     case 'reserve.allocate': {
       const reserve = state.cloud.entities.find(
         (x) => x.kind === 'reserve' && x.id === p.reserve_id,
@@ -195,6 +201,13 @@ export function OfflineSyncAccounts({
   const [skipReserveId, setSkipReserveId] = useState('');
   const [skipSlot, setSkipSlot] = useState('');
   const [skipDate, setSkipDate] = useState('');
+  const [voidReserveId, setVoidReserveId] = useState('');
+  const [voidReserveEvent, setVoidReserveEvent] = useState('');
+  const [voidReserveDate, setVoidReserveDate] = useState('');
+  const [voidReserveReason, setVoidReserveReason] = useState('');
+  const [cycleReserveId, setCycleReserveId] = useState('');
+  const [cycleDate, setCycleDate] = useState('');
+  const [cycleReason, setCycleReason] = useState('');
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retries = useRef(0);
   const busyRetries = useRef(0);
@@ -719,6 +732,115 @@ export function OfflineSyncAccounts({
       if (mounted.current) {
         setReverseId('');
         setReverseReason('');
+      }
+    } catch (error) {
+      showError(error);
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
+
+  const changeReserveCycle = async (closing: boolean) => {
+    if (!state || busy || state.status === 'CONFLICT') return;
+    try {
+      const reserve = state.cloud.entities.find(
+        (x) => x.kind === 'reserve' && x.id === cycleReserveId,
+      );
+      const data = reserve?.data as
+        { title?: unknown; archived_at?: unknown; period_months?: unknown } | undefined;
+      if (
+        !reserve ||
+        data?.archived_at !== null ||
+        typeof data.period_months !== 'number' ||
+        !isValidLedgerDate(cycleDate) ||
+        (!closing && (!cycleReason.trim() || cycleReason.length > 500))
+      )
+        throw Error('Проверьте резерв, дату и причину отмены');
+      if (
+        !window.confirm(
+          `${closing ? 'Завершить цикл' : 'Отменить закрытие цикла'} резерва «${String(data.title)}»?`,
+        )
+      )
+        return;
+      const payload: Record<string, unknown> = { reserve_id: reserve.id, occurred_on: cycleDate };
+      if (!closing) payload.reason = cycleReason.trim();
+      setBusy(true);
+      await enqueue({
+        schema_version: 2,
+        client_mutation_id: crypto.randomUUID(),
+        base_revision: state.cloud.revision,
+        action: closing ? 'reserve.cycle.close' : 'reserve.cycle.void',
+        expected_entity_revisions: { [reserve.id]: reserve.entity_revision },
+        payload,
+      });
+      if (mounted.current && !closing) setCycleReason('');
+    } catch (error) {
+      showError(error);
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
+
+  const voidReserveEventAction = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!state || busy || state.status === 'CONFLICT') return;
+    try {
+      const reserve = state.cloud.entities.find(
+        (x) => x.kind === 'reserve' && x.id === voidReserveId,
+      );
+      const data = reserve?.data as
+        | {
+            archived_at?: unknown;
+            account_id?: unknown;
+            cycle_number?: unknown;
+            event_log?: Array<{
+              id?: string;
+              kind?: string;
+              cycle_number?: number;
+              target_event_id?: string;
+            }>;
+          }
+        | undefined;
+      const account = state.cloud.entities.find(
+        (x) => x.kind === 'account' && x.id === data?.account_id,
+      );
+      const original = data?.event_log?.find((entry) => entry.id === voidReserveEvent);
+      if (
+        !reserve ||
+        data?.archived_at !== null ||
+        !account ||
+        !original ||
+        !['skip', 'contribution', 'release'].includes(String(original.kind)) ||
+        original.cycle_number !== data.cycle_number ||
+        data.event_log?.some(
+          (entry) => entry.kind === 'void' && entry.target_event_id === original.id,
+        ) ||
+        !isValidLedgerDate(voidReserveDate) ||
+        !voidReserveReason.trim() ||
+        voidReserveReason.length > 500
+      )
+        throw Error('Проверьте событие, дату и причину отмены');
+      setBusy(true);
+      await enqueue({
+        schema_version: 2,
+        client_mutation_id: crypto.randomUUID(),
+        base_revision: state.cloud.revision,
+        action: 'reserve.event.void',
+        expected_entity_revisions: {
+          [reserve.id]: reserve.entity_revision,
+          [account.id]: account.entity_revision,
+        },
+        payload: {
+          reserve_id: reserve.id,
+          account_id: account.id,
+          target_event_id: original.id,
+          occurred_on: voidReserveDate,
+          reason: voidReserveReason.trim(),
+        },
+      });
+      if (mounted.current) {
+        setVoidReserveEvent('');
+        setVoidReserveReason('');
       }
     } catch (error) {
       showError(error);
@@ -1506,6 +1628,172 @@ export function OfflineSyncAccounts({
             disabled={busy || state.status === 'CONFLICT'}
           >
             Сохранить резерв в очередь
+          </button>
+        </form>
+      </details>
+      <details>
+        <summary>Завершить или восстановить цикл резерва</summary>
+        <label className="field">
+          <span>Резерв для цикла</span>
+          <select
+            value={cycleReserveId}
+            onChange={(event) => setCycleReserveId(event.target.value)}
+          >
+            <option value="">Выберите резерв</option>
+            {state.cloud.entities
+              .filter((entity) => {
+                const data = entity.data as { archived_at?: unknown; period_months?: unknown };
+                return (
+                  entity.kind === 'reserve' &&
+                  data?.archived_at === null &&
+                  typeof data.period_months === 'number'
+                );
+              })
+              .map((entity) => (
+                <option key={entity.id} value={entity.id}>
+                  {String((entity.data as { title: string }).title)}
+                </option>
+              ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Дата действия с циклом</span>
+          <input
+            type="date"
+            value={cycleDate}
+            onChange={(event) => setCycleDate(event.target.value)}
+          />
+        </label>
+        <label className="field">
+          <span>Причина восстановления цикла</span>
+          <input
+            value={cycleReason}
+            onChange={(event) => setCycleReason(event.target.value)}
+            maxLength={500}
+          />
+        </label>
+        <p>Цикл можно завершить после полной оплаты. Результат подтвердит сервер.</p>
+        <div className="dialog-actions">
+          <button
+            type="button"
+            className="button-secondary"
+            disabled={busy || state.status === 'CONFLICT' || !cycleReserveId}
+            onClick={() => void changeReserveCycle(true)}
+          >
+            Завершить цикл
+          </button>
+          <button
+            type="button"
+            className="button-secondary"
+            disabled={busy || state.status === 'CONFLICT' || !cycleReserveId}
+            onClick={() => void changeReserveCycle(false)}
+          >
+            Отменить закрытие цикла
+          </button>
+        </div>
+      </details>
+      <details>
+        <summary>Отменить событие резерва</summary>
+        <form onSubmit={(event) => void voidReserveEventAction(event)}>
+          <label className="field">
+            <span>Резерв для отмены события</span>
+            <select
+              value={voidReserveId}
+              onChange={(event) => {
+                setVoidReserveId(event.target.value);
+                setVoidReserveEvent('');
+              }}
+              required
+            >
+              <option value="">Выберите резерв</option>
+              {state.cloud.entities
+                .filter((entity) => {
+                  const data = entity.data as { archived_at?: unknown; account_id?: unknown };
+                  return (
+                    entity.kind === 'reserve' &&
+                    data?.archived_at === null &&
+                    typeof data.account_id === 'string'
+                  );
+                })
+                .map((entity) => (
+                  <option key={entity.id} value={entity.id}>
+                    {String((entity.data as { title: string }).title)}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Событие для отмены</span>
+            <select
+              value={voidReserveEvent}
+              onChange={(event) => setVoidReserveEvent(event.target.value)}
+              required
+            >
+              <option value="">Выберите событие</option>
+              {(() => {
+                const reserve = state.cloud.entities.find(
+                  (x) => x.kind === 'reserve' && x.id === voidReserveId,
+                );
+                const data = reserve?.data as
+                  | {
+                      cycle_number?: number;
+                      event_log?: Array<{
+                        id: string;
+                        kind: string;
+                        cycle_number: number;
+                        occurred_on: string;
+                        target_event_id?: string | null;
+                      }>;
+                    }
+                  | undefined;
+                const history = data?.event_log || [];
+                return history
+                  .filter(
+                    (item) =>
+                      ['skip', 'contribution', 'release'].includes(item.kind) &&
+                      item.cycle_number === data?.cycle_number &&
+                      !history.some(
+                        (other) => other.kind === 'void' && other.target_event_id === item.id,
+                      ),
+                  )
+                  .map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.occurred_on} ·{' '}
+                      {item.kind === 'skip'
+                        ? 'Пропуск'
+                        : item.kind === 'contribution'
+                          ? 'Пополнение'
+                          : 'Освобождение'}
+                    </option>
+                  ));
+              })()}
+            </select>
+          </label>
+          <label className="field">
+            <span>Дата отмены события</span>
+            <input
+              type="date"
+              value={voidReserveDate}
+              onChange={(event) => setVoidReserveDate(event.target.value)}
+              required
+            />
+          </label>
+          <label className="field">
+            <span>Причина отмены события</span>
+            <input
+              value={voidReserveReason}
+              onChange={(event) => setVoidReserveReason(event.target.value)}
+              maxLength={500}
+              required
+            />
+          </label>
+          <p>Компенсация распределения и остаток будут подтверждены сервером.</p>
+          <button
+            type="submit"
+            className="button-secondary"
+            disabled={busy || state.status === 'CONFLICT'}
+          >
+            Сохранить отмену события в очередь
           </button>
         </form>
       </details>

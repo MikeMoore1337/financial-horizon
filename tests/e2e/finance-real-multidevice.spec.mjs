@@ -113,6 +113,8 @@ test('#68 sync controls remain accessible in both themes and responsive widths',
   await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible();
   await page.getByText('Записать доход или расход').click();
   await page.getByText('Создать резерв', {exact:true}).click();
+  await page.getByText('Завершить или восстановить цикл резерва').click();
+  await page.getByText('Отменить событие резерва').click();
   await page.getByText('Отметить пропущенный взнос').click();
   await page.getByText('Изменить название или цель резерва').click();
   await page.getByText('Пополнить или освободить резерв').click();
@@ -340,6 +342,60 @@ test('#68 offline UI records an expense once after reconnecting', async ({page, 
   expect(cancellations[0].data.postings).toEqual([{account_id:accountId, signed_minor:125}]);
 });
 
+test('#68 offline reserve cycle close and undo preserve paid balance', async ({page, context}) => {
+  test.setTimeout(120_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  expect((await context.request.post('/__e2e__/personal-session')).status()).toBe(200);
+  await bootstrap(context);
+  const accountId=randomUUID();
+  expect((await submit(context, await state(context), 'account.create', {id:accountId,
+    name:'Synthetic cycle account', kind:'cash', currency:'RUB', opening_minor:10000})).status()).toBe(201);
+  const planned=await submit(context, await state(context), 'obligation.create', {title:'Synthetic cycle obligation',
+    direction:'expense', amount_minor:5000, starts_on:'2026-11-12', timezone:'Europe/Moscow',
+    recurrence_unit:'none', recurrence_every:1}, {}, 1);
+  expect(planned.status()).toBe(201);
+  const obligationId=(await planned.json()).changes[0].entity_id, reserveId=randomUUID();
+  const before=await state(context);
+  const create=await submit(context,before,'reserve.create',{id:reserveId,obligation_id:obligationId,
+    account_id:accountId,title:'Synthetic cycle reserve',target_minor:5000,opened_on:'2026-10-12',
+    first_due_on:'2026-11-12',period_months:1,due_day:12,contribution_mode:'auto',opening_reserved_minor:0},
+    {[accountId]:versionOf(before,accountId),[obligationId]:versionOf(before,obligationId)});
+  expect(create.status()).toBe(201);
+  const ready=await state(context);
+  const paid=await submit(context,ready,'settlement.payment.record',{account_id:accountId,
+    obligation_id:obligationId,amount_minor:5000,paid_on:'2026-11-12',occurrence_on:'2026-11-12',
+    reserve_id:reserveId,reserved_used_minor:0},{[accountId]:versionOf(ready,accountId),
+      [obligationId]:versionOf(ready,obligationId),[reserveId]:versionOf(ready,reserveId)});
+  expect(paid.status()).toBe(201);
+  await page.goto('/');
+  await openAccounts(page);
+  await page.getByRole('button',{name:'Офлайн-синхронизация'}).click();
+  await page.getByLabel('Парольная фраза',{exact:true}).fill('synthetic cycle phrase issue sixty eight');
+  await page.getByRole('button',{name:'Создать копию'}).click();
+  await page.getByLabel('Я сохранил ключ вне браузера').check();
+  await page.getByRole('button',{name:'Разблокировать'}).click();
+  await expect(page.getByText('Синхронизировано',{exact:true})).toBeVisible();
+  await page.getByText('Завершить или восстановить цикл резерва').click();
+  const form=page.locator('details').filter({has:page.getByText('Завершить или восстановить цикл резерва',{exact:true})});
+  await form.getByLabel('Резерв для цикла').selectOption(reserveId);
+  await form.getByLabel('Дата действия с циклом').fill('2026-11-12');
+  for (const [closing,cycle,due] of [[true,2,'2026-12-12'],[false,1,'2026-11-12']]) {
+    await context.setOffline(true);
+    try {
+      if(!closing) await form.getByLabel('Причина восстановления цикла').fill('Synthetic cycle correction');
+      page.once('dialog', prompt=>prompt.accept());
+      await form.getByRole('button',{name:closing?'Завершить цикл':'Отменить закрытие цикла',exact:true}).click();
+      await expect(page.getByText('Ожидает отправки',{exact:true})).toBeVisible();
+    } finally {await context.setOffline(false);}
+    await expect(page.getByText('Синхронизировано',{exact:true})).toBeVisible({timeout:30_000});
+    const result=await state(context), reserve=result.body.entities.find(x=>x.id===reserveId);
+    expect(reserve.data.cycle_number).toBe(cycle);
+    expect(reserve.data.target_on).toBe(due);
+    expect(entity(result,accountId).data.balance_minor).toBe(5000);
+    expect(entity(result,accountId).data.reserved_minor).toBe(0);
+  }
+});
+
 test('#68 offline reserve creation, changes and archive preserve real account balance', async ({page, context}) => {
   test.setTimeout(120_000);
   if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
@@ -409,12 +465,32 @@ test('#68 offline reserve creation, changes and archive preserve real account ba
   } finally {await context.setOffline(false);}
   await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible({timeout:30_000});
   const skipped = await state(context);
-  expect(skipped.body.entities.find(x => x.id === reserveId).data.event_log.filter(x => x.kind === 'skip')).toHaveLength(1);
+  const skippedEvents = skipped.body.entities.find(x => x.id === reserveId).data.event_log.filter(x => x.kind === 'skip');
+  expect(skippedEvents).toHaveLength(1);
   expect(entity(skipped, accountId).data.balance_minor).toBe(10000);
   expect(entity(skipped, accountId).data.reserved_minor).toBe(0);
+  await page.getByText('Отменить событие резерва').click();
+  const voidForm = page.locator('details').filter({has:page.getByText('Отменить событие резерва', {exact:true})});
+  const voidEvent = async (id) => {
+    await context.setOffline(true);
+    try {
+      await voidForm.getByLabel('Резерв для отмены события').selectOption(reserveId);
+      await voidForm.getByLabel('Событие для отмены').selectOption(id);
+      await voidForm.getByLabel('Дата отмены события').fill('2026-11-12');
+      await voidForm.getByLabel('Причина отмены события').fill('Synthetic correction');
+      await voidForm.getByRole('button', {name:'Сохранить отмену события в очередь'}).click();
+      await expect(page.getByText('Ожидает отправки', {exact:true})).toBeVisible();
+    } finally {await context.setOffline(false);}
+    await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible({timeout:30_000});
+  };
+  await voidEvent(skippedEvents[0].id);
+  const afterSkipVoid = await state(context);
+  expect(afterSkipVoid.body.entities.find(x => x.id === reserveId).data.event_log
+    .filter(x => x.kind === 'void' && x.target_event_id === skippedEvents[0].id)).toHaveLength(1);
+  expect(entity(afterSkipVoid, accountId).data.reserved_minor).toBe(0);
   await page.getByText('Пополнить или освободить резерв').click();
   const form = page.locator('details').filter({has:page.getByText('Пополнить или освободить резерв', {exact:true})});
-  for (const [action, amount, expected, events] of [['contribution','12',1200,1], ['release','5',700,1], ['release','7',0,2]]) {
+  for (const [action, amount, expected, events] of [['contribution','12',1200,1], ['contribution','12',1200,2], ['release','5',700,1], ['release','7',0,2]]) {
     await context.setOffline(true);
     try {
       await form.getByRole('combobox', {name:'Резерв', exact:true}).selectOption(reserveId);
@@ -431,6 +507,14 @@ test('#68 offline reserve creation, changes and archive preserve real account ba
     const reserve = after.body.entities.find(x => x.id === reserveId);
     expect(reserve.data.allocated_minor).toBe(expected);
     expect(reserve.data.event_log.filter(x => x.kind === action)).toHaveLength(events);
+    if (action === 'contribution' && events === 1) {
+      const original = reserve.data.event_log.find(x => x.kind === 'contribution');
+      await voidEvent(original.id);
+      const restored = await state(context);
+      expect(entity(restored, accountId).data.balance_minor).toBe(10000);
+      expect(entity(restored, accountId).data.reserved_minor).toBe(0);
+      expect(restored.body.entities.find(x => x.id === reserveId).data.allocated_minor).toBe(0);
+    }
   }
   await context.setOffline(true);
   try {

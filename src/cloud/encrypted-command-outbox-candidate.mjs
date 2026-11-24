@@ -25,6 +25,9 @@ const ACTION_FIELDS = Object.freeze({
     'first_due_on', 'period_months', 'due_day', 'contribution_mode', 'opening_reserved_minor'],
   'reserve.update': ['reserve_id', 'title', 'target_minor', 'first_due_on', 'period_months', 'due_day', 'contribution_mode'],
   'reserve.skip': ['reserve_id', 'slot_on', 'occurred_on'],
+  'reserve.event.void': ['reserve_id', 'account_id', 'target_event_id', 'occurred_on', 'reason'],
+  'reserve.cycle.close': ['reserve_id', 'occurred_on'],
+  'reserve.cycle.void': ['reserve_id', 'occurred_on', 'reason'],
   'obligation.create': ['title', 'direction', 'amount_minor', 'starts_on', 'timezone', 'recurrence_unit', 'recurrence_every'],
   'account.transfer': ['from_account_id', 'to_account_id', 'amount_minor', 'occurred_on'],
   'transaction.reverse': ['transaction_id', 'reason'],
@@ -525,6 +528,152 @@ function verifyReserveSkipDependencies(command, entities) {
     hold('План резерва недоступен');
   }
 }
+function verifyReserveEventVoidDependencies(command, entities) {
+  if (command.action !== 'reserve.event.void') return;
+  const p = command.payload;
+  const reserves = Array.isArray(entities) ? entities.filter(e => e.kind === 'reserve' && e.id === p.reserve_id) : [];
+  const accounts = Array.isArray(entities) ? entities.filter(e => e.kind === 'account' && e.id === p.account_id) : [];
+  const data = reserves[0]?.data;
+  const original = Array.isArray(data?.event_log) ? data.event_log.filter(e => e.id === p.target_event_id) : [];
+  if (reserves.length !== 1 || accounts.length !== 1 ||
+      reserves[0].entity_revision !== command.expected_entity_revisions[p.reserve_id] ||
+      accounts[0].entity_revision !== command.expected_entity_revisions[p.account_id] ||
+      data?.archived_at !== null || data.account_id !== p.account_id ||
+      original.length !== 1 || !['skip','contribution','release'].includes(original[0].kind) ||
+      original[0].reserve_id !== p.reserve_id || original[0].cycle_number !== data.cycle_number ||
+      data.event_log.some(e => e.kind === 'void' && e.target_event_id === p.target_event_id)) {
+    hold('Событие резерва недоступно для отмены');
+  }
+}
+function reserveCycleDue(first, months, anchor) {
+  if (typeof first !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(first) || first.startsWith('0000-') ||
+      !Number.isFinite(Date.parse(first + 'T00:00:00Z')) ||
+      new Date(first + 'T00:00:00Z').toISOString().slice(0,10) !== first || !integer(months)) {
+    hold('Некорректная дата цикла резерва');
+  }
+  const [year, month] = first.split('-').map(Number);
+  const total = year * 12 + month - 1 + months;
+  const y = Math.floor(total / 12), m = total % 12 + 1;
+  if (!integer(y, 1, 9999) || !integer(m, 1, 12)) hold('Дата следующего цикла вне диапазона');
+  const last = new Date(Date.UTC(y < 100 ? y + 400 : y, m, 0)).getUTCDate();
+  return String(y).padStart(4,'0') + '-' + String(m).padStart(2,'0') + '-' + String(Math.min(anchor,last)).padStart(2,'0');
+}
+function verifyReserveCycleDependencies(command, entities) {
+  if (!['reserve.cycle.close','reserve.cycle.void'].includes(command.action)) return;
+  const id = command.payload.reserve_id;
+  const matches = Array.isArray(entities) ? entities.filter(e => e.kind === 'reserve' && e.id === id) : [];
+  const data = matches[0]?.data;
+  if (matches.length !== 1 || matches[0].entity_revision !== command.expected_entity_revisions[id] ||
+      data?.archived_at !== null || !integer(data.period_months,1,60) || !integer(data.due_day,1,31) ||
+      !integer(data.cycle_number,1,10000) || !Array.isArray(data.event_log) ||
+      (command.action === 'reserve.cycle.void' && (data.cycle_number <= 1 ||
+        data.event_log.at(-1)?.kind !== 'cycle_close' || data.event_log.at(-1)?.cycle_number !== data.cycle_number - 1))) {
+    hold('Цикл резерва недоступен');
+  }
+}
+function verifyReserveCycleReceipt(command, changes, entities, previouslyApplied) {
+  if (!['reserve.cycle.close','reserve.cycle.void'].includes(command.action)) return;
+  const p = command.payload, closing = command.action === 'reserve.cycle.close';
+  const prior = Array.isArray(entities) ? entities.filter(e => e.kind === 'reserve' && e.id === p.reserve_id) : [];
+  const change = changes[0], entity = change?.payload?.entity, data = entity?.data;
+  if (changes.length !== 1 || change?.kind !== 'upsert' || !consistentEvent(change) ||
+      entity.kind !== 'reserve' || entity.id !== p.reserve_id ||
+      entity.entity_revision !== command.expected_entity_revisions[p.reserve_id] + 1 ||
+      !plain(data) || !integer(data.cycle_number,1,10000) || !integer(data.period_months,1,60) ||
+      !integer(data.due_day,1,31) || typeof data.first_due_on !== 'string' ||
+      !Array.isArray(data.event_log) || prior.length !== 1 || !UUID.test(change.payload.event_id || '')) {
+    hold('Изменение цикла не подтверждено');
+  }
+  const expectedDue = reserveCycleDue(data.first_due_on, (data.cycle_number - 1) * data.period_months, data.due_day);
+  const events = data.event_log.filter(e => e.id === change.payload.event_id && e.reserve_id === p.reserve_id &&
+    e.kind === (closing ? 'cycle_close' : 'void') && e.revision === change.revision &&
+    e.cycle_number === (closing ? data.cycle_number - 1 : data.cycle_number) && e.occurred_on === p.occurred_on &&
+    (closing ? e.target_event_id === null : e.note === p.reason.trim() && e.target_event_id === change.payload.voided_event_id));
+  if (events.length !== 1 || data.target_on !== expectedDue ||
+      (closing ? change.payload.next_due_on !== expectedDue : change.payload.restored_due_on !== expectedDue)) {
+    hold('Дата или событие цикла не соответствуют команде');
+  }
+  const originalClose = closing ? null : data.event_log.find(e =>
+    e.id === change.payload.voided_event_id && e.kind === 'cycle_close' && e.cycle_number === data.cycle_number);
+  if (!closing && (!UUID.test(change.payload.voided_event_id || '') || !originalClose)) {
+    hold('Отменяемое закрытие цикла не найдено');
+  }
+  const old = prior[0].data;
+  if (previouslyApplied) {
+    if (!Array.isArray(old?.event_log) || !old.event_log.some(e => canonical(e) === canonical(events[0])) ||
+        (!closing && !old.event_log.some(e => canonical(e) === canonical(originalClose)))) {
+      hold('Снимок не подтверждает изменение цикла');
+    }
+    return;
+  }
+  if (!Array.isArray(old?.event_log) || prior[0].entity_revision !== command.expected_entity_revisions[p.reserve_id] ||
+      data.cycle_number !== old.cycle_number + (closing ? 1 : -1) ||
+      data.event_log.length !== old.event_log.length + 1 ||
+      canonical(data.event_log.slice(0,-1)) !== canonical(old.event_log) ||
+      canonical({...old,cycle_number:data.cycle_number,target_on:expectedDue,event_log:data.event_log}) !== canonical(data)) {
+    hold('Цикл неожиданно изменил данные резерва');
+  }
+}
+function verifyReserveEventVoidReceipt(command, changes, entities, previouslyApplied) {
+  if (command.action !== 'reserve.event.void') return;
+  const p = command.payload;
+  const priorReserves = Array.isArray(entities) ? entities.filter(e => e.kind === 'reserve' && e.id === p.reserve_id) : [];
+  const priorAccounts = Array.isArray(entities) ? entities.filter(e => e.kind === 'account' && e.id === p.account_id) : [];
+  const reserveEvents = changes.filter(e => e.kind === 'upsert' && e.payload?.entity?.kind === 'reserve');
+  const accountEvents = changes.filter(e => e.kind === 'upsert' && e.payload?.entity?.kind === 'account');
+  if (priorReserves.length !== 1 || priorAccounts.length !== 1 || reserveEvents.length !== 1 ||
+      !consistentEvent(reserveEvents[0])) hold('Нет исходного события резерва');
+  const old = priorReserves[0].data, oldAccount = priorAccounts[0].data;
+  const change = reserveEvents[0], entity = change.payload.entity, data = entity.data;
+  const originals = Array.isArray(data?.event_log) ? data.event_log.filter(e => e.id === p.target_event_id) : [];
+  if (entity.id !== p.reserve_id || !plain(data) || data.account_id !== p.account_id || old?.account_id !== p.account_id ||
+      entity.entity_revision !== command.expected_entity_revisions[p.reserve_id] + 1 ||
+      change.payload.voided_event_id !== p.target_event_id || !UUID.test(change.payload.event_id || '') ||
+      originals.length !== 1 || !['skip','contribution','release'].includes(originals[0].kind)) {
+    hold('Отмена не соответствует исходному событию резерва');
+  }
+  const original = originals[0], money = original.kind !== 'skip';
+  if (money && !integer(original.amount_minor, 1, 1_000_000_000_000)) hold('Некорректная сумма исходного события');
+  const delta = money ? (original.kind === 'contribution' ? -original.amount_minor : original.amount_minor) : 0;
+  const voids = data.event_log.filter(e => e.id === change.payload.event_id && e.reserve_id === p.reserve_id &&
+    e.kind === 'void' && e.revision === change.revision && e.target_event_id === p.target_event_id &&
+    e.cycle_number === original.cycle_number && e.occurred_on === p.occurred_on && e.note === p.reason.trim() &&
+    (money ? UUID.test(e.allocation_id || '') : e.allocation_id === null));
+  if (voids.length !== 1 || changes.length !== (money ? 2 : 1) || accountEvents.length !== (money ? 1 : 0) ||
+      (money && (!consistentEvent(accountEvents[0]) || accountEvents[0].payload.entity.id !== p.account_id ||
+        accountEvents[0].payload.entity.entity_revision !== command.expected_entity_revisions[p.account_id] + 1))) {
+    hold('Неполное подтверждение отмены резерва');
+  }
+  if (previouslyApplied) {
+    if (!Array.isArray(old?.event_log) || !old.event_log.some(e => canonical(e) === canonical(original)) ||
+        !old.event_log.some(e => canonical(e) === canonical(voids[0]))) {
+      hold('Сохранённый снимок не содержит отмену резерва');
+    }
+    return;
+  }
+  if (!Array.isArray(old?.event_log) || !Array.isArray(old.allocations_by_account) ||
+      priorReserves[0].entity_revision !== command.expected_entity_revisions[p.reserve_id] ||
+      priorAccounts[0].entity_revision !== command.expected_entity_revisions[p.account_id] ||
+      data.event_log.length !== old.event_log.length + 1 ||
+      canonical(data.event_log.slice(0, -1)) !== canonical(old.event_log)) hold('История отмены резерва повреждена');
+  const pairs = new Map(old.allocations_by_account.map(pair => [pair.account_id, pair.allocated_minor]));
+  const amount = (pairs.get(p.account_id) || 0) + delta;
+  if (!integer(amount) || pairs.size !== old.allocations_by_account.length) hold('Некорректный остаток резерва');
+  if (amount) pairs.set(p.account_id, amount); else pairs.delete(p.account_id);
+  const expectedPairs = [...pairs].sort(([a], [b]) => a.localeCompare(b))
+    .map(([account_id, allocated_minor]) => ({account_id, allocated_minor}));
+  if (canonical({...old, allocated_minor:old.allocated_minor + delta,
+      allocations_by_account:expectedPairs, event_log:data.event_log}) !== canonical(data)) {
+    hold('Отмена изменила другие свойства резерва');
+  }
+  if (money) {
+    const account = accountEvents[0].payload.entity.data;
+    if (canonical({...oldAccount, reserved_minor:oldAccount.reserved_minor + delta,
+        available_minor:oldAccount.available_minor - delta}) !== canonical(account)) {
+      hold('Возврат распределения не совпадает с остатком счёта');
+    }
+  }
+}
 function verifyReserveSkipReceipt(command, changes, entities, previouslyApplied) {
   if (command.action !== 'reserve.skip') return;
   const p = command.payload, change = changes[0], entity = change?.payload?.entity;
@@ -772,6 +921,8 @@ function validateCommand(command) {
     requiredRevisions = [];
   } else if (dto.action === 'reserve.allocate') {
     requiredRevisions = [dto.payload.account_id, dto.payload.reserve_id];
+  } else if (dto.action === 'reserve.event.void') {
+    requiredRevisions = [dto.payload.account_id, dto.payload.reserve_id];
   } else if (dto.action === 'reserve.create') {
     requiredRevisions = [dto.payload.account_id, dto.payload.obligation_id];
   } else if (dto.action === 'reserve.archive') {
@@ -779,6 +930,8 @@ function validateCommand(command) {
   } else if (dto.action === 'reserve.update') {
     requiredRevisions = [dto.payload.reserve_id];
   } else if (dto.action === 'reserve.skip') {
+    requiredRevisions = [dto.payload.reserve_id];
+  } else if (['reserve.cycle.close', 'reserve.cycle.void'].includes(dto.action)) {
     requiredRevisions = [dto.payload.reserve_id];
   } else if (dto.action === 'account.transfer') {
     requiredRevisions = [dto.payload.from_account_id, dto.payload.to_account_id];
@@ -893,7 +1046,7 @@ function validateCommand(command) {
     }
     if ((name === 'account_id' || name === 'from_account_id' || name === 'to_account_id' || name === 'obligation_id' ||
          name === 'loan_id' || name === 'transaction_id' ||
-         name === 'fact_id' || name === 'reserve_id' || name === 'id') && !UUID.test(value)) {
+         name === 'fact_id' || name === 'reserve_id' || name === 'target_event_id' || name === 'id') && !UUID.test(value)) {
       hold('Недопустимый идентификатор');
     }
   }
@@ -1224,6 +1377,8 @@ export async function enqueueEncryptedFinanceCommandCandidate({
   verifyReserveCreateDependencies(pinned, cloud.entities);
   verifyReserveUpdateDependencies(pinned, cloud.entities);
   verifyReserveSkipDependencies(pinned, cloud.entities);
+  verifyReserveEventVoidDependencies(pinned, cloud.entities);
+  verifyReserveCycleDependencies(pinned, cloud.entities);
   verifyCashMovementDependencies(pinned, cloud.entities);
   verifyReversalDependencies(pinned, cloud.entities);
   verifyTransferDependencies(pinned, cloud.entities);
@@ -1361,6 +1516,8 @@ export async function persistAuthenticatedFinanceReceiptCandidate({
   verifyReserveCreateReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   verifyReserveUpdateReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   verifyReserveSkipReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
+  verifyReserveEventVoidReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
+  verifyReserveCycleReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   verifyObligationReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   verifyAccountReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   verifyCashMovementReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
@@ -1771,6 +1928,8 @@ export async function resolveStaleFinanceConflict({
     verifyReserveCreateDependencies(replacement, cloud.entities);
     verifyReserveUpdateDependencies(replacement, cloud.entities);
     verifyReserveSkipDependencies(replacement, cloud.entities);
+    verifyReserveEventVoidDependencies(replacement, cloud.entities);
+    verifyReserveCycleDependencies(replacement, cloud.entities);
     verifyCashMovementDependencies(replacement, cloud.entities);
     verifyReversalDependencies(replacement, cloud.entities);
     verifyTransferDependencies(replacement, cloud.entities);

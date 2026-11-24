@@ -1383,6 +1383,121 @@ for (const opening of [0,1200]) test(`#68 reserve creation confirms its exact pl
   session.logout();
 });
 
+test('#68 cycle close and undo keep the original month-end anchor and exact history', async () => {
+  const reserveId='10000000-0000-4000-8000-000000000003';
+  const closeId='10000000-0000-4000-8000-000000000004';
+  const voidId='10000000-0000-4000-8000-000000000005';
+  const voidMutation='10000000-0000-4000-8000-000000000006';
+  mount();
+  await createAtomicEncryptedCandidate(USER_A, PASS, {...clone(SOURCE), outbox:[], conflicts:[]});
+  const session=await unlock(USER_A), identity=cloudAuth(session), pages=cloudPages();
+  pages[0].body.revision=1;
+  const reserve={id:reserveId,kind:'reserve',entity_revision:1,data:{title:'Synthetic',archived_at:null,
+    first_due_on:'2026-01-31',target_on:'2026-01-31',period_months:1,due_day:31,cycle_number:1,
+    allocated_minor:0,event_log:[]}};
+  pages[0].body.entities.push(reserve);
+  await initializeEncryptedCloudCacheCandidate({scope:USER_A,session,identity,pages,
+    expectedEpoch:0,confirmedAccountCacheInitialization:true});
+  const close={schema_version:2,client_mutation_id:PENDING_ID,base_revision:1,action:'reserve.cycle.close',
+    expected_entity_revisions:{[reserveId]:1},payload:{reserve_id:reserveId,occurred_on:'2026-01-31'}};
+  await enqueueEncryptedFinanceCommandCandidate({scope:USER_A,session,identity,command:close,
+    ifMatch:CLOUD_ETAG,expectedEpoch:1});
+  const closeEvent={id:closeId,reserve_id:reserveId,kind:'cycle_close',revision:2,cycle_number:1,
+    occurred_on:'2026-01-31',target_event_id:null};
+  const closed={...reserve,entity_revision:2,data:{...reserve.data,cycle_number:2,
+    target_on:'2026-02-28',event_log:[closeEvent]}};
+  const closeChange={revision:2,ordinal:0,kind:'upsert',entity_id:reserveId,entity_revision:2,
+    payload:{entity:closed,event_id:closeId,next_due_on:'2026-02-28'}};
+  const proof=(change,id,revision)=>({receipt:{schema_version:2,client_mutation_id:id,revision,replayed:false,changes:[change]},
+    deltaPage:{schema_version:1,from_revision:revision-1,to_revision:revision,next_since_revision:revision,
+      has_more:false,changes:[change]},commandHttpStatus:201,deltaHttpStatus:200});
+  const before=await readAtomicEncryptedCandidate(USER_A,session);
+  for(const alter of [e=>{e.payload.entity.data.target_on='2026-03-03';e.payload.next_due_on='2026-03-03';},
+    e=>{e.payload.entity.data.allocated_minor=10;},e=>{e.payload.entity.data.event_log[0].cycle_number=2;}]) {
+    const wrong=structuredClone(closeChange);alter(wrong);
+    await assert.rejects(()=>persistAuthenticatedFinanceReceiptCandidate({scope:USER_A,session,identity,
+      expectedEpoch:2,...proof(wrong,PENDING_ID,2)}),/SYNC_HOLD/);
+    assert.deepEqual(await readAtomicEncryptedCandidate(USER_A,session),before);
+  }
+  await persistAuthenticatedFinanceReceiptCandidate({scope:USER_A,session,identity,
+    expectedEpoch:2,...proof(closeChange,PENDING_ID,2)});
+  const undo={schema_version:2,client_mutation_id:voidMutation,base_revision:2,action:'reserve.cycle.void',
+    expected_entity_revisions:{[reserveId]:2},payload:{reserve_id:reserveId,occurred_on:'2026-01-31',reason:'Correction'}};
+  await enqueueEncryptedFinanceCommandCandidate({scope:USER_A,session,identity,command:undo,
+    ifMatch:CLOUD_ETAG,expectedEpoch:3});
+  const voidEvent={id:voidId,reserve_id:reserveId,kind:'void',revision:3,cycle_number:1,
+    occurred_on:'2026-01-31',target_event_id:closeId,note:'Correction'};
+  const restored={...reserve,entity_revision:3,data:{...reserve.data,event_log:[closeEvent,voidEvent]}};
+  const voidChange={revision:3,ordinal:0,kind:'upsert',entity_id:reserveId,entity_revision:3,
+    payload:{entity:restored,event_id:voidId,voided_event_id:closeId,restored_due_on:'2026-01-31'}};
+  const queued=await readAtomicEncryptedCandidate(USER_A,session);
+  for(const alter of [e=>{e.payload.entity.data.event_log[1].target_event_id=NEW_ACCOUNT_ID;},
+    e=>{e.payload.entity.data.event_log[1].note='Wrong';},e=>{e.payload.entity.data.target_on='2026-02-28';}]) {
+    const wrong=structuredClone(voidChange);alter(wrong);
+    await assert.rejects(()=>persistAuthenticatedFinanceReceiptCandidate({scope:USER_A,session,identity,
+      expectedEpoch:4,...proof(wrong,voidMutation,3)}),/SYNC_HOLD/);
+    assert.deepEqual(await readAtomicEncryptedCandidate(USER_A,session),queued);
+  }
+  const result=await persistAuthenticatedFinanceReceiptCandidate({scope:USER_A,session,identity,
+    expectedEpoch:4,...proof(voidChange,voidMutation,3)});
+  assert.equal(result.status,'DURABLY_CONFIRMED');
+  session.logout();
+});
+
+for (const kind of ['skip','contribution']) test(`#68 voiding ${kind} verifies event and compensation`, async () => {
+  const reserveId='10000000-0000-4000-8000-000000000003';
+  const originalId='10000000-0000-4000-8000-000000000004';
+  const voidId='10000000-0000-4000-8000-000000000005';
+  const allocationId='10000000-0000-4000-8000-000000000006';
+  mount();
+  await createAtomicEncryptedCandidate(USER_A, PASS, {...clone(SOURCE), outbox:[], conflicts:[]});
+  const session=await unlock(USER_A), identity=cloudAuth(session), pages=cloudPages();
+  pages[0].body.revision=1;
+  const money=kind==='contribution', priorAmount=money?1200:0;
+  pages[0].body.entities[0].data.reserved_minor=priorAmount;
+  pages[0].body.entities[0].data.available_minor=10000-priorAmount;
+  const original={id:originalId, reserve_id:reserveId, kind, cycle_number:1, revision:1,
+    amount_minor:money?1200:null};
+  const reserve={id:reserveId,kind:'reserve',entity_revision:1,data:{title:'Synthetic reserve',
+    account_id:CLOUD_ACCOUNT,archived_at:null,period_months:1,cycle_number:1,allocated_minor:priorAmount,
+    allocations_by_account:money?[{account_id:CLOUD_ACCOUNT,allocated_minor:1200}]:[],event_log:[original]}};
+  pages[0].body.entities.push(reserve);
+  await initializeEncryptedCloudCacheCandidate({scope:USER_A,session,identity,pages,
+    expectedEpoch:0,confirmedAccountCacheInitialization:true});
+  const command={schema_version:2,client_mutation_id:PENDING_ID,base_revision:1,action:'reserve.event.void',
+    expected_entity_revisions:{[reserveId]:1,[CLOUD_ACCOUNT]:1},payload:{reserve_id:reserveId,
+      account_id:CLOUD_ACCOUNT,target_event_id:originalId,occurred_on:'2026-11-12',reason:'Correction'}};
+  await enqueueEncryptedFinanceCommandCandidate({scope:USER_A,session,identity,command,
+    ifMatch:CLOUD_ETAG,expectedEpoch:1});
+  const voidEvent={id:voidId,reserve_id:reserveId,kind:'void',revision:2,cycle_number:1,
+    target_event_id:originalId,occurred_on:'2026-11-12',note:'Correction',allocation_id:money?allocationId:null};
+  const updated={...reserve,entity_revision:2,data:{...reserve.data,allocated_minor:0,
+    allocations_by_account:[],event_log:[original,voidEvent]}};
+  const events=[{revision:2,ordinal:0,kind:'upsert',entity_id:reserveId,entity_revision:2,
+    payload:{entity:updated,event_id:voidId,voided_event_id:originalId}}];
+  if(money) events.push({revision:2,ordinal:1,kind:'upsert',entity_id:CLOUD_ACCOUNT,entity_revision:2,
+    payload:{entity:cloudAccount(2,10000)}});
+  const evidence=changes=>({receipt:{schema_version:2,client_mutation_id:PENDING_ID,revision:2,replayed:false,changes},
+    deltaPage:{schema_version:1,from_revision:1,to_revision:2,next_since_revision:2,has_more:false,changes},
+    commandHttpStatus:201,deltaHttpStatus:200});
+  const before=await readAtomicEncryptedCandidate(USER_A,session);
+  for(const alter of [e=>{e[0].payload.entity.data.event_log[1].target_event_id=NEW_ACCOUNT_ID;},
+    e=>{e[0].payload.entity.data.event_log[1].note='Wrong';},
+    e=>{e[0].payload.entity.data.allocated_minor=1;},
+    ...(money?[e=>{e[1].payload.entity.data.balance_minor=9000;}]:[])]) {
+    const wrong=structuredClone(events);alter(wrong);
+    await assert.rejects(()=>persistAuthenticatedFinanceReceiptCandidate({scope:USER_A,session,identity,
+      expectedEpoch:2,...evidence(wrong)}),/SYNC_HOLD/);
+    assert.deepEqual(await readAtomicEncryptedCandidate(USER_A,session),before);
+  }
+  const proof=evidence(events);
+  await persistEncryptedCloudDeltaCandidate({scope:USER_A,session,identity,page:proof.deltaPage,expectedEpoch:2});
+  const result=await persistAuthenticatedFinanceReceiptCandidate({scope:USER_A,session,identity,
+    expectedEpoch:3,...proof,receipt:{...proof.receipt,replayed:true},commandHttpStatus:200});
+  assert.equal(result.status,'DURABLY_CONFIRMED');
+  session.logout();
+});
+
 test('#68 skipped contribution is acknowledged only for its exact slot and event', async () => {
   const reserveId='10000000-0000-4000-8000-000000000003';
   const eventId='10000000-0000-4000-8000-000000000004';
