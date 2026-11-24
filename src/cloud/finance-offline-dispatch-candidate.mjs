@@ -8,6 +8,7 @@
 import {readAtomicEncryptedCandidate} from '../security/protected-atomic-candidate.ts';
 import {
   persistAuthenticatedFinanceReceiptCandidate,
+  persistSnapshotVerifiedFinanceReceiptCandidate,
   classifyFinanceOutboxResponseCandidate,
   recordEncryptedFinanceRetryCandidate,
   persistEncryptedFinanceHoldCandidate,
@@ -253,6 +254,7 @@ async function dispatchWithoutNetworkLease({
   // A watermark can advance after an import even while this exact committed
   // revision remains in the independent journal. Ask for only the revision
   // tied to this UUID; a missing or incomplete journal still holds the queue.
+  let bothJournalsUnavailable = false;
   if (deltaResponse.status === 410 && committedRevision !== null) {
     try {
       const recovery = await fetchImpl(
@@ -263,6 +265,7 @@ async function dispatchWithoutNetworkLease({
          signal:session.lifecycleSignal},
       );
       active(scope, session, identity);
+      bothJournalsUnavailable = recovery.status === 410;
       if (recovery.status === 200 || recovery.status === 401 || recovery.status === 403) {
         deltaResponse = recovery;
       }
@@ -273,6 +276,13 @@ async function dispatchWithoutNetworkLease({
   if (deltaResponse.status !== 200) {
     if (deltaResponse.status === 401 || deltaResponse.status === 403) return control('AUTH_HOLD');
     if (deltaResponse.status === 410) {
+      if (bothJournalsUnavailable && recoveringDeltaHold && item.recoveryBase &&
+          cloud.revision === committedRevision && posted.status === 200) {
+        const recovered = await persistSnapshotVerifiedFinanceReceiptCandidate({
+          scope, session, identity, expectedEpoch, receipt, commandHttpStatus:posted.status,
+        });
+        return Object.freeze({...recovered, sentByThisCall:true});
+      }
       const stopped = await persistEncryptedFinanceHoldCandidate({
         scope, session, identity, expectedEpoch,
         mutationId: item.mutationId, httpStatus: 410,

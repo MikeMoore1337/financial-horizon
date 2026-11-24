@@ -109,9 +109,23 @@ export async function refreshEncryptedCloudSnapshot({
   snapshot.cloudFinance = verified.revision === before.revision
     ? {...before, serverEtag}
     : cloudImage(verified, proofs, serverEtag);
+  // Keep the exact pre-command image when replacing it. It is encrypted in
+  // the same CAS and remains tied to the original head UUID and If-Match.
+  // It is useful only for a later exact-revision snapshot comparison; it
+  // never settles the command or replaces missing journal events.
+  const outbox = structuredClone(bundle.outbox);
+  const head = outbox[0];
+  if (verified.revision === before.revision + 1 && head && !head.recoveryBase &&
+      ['account.create', 'account.update', 'account.archive', 'account.unarchive',
+        'transaction.record', 'account.transfer'].includes(head.command?.action) &&
+      head.status === 'pending' && head.command?.base_revision === before.revision &&
+      typeof before.serverEtag === 'string' && head.ifMatch === before.serverEtag) {
+    head.recoveryBase = {revision:before.revision, serverEtag:before.serverEtag,
+      fingerprint:head.fingerprint, entities:structuredClone(before.entities)};
+  }
   const nextEpoch = await compareAndSwapAtomicEncryptedCandidate(
     scope, session, expectedEpoch, 2,
-    {snapshot, outbox: bundle.outbox, conflicts: bundle.conflicts},
+    {snapshot, outbox, conflicts: bundle.conflicts},
   );
   active(scope, session, identity);
   return Object.freeze({status: 'ENCRYPTED_SNAPSHOT_REFRESHED', bundleEpoch: nextEpoch,

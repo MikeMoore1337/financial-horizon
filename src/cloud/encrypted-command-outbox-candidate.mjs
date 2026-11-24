@@ -1585,6 +1585,114 @@ export async function persistAuthenticatedFinanceReceiptCandidate({
   });
 }
 
+/**
+ * Recover a narrow set of single-event commands after a missing journal.
+ * The caller must supply a replayed authenticated receipt after BOTH journal
+ * endpoints returned 410. Independently compare the complete authenticated
+ * snapshot at the exact commit revision against applying that receipt to the
+ * encrypted pre-command snapshot. A receipt alone is never evidence.
+ */
+export async function persistSnapshotVerifiedFinanceReceiptCandidate({
+  scope, session, identity, expectedEpoch, receipt, commandHttpStatus,
+}) {
+  active(scope, session, identity);
+  const ack = safeJson(receipt);
+  if (commandHttpStatus !== 200 || !plain(ack) || ack.replayed !== true ||
+      ![1, 2].includes(ack.schema_version) || !UUID.test(ack.client_mutation_id) ||
+      !integer(ack.revision, 1) || !Array.isArray(ack.changes) || ack.changes.length !== 1) {
+    hold('Нет повторной квитанции проведённой операции');
+  }
+  const current = await readAtomicEncryptedCandidate(scope, session);
+  active(scope, session, identity);
+  if (!current || current.epoch !== expectedEpoch || current.schemaVersion !== 2 ||
+      current.snapshot?.version !== 2 || !Array.isArray(current.conflicts)) {
+    hold('Зашифрованное состояние изменилось');
+  }
+  const cloud = current.snapshot.cloudFinance;
+  if (!plain(cloud) || cloud.schemaVersion !== 1 || cloud.scope !== scope ||
+      cloud.profileId !== identity.profileId || cloud.epoch !== identity.epoch ||
+      cloud.revision !== ack.revision || !Array.isArray(cloud.entities) ||
+      typeof cloud.serverEtag !== 'string' ||
+      !new RegExp('^"fh\\.1\\.' + ack.revision + '\\.[a-f0-9]{16}"$').test(cloud.serverEtag)) {
+    hold('Нет полного снимка точной ревизии операции');
+  }
+  existingQueue(current.outbox, scope, identity);
+  const head = current.outbox[0], base = head?.recoveryBase;
+  if (!head || head.mutationId !== ack.client_mutation_id ||
+      head.command.client_mutation_id !== ack.client_mutation_id ||
+      head.command.schema_version !== ack.schema_version ||
+      !['account.create', 'account.update', 'account.archive', 'account.unarchive',
+        'transaction.record', 'account.transfer'].includes(head.command.action) ||
+      !plain(base) || base.revision !== ack.revision - 1 ||
+      head.command.base_revision !== base.revision || base.serverEtag !== head.ifMatch ||
+      base.fingerprint !== head.fingerprint || !Array.isArray(base.entities)) {
+    hold('Нет исходного подтверждённого снимка операции');
+  }
+  const holds = current.conflicts.filter(entry => plain(entry) &&
+    entry.kind === 'finance_sync_hold' && entry.mutationId === head.mutationId);
+  if (holds.length !== 1 || holds[0].scope !== scope || holds[0].profileId !== identity.profileId ||
+      holds[0].httpStatus !== 410 || holds[0].decision !== 'SNAPSHOT_REQUIRED_HOLD' ||
+      holds[0].source !== 'delta' || holds[0].baseRevision !== base.revision ||
+      holds[0].manualChoice !== undefined || holds[0].verifiedCancellationFingerprint !== undefined) {
+    hold('Нет однозначной остановки для сверки');
+  }
+  const digest = await fingerprint(scope, identity.profileId, head.ifMatch, head.command);
+  active(scope, session, identity);
+  if (digest !== head.fingerprint) hold('Исходная операция изменилась');
+  const event = ack.changes[0];
+  if (!plain(event) || event.revision !== ack.revision || event.ordinal !== 0) {
+    hold('Некорректная ревизия квитанции');
+  }
+  // Check the original command against its pre-commit image, including the
+  // exact financial effects, before comparing ALL entities to /state.
+  verifyAccountReceipt(head.command, ack.changes, base.entities, false);
+  verifyCashMovementReceipt(head.command, ack.changes, base.entities, false);
+  verifyTransferReceipt(head.command, ack.changes, base.entities, false);
+  if (head.command.action === 'account.transfer') {
+    const event = ack.changes[0].payload, tx = event.entity;
+    if (tx.entity_revision !== 1 || tx.data.reversed_transaction_id !== null ||
+        tx.data.note !== null || Object.hasOwn(tx.data, 'payment_link') ||
+        Object.hasOwn(tx.data, 'reserve_allocation')) hold('Лишние изменения перевода');
+    for (const [id, amount] of [[head.command.payload.from_account_id, -head.command.payload.amount_minor],
+      [head.command.payload.to_account_id, head.command.payload.amount_minor]]) {
+      const old = base.entities.find(entity => entity.kind === 'account' && entity.id === id);
+      const updated = event.accounts.find(entity => entity.id === id);
+      if (!old || !updated || updated.data?.available_minor !== old.data?.available_minor + amount ||
+          ['name', 'type', 'currency', 'opening_minor', 'archived_at'].some(key =>
+            updated.data?.[key] !== old.data?.[key])) hold('Лишние изменения счёта перевода');
+    }
+  }
+  const predicted = applyFinanceDeltaCandidate({scope, profileId:identity.profileId,
+    generation:identity.generation, epoch:identity.epoch, revision:base.revision,
+    entities:base.entities, pending:current.outbox, conflicts:current.conflicts},
+  {schema_version:1, from_revision:base.revision, to_revision:ack.revision,
+    next_since_revision:ack.revision, has_more:false, changes:ack.changes}, identity);
+  const ordered = entities => [...entities].sort((a,b) => a.id.localeCompare(b.id));
+  if (predicted.revision !== cloud.revision ||
+      canonical(ordered(predicted.entities)) !== canonical(ordered(cloud.entities))) {
+    hold('Серверный снимок не подтверждает полное изменение');
+  }
+  const proofs = cloud.appliedReceipts || [];
+  if (!Array.isArray(proofs) || proofs.length >= 2000 || proofs.some(x =>
+      !plain(x) || !UUID.test(x.mutationId) || !/^[a-f0-9]{64}$/.test(x.fingerprint) ||
+      !integer(x.revision, 1) || x.mutationId === head.mutationId)) {
+    hold('Некорректная история подтверждённых операций');
+  }
+  const snapshot = structuredClone(current.snapshot);
+  snapshot.cloudFinance.appliedReceipts = [...proofs, {
+    mutationId:head.mutationId, fingerprint:digest, revision:ack.revision,
+    proof:'exact_snapshot',
+  }];
+  const nextEpoch = await compareAndSwapAtomicEncryptedCandidate(scope, session, expectedEpoch, 2, {
+    snapshot, outbox:current.outbox.slice(1),
+    conflicts:current.conflicts.filter(entry => entry !== holds[0]),
+  });
+  active(scope, session, identity);
+  return Object.freeze({status:'DURABLY_CONFIRMED', bundleEpoch:nextEpoch,
+    serverRevision:ack.revision, pending:current.outbox.length - 1,
+    serverBalanceChanged:false, sentByThisFunction:false, proof:'exact_snapshot'});
+}
+
 
 /**
  * Persist bounded retry count with the unchanged original mutation ID,
