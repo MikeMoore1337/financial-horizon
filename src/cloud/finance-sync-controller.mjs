@@ -8,7 +8,7 @@ import {downloadVerifiedFinanceSnapshotCandidate} from './authenticated-snapshot
 import {initializeEncryptedCloudCacheCandidate, refreshEncryptedCloudSnapshot} from './encrypted-cloud-cache-candidate.mjs';
 import {enqueueEncryptedFinanceCommandCandidate, recordVerifiedFinanceCancellation,
   resolveStaleFinanceConflict} from './encrypted-command-outbox-candidate.mjs';
-import {dispatchOneEncryptedFinanceCommandCandidate} from './finance-offline-dispatch-candidate.mjs';
+import {dispatchOneEncryptedFinanceCommandCandidate, downloadPendingFinanceJournalCandidate} from './finance-offline-dispatch-candidate.mjs';
 import {rememberOfflineActor, readOfflineActor, forgetOfflineActor} from './offline-access-hint.mjs';
 
 const USER = /^[a-f0-9]{32}$/;
@@ -246,8 +246,21 @@ export class FinanceSyncController {
     this.#active(generation);
     const bundle = await readAtomicEncryptedCandidate(this.#scope, this.#session);
     this.#active(generation);
+    const cloud = bundle?.snapshot?.cloudFinance, head = bundle?.outbox?.[0];
+    const proofBase = head?.command?.base_revision === cloud?.revision && head?.ifMatch === cloud?.serverEtag
+      ? cloud : head?.recoveryBase;
+    let pendingJournalPage = null;
+    if (head && !head.recoveryJournal && head.status === 'pending' &&
+        proofBase && head.command?.base_revision === proofBase.revision && head.ifMatch === proofBase.serverEtag &&
+        (proofBase === cloud || proofBase.fingerprint === head.fingerprint) &&
+        Number.isSafeInteger(pulled.pages?.[0]?.body?.revision) &&
+        pulled.pages[0].body.revision > proofBase.revision) {
+      pendingJournalPage = await downloadPendingFinanceJournalCandidate({scope:this.#scope,
+        session:this.#session, identity, origin:this.#origin, sinceRevision:proofBase.revision, fetchImpl:transport});
+      this.#active(generation);
+    }
     const input = {scope:this.#scope, session:this.#session, identity,
-      pages:pulled.pages, etag:pulled.etag, expectedEpoch:bundle.epoch};
+      pages:pulled.pages, etag:pulled.etag, expectedEpoch:bundle.epoch, pendingJournalPage};
     if (!Object.hasOwn(bundle.snapshot, 'cloudFinance')) {
       await initializeEncryptedCloudCacheCandidate({...input, confirmedAccountCacheInitialization:true});
     } else await refreshEncryptedCloudSnapshot(input);

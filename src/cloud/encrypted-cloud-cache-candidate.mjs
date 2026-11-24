@@ -79,7 +79,7 @@ function validatedReceipts(value) {
  * The caller must obtain pages and ETag from the authenticated, same-origin
  * snapshot downloader in the same live session; this function does no HTTP. */
 export async function refreshEncryptedCloudSnapshot({
-  scope, session, identity, pages, etag, expectedEpoch,
+  scope, session, identity, pages, etag, expectedEpoch, pendingJournalPage = null,
 }) {
   active(scope, session, identity);
   const verified = verifyFinanceSnapshotPagesCandidate(pages, identity);
@@ -101,7 +101,7 @@ export async function refreshEncryptedCloudSnapshot({
   }
   // A revision identifies one authoritative state. Do not replace the
   // existing encrypted image at the same revision with an unproven variant.
-  if (verified.revision === before.revision && before.serverEtag === serverEtag) {
+  if (verified.revision === before.revision && before.serverEtag === serverEtag && pendingJournalPage === null) {
     return Object.freeze({status: 'NO_NEW_REVISION', bundleEpoch: expectedEpoch,
       serverRevision: verified.revision, pending: bundle.outbox.length});
   }
@@ -115,6 +115,27 @@ export async function refreshEncryptedCloudSnapshot({
   // never settles the command or replaces missing journal events.
   const outbox = structuredClone(bundle.outbox);
   const head = outbox[0];
+  const proofBase = head?.command?.base_revision === before.revision && head?.ifMatch === before.serverEtag
+    ? before : head?.recoveryBase;
+  if (pendingJournalPage !== null && head && !head.recoveryJournal &&
+      head.status === 'pending' && proofBase && head.command?.base_revision === proofBase.revision &&
+      typeof proofBase.serverEtag === 'string' && head.ifMatch === proofBase.serverEtag &&
+      (proofBase === before || proofBase.fingerprint === head.fingerprint) &&
+      Array.isArray(proofBase.entities) && verified.revision > proofBase.revision &&
+      pendingJournalPage.from_revision === proofBase.revision &&
+      pendingJournalPage.next_since_revision === proofBase.revision + 1 &&
+      Array.isArray(pendingJournalPage.changes) && pendingJournalPage.changes.length > 0 &&
+      pendingJournalPage.changes.length <= 100) {
+    // The caller supplies a bounded, independently fetched authenticated page.
+    // Validation is read-only; a bad page cannot affect the new snapshot.
+    try {
+      applyFinanceDeltaCandidate({...before, revision:proofBase.revision, entities:proofBase.entities,
+        generation:identity.generation,
+        pending:bundle.outbox, conflicts:bundle.conflicts}, pendingJournalPage, identity);
+      head.recoveryJournal = {fingerprint:head.fingerprint, ifMatch:head.ifMatch,
+        page:structuredClone(pendingJournalPage)};
+    } catch { active(scope, session, identity); /* Refresh without unverified evidence. */ }
+  }
   if (verified.revision > before.revision && verified.revision <= before.revision + 9 &&
       head && !head.recoveryBase &&
       ['account.create', 'account.update', 'account.archive', 'account.unarchive',

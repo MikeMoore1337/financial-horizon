@@ -8,6 +8,7 @@
 import {readAtomicEncryptedCandidate} from '../security/protected-atomic-candidate.ts';
 import {
   persistAuthenticatedFinanceReceiptCandidate,
+  journalEvidenceMatchesReceiptCandidate,
   persistSnapshotVerifiedFinanceReceiptCandidate,
   classifyFinanceOutboxResponseCandidate,
   recordEncryptedFinanceRetryCandidate,
@@ -78,6 +79,32 @@ async function jsonResponse(response) {
     const raw = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
     return JSON.parse(raw);
   } finally { reader.releaseLock(); }
+}
+
+/** Fetch one independent journal revision for encrypted crash recovery. */
+export async function downloadPendingFinanceJournalCandidate({
+  scope, session, identity, origin, sinceRevision, fetchImpl = globalThis.fetch,
+}) {
+  active(scope, session, identity);
+  const server = authority(origin);
+  if (!safeRevision(sinceRevision) || typeof fetchImpl !== 'function') return null;
+  try {
+    const response = await fetchImpl(server + '/api/finance/v1/changes?since_revision=' +
+      sinceRevision + '&limit_revisions=1',
+    {method:'GET', credentials:'same-origin', mode:'same-origin', redirect:'error',
+     cache:'no-store', referrerPolicy:'same-origin',
+     headers:{'Accept':'application/json','X-FH-Expected-Profile':identity.profileId},
+     signal:session.lifecycleSignal});
+    active(scope, session, identity);
+    if (response.status !== 200) return null;
+    const page = await jsonResponse(response);
+    active(scope, session, identity);
+    return page?.from_revision === sinceRevision && page?.next_since_revision === sinceRevision + 1 &&
+      Array.isArray(page.changes) && page.changes.length > 0 && page.changes.length <= 100 ? page : null;
+  } catch {
+    active(scope, session, identity);
+    return null;
+  }
 }
 function control(action, delay = null, bundleEpoch = null) {
   return Object.freeze({status: action, retryDelayMs: delay,
@@ -234,6 +261,15 @@ async function dispatchWithoutNetworkLease({
   // reconciliation still validates the complete receipt and delta.
   const committedRevision = Number.isSafeInteger(receipt?.revision) &&
     receipt.revision >= 1 ? receipt.revision : null;
+  const savedJournal = item.recoveryJournal;
+  if (Object.hasOwn(item, 'recoveryJournal') &&
+      (!savedJournal || typeof savedJournal !== 'object' || Array.isArray(savedJournal) ||
+       savedJournal.fingerprint !== item.fingerprint || savedJournal.ifMatch !== item.ifMatch ||
+       !journalEvidenceMatchesReceiptCandidate(receipt, savedJournal.page))) {
+    // Two independent server observations disagree. Do not discard either
+    // observation or accept a different proof path as a silent fallback.
+    return control('RECOVERY_HOLD', null, expectedEpoch);
+  }
   const sinceRevision = committedRevision !== null &&
     committedRevision <= cloud.revision
     ? committedRevision - 1 : cloud.revision;
@@ -254,8 +290,8 @@ async function dispatchWithoutNetworkLease({
   // A watermark can advance after an import even while this exact committed
   // revision remains in the independent journal. Ask for only the revision
   // tied to this UUID; a missing or incomplete journal still holds the queue.
-  let bothJournalsUnavailable = false;
-  if (deltaResponse.status === 410 && committedRevision !== null) {
+  let exactJournalUnavailable = false;
+  if ((deltaResponse.status === 410 || (deltaResponse.status === 503 && savedJournal)) && committedRevision !== null) {
     try {
       const recovery = await fetchImpl(
         server + '/api/finance/v1/commands/' + item.mutationId + '/changes',
@@ -265,7 +301,7 @@ async function dispatchWithoutNetworkLease({
          signal:session.lifecycleSignal},
       );
       active(scope, session, identity);
-      bothJournalsUnavailable = recovery.status === 410;
+      exactJournalUnavailable = recovery.status === 410;
       if (recovery.status === 200 || recovery.status === 401 || recovery.status === 403) {
         deltaResponse = recovery;
       }
@@ -273,10 +309,17 @@ async function dispatchWithoutNetworkLease({
       if (session.lifecycleSignal.aborted || identity.signal?.aborted) return control('AUTH_HOLD');
     }
   }
+  if (exactJournalUnavailable && posted.status === 200 && savedJournal) {
+    const recovered = await persistAuthenticatedFinanceReceiptCandidate({
+      scope, session, identity, expectedEpoch, receipt, deltaPage:savedJournal.page,
+      commandHttpStatus:posted.status, deltaHttpStatus:200, recoverDeltaHold:recoveringDeltaHold,
+    });
+    return Object.freeze({...recovered, sentByThisCall:true, proof:'cached_independent_journal'});
+  }
   if (deltaResponse.status !== 200) {
     if (deltaResponse.status === 401 || deltaResponse.status === 403) return control('AUTH_HOLD');
     if (deltaResponse.status === 410) {
-      if (bothJournalsUnavailable && recoveringDeltaHold && item.recoveryBase &&
+      if (exactJournalUnavailable && recoveringDeltaHold && item.recoveryBase &&
           cloud.revision >= committedRevision && cloud.revision - committedRevision <= 8 && posted.status === 200) {
         // Read every intervening revision under the same session and Web Lock.
         // A missing, overlong or unauthorized tail keeps the original hold.

@@ -106,6 +106,16 @@ function canonical(value) {
   }
   return JSON.stringify(value);
 }
+/** Compare independently retained journal events with an authenticated receipt. */
+export function journalEvidenceMatchesReceiptCandidate(receipt, page) {
+  try {
+    const ack = safeJson(receipt), delta = safeJson(page);
+    return plain(ack) && integer(ack.revision, 1) && Array.isArray(ack.changes) &&
+      ack.changes.length > 0 && plain(delta) && delta.schema_version === 1 &&
+      delta.from_revision === ack.revision - 1 && delta.next_since_revision === ack.revision &&
+      Array.isArray(delta.changes) && canonical(ack.changes) === canonical(delta.changes);
+  } catch { return false; }
+}
 function keysExactly(object, required, optional = []) {
   if (!plain(object)) hold('Неверная структура команды');
   const current = Object.keys(object);

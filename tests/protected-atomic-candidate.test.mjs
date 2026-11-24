@@ -2705,6 +2705,82 @@ test('#68 historical server receipt recovery re-fetches the original committed r
   session.logout();
 });
 
+test('#68 an independently retained encrypted journal proves a prior command after later changes and journal loss', async () => {
+  const {db, session, identity} = await preparedOfflineQueue();
+  await refreshEncryptedCloudSnapshot({scope:USER_A, session, identity, pages:cloudPages(),
+    etag:'"fh.1.0.0123456789abcdef"', expectedEpoch:1});
+  await enqueueEncryptedFinanceCommandCandidate({scope:USER_A, session, identity,
+    command:pendingCommand(), ifMatch:'"fh.1.0.0123456789abcdef"', expectedEpoch:2});
+  const {receipt,deltaPage} = confirmedReceiptData();
+  const latest = cloudPages(); latest[0].body.revision = 12;
+  const later = structuredClone(receipt.changes[0].payload.entity);
+  later.entity_revision = 2; later.data.name = 'Synthetic later edit';
+  latest[0].body.entities.push(later);
+  await refreshEncryptedCloudSnapshot({scope:USER_A,session,identity,pages:latest,
+    etag:'"fh.1.12.0123456789abcdef"',expectedEpoch:3,pendingJournalPage:deltaPage});
+  const retained = await readAtomicEncryptedCandidate(USER_A,session);
+  assert.equal(retained.outbox[0].recoveryJournal.page.changes[0].entity_id,NEW_ACCOUNT_ID);
+  assert.equal(retained.outbox[0].recoveryBase,undefined);
+  const ciphertext = JSON.stringify([...db.tables.get('bundles').values()]);
+  assert.equal(ciphertext.includes('Synthetic cash to encrypt'),false);
+  session.logout();
+  const reopened = new LocalBudgetSession(); reopened.selectScope(USER_A);
+  await reopened.unlock(await getAtomicEncryptedKeyset(USER_A),{passphrase:PASS});
+  const fresh = cloudAuth(reopened), args = {lockManager:TEST_LOCKS,scope:USER_A,
+    session:reopened,identity:fresh,expectedEpoch:4,origin:TEST_ORIGIN,explicitNetworkCandidateConsent:true,
+    fetchImpl:async url => url.endsWith('/commands') ? mockFinanceJson({...receipt,replayed:true},200)
+      : url.includes('/changes?') ? mockFinanceJson({code:'service_unavailable'},503)
+        : mockFinanceJson({code:'snapshot_required'},410)};
+  const forged = structuredClone(receipt);
+  forged.changes[0].payload.entity.data.name = 'Conflicting receipt';
+  let calls = 0;
+  const conflict = await dispatchOneEncryptedFinanceCommandCandidate({...args,fetchImpl:async () => {
+    calls++; return mockFinanceJson({...forged,replayed:true},200);
+  }});
+  assert.equal(conflict.status,'RECOVERY_HOLD');
+  assert.equal(calls,1);
+  assert.deepEqual(await readAtomicEncryptedCandidate(USER_A,reopened),retained);
+  const unavailable = await dispatchOneEncryptedFinanceCommandCandidate({...args,fetchImpl:async url =>
+    url.endsWith('/commands') ? mockFinanceJson({...receipt,replayed:true},200)
+      : mockFinanceJson({code:'service_unavailable'},503)});
+  assert.equal(unavailable.status,'RECOVERY_HOLD');
+  assert.deepEqual(await readAtomicEncryptedCandidate(USER_A,reopened),retained);
+  db.failBundlePut = true;
+  await assert.rejects(() => dispatchOneEncryptedFinanceCommandCandidate(args),/injected bundle write failure/);
+  assert.deepEqual(await readAtomicEncryptedCandidate(USER_A,reopened),retained);
+  db.failBundlePut = false;
+  const result = await dispatchOneEncryptedFinanceCommandCandidate(args);
+  assert.equal(result.proof,'cached_independent_journal');
+  const after = await readAtomicEncryptedCandidate(USER_A,reopened);
+  assert.equal(after.outbox.length,0);
+  assert.equal(after.snapshot.cloudFinance.revision,12);
+  assert.deepEqual(after.snapshot.cloudFinance.entities,retained.snapshot.cloudFinance.entities);
+  reopened.logout();
+});
+
+test('#68 invalid journal is not retained and a later valid read can be stored at the same snapshot revision', async () => {
+  const {session,identity} = await preparedOfflineQueue();
+  await refreshEncryptedCloudSnapshot({scope:USER_A,session,identity,pages:cloudPages(),
+    etag:'"fh.1.0.0123456789abcdef"',expectedEpoch:1});
+  await enqueueEncryptedFinanceCommandCandidate({scope:USER_A,session,identity,command:pendingCommand(),
+    ifMatch:'"fh.1.0.0123456789abcdef"',expectedEpoch:2});
+  const {receipt,deltaPage} = confirmedReceiptData(), invalid = structuredClone(deltaPage);
+  invalid.changes[0].payload.entity.id = CLOUD_TRANSACTION;
+  const latest = cloudPages(); latest[0].body.revision = 1;
+  latest[0].body.entities.push(structuredClone(receipt.changes[0].payload.entity));
+  await refreshEncryptedCloudSnapshot({scope:USER_A,session,identity,pages:latest,
+    etag:'"fh.1.1.0123456789abcdef"',expectedEpoch:3,pendingJournalPage:invalid});
+  const before = await readAtomicEncryptedCandidate(USER_A,session);
+  assert.equal(before.outbox[0].recoveryJournal,undefined);
+  assert.equal(before.outbox[0].recoveryBase.revision,0);
+  await refreshEncryptedCloudSnapshot({scope:USER_A,session,identity,pages:latest,
+    etag:'"fh.1.1.0123456789abcdef"',expectedEpoch:4,pendingJournalPage:deltaPage});
+  const after = await readAtomicEncryptedCandidate(USER_A,session);
+  assert.equal(after.outbox[0].recoveryJournal.page.changes[0].entity_id,NEW_ACCOUNT_ID);
+  assert.equal(after.outbox[0].mutationId,before.outbox[0].mutationId);
+  session.logout();
+});
+
 test('#68 historical ACK fails closed when original server event cannot be recovered', async () => {
   const {session, identity} = await pendingAccountCreate();
   const {receipt, deltaPage} = confirmedReceiptData();
