@@ -204,7 +204,7 @@ test('native encrypted cloud cache+outbox+server ACK survive reload with exact c
     const identity={scope,profileId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       generation:s.lifecycleVersion,epoch:'e'.repeat(32),signal:s.lifecycleSignal};
     const newAccount={id:created,kind:'account',entity_revision:1,
-      data:{name:'SYNTHETIC_SERVER_CONFIRMED_ACCOUNT',type:'cash',
+      data:{name:'SECRET_PENDING_ACCOUNT',type:'cash',
         currency:'RUB',opening_minor:2000,balance_minor:2000,
         reserved_minor:0,available_minor:2000,archived_at:null}};
     const change={revision:1,ordinal:0,kind:'upsert',
