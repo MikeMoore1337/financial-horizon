@@ -26,7 +26,7 @@ from .ledger_service import (
     FinanceCommandError, VerifiedFinanceScope, derive_verified_scope,
     ensure_verified_profile, submit_account_command, cancel_uncommitted_account_command,
 )
-from .snapshot import get_finance_snapshot, get_finance_delta
+from .snapshot import get_finance_snapshot, get_finance_delta, get_committed_command_delta
 
 log = logging.getLogger("fh.finance_api")
 AUTH_COOKIE = "fh_email_session"
@@ -264,6 +264,22 @@ def mount_finance_routes(
             return _finance_error(exc)
         except SQLAlchemyError:
             log.error("finance_delta_read_failed")
+            return _finance_error(FinanceCommandError(
+                "service_unavailable", "Финансовый сервис недоступен", 503
+            ))
+
+    @router.get("/commands/{mutation_id}/changes")
+    def committed_command_changes(mutation_id: str, request: Request):
+        rate(request, "finance-read")
+        verified = scope(request)
+        try:
+            if request.query_params:
+                raise FinanceCommandError("invalid_command", "Недопустимый параметр журнала", 422)
+            return _finance_response(get_committed_command_delta(engine, scope=verified, mutation_id=mutation_id))
+        except FinanceCommandError as exc:
+            return _finance_error(exc)
+        except SQLAlchemyError:
+            log.error("finance_receipt_delta_read_failed")
             return _finance_error(FinanceCommandError(
                 "service_unavailable", "Финансовый сервис недоступен", 503
             ))

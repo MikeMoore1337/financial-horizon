@@ -1439,7 +1439,7 @@ export function classifyFinanceOutboxResponseCandidate(status, attempts = 0) {
  */
 export async function persistAuthenticatedFinanceReceiptCandidate({
   scope, session, identity, expectedEpoch, receipt, deltaPage,
-  commandHttpStatus, deltaHttpStatus,
+  commandHttpStatus, deltaHttpStatus, recoverDeltaHold = false,
 }) {
   active(scope, session, identity);
   if (!integer(expectedEpoch) ||
@@ -1477,6 +1477,20 @@ export async function persistAuthenticatedFinanceReceiptCandidate({
       first.command.client_mutation_id !== ack.client_mutation_id ||
       first.status !== 'pending') {
     hold('Получено подтверждение не первой ожидающей команды');
+  }
+  const matchingHolds = current.conflicts.filter(entry => plain(entry) &&
+    entry.kind === 'finance_sync_hold' && entry.mutationId === first.mutationId);
+  if (recoverDeltaHold) {
+    const prior = matchingHolds[0];
+    if (matchingHolds.length !== 1 || prior.scope !== scope ||
+        prior.profileId !== identity.profileId || prior.httpStatus !== 410 ||
+        prior.decision !== 'SNAPSHOT_REQUIRED_HOLD' || prior.source !== 'delta' ||
+        prior.baseRevision !== first.command.base_revision || prior.manualChoice !== undefined ||
+        prior.verifiedCancellationFingerprint !== undefined) {
+      hold('Остановка операции изменилась');
+    }
+  } else if (matchingHolds.length) {
+    hold('Операция остановлена для сверки');
   }
   const digest = await fingerprint(
     scope, identity.profileId, first.ifMatch, first.command,
@@ -1557,7 +1571,7 @@ export async function persistAuthenticatedFinanceReceiptCandidate({
   const nextEpoch = await compareAndSwapAtomicEncryptedCandidate(
     scope, session, expectedEpoch, 2, {
       snapshot: sealedSnapshot, outbox: current.outbox.slice(1),
-      conflicts: current.conflicts,
+      conflicts: recoverDeltaHold ? current.conflicts.filter(entry => entry !== matchingHolds[0]) : current.conflicts,
     },
   );
   active(scope, session, identity);

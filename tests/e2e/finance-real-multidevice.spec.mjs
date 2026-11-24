@@ -1288,7 +1288,7 @@ test('#68 semantic conflict is released only after the server fences the origina
   expect((await replay.json()).code).toBe('command_cancelled');
 });
 
-test('#68 committed command remains queued when compacted history prevents verification', async ({page, context}) => {
+for (const retention of ['always', 'later', 'never']) test(`#68 committed command uses retained journal or holds when missing (retention=${retention})`, async ({page, context}) => {
   test.setTimeout(120_000);
   if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
   await context.route('**/__e2e_138_*.js', route => route.fulfill({
@@ -1300,9 +1300,11 @@ test('#68 committed command remains queued when compacted history prevents verif
   const actor = (await login.json()).user.id;
   await page.goto('/__e2e__/ready');
   const accountId = randomUUID();
-  const result = await page.evaluate(async ({actor, accountId}) => {
+  const result = await page.evaluate(async ({actor, accountId, retention}) => {
     const {FinanceSyncController} = await import('/__e2e_138_controller__.js');
-    const transport = (url, options) => String(url).includes('/api/finance/v1/changes?')
+    let available = retention === 'always';
+    const transport = (url, options) => (String(url).includes('/api/finance/v1/changes?') ||
+      (!available && /\/api\/finance\/v1\/commands\/[^/]+\/changes$/.test(String(url))))
       ? Promise.resolve(new Response(JSON.stringify({code:'snapshot_required'}),
         {status:410, headers:{'Content-Type':'application/json'}})) : fetch(url, options);
     const controller = new FinanceSyncController({verifiedActorUserId:actor, origin:location.origin,
@@ -1314,6 +1316,23 @@ test('#68 committed command remains queued when compacted history prevents verif
       payload:{id:accountId, name:'Synthetic already committed', kind:'cash', currency:'RUB', opening_minor:500}};
     await controller.enqueue(command);
     const held = await controller.dispatchOnce();
+    if (retention === 'always') {
+      const after = await controller.read();
+      controller.close();
+      return {held:held.status, pending:after.outbox.length};
+    }
+    if (retention === 'later') {
+      controller.close();
+      available = true;
+      const restarted = new FinanceSyncController({verifiedActorUserId:actor, origin:location.origin,
+        fetchImpl:transport});
+      await restarted.unlock({passphrase:'synthetic committed phrase issue sixty eight'});
+      const recovered = await restarted.dispatchOnce();
+      const after = await restarted.read();
+      restarted.close();
+      return {held:held.status, recovered:recovered.status, pending:after.outbox.length,
+        conflicts:after.conflicts.length};
+    }
     const refreshed = await controller.refresh();
     let refused = false;
     try { await controller.resolve({mutationId:command.client_mutation_id,
@@ -1323,8 +1342,10 @@ test('#68 committed command remains queued when compacted history prevents verif
     controller.close();
     return {held:held.status, refused, pending:after.outbox.length,
       conflict:after.conflicts[0].httpStatus};
-  }, {actor, accountId});
-  expect(result).toEqual({held:'SNAPSHOT_REQUIRED_HOLD', refused:true, pending:1, conflict:410});
+  }, {actor, accountId, retention});
+  expect(result).toEqual(retention === 'always' ? {held:'DURABLY_CONFIRMED',pending:0} :
+    retention === 'later' ? {held:'SNAPSHOT_REQUIRED_HOLD', recovered:'DURABLY_CONFIRMED',pending:0,conflicts:0} :
+    {held:'SNAPSHOT_REQUIRED_HOLD', refused:true, pending:1, conflict:410});
   const server = await state(context);
   expect(server.body.entities.filter(item => item.id === accountId)).toHaveLength(1);
 });

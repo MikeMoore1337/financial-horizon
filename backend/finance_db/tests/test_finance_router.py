@@ -100,6 +100,34 @@ def seed(engine, scope, opening, kind="bank"):
     return acc
 
 
+def test_committed_revision_recovery_requires_owner_and_profile_fence(auth_finance):
+    client, app, mail, _, engine, namespace = auth_finance
+    mutation = str(uuid4())
+    url = f"/api/finance/v1/commands/{mutation}/changes"
+    assert client.get(url).status_code == 401
+    uid = authenticate(client, mail)
+    assert bootstrap(client).status_code == 200
+    scope = derive_verified_scope(uid, namespace)
+    before = get_account_snapshot(engine, scope=scope)
+    command = {"schema_version":1, "client_mutation_id":mutation, "base_revision":before.body["revision"],
+        "action":"account.create", "expected_entity_revisions":{}, "payload":{"id":str(uuid4()),
+        "name":"Synthetic account", "kind":"cash", "currency":"RUB", "opening_minor":500}}
+    result = submit_account_command(engine, scope=scope, command=command, if_match=before.etag,
+                                    idempotency_key=mutation, allow_internal=True)
+    recovered = client.get(url)
+    assert recovered.status_code == 200
+    assert recovered.json()["changes"] == result.body["changes"]
+    assert "no-store" in recovered.headers["cache-control"]
+    assert client.get(url, headers={"X-FH-Expected-Profile":str(uuid4())}).status_code == 403
+    assert client.get(url + "?extra=1").status_code == 422
+    with TestClient(app) as foreign:
+        authenticate(foreign, mail, email="foreign@example.invalid")
+        assert bootstrap(foreign).status_code == 200
+        assert foreign.get(url).status_code == 410
+    assert client.post("/api/auth/email/logout", headers={"Origin":ORIGIN}, json={}).status_code == 200
+    assert client.get(url).status_code == 401
+
+
 def test_opt_in_finance_routes_reject_anonymous_requests_and_unsafe_origins(auth_finance):
     client, _, mail, _, _, _ = auth_finance
     assert bootstrap(client).status_code == 401

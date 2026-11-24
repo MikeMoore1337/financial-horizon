@@ -167,12 +167,19 @@ async function dispatchWithoutNetworkLease({
   }
   const stop = bundle.conflicts?.find(value =>
     value?.kind === 'finance_sync_hold' && value.mutationId === item.mutationId);
+  let recoveringDeltaHold = false;
   if (stop) {
     if (stop.scope !== scope || stop.profileId !== identity.profileId ||
         !['CONFLICT_HOLD','SNAPSHOT_REQUIRED_HOLD'].includes(stop.decision)) {
       hold('Повреждена финансовая остановка');
     }
-    return Object.freeze({
+    recoveringDeltaHold = stop.decision === 'SNAPSHOT_REQUIRED_HOLD' &&
+      stop.httpStatus === 410 && stop.source === 'delta' &&
+      stop.baseRevision === item.command.base_revision &&
+      stop.manualChoice === undefined && stop.verifiedCancellationFingerprint === undefined &&
+      bundle.conflicts.filter(value => value?.kind === 'finance_sync_hold' &&
+        value.mutationId === item.mutationId).length === 1;
+    if (!recoveringDeltaHold) return Object.freeze({
       status: stop.decision, sentByThisCall: false,
       bundleEpoch: expectedEpoch, queuePreserved: true,
       serverCommitNotYetReconciled: true,
@@ -243,7 +250,28 @@ async function dispatchWithoutNetworkLease({
   } catch {
     return control(session.lifecycleSignal.aborted ? 'AUTH_HOLD' : 'RECOVERY_HOLD');
   }
+  // A watermark can advance after an import even while this exact committed
+  // revision remains in the independent journal. Ask for only the revision
+  // tied to this UUID; a missing or incomplete journal still holds the queue.
+  if (deltaResponse.status === 410 && committedRevision !== null) {
+    try {
+      const recovery = await fetchImpl(
+        server + '/api/finance/v1/commands/' + item.mutationId + '/changes',
+        {method:'GET', credentials:'same-origin', mode:'same-origin', redirect:'error',
+         cache:'no-store', referrerPolicy:'same-origin',
+         headers:{'Accept':'application/json', 'X-FH-Expected-Profile':identity.profileId},
+         signal:session.lifecycleSignal},
+      );
+      active(scope, session, identity);
+      if (recovery.status === 200 || recovery.status === 401 || recovery.status === 403) {
+        deltaResponse = recovery;
+      }
+    } catch {
+      if (session.lifecycleSignal.aborted || identity.signal?.aborted) return control('AUTH_HOLD');
+    }
+  }
   if (deltaResponse.status !== 200) {
+    if (deltaResponse.status === 401 || deltaResponse.status === 403) return control('AUTH_HOLD');
     if (deltaResponse.status === 410) {
       const stopped = await persistEncryptedFinanceHoldCandidate({
         scope, session, identity, expectedEpoch,
@@ -263,6 +291,7 @@ async function dispatchWithoutNetworkLease({
   const reconciled = await persistAuthenticatedFinanceReceiptCandidate({
     scope, session, identity, expectedEpoch, receipt, deltaPage,
     commandHttpStatus: posted.status, deltaHttpStatus: deltaResponse.status,
+    recoverDeltaHold: recoveringDeltaHold,
   });
   return Object.freeze({...reconciled, sentByThisCall: true});
 }

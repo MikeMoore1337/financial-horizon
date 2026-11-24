@@ -359,6 +359,28 @@
         "x-feature-off": true
       }
     },
+    "/api/finance/v1/commands/{mutation_id}/changes": {
+      "get": {
+        "tags": ["sync"],
+        "summary": "Read one owned committed command's complete retained journal revision",
+        "description": "Does not bypass the general changes cursor watermark or reconstruct missing journal rows from a receipt.",
+        "parameters": [
+          {"name": "mutation_id", "in": "path", "required": true, "schema": {"type": "string", "format": "uuid"}},
+          {"name": "X-FH-Expected-Profile", "in": "header", "required": false, "schema": {"type": "string", "format": "uuid"}}
+        ],
+        "responses": {
+          "200": {"description": "Complete independently retained revision", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Delta"}}}, "headers": {"Cache-Control": {"schema": {"type": "string", "const": "private, no-store"}}}},
+          "401": {"description": "Session expired"},
+          "403": {"description": "Profile fence mismatch"},
+          "410": {"description": "Owned committed receipt or complete retained revision unavailable"},
+          "422": {"description": "Invalid mutation identifier or query"},
+          "429": {"description": "Read quota exceeded"},
+          "503": {"description": "Temporarily unavailable"}
+        },
+        "security": [{"financeCookie": []}],
+        "x-feature-off": true
+      }
+    },
     "/api/finance/v1/commands/cancel": {
       "post": {
         "tags": ["sync"],

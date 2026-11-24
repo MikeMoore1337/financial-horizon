@@ -381,3 +381,57 @@ def get_finance_delta(
             "to_revision": current, "next_since_revision": upper,
             "has_more": has_more, "changes": changes,
         }, _opaque_etag(scope.profile_id, current))
+
+
+def get_committed_command_delta(
+    engine: Engine, *, scope: VerifiedFinanceScope, mutation_id: str,
+) -> FinanceResult:
+    """Read exactly one committed command's still-retained journal revision.
+
+    The ordinary cursor watermark still applies to general history. A cursor
+    may become stale after an import even while this exact, immutable revision
+    remains present. Never reconstruct missing rows from the stored receipt.
+    """
+    if not isinstance(mutation_id, str) or not re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", mutation_id,
+    ):
+        raise FinanceCommandError("invalid_command", "Неверный идентификатор операции", 422)
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        profile = _locked_profile(session, scope)
+        current = int(profile["revision"])
+        receipt = session.execute(text("""
+            SELECT committed_revision,status_code,response_body FROM command_receipts
+            WHERE profile_id=:p AND client_mutation_id=:id
+        """), {"p": scope.profile_id, "id": UUID(mutation_id)}).mappings().one_or_none()
+        body = receipt["response_body"] if receipt else None
+        revision = receipt["committed_revision"] if receipt else None
+        if (not receipt or receipt["status_code"] != 201 or type(revision) is not int
+                or not 1 <= revision <= current or not isinstance(body, dict)
+                or body.get("client_mutation_id") != mutation_id or body.get("revision") != revision
+                or not isinstance(body.get("changes"), list) or not 1 <= len(body["changes"]) <= 2000):
+            raise FinanceCommandError("snapshot_required", "Независимый журнал операции недоступен", 410, current)
+        rows = session.execute(text("""
+            SELECT revision,ordinal,schema_version,kind,entity_id,payload
+            FROM change_log WHERE profile_id=:p AND revision=:r ORDER BY ordinal LIMIT 2001
+        """), {"p": scope.profile_id, "r": revision}).mappings().all()
+        if len(rows) != len(body["changes"]) or len(rows) > 2000:
+            raise FinanceCommandError("snapshot_required", "Независимый журнал операции недоступен", 410, current)
+        changes = []
+        for ordinal, item in enumerate(rows):
+            payload = item["payload"]
+            if (item["ordinal"] != ordinal or item["revision"] != revision or item["schema_version"] != 1
+                    or item["kind"] not in ("upsert", "tombstone", "ledger_posted")
+                    or not isinstance(item["entity_id"], UUID) or not isinstance(payload, dict)):
+                raise FinanceCommandError("snapshot_required", "Независимый журнал операции недоступен", 410, current)
+            payload = dict(payload)
+            entity_revision = payload.pop("_entity_revision", None)
+            if type(entity_revision) is not int or not 1 <= entity_revision <= 2**53 - 1:
+                raise FinanceCommandError("snapshot_required", "Независимый журнал операции недоступен", 410, current)
+            changes.append({"revision": revision, "ordinal": ordinal, "kind": item["kind"],
+                            "entity_id": str(item["entity_id"]), "entity_revision": entity_revision,
+                            "payload": _as_json(payload)})
+        return FinanceResult(200, {"schema_version": 1, "from_revision": revision - 1,
+                                  "to_revision": revision, "next_since_revision": revision,
+                                  "has_more": False, "changes": changes},
+                             _opaque_etag(scope.profile_id, revision))

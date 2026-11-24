@@ -2824,6 +2824,32 @@ test('#68 persisted financial 409/412 holds survive browser restart and block au
   }
 });
 
+test('#68 a watermark 410 recovers only from matching retained independent events', async () => {
+  for (const corrupt of [false,true]) {
+    const {session,identity}=await pendingAccountCreate();
+    const proof=confirmedReceiptData(), urls=[];
+    if(corrupt) proof.deltaPage.changes[0].payload.entity.data.name='Wrong account';
+    const args={lockManager:TEST_LOCKS,scope:USER_A,session,identity,origin:TEST_ORIGIN,
+      expectedEpoch:2,explicitNetworkCandidateConsent:true,fetchImpl:async url=>{
+        urls.push(url);
+        if(url.endsWith('/commands')) return mockFinanceJson(proof.receipt,201);
+        if(url.includes('/changes?')) return mockFinanceJson({code:'snapshot_required'},410);
+        return mockFinanceJson(proof.deltaPage,200);
+      }};
+    const before=await readAtomicEncryptedCandidate(USER_A,session);
+    if(corrupt){
+      await assert.rejects(()=>dispatchOneEncryptedFinanceCommandCandidate(args),/SYNC_HOLD/);
+      assert.deepEqual(await readAtomicEncryptedCandidate(USER_A,session),before);
+    }else{
+      const result=await dispatchOneEncryptedFinanceCommandCandidate(args);
+      assert.equal(result.status,'DURABLY_CONFIRMED');
+      assert.equal((await readAtomicEncryptedCandidate(USER_A,session)).outbox.length,0);
+    }
+    assert.equal(urls[2],TEST_ORIGIN+'/api/finance/v1/commands/'+PENDING_ID+'/changes');
+    session.logout();
+  }
+});
+
 test('#68 HTTP 410 after successful POST preserves encrypted queue as snapshot-required', async () => {
   const {session, identity} = await pendingAccountCreate();
   const before = await readAtomicEncryptedCandidate(USER_A, session);
@@ -2841,7 +2867,7 @@ test('#68 HTTP 410 after successful POST preserves encrypted queue as snapshot-r
   });
   assert.equal(outcome.status, 'SNAPSHOT_REQUIRED_HOLD');
   assert.equal(outcome.bundleEpoch, 3);
-  assert.equal(requested, 2);
+  assert.equal(requested, 3);
   const after = await readAtomicEncryptedCandidate(USER_A, session);
   assert.deepEqual(after.snapshot, before.snapshot);
   assert.deepEqual(after.outbox, before.outbox);
@@ -2852,6 +2878,33 @@ test('#68 HTTP 410 after successful POST preserves encrypted queue as snapshot-r
   assert.equal(after.conflicts[0].mutationId, PENDING_ID);
   assert.equal(after.snapshot.cloudFinance.revision, 0);
   session.logout();
+});
+
+test('#68 a stored delta hold survives restart until independently verified recovery commits atomically', async () => {
+  const {db, session, identity} = await pendingAccountCreate();
+  await persistEncryptedFinanceHoldCandidate({scope:USER_A, session, identity, expectedEpoch:2,
+    mutationId:PENDING_ID, httpStatus:410, decision:'SNAPSHOT_REQUIRED_HOLD', source:'delta'});
+  const before = await readAtomicEncryptedCandidate(USER_A, session);
+  session.logout();
+  const restored = new LocalBudgetSession();
+  restored.selectScope(USER_A);
+  await restored.unlock(await getAtomicEncryptedKeyset(USER_A), {passphrase:PASS});
+  const fresh = cloudAuth(restored), proof = confirmedReceiptData();
+  const args = {lockManager:TEST_LOCKS, scope:USER_A, session:restored, identity:fresh,
+    origin:TEST_ORIGIN, expectedEpoch:3, explicitNetworkCandidateConsent:true,
+    fetchImpl:async url => url.endsWith('/commands') ? mockFinanceJson(proof.receipt,200) :
+      url.includes('/changes?') ? mockFinanceJson({code:'snapshot_required'},410) :
+        mockFinanceJson(proof.deltaPage,200)};
+  db.failBundlePut = true;
+  await assert.rejects(() => dispatchOneEncryptedFinanceCommandCandidate(args), /injected bundle write failure/);
+  assert.deepEqual(await readAtomicEncryptedCandidate(USER_A, restored), before);
+  db.failBundlePut = false;
+  assert.equal((await dispatchOneEncryptedFinanceCommandCandidate(args)).status, 'DURABLY_CONFIRMED');
+  const after = await readAtomicEncryptedCandidate(USER_A, restored);
+  assert.equal(after.outbox.length, 0);
+  assert.equal(after.conflicts.length, 0);
+  assert.equal(after.snapshot.cloudFinance.revision, 1);
+  restored.logout();
 });
 
 test('#68 conflict-persistence failure cannot lose a queued financial command', async () => {
