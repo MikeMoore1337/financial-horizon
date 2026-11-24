@@ -1666,6 +1666,61 @@ for (const mode of ['new_entity', 'two_new_entities', 'updated_entity']) test(`#
   } finally {await other.close();}
 });
 
+test('#68 later journal gap preserves recovery of the original committed revision', async ({browser,page,context}) => {
+  test.setTimeout(120_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  await context.route('**/__e2e_138_*.js', route => route.fulfill({
+    status:200,contentType:'text/javascript',body:testModuleSources.get(new URL(route.request().url()).pathname),
+    headers:{'Cache-Control':'no-store'},
+  }));
+  const login = await context.request.post('/__e2e__/personal-session');
+  const actor = (await login.json()).user.id, accountId = randomUUID(), laterId = randomUUID();
+  await page.goto('/__e2e__/ready');
+  const baseline = await page.evaluate(async ({actor,accountId}) => {
+    const {FinanceSyncController} = await import('/__e2e_138_controller__.js');
+    const controller = new FinanceSyncController({verifiedActorUserId:actor,origin:location.origin});
+    await controller.createLocal('synthetic later journal gap phrase sixty eight',true);
+    const opened = await controller.unlock({passphrase:'synthetic later journal gap phrase sixty eight'});
+    await controller.enqueue({schema_version:2,client_mutation_id:crypto.randomUUID(),
+      base_revision:opened.cloud.revision,action:'account.create',expected_entity_revisions:{},
+      payload:{id:accountId,name:'Synthetic original',kind:'cash',currency:'RUB',opening_minor:500}});
+    window.__fh68test = controller;
+    return opened.cloud.revision;
+  },{actor,accountId});
+  const loseResponse = async route => {await route.fetch(); await route.abort('failed');};
+  await context.route('**/api/finance/v2/commands',loseResponse);
+  expect(await page.evaluate(async () => (await window.__fh68test.dispatchOnce()).status)).toBe('RETRY_SAME_UUID');
+  await context.unroute('**/api/finance/v2/commands',loseResponse);
+  const other = await browser.newContext({baseURL:ORIGIN,storageState:await context.storageState()});
+  try {
+    await bootstrap(other);
+    expect((await submit(other,await state(other),'account.create',
+      {id:laterId,name:'Synthetic later',kind:'cash',currency:'RUB',opening_minor:300})).status()).toBe(201);
+    execFileSync(process.env.FH_E2E_PYTHON || 'python3',
+      [fileURLToPath(new URL('./remove_synthetic_journal.py',import.meta.url)),actor,String(baseline+2),'gap'],
+      {stdio:'pipe'});
+    const statuses = [];
+    page.on('response',response => {
+      if (response.url().includes('/api/finance/v1/changes?') ||
+          /\/api\/finance\/v1\/commands\/[^/]+\/changes$/.test(response.url())) statuses.push(response.status());
+    });
+    const result = await page.evaluate(async () => {
+      const controller = window.__fh68test;
+      const before = await controller.read();
+      const confirmed = await controller.dispatchOnce();
+      const after = await controller.read();
+      controller.close(); delete window.__fh68test;
+      return {hadRetainedJournal:!!before.outbox[0]?.recoveryJournal,status:confirmed.status,
+        pending:after.outbox.length};
+    });
+    expect(result).toEqual({hadRetainedJournal:false,status:'DURABLY_CONFIRMED',pending:0});
+    expect(statuses).toEqual([503,200]);
+    const server = await state(other);
+    expect(server.body.entities.filter(item => [accountId,laterId].includes(item.id))).toHaveLength(2);
+    expect(entity(server,accountId).data.balance_minor).toBe(500);
+  } finally {await other.close();}
+});
+
 for (const loss of ['watermark','gap']) test(`#68 retained independent journal survives actual ${loss} loss and a later edit on another device`, async ({browser,page,context}) => {
   test.setTimeout(120_000);
   if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();

@@ -2478,7 +2478,10 @@ test('#68 failures, server conflicts and ambiguous POST response retain queued m
     } else {
       assert.deepEqual(current, prior);
     }
-    assert.equal(calls.length, stage === 'delta-missing' ? 2 : 1);
+    assert.equal(calls.length, stage === 'delta-missing' ? 3 : 1);
+    if (stage === 'delta-missing') {
+      assert.equal(calls[2], TEST_ORIGIN + '/api/finance/v1/commands/' + PENDING_ID + '/changes');
+    }
     session.logout();
   }
 });
@@ -2703,6 +2706,51 @@ test('#68 historical server receipt recovery re-fetches the original committed r
     '/api/finance/v1/changes?since_revision=0&limit_revisions=1');
   assert.equal((await readAtomicEncryptedCandidate(USER_A, session)).outbox.length, 0);
   session.logout();
+});
+
+test('#68 a gap in later journal revisions does not hide the independent committed revision', async () => {
+  for (const outcome of ['valid', 'mismatch', 'unavailable', 'unauthorized']) {
+    const {session, identity} = await pendingAccountCreate();
+    const {receipt, deltaPage} = confirmedReceiptData();
+    const before = await readAtomicEncryptedCandidate(USER_A, session);
+    const urls = [];
+    const result = () => dispatchOneEncryptedFinanceCommandCandidate({
+      lockManager: TEST_LOCKS, scope: USER_A, session, identity, expectedEpoch: 2,
+      origin: TEST_ORIGIN, explicitNetworkCandidateConsent: true,
+      fetchImpl: async url => {
+        urls.push(url);
+        if (urls.length === 1) return mockFinanceJson({...receipt, replayed:true}, 200);
+        if (urls.length === 2) return mockFinanceJson({code:'service_unavailable'}, 503);
+        if (urls.length !== 3) throw Error('Unexpected financial request');
+        if (outcome === 'unavailable') return mockFinanceJson({code:'service_unavailable'}, 503);
+        if (outcome === 'unauthorized') return mockFinanceJson({code:'unauthorized'}, 401);
+        if (outcome === 'mismatch') {
+          const altered = structuredClone(deltaPage);
+          altered.changes[0].payload.entity.data.name = 'Different account';
+          return mockFinanceJson(altered, 200);
+        }
+        return mockFinanceJson(deltaPage, 200);
+      },
+    });
+    if (outcome === 'mismatch') {
+      await assert.rejects(result, /SYNC_HOLD/);
+    } else {
+      const response = await result();
+      assert.equal(response.status, outcome === 'valid' ? 'DURABLY_CONFIRMED'
+        : outcome === 'unauthorized' ? 'AUTH_HOLD' : 'RECOVERY_HOLD');
+    }
+    assert.equal(urls.length, 3);
+    assert.equal(urls[2], TEST_ORIGIN + '/api/finance/v1/commands/' +
+      before.outbox[0].mutationId + '/changes');
+    const after = await readAtomicEncryptedCandidate(USER_A, session);
+    if (outcome === 'valid') {
+      assert.equal(after.outbox.length, 0);
+      assert.equal(after.snapshot.cloudFinance.appliedReceipts.length, 1);
+    } else {
+      assert.deepEqual(after, before);
+    }
+    session.logout();
+  }
 });
 
 test('#68 an independently retained encrypted journal proves a prior command after later changes and journal loss', async () => {

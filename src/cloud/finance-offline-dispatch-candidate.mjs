@@ -287,11 +287,11 @@ async function dispatchWithoutNetworkLease({
   } catch {
     return control(session.lifecycleSignal.aborted ? 'AUTH_HOLD' : 'RECOVERY_HOLD');
   }
-  // A watermark can advance after an import even while this exact committed
-  // revision remains in the independent journal. Ask for only the revision
-  // tied to this UUID; a missing or incomplete journal still holds the queue.
+  // A watermark or a gap in a later revision can prevent the general feed
+  // even when this command's exact independent revision is still available.
+  // A missing or incomplete exact journal still holds the queue.
   let exactJournalUnavailable = false;
-  if ((deltaResponse.status === 410 || (deltaResponse.status === 503 && savedJournal)) && committedRevision !== null) {
+  if ((deltaResponse.status === 410 || deltaResponse.status === 503) && committedRevision !== null) {
     try {
       const recovery = await fetchImpl(
         server + '/api/finance/v1/commands/' + item.mutationId + '/changes',
