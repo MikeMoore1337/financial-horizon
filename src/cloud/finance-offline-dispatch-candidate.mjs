@@ -1,10 +1,9 @@
 /**
- * #68 - INACTIVE explicit one-command sync candidate.
+ * #68 - explicit one-command sync dispatcher.
  *
- * No automatic timers, Service Worker interception, background uploads or
- * PWA entrypoint import. Each invocation sends at most ONE persisted command
- * to the strictly same-origin, authenticated FH v2 candidate. On uncertain
- * outcomes it leaves the encrypted outbox unchanged for safe idempotent retry.
+ * Scheduling and lifecycle belong to the feature-gated authenticated UI.
+ * Each invocation sends at most ONE persisted command to the same-origin FH
+ * finance API. Uncertain outcomes retain it for safe idempotent retry.
  */
 import {readAtomicEncryptedCandidate} from '../security/protected-atomic-candidate.ts';
 import {

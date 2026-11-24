@@ -2,30 +2,42 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Accounts, type AccountsProps } from './Accounts';
 import { AccountsFinanceGateway, FinanceBridgeError } from './accounts-finance-gateway';
 import type { AccountServerView } from '../domain/accounts/server-snapshot.ts';
-import { OfflineSyncAccounts } from './OfflineSyncAccounts';
 
-/** Review-only integration point. The production app.js never routes here. */
 export interface ConnectedAccountsProps {
   verifiedActorUserId: string | null;
+  syncEnabled: boolean;
+  onOpenSync: () => void;
+  refreshVersion: number;
   onBack: () => void;
 }
 
-export function ConnectedAccounts({ verifiedActorUserId, onBack }: ConnectedAccountsProps) {
-  const [offlineSync, setOfflineSync] = useState(false);
-  if (offlineSync && verifiedActorUserId) {
-    return <OfflineSyncAccounts actor={verifiedActorUserId} onBack={() => setOfflineSync(false)} />;
-  }
+export function ConnectedAccounts({
+  verifiedActorUserId,
+  syncEnabled,
+  onOpenSync,
+  refreshVersion,
+  onBack,
+}: ConnectedAccountsProps) {
   return (
     <>
-      <button
-        type="button"
-        className="button-secondary"
-        onClick={() => setOfflineSync(true)}
-        disabled={!verifiedActorUserId}
-      >
-        Офлайн-синхронизация
-      </button>
-      <OnlineAccounts verifiedActorUserId={verifiedActorUserId} onBack={onBack} />
+      {syncEnabled && (
+        <button
+          type="button"
+          className="button-secondary"
+          onClick={onOpenSync}
+          disabled={!verifiedActorUserId}
+        >
+          Офлайн-синхронизация
+        </button>
+      )}
+      <OnlineAccounts
+        key={refreshVersion}
+        verifiedActorUserId={verifiedActorUserId}
+        syncEnabled={syncEnabled}
+        onOpenSync={onOpenSync}
+        refreshVersion={refreshVersion}
+        onBack={onBack}
+      />
     </>
   );
 }

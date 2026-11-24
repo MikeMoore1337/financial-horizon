@@ -20,11 +20,11 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from backend.finance_api.contracts import parse_v1_command
 from backend.finance_api.contracts_v2_candidate import parse_v2_account_command
-from backend.finance_api.accounts_v2_service import submit_account_v2_candidate
+from backend.finance_api.accounts_v2_service import prepare_account_v2_command, submit_account_v2_candidate
 
 from .ledger_service import (
     FinanceCommandError, VerifiedFinanceScope, derive_verified_scope,
-    ensure_verified_profile, submit_account_command,
+    ensure_verified_profile, submit_account_command, cancel_uncommitted_account_command,
 )
 from .snapshot import get_finance_snapshot, get_finance_delta
 
@@ -221,7 +221,7 @@ def mount_finance_routes(
         response.headers["Cache-Control"] = "private, no-store"
         return {"ok": True, "profile_id": str(verified.profile_id),
                 "payment_guard_v1": bool(enable_account_v2_candidate),
-                "sync_profile_fence_v1": True}
+                "sync_profile_fence_v1": True, "sync_cancel_fence_v1": True}
 
     router = APIRouter(prefix="/api/finance/v1", include_in_schema=False)
 
@@ -306,6 +306,42 @@ def mount_finance_routes(
             return _finance_error(FinanceCommandError(
                 "service_unavailable", "Операция не подтверждена сервером", 503
             ))
+
+    async def cancel_command(request: Request, *, v2: bool):
+        _guard_origin(request, public_origin)
+        await run_in_threadpool(rate, request, "finance-write")
+        verified = await run_in_threadpool(scope, request)
+        try:
+            body = await (parse_v2_account_command(request) if v2 else parse_v1_command(request))
+        except FinanceCommandError as exc:
+            return _finance_error(exc)
+
+        def fence_with_fresh_session():
+            current = scope(request)
+            if current != verified:
+                raise HTTPException(status_code=401, detail="Сеанс изменился")
+            tag = request.headers.get("if-match", "")
+            mutation = request.headers.get("idempotency-key", "")
+            normalized = (prepare_account_v2_command(scope=current, command=body,
+                          if_match=tag, idempotency_key=mutation) if v2 else body)
+            return cancel_uncommitted_account_command(
+                engine, scope=current, command=normalized, if_match=tag,
+                idempotency_key=mutation, allow_account_v2=v2,
+            )
+
+        try:
+            return _finance_response(await run_in_threadpool(fence_with_fresh_session))
+        except FinanceCommandError as exc:
+            return _finance_error(exc)
+        except SQLAlchemyError:
+            log.error("finance_cancel_db_failed")
+            return _finance_error(FinanceCommandError(
+                "service_unavailable", "Отмена не подтверждена сервером", 503,
+            ))
+
+    @router.post("/commands/cancel")
+    async def cancel_v1_command(request: Request):
+        return await cancel_command(request, v2=False)
 
     # Inactive default: owner-confirmed, source-preserving personal import.
     # Actual authenticated FH session and idempotent SQL commit are mandatory.
@@ -446,6 +482,10 @@ def mount_finance_routes(
     # Accepted v1 routing, cookies and command whitelist remain unchanged.
     if enable_account_v2_candidate:
         v2 = APIRouter(prefix="/api/finance/v2", include_in_schema=False)
+
+        @v2.post("/commands/cancel")
+        async def cancel_v2_command(request: Request):
+            return await cancel_command(request, v2=True)
 
         @v2.post("/commands")
         async def account_v2_commands(request: Request):

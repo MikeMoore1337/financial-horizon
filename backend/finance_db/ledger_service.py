@@ -1827,6 +1827,13 @@ def submit_account_command(
             if bytes(existing["request_sha256"]) != request_hash:
                 raise FinanceCommandError("idempotency_key_reuse",
                                           "Другая команда с этим идентификатором уже существует", 409)
+            if existing["committed_revision"] is None:
+                # A user explicitly fenced this exact pending command. Its
+                # permanent tombstone must never be interpreted as a success.
+                stored = dict(existing["response_body"])
+                if existing["status_code"] != 409 or stored.get("code") != "command_cancelled":
+                    raise FinanceCommandError("service_unavailable", "Некорректная квитанция операции", 503)
+                raise FinanceCommandError("command_cancelled", "Операция ранее отменена", 409)
             replay = dict(existing["response_body"])
             replay["replayed"] = True
             return FinanceResult(200, replay,
@@ -1847,6 +1854,49 @@ def submit_account_command(
         """), {"p": scope.profile_id, "id": mutation_id, "hash": request_hash,
                "revision": new_revision, "reply": json.dumps(ack, ensure_ascii=False)})
         return FinanceResult(201, ack, _opaque_etag(scope.profile_id, new_revision))
+
+
+def cancel_uncommitted_account_command(
+    engine: Engine, *, scope: VerifiedFinanceScope, command: object,
+    if_match: str, idempotency_key: str, allow_account_v2: bool = False,
+) -> FinanceResult:
+    """Fence an exact pending request without reversing an already committed one.
+
+    The same profile lock and fingerprint as submit_account_command make this
+    atomic across devices. The rejected receipt remains a permanent tombstone;
+    no balance, entity, change-log entry or profile revision is changed.
+    """
+    body, mutation_id, base_revision, _, request_hash = _validated(
+        command, if_match, idempotency_key,
+        allow_internal=False, allow_account_v2=allow_account_v2,
+    )
+    with finance_transaction(engine, verified_user_id=scope.user_id,
+                             profile_id=scope.profile_id) as session:
+        revision = _profile_lock(session, scope.profile_id)
+        existing = session.execute(text("""
+            SELECT request_sha256,status_code,committed_revision,response_body
+            FROM command_receipts WHERE profile_id=:p AND client_mutation_id=:id
+        """), {"p": scope.profile_id, "id": mutation_id}).mappings().one_or_none()
+        if existing is not None:
+            if bytes(existing["request_sha256"]) != request_hash:
+                raise FinanceCommandError("idempotency_key_reuse",
+                                          "Другая команда с этим идентификатором уже существует", 409)
+            if existing["committed_revision"] is not None:
+                raise FinanceCommandError("command_already_committed",
+                                          "Операция уже проведена; требуется сверка", 409)
+            stored = dict(existing["response_body"])
+            if existing["status_code"] != 409 or stored.get("code") != "command_cancelled":
+                raise FinanceCommandError("service_unavailable", "Некорректная квитанция операции", 503)
+            return FinanceResult(200, stored, _opaque_etag(scope.profile_id, revision))
+        tombstone = {"code": "command_cancelled", "schema_version": body["schema_version"],
+                     "client_mutation_id": str(mutation_id), "base_revision": base_revision}
+        session.execute(text("""
+            INSERT INTO command_receipts
+              (profile_id,client_mutation_id,request_sha256,status_code,committed_revision,response_body)
+            VALUES (:p,:id,:hash,409,NULL,CAST(:reply AS jsonb))
+        """), {"p": scope.profile_id, "id": mutation_id, "hash": request_hash,
+                 "reply": json.dumps(tombstone, ensure_ascii=False)})
+        return FinanceResult(200, tombstone, _opaque_etag(scope.profile_id, revision))
 
 
 def get_account_snapshot(engine: Engine, *, scope: VerifiedFinanceScope) -> FinanceResult:

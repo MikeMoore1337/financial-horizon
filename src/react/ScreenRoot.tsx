@@ -11,6 +11,7 @@ import { Settings, type SettingsProps } from './Settings';
 import { AuthBoundary, type AuthAccess } from './AuthBoundary';
 import { Accounts, type AccountsProps } from './Accounts';
 import { ConnectedAccounts, type ConnectedAccountsProps } from './ConnectedAccounts';
+import { OfflineSyncAccounts } from './OfflineSyncAccounts';
 import { BankImport, type BankImportProps } from '../importers/bank-statements/BankImport';
 
 export type ScreenView =
@@ -22,6 +23,30 @@ export type ScreenView =
   | { view: 'accounts'; props: AccountsProps }
   | { view: 'accounts-connected'; props: ConnectedAccountsProps }
   | { view: 'bank-import'; props: BankImportProps };
+
+/** Separate local-key entry: never mounts the legacy account or guest ledger. */
+export function createOfflineSyncRoot(
+  host: HTMLElement,
+  actor: string,
+  onBack: () => void,
+  offlineOnly = true,
+  onSessionRevoked?: () => void,
+) {
+  const root = createRoot(host);
+  flushSync(() =>
+    root.render(
+      <StrictMode>
+        <OfflineSyncAccounts
+          actor={actor}
+          offlineOnly={offlineOnly}
+          onBack={onBack}
+          onSessionRevoked={onSessionRevoked}
+        />
+      </StrictMode>,
+    ),
+  );
+  return { unmount: () => root.unmount() };
+}
 
 /** One React owner for any migrated screen, never shared with legacy innerHTML. */
 export function createScreenRoot(

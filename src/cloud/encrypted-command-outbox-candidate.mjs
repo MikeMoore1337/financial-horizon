@@ -19,7 +19,9 @@ const STRONG_ETAG = /^"[^"\r\n]{1,254}"$/;
 const MAX_BYTES = 32768;
 const MAX_QUEUE = 1000;
 const ACTION_FIELDS = Object.freeze({
+  'obligation.create': ['title', 'direction', 'amount_minor', 'starts_on', 'timezone', 'recurrence_unit', 'recurrence_every'],
   'account.transfer': ['from_account_id', 'to_account_id', 'amount_minor', 'occurred_on'],
+  'transaction.reverse': ['transaction_id', 'reason'],
   'account.create': ['id', 'name', 'kind', 'currency', 'opening_minor'],
   'account.update': ['account_id', 'name', 'kind'],
   'account.archive': ['account_id'],
@@ -380,6 +382,97 @@ function verifySettlementDependencies(command, entities) {
     }
   }
 }
+function verifyLoanDependencies(command, entities) {
+  if (!['loan.payment.record', 'loan.payment.void'].includes(command.action)) return;
+  if (!Array.isArray(entities)) hold('Нет подтверждённого снимка кредита');
+  const p = command.payload;
+  const find = (id, kind) => {
+    const found = entities.filter(e => e.id === id && e.kind === kind);
+    if (found.length !== 1 || found[0].entity_revision !== command.expected_entity_revisions[id]) {
+      hold('Сущность или её серверная ревизия недоступны');
+    }
+    return found[0].data;
+  };
+  const account = find(p.account_id, 'account');
+  if (command.action === 'loan.payment.record') {
+    const loan = find(p.loan_id, 'loan');
+    if (account?.archived_at != null || loan?.deleted_at != null) hold('Счёт или кредит недоступны');
+  } else {
+    const transaction = find(p.transaction_id, 'transaction');
+    const fact = find(p.fact_id, 'loan_payment');
+    if (transaction?.kind !== 'payment' || transaction.payment_link?.loan_payment_id !== p.fact_id ||
+        transaction.payment_link?.settlement_id !== null || transaction.reserve_allocation !== undefined ||
+        fact?.voided_at != null || !Array.isArray(transaction.postings) ||
+        transaction.postings.length !== 1 || transaction.postings[0]?.account_id !== p.account_id ||
+        transaction.postings[0]?.signed_minor !== -fact.amount_minor ||
+        entities.some(e => e.kind === 'transaction' && e.data?.reversed_transaction_id === p.transaction_id)) {
+      hold('Исходный кредитный платёж недоступен для отмены');
+    }
+  }
+}
+function verifyLoanReceipt(command, changes, entities, previouslyApplied) {
+  if (!['loan.payment.record', 'loan.payment.void'].includes(command.action)) return;
+  if (!Array.isArray(entities) || changes.length !== 2) hold('Нет подтверждения кредитного платежа');
+  const p = command.payload;
+  const reversal = command.action === 'loan.payment.void';
+  const postings = changes.filter(e => e.kind === 'ledger_posted' && e.payload?.entity?.kind === 'transaction');
+  const facts = changes.filter(e => e.kind === 'upsert' && e.payload?.entity?.kind === 'loan_payment');
+  if (postings.length !== 1 || facts.length !== 1 ||
+      !consistentEvent(postings[0]) || !consistentEvent(facts[0])) hold('Неполная квитанция кредитного платежа');
+  const txEntity = postings[0].payload.entity, tx = txEntity.data, factEntity = facts[0].payload.entity;
+  const fact = factEntity.data;
+  let signed;
+  if (!reversal) {
+    signed = -p.amount_minor;
+    if (tx?.kind !== 'payment' || tx.occurred_on !== p.paid_on ||
+        tx.payment_link?.settlement_id !== null || tx.payment_link?.loan_payment_id !== factEntity.id ||
+        fact?.loan_id !== p.loan_id || fact.amount_minor !== p.amount_minor ||
+        fact.paid_on !== p.paid_on || fact.strategy !== p.strategy || fact.voided_at !== null ||
+        entities.filter(e => e.kind === 'loan' && e.id === p.loan_id).length !== 1) {
+      hold('Факт кредитного платежа не соответствует команде');
+    }
+  } else {
+    const originals = entities.filter(e => e.kind === 'transaction' && e.id === p.transaction_id);
+    const oldFacts = entities.filter(e => e.kind === 'loan_payment' && e.id === p.fact_id);
+    const original = originals[0]?.data, oldFact = oldFacts[0]?.data;
+    signed = oldFact?.amount_minor;
+    if (originals.length !== 1 || oldFacts.length !== 1 || !integer(signed, 1) ||
+        original?.kind !== 'payment' || original.payment_link?.settlement_id !== null ||
+        original.payment_link?.loan_payment_id !== p.fact_id || original.reserve_allocation !== undefined ||
+        !Array.isArray(original.postings) || original.postings.length !== 1 ||
+        original.postings[0]?.account_id !== p.account_id || original.postings[0]?.signed_minor !== -signed ||
+        factEntity.id !== p.fact_id || fact?.loan_id !== oldFact.loan_id ||
+        fact.amount_minor !== signed || fact.paid_on !== oldFact.paid_on || fact.strategy !== oldFact.strategy ||
+        typeof fact.voided_at !== 'string' || !Number.isFinite(Date.parse(fact.voided_at)) ||
+        tx?.kind !== 'reversal' || tx.reversed_transaction_id !== p.transaction_id || tx.note !== p.reason.trim()) {
+      hold('Отмена не соответствует исходному кредитному платежу');
+    }
+    if (previouslyApplied && canonical(oldFact) !== canonical(fact)) hold('Сохранённая отмена не совпадает');
+  }
+  if (tx?.reserve_allocation !== undefined || !Array.isArray(tx?.postings) || tx.postings.length !== 1 ||
+      tx.postings[0]?.account_id !== p.account_id || tx.postings[0]?.signed_minor !== signed) {
+    hold('Проводка не соответствует кредитному платежу');
+  }
+  if (previouslyApplied) {
+    const stored = entities.filter(e => e.kind === 'transaction' && e.id === txEntity.id);
+    const storedFacts = entities.filter(e => e.kind === 'loan_payment' && e.id === factEntity.id);
+    if (stored.length !== 1 || canonical(stored[0].data) !== canonical(tx) || storedFacts.length !== 1 ||
+        storedFacts[0].data?.loan_id !== fact.loan_id || storedFacts[0].data?.amount_minor !== fact.amount_minor ||
+        storedFacts[0].data?.paid_on !== fact.paid_on || storedFacts[0].data?.strategy !== fact.strategy) {
+      hold('Сохранённый снимок не содержит кредитный платёж');
+    }
+  } else {
+    const prior = entities.filter(e => e.kind === 'account' && e.id === p.account_id);
+    const updated = postings[0].payload.accounts;
+    if (prior.length !== 1 || !Array.isArray(updated) || updated.length !== 1 ||
+        updated[0]?.kind !== 'account' || updated[0]?.id !== p.account_id ||
+        !Number.isSafeInteger(prior[0].data?.balance_minor + signed) ||
+        updated[0].data?.balance_minor !== prior[0].data?.balance_minor + signed ||
+        updated[0].data?.reserved_minor !== prior[0].data?.reserved_minor) {
+      hold('Остаток не соответствует кредитному платежу');
+    }
+  }
+}
 function validateCommand(command) {
   const dto = safeJson(command);
   keysExactly(dto, [
@@ -390,7 +483,7 @@ function validateCommand(command) {
       !integer(dto.base_revision) ||
       typeof dto.action !== 'string' ||
       !Object.hasOwn(ACTION_FIELDS, dto.action) ||
-      (dto.schema_version === 1) !== (dto.action === 'account.transfer')) {
+      (dto.schema_version === 1) !== ['obligation.create', 'account.transfer', 'transaction.reverse'].includes(dto.action)) {
     hold('Недопустимая версия или действие команды');
   }
   keysExactly(dto.payload, ACTION_FIELDS[dto.action], OPTIONAL_FIELDS[dto.action] || []);
@@ -409,10 +502,18 @@ function validateCommand(command) {
   // Rejecting invalid commands before queueing prevents persistent offline
   // entries that can never succeed after a network reconnect.
   let requiredRevisions;
-  if (dto.action === 'account.create') {
+  if (dto.action === 'account.create' || dto.action === 'obligation.create') {
     requiredRevisions = [];
   } else if (dto.action === 'account.transfer') {
     requiredRevisions = [dto.payload.from_account_id, dto.payload.to_account_id];
+  } else if (dto.action === 'transaction.reverse') {
+    // The exact account IDs are checked against the encrypted authoritative
+    // transaction image below; only the original ID is present in payload.
+    requiredRevisions = Object.keys(dto.expected_entity_revisions);
+    if (requiredRevisions.length < 2 || requiredRevisions.length > 3 ||
+        !requiredRevisions.includes(dto.payload.transaction_id)) {
+      hold('Отсутствуют ревизии отменяемой операции и счетов');
+    }
   } else if (dto.action === 'settlement.payment.record') {
     requiredRevisions = [dto.payload.account_id, dto.payload.obligation_id];
     if (Object.hasOwn(dto.payload, 'reserve_id')) requiredRevisions.push(dto.payload.reserve_id);
@@ -445,6 +546,17 @@ function validateCommand(command) {
       !['term', 'amount'].includes(dto.payload.strategy)) {
     hold('Недопустимая стратегия платежа');
   }
+  if (dto.action === 'obligation.create') {
+    const p = dto.payload;
+    if (typeof p.title !== 'string' || !p.title.trim() || p.title.length > 160 ||
+        !['income', 'expense'].includes(p.direction) ||
+        !integer(p.amount_minor, 0, 1_000_000_000_000) ||
+        !['none', 'month', 'year'].includes(p.recurrence_unit) ||
+        !integer(p.recurrence_every, 1, 120) || typeof p.timezone !== 'string' ||
+        p.timezone.length < 1 || p.timezone.length > 64) hold('Некорректное обязательство');
+    try { new Intl.DateTimeFormat('en', {timeZone:p.timezone}); }
+    catch { hold('Недопустимый часовой пояс'); }
+  }
   for (const name of ['name', 'reason']) {
     if (Object.hasOwn(dto.payload, name) &&
         (typeof dto.payload[name] !== 'string' ||
@@ -458,7 +570,7 @@ function validateCommand(command) {
       (typeof dto.payload.note !== 'string' || dto.payload.note.length > 500)) {
     hold('Недопустимое примечание');
   }
-  for (const name of ['paid_on', 'occurred_on', 'occurrence_on']) {
+  for (const name of ['paid_on', 'occurred_on', 'occurrence_on', 'starts_on']) {
     if (Object.hasOwn(dto.payload, name)) {
       const value = dto.payload[name];
       if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
@@ -481,7 +593,7 @@ function validateCommand(command) {
         !integer(value, -1_000_000_000_000, 1_000_000_000_000)) {
       hold('Недопустимая сумма');
     }
-    if (name === 'amount_minor' && !integer(value, 1, 1_000_000_000_000)) {
+    if (name === 'amount_minor' && !integer(value, dto.action === 'obligation.create' ? 0 : 1, 1_000_000_000_000)) {
       hold('Недопустимая сумма');
     }
     if ((name === 'account_id' || name === 'from_account_id' || name === 'to_account_id' || name === 'obligation_id' ||
@@ -491,6 +603,167 @@ function validateCommand(command) {
     }
   }
   return dto;
+}
+
+function verifyObligationReceipt(command, changes, entities, previouslyApplied) {
+  if (command.action !== 'obligation.create') return;
+  const p = command.payload, change = changes[0], entity = change?.payload?.entity, data = entity?.data;
+  if (!Array.isArray(entities) || changes.length !== 1 || change?.kind !== 'upsert' ||
+      !consistentEvent(change) || entity.kind !== 'obligation' || entity.entity_revision !== 1 ||
+      data?.title !== p.title.trim() || data.direction !== p.direction ||
+      data.amount_minor !== p.amount_minor || data.starts_on !== p.starts_on ||
+      data.timezone !== p.timezone || data.recurrence_unit !== p.recurrence_unit ||
+      data.recurrence_every !== p.recurrence_every || data.category !== null || data.deleted_at !== null) {
+    hold('Созданное обязательство не соответствует исходной команде');
+  }
+  if (previouslyApplied && !entities.some(e => e.kind === 'obligation' && e.id === entity.id)) {
+    hold('Подтверждённое обязательство отсутствует в сохранённом снимке');
+  }
+}
+
+/** A matching receipt and journal can still describe the wrong intention. */
+function verifyAccountReceipt(command, changes, entities, previouslyApplied) {
+  if (!['account.create', 'account.update', 'account.archive', 'account.unarchive'].includes(command.action)) return;
+  if (!Array.isArray(entities)) hold('Нет подтверждённого снимка счетов');
+  const p = command.payload;
+  const creating = command.action === 'account.create';
+  const id = creating ? p.id : p.account_id;
+  const expectedRevision = creating ? 1 : command.expected_entity_revisions[id] + 1;
+  const change = changes[0], entity = change?.payload?.entity, data = entity?.data;
+  if (changes.length !== 1 || change?.kind !== 'upsert' || !consistentEvent(change) ||
+      entity.kind !== 'account' || entity.id !== id || entity.entity_revision !== expectedRevision ||
+      !plain(data) || data.currency !== 'RUB') hold('Подтверждение счёта не соответствует команде');
+  if (creating && (data.name !== p.name.trim() || data.type !== p.kind ||
+      data.opening_minor !== p.opening_minor || data.balance_minor !== p.opening_minor ||
+      data.reserved_minor !== 0 || data.available_minor !== p.opening_minor || data.archived_at !== null)) {
+    hold('Созданный счёт не соответствует исходной команде');
+  }
+  if (command.action === 'account.update' &&
+      (data.name !== p.name.trim() || data.type !== p.kind || data.archived_at !== null)) {
+    hold('Изменение счёта не соответствует исходной команде');
+  }
+  if (command.action === 'account.archive' &&
+      (typeof data.archived_at !== 'string' || !Number.isFinite(Date.parse(data.archived_at)))) {
+    hold('Архивирование счёта не подтверждено');
+  }
+  if (command.action === 'account.unarchive' && data.archived_at !== null) {
+    hold('Восстановление счёта не подтверждено');
+  }
+  if (!creating && !previouslyApplied) {
+    const prior = entities.filter(value => value.kind === 'account' && value.id === id);
+    if (prior.length !== 1 || prior[0].entity_revision !== expectedRevision - 1 ||
+        (command.action === 'account.unarchive'
+          ? typeof prior[0].data?.archived_at !== 'string'
+          : prior[0].data?.archived_at !== null) ||
+        ['opening_minor', 'balance_minor', 'reserved_minor', 'available_minor', 'currency']
+          .some(key => prior[0].data?.[key] !== data[key]) ||
+        (command.action !== 'account.update' &&
+          (prior[0].data?.name !== data.name || prior[0].data?.type !== data.type))) {
+      hold('Остаток или свойства счёта изменились неожиданно');
+    }
+  }
+}
+
+function verifyCashMovementReceipt(command, changes, entities, previouslyApplied) {
+  if (command.action !== 'transaction.record') return;
+  if (!Array.isArray(entities)) hold('Нет подтверждённого снимка счетов');
+  const p = command.payload, change = changes[0], event = change?.payload;
+  const transaction = event?.entity, data = transaction?.data;
+  if (changes.length !== 1 || change?.kind !== 'ledger_posted' || !consistentEvent(change) ||
+      transaction.kind !== 'transaction' || transaction.id !== p.id || transaction.entity_revision !== 1 ||
+      event.account_id !== p.account_id || event.signed_minor !== p.signed_minor ||
+      event.transaction_kind !== p.kind || data?.kind !== p.kind || data.occurred_on !== p.occurred_on ||
+      data.note !== (p.note ?? null) || data.reversed_transaction_id !== null ||
+      Object.hasOwn(data, 'payment_link') || Object.hasOwn(data, 'reserve_allocation') ||
+      !Array.isArray(data.postings) || data.postings.length !== 1 ||
+      data.postings[0]?.account_id !== p.account_id || data.postings[0]?.signed_minor !== p.signed_minor ||
+      !Array.isArray(event.accounts) || event.accounts.length !== 1 ||
+      event.accounts[0]?.id !== p.account_id || event.accounts[0]?.kind !== 'account') {
+    hold('Денежная операция не соответствует исходной команде');
+  }
+  if (!previouslyApplied) {
+    const prior = entities.filter(value => value.kind === 'account' && value.id === p.account_id);
+    const updated = event.accounts[0];
+    if (prior.length !== 1 || prior[0].entity_revision !== command.expected_entity_revisions[p.account_id] ||
+        updated.entity_revision !== prior[0].entity_revision + 1 ||
+        !Number.isSafeInteger(prior[0].data?.balance_minor + p.signed_minor) ||
+        updated.data?.balance_minor !== prior[0].data.balance_minor + p.signed_minor ||
+        updated.data?.available_minor !== prior[0].data.available_minor + p.signed_minor ||
+        ['reserved_minor', 'name', 'type', 'currency', 'opening_minor', 'archived_at']
+          .some(key => updated.data?.[key] !== prior[0].data?.[key])) {
+      hold('Остаток не соответствует денежной операции');
+    }
+  }
+}
+
+function reversalOriginal(command, entities) {
+  if (!Array.isArray(entities)) hold('Нет подтверждённого журнала операций');
+  const id = command.payload.transaction_id;
+  const matches = entities.filter(entity => entity.kind === 'transaction' && entity.id === id);
+  const original = matches[0];
+  if (matches.length !== 1 || original.entity_revision !== command.expected_entity_revisions[id] ||
+      !['income', 'expense', 'adjustment', 'transfer'].includes(original.data?.kind) ||
+      !Array.isArray(original.data?.postings) || ![1, 2].includes(original.data.postings.length) ||
+      original.data.postings.some(posting => !UUID.test(posting?.account_id) ||
+        !Number.isSafeInteger(posting?.signed_minor) || posting.signed_minor === 0) ||
+      new Set(original.data.postings.map(posting => posting.account_id)).size !== original.data.postings.length) {
+    hold('Исходная операция для отмены недоступна');
+  }
+  const revisions = Object.keys(command.expected_entity_revisions);
+  if (revisions.length !== original.data.postings.length + 1 ||
+      original.data.postings.some(posting => !Object.hasOwn(command.expected_entity_revisions, posting.account_id))) {
+    hold('Не подтверждены все счета отменяемой операции');
+  }
+  return original;
+}
+
+function verifyReversalDependencies(command, entities) {
+  if (command.action !== 'transaction.reverse') return;
+  const original = reversalOriginal(command, entities);
+  if (entities.some(entity => entity.kind === 'transaction' &&
+      entity.data?.reversed_transaction_id === original.id)) hold('Операция уже отменена');
+  for (const posting of original.data.postings) {
+    const accounts = entities.filter(entity => entity.kind === 'account' && entity.id === posting.account_id &&
+      entity.entity_revision === command.expected_entity_revisions[posting.account_id]);
+    const data = accounts[0]?.data;
+    const next = data?.balance_minor - posting.signed_minor;
+    if (accounts.length !== 1 || !Number.isSafeInteger(next) || !integer(data?.reserved_minor) ||
+        (data.reserved_minor > 0 && next < data.reserved_minor)) {
+      hold('Отмена недоступна для текущих остатков счетов');
+    }
+  }
+}
+
+function verifyReversalReceipt(command, changes, entities, previouslyApplied) {
+  if (command.action !== 'transaction.reverse') return;
+  const original = reversalOriginal(command, entities), change = changes[0], event = change?.payload;
+  const reversal = event?.entity, data = reversal?.data;
+  if (changes.length !== 1 || change?.kind !== 'ledger_posted' || !consistentEvent(change) ||
+      reversal.kind !== 'transaction' || reversal.entity_revision !== 1 ||
+      event.transaction_kind !== 'reversal' || event.reversed_transaction_id !== original.id ||
+      data?.kind !== 'reversal' || data.reversed_transaction_id !== original.id ||
+      data.note !== command.payload.reason.trim() || Object.hasOwn(data, 'payment_link') ||
+      Object.hasOwn(data, 'reserve_allocation') || !Array.isArray(data.postings) ||
+      data.postings.length !== original.data.postings.length || !Array.isArray(event.accounts) ||
+      event.accounts.length !== original.data.postings.length) hold('Отмена не соответствует исходной операции');
+  for (const posting of original.data.postings) {
+    const inverse = data.postings.filter(item => item.account_id === posting.account_id &&
+      item.signed_minor === -posting.signed_minor);
+    const updated = event.accounts.filter(item => item.kind === 'account' && item.id === posting.account_id);
+    if (inverse.length !== 1 || updated.length !== 1) hold('Компенсирующие проводки не подтверждены');
+    if (!previouslyApplied) {
+      const prior = entities.filter(item => item.kind === 'account' && item.id === posting.account_id);
+      if (prior.length !== 1 || prior[0].entity_revision !== command.expected_entity_revisions[posting.account_id] ||
+          updated[0].entity_revision !== prior[0].entity_revision + 1 ||
+          !Number.isSafeInteger(prior[0].data?.balance_minor - posting.signed_minor) ||
+          updated[0].data?.balance_minor !== prior[0].data.balance_minor - posting.signed_minor ||
+          updated[0].data?.available_minor !== prior[0].data.available_minor - posting.signed_minor ||
+          ['reserved_minor', 'name', 'type', 'currency', 'opening_minor', 'archived_at']
+            .some(key => updated[0].data?.[key] !== prior[0].data?.[key])) {
+        hold('Остатки счетов не соответствуют отмене');
+      }
+    }
+  }
 }
 
 function verifyTransferReceipt(command, changes, entities, previouslyApplied) {
@@ -521,6 +794,22 @@ function verifyTransferReceipt(command, changes, entities, previouslyApplied) {
         hold('Изменение остатка перевода не подтверждено');
       }
     }
+  }
+}
+
+function verifyCashMovementDependencies(command, entities) {
+  if (command.action !== 'transaction.record') return;
+  if (!Array.isArray(entities)) hold('Снимок счетов недоступен');
+  const p = command.payload;
+  const matches = entities.filter(x => x?.kind === 'account' && x.id === p.account_id &&
+    x.entity_revision === command.expected_entity_revisions[p.account_id]);
+  if (matches.length !== 1 || matches[0].data?.archived_at !== null ||
+      !Number.isSafeInteger(matches[0].data?.balance_minor) ||
+      !Number.isSafeInteger(matches[0].data.balance_minor + p.signed_minor) ||
+      !integer(matches[0].data.reserved_minor) || !Number.isSafeInteger(matches[0].data.available_minor) ||
+      (p.signed_minor < 0 && matches[0].data.reserved_minor > 0 &&
+        matches[0].data.available_minor < -p.signed_minor)) {
+    hold('Операция не соответствует доступному остатку счёта');
   }
 }
 
@@ -634,6 +923,9 @@ export async function enqueueEncryptedFinanceCommandCandidate({
     hold('Условие записи не соответствует сохранённому серверному снимку');
   }
   verifySettlementDependencies(pinned, cloud.entities);
+  verifyLoanDependencies(pinned, cloud.entities);
+  verifyCashMovementDependencies(pinned, cloud.entities);
+  verifyReversalDependencies(pinned, cloud.entities);
   verifyTransferDependencies(pinned, cloud.entities);
   if (current.outbox.length >= MAX_QUEUE) hold('Достигнут лимит офлайн-операций');
   const item = {
@@ -763,6 +1055,11 @@ export async function persistAuthenticatedFinanceReceiptCandidate({
   }
   verifySettlementReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   verifySettlementReversalReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
+  verifyLoanReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
+  verifyObligationReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
+  verifyAccountReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
+  verifyCashMovementReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
+  verifyReversalReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   verifyTransferReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   let checked;
   if (previouslyApplied) {
@@ -1052,10 +1349,49 @@ export async function recordManualFinanceConflictChoiceCandidate({
   });
 }
 
-/** Resolve only an authenticated 412 hold. A 409 may indicate an already
- * used idempotency key and a 410 may follow a committed POST, so neither is
- * evidence that the command did not run. Preserve the entire original
- * request and its fingerprint in the encrypted conflict history. */
+/** Persist an authenticated server tombstone before allowing conflict resolution. */
+export async function recordVerifiedFinanceCancellation({
+  scope, session, identity, expectedEpoch, mutationId, cancellationAck,
+}) {
+  active(scope, session, identity);
+  if (!integer(expectedEpoch) || !UUID.test(mutationId)) hold('Неверная отмена операции');
+  const ack = safeJson(cancellationAck);
+  if (!plain(ack) || ack.code !== 'command_cancelled' || ack.client_mutation_id !== mutationId ||
+      ![1, 2].includes(ack.schema_version) || !integer(ack.base_revision)) {
+    hold('Сервер не подтвердил отмену исходной операции');
+  }
+  const current = await readAtomicEncryptedCandidate(scope, session);
+  active(scope, session, identity);
+  if (!current || current.epoch !== expectedEpoch || current.schemaVersion !== 2 ||
+      !Array.isArray(current.outbox) || !Array.isArray(current.conflicts)) hold('Очередь изменилась');
+  const cloud = current.snapshot?.cloudFinance;
+  if (!plain(cloud) || cloud.scope !== scope || cloud.profileId !== identity.profileId ||
+      cloud.epoch !== identity.epoch) hold('Финансовый профиль изменился');
+  existingQueue(current.outbox, scope, identity);
+  const head = current.outbox[0];
+  const conflicts = current.conflicts.filter(item => plain(item) && item.kind === 'finance_sync_hold' &&
+    item.mutationId === mutationId && item.scope === scope && item.profileId === identity.profileId);
+  if (!head || head.mutationId !== mutationId || conflicts.length !== 1 ||
+      ![409, 410].includes(conflicts[0].httpStatus) ||
+      head.command.schema_version !== ack.schema_version || head.command.base_revision !== ack.base_revision) {
+    hold('Отмена не соответствует ожидающей операции');
+  }
+  const digest = await fingerprint(scope, identity.profileId, head.ifMatch, head.command);
+  active(scope, session, identity);
+  if (digest !== head.fingerprint) hold('Исходная операция изменилась');
+  if (conflicts[0].verifiedCancellationFingerprint === digest) {
+    return Object.freeze({status:'CANCELLATION_RECORDED', bundleEpoch:expectedEpoch});
+  }
+  const nextConflicts = current.conflicts.map(item => item === conflicts[0]
+    ? {...item, verifiedCancellationFingerprint:digest} : item);
+  const nextEpoch = await compareAndSwapAtomicEncryptedCandidate(scope, session, expectedEpoch, 2,
+    {snapshot:current.snapshot, outbox:current.outbox, conflicts:nextConflicts});
+  active(scope, session, identity);
+  return Object.freeze({status:'CANCELLATION_RECORDED', bundleEpoch:nextEpoch});
+}
+
+/** Resolve only a proven stale refusal or a durably fenced original command.
+ * Preserve the entire request and fingerprint in encrypted conflict history. */
 export async function resolveStaleFinanceConflict({
   scope, session, identity, expectedEpoch, mutationId, observedRevision,
   choice, replacementCommand = null, explicitUserChoice = false,
@@ -1090,17 +1426,20 @@ export async function resolveStaleFinanceConflict({
     x.kind === 'finance_sync_hold' && x.mutationId === mutationId);
   if (!head || head.mutationId !== mutationId || matches.length !== 1 ||
       matches[0].scope !== scope || matches[0].profileId !== identity.profileId ||
-      matches[0].httpStatus !== 412 || matches[0].decision !== 'CONFLICT_HOLD' ||
-      matches[0].source !== 'command' ||
-      !integer(matches[0].verifiedStaleRevision, head.command.base_revision + 1) ||
-      observedRevision < matches[0].verifiedStaleRevision ||
-      matches[0].baseRevision !== head.command.base_revision ||
-      observedRevision <= head.command.base_revision) {
-    hold('Нет подтверждённого отказа из-за устаревшей версии');
+      matches[0].baseRevision !== head.command.base_revision) {
+    hold('Нет подтверждённого финансового конфликта');
   }
   const originalFingerprint = await fingerprint(scope, identity.profileId, head.ifMatch, head.command);
   active(scope, session, identity);
   if (originalFingerprint !== head.fingerprint) hold('Исходная операция изменилась');
+  const stale = matches[0].httpStatus === 412 && matches[0].decision === 'CONFLICT_HOLD' &&
+    matches[0].source === 'command' &&
+    integer(matches[0].verifiedStaleRevision, head.command.base_revision + 1) &&
+    observedRevision >= matches[0].verifiedStaleRevision && observedRevision > head.command.base_revision;
+  const cancelled = [409, 410].includes(matches[0].httpStatus) &&
+    matches[0].verifiedCancellationFingerprint === originalFingerprint &&
+    observedRevision >= head.command.base_revision;
+  if (!stale && !cancelled) hold('Исходная операция не отменена и не доказан отказ');
   let nextItem = null;
   if (replacement) {
     if (replacement.client_mutation_id === mutationId ||
@@ -1121,6 +1460,9 @@ export async function resolveStaleFinanceConflict({
       hold('Новый счёт уже существует');
     }
     verifySettlementDependencies(replacement, cloud.entities);
+    verifyLoanDependencies(replacement, cloud.entities);
+    verifyCashMovementDependencies(replacement, cloud.entities);
+    verifyReversalDependencies(replacement, cloud.entities);
     verifyTransferDependencies(replacement, cloud.entities);
     const digest = await fingerprint(scope, identity.profileId, cloud.serverEtag, replacement);
     active(scope, session, identity);

@@ -25,9 +25,11 @@ function setup(refresh){
    return [{open:true,close:()=>events.push('dialog-closed'),
     replaceChildren:()=>events.push('dialog-cleared')}];
   }},
+  backgroundSyncRoot:{unmount:()=>events.push('background-unmount')},
+  backgroundSyncHost:{remove:()=>events.push('background-removed')},offlineSyncView:false,
   screenRoot:{unmount:()=>events.push('react-unmount')},
   navRoots:{unmount:()=>events.push('nav-unmount')},
-  $:()=>({replaceChildren:()=>events.push('ledger-cleared')}),
+  $:()=>({style:{},replaceChildren:()=>events.push('ledger-cleared')}),
   window:{location:{replace:url=>events.push(url)}},
   syncAccountControls:()=>events.push('sync')};
  return {check:runInNewContext(handler+'\nrefreshEmailSession',ctx),ctx,events};
@@ -54,7 +56,7 @@ test('expired session hides the old account ledger and opens login',async()=>{
  assert.equal(s.ctx.navRoots,null);
   assert.equal(s.ctx.cloudImportFile,null);
   assert.equal(s.ctx.pendingCloudImport,null);
- assert.deepEqual(s.events,['scope-revoked','react-unmount','nav-unmount','ledger-cleared','dialog-closed','dialog-cleared','./account.html']);
+ assert.deepEqual(s.events,['scope-revoked','react-unmount','background-unmount','background-removed','nav-unmount','ledger-cleared','dialog-closed','dialog-cleared','./account.html']);
 });
 test('a different account cannot re-use previous account data',async()=>{
  const s=setup(async()=>true);s.ctx.emailSession.userId='b'.repeat(32);
@@ -62,7 +64,56 @@ test('a different account cannot re-use previous account data',async()=>{
  assert.equal(s.ctx.state,null);
  assert.equal(s.ctx.screenRoot,null);
  assert.equal(s.ctx.navRoots,null);
- assert.deepEqual(s.events,['scope-revoked','react-unmount','nav-unmount','ledger-cleared','dialog-closed','dialog-cleared','./account.html']);
+ assert.deepEqual(s.events,['scope-revoked','react-unmount','background-unmount','background-removed','nav-unmount','ledger-cleared','dialog-closed','dialog-cleared','./account.html']);
+});
+test('offline focus preserves the open ledger and does not authorize new online work',async()=>{
+ let calls=0;
+ const s=setup(async()=>{calls++;return false;});
+ s.ctx.navigator={onLine:false};
+ assert.equal(await s.check(),false);
+ assert.equal(calls,0);
+ assert.notEqual(s.ctx.state,null);
+ assert.deepEqual(s.events,[]);
+});
+test('network loss during revalidation preserves the view, but HTTP and invalid replies revoke it',async()=>{
+ for(const failure of ['network','http','invalid']){
+  let release;
+  const s=setup(()=>new Promise(resolve=>{release=resolve;}));
+  s.ctx.navigator={onLine:true};
+  const pending=s.check();
+  s.ctx.navigator.onLine=false;
+  s.ctx.emailSession.lastRefreshFailure=failure;
+  release(false);
+  assert.equal(await pending,false);
+  if(failure==='network'){
+   assert.notEqual(s.ctx.state,null);
+   assert.deepEqual(s.events,[]);
+  }else{
+   assert.equal(s.ctx.state,null);
+   assert.ok(s.events.includes('./account.html'));
+  }
+ }
+});
+test('network loss never preserves a view after the account identity changes',async()=>{
+ let release;
+ const s=setup(()=>new Promise(resolve=>{release=resolve;}));
+ s.ctx.navigator={onLine:true};
+ const pending=s.check();
+ s.ctx.navigator.onLine=false;
+ s.ctx.emailSession.userId='b'.repeat(32);
+ s.ctx.emailSession.lastRefreshFailure='network';
+ release(false);
+ assert.equal(await pending,false);
+ assert.equal(s.ctx.state,null);
+ assert.ok(s.events.includes('./account.html'));
+});
+test('an already changed identity revokes the old view even when offline',async()=>{
+ const s=setup(async()=>{throw Error('Must not fetch while offline');});
+ s.ctx.navigator={onLine:false};
+ s.ctx.emailSession.userId='b'.repeat(32);
+ assert.equal(await s.check(),false);
+ assert.equal(s.ctx.state,null);
+ assert.ok(s.events.includes('./account.html'));
 });
 test('guest mode and pending logout must not run a session check',async()=>{
  const s=setup(async()=>{throw Error('Must not run');});

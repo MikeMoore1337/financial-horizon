@@ -56,6 +56,31 @@ test('OAuth-only account with null email retains account scope and logs out thro
  assert.ok(urls.some(([url,method])=>url.endsWith('/api/auth/email/logout')&&method==='POST'));
 });
 
+test('session refresh distinguishes network loss from a server rejection',async()=>{
+ const {createEmailSession}=await import('../auth-session.js');
+ let mode='success';
+ const session=createEmailSession(async()=>{
+  if(mode==='network')throw Error('offline');
+  if(mode==='http')return {ok:false,status:401};
+  if(mode==='invalid')return {ok:true,json:async()=>{throw Error('invalid JSON');}};
+  return {ok:true,json:async()=>({authenticated:true,user:{id:'f'.repeat(32),email:null}})};
+ });
+ assert.equal(await session.refresh(),true);
+ assert.equal(session.lastRefreshFailure,null);
+ mode='network';
+ assert.equal(await session.refresh(),false);
+ assert.equal(session.lastRefreshFailure,'network');
+ mode='http';
+ assert.equal(await session.refresh(),false);
+ assert.equal(session.lastRefreshFailure,'http');
+ mode='invalid';
+ assert.equal(await session.refresh(),false);
+ assert.equal(session.lastRefreshFailure,'invalid');
+ mode='success';
+ assert.equal(await session.refresh(),true);
+ assert.equal(session.lastRefreshFailure,null);
+});
+
 test('OAuth-only accounts are authorized by stable user ID even without email',()=>{
  const main=read('app.js');
  assert.match(main,/const signedIn=Boolean\(emailSession\.userId\)/);

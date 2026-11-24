@@ -6,7 +6,8 @@ import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.
 import {previewXlsxReserves} from './src/domain/reserves/xlsx-preview.ts';
 import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
-import {createScreenRoot} from './src/react/ScreenRoot.tsx';
+import {createScreenRoot,createOfflineSyncRoot} from './src/react/ScreenRoot.tsx';
+import {readOfflineActor,forgetOfflineActor} from './src/cloud/offline-access-hint.mjs';
 import {projectOverviewCategories,projectOverviewLoan} from './src/react/OverviewModels.tsx';
 import {projectObligationRows} from './src/react/ObligationsModels.tsx';
 import {buildInAppReminders,readReminderSettings} from './src/domain/cashflow/in-app-reminders.ts';
@@ -30,6 +31,7 @@ const titles={overview:'Обзор',calendar:'Календарь',obligations:'�
 // Only an explicit reviewed release can present the optional server-backed accounts view.
 // FastAPI authentication and profile scoping remain the sole authorization boundary.
 const financeAccountsEnabled=document.querySelector('meta[name="fh-finance-accounts"]')?.content==='enabled';
+const financeSyncEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-sync"]')?.content==='enabled';
 const financeImportEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-import"]')?.content==='enabled';
 // #38 signed bank import needs an independently approved production backend.
 const bankImportEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-bank-import"]')?.content==='enabled';
@@ -40,6 +42,7 @@ let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,
 let cloudImportSourceKind='account';
 const GUEST_MODE_KEY='fh-guest-session-v2';
 let screenRoot=null;
+let backgroundSyncRoot=null,backgroundSyncHost=null,accountScreenVersion=0;
 let navRoots=null;
 let auxiliaryDialogRoots=null;
 let financeFormRoots=null;
@@ -52,15 +55,20 @@ function getAuthAccess(){
 let storageStatusMessage='Браузер может удалить данные при очистке хранилища. Делайте резервные копии.';
 let storageStatusRequest=0;
 let lastStorageContext=null;
+let offlineSyncView=false,lastSyncContext=false;
 function revokeDisplayedLedger(){
  revokeStateScope(); // invalidate pending IDB reads/writes before clearing the UI
  state=null;
+ offlineSyncView=false;
 
  if(typeof ui!=='undefined'){
   ui.reserveSuggestions=[];ui.focusReserveId=null;ui.obligationsSection='payments';
  }
  restoreFile=null;verifyBackupFile=null;cloudImportFile=null;pendingCloudImport=null;cloudImportController?.abort();cloudImportController=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
  if(screenRoot){screenRoot.unmount();screenRoot=null;}
+ if(backgroundSyncRoot){backgroundSyncRoot.unmount();backgroundSyncRoot=null;}
+ if(backgroundSyncHost){backgroundSyncHost.remove();backgroundSyncHost=null;}
+ if($('#main'))$('#main').style.display='';
  if(navRoots){navRoots.unmount();navRoots=null;}
  if(typeof auxiliaryDialogRoots!=='undefined'&&auxiliaryDialogRoots){auxiliaryDialogRoots.dispose();auxiliaryDialogRoots=null;}
  if(typeof financeFormRoots!=='undefined'&&financeFormRoots){financeFormRoots.dispose();financeFormRoots=null;}
@@ -74,6 +82,43 @@ function revokeDisplayedLedger(){
   if(dialog.open)dialog.close();
   dialog.replaceChildren();
  }
+}
+function startOfflineSync(actor){
+ // The hint merely chooses an encrypted vault; it is never a live auth session.
+ // If cross-tab revocation cannot be observed, do not expose the local vault.
+ authBroadcast=new BroadcastChannel('fh-auth-session-v2');
+ authBroadcast.onmessage=event=>{
+  if(event.data?.type==='session-changed'||(event.data?.type==='logout'&&event.data.userId===actor)){
+   forgetOfflineActor(actor);
+   revokeDisplayedLedger();
+   window.location.replace('./account.html');
+  }
+ };
+ for(const selector of ['.sidebar','.toolbar','.footer','.bottom-nav']){
+  const element=$(selector);if(element)element.style.display='none';
+ }
+ const main=$('#main');main.replaceChildren();
+ screenRoot=createOfflineSyncRoot(main,actor,()=>window.location.replace('./account.html'));
+}
+function openBackgroundSync(){
+ if(!financeSyncEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId)return;
+ if(!backgroundSyncRoot){
+  const main=$('#main');
+  backgroundSyncHost=document.createElement('main');
+  backgroundSyncHost.className='page';backgroundSyncHost.id='offline-sync-main';
+  main.insertAdjacentElement('afterend',backgroundSyncHost);
+  const actor=activeUserId;
+  backgroundSyncRoot=createOfflineSyncRoot(backgroundSyncHost,actor,()=>navigation('overview'),false,()=>{
+   forgetOfflineActor(actor);revokeDisplayedLedger();window.location.replace('./account.html');
+  });
+ }
+ $('#main').style.display='none';backgroundSyncHost.style.display='';
+ offlineSyncView=true;syncStorageContext();syncAccountControls();
+}
+function hideBackgroundSync(){
+ if(backgroundSyncHost)backgroundSyncHost.style.display='none';
+ const main=$('#main');if(main)main.style.display='';
+ offlineSyncView=false;
 }
 const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
 const monthEvents=()=>getMonthEvents(state,ui.month);
@@ -102,11 +147,12 @@ function syncStorageContext(){
  const serverCalendar=eligible&&ui.view==='calendar'&&ui.calendarSource==='server';
  const serverOverview=eligible&&ui.view==='overview'&&ui.overviewSource==='server';
  const serverAccounts=eligible&&((ui.view==='accounts-connected'||ui.view==='bank-import')||serverPayments||serverCalendar||serverOverview);
+ const syncView=serverAccounts&&ui.view==='accounts-connected'&&offlineSyncView;
  const labels=[
-  ['storage-context-chip',serverAccounts?'На сервере':'Локально'],
-  ['storage-context-title',serverOverview?'Обзор аккаунта':serverCalendar?'Календарь аккаунта':serverPayments?'Оплаты в аккаунте':serverAccounts?'Счета в аккаунте':'Хранится на устройстве'],
-  ['storage-context-detail',serverAccounts?'Локальный бюджет отдельно':'Без банковских подключений'],
-  ['storage-context-footnote',serverOverview||serverCalendar||serverPayments?'Данные хранятся в аккаунте. Локальные записи остаются в этом браузере.':serverAccounts?'Счета хранятся на сервере. Локальная бухгалтерия остаётся в этом браузере.':'Данные остаются в этом браузере. Делайте резервные копии.'],
+  ['storage-context-chip',syncView?'Локальная копия':serverAccounts?'На сервере':'Локально'],
+  ['storage-context-title',syncView?'Офлайн-синхронизация':serverOverview?'Обзор аккаунта':serverCalendar?'Календарь аккаунта':serverPayments?'Оплаты в аккаунте':serverAccounts?'Счета в аккаунте':'Хранится на устройстве'],
+  ['storage-context-detail',syncView?'Подтверждённый снимок и очередь':serverAccounts?'Локальный бюджет отдельно':'Без банковских подключений'],
+  ['storage-context-footnote',syncView?'Снимок и ожидающие операции хранятся на устройстве в зашифрованном виде.':serverOverview||serverCalendar||serverPayments?'Данные хранятся в аккаунте. Локальные записи остаются в этом браузере.':serverAccounts?'Счета хранятся на сервере. Локальная бухгалтерия остаётся в этом браузере.':'Данные остаются в этом браузере. Делайте резервные копии.'],
  ];
  for(const [id,value] of labels){
   const element=document.getElementById(id);
@@ -116,14 +162,17 @@ function syncStorageContext(){
  // Accounts has its own explicit "Новый счёт" button.
  const globalAdd=$('#top-add');
  if(!navRoots&&globalAdd)globalAdd.hidden=serverAccounts;
- if(lastStorageContext!==serverAccounts){
-  $('#save-indicator').textContent=serverAccounts?'Серверный раздел':'Локальная база готова';
+ if(lastStorageContext!==serverAccounts||lastSyncContext!==syncView){
+  $('#save-indicator').textContent=syncView?'Зашифрованная локальная копия':serverAccounts?'Серверный раздел':'Локальная база готова';
   lastStorageContext=serverAccounts;
+  lastSyncContext=syncView;
  }
 }
 function navigation(view){
  if(view==='accounts-connected'&&(!financeAccountsEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId))return;
  if(view==='bank-import'&&!guestMode&&(!bankImportEnabled||!activeUserId||emailSession.userId!==activeUserId))return;
+ hideBackgroundSync();
+ if(view==='accounts-connected')accountScreenVersion++;
  if(view==='calendar'&&ui.view!=='calendar')ui.calendarSource=financeReservesEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId?'server':'local';
  if(view==='overview'&&ui.view!=='overview')ui.overviewSource=financeReservesEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId?'server':'local';
  ui.view=view;$('.sidebar')?.classList.remove('open');window.scrollTo({top:0,behavior:'instant'});render();if(view==='settings'){void renderStorageStatus();if(!guestMode)void refreshEmailSession();}}
@@ -134,7 +183,7 @@ function render(){
  if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'||ui.view==='settings'||ui.view==='accounts-connected'||ui.view==='bank-import'){
   if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main,getAuthAccess);}
   if(ui.view==='accounts-connected'){
-   screenRoot.render({view:'accounts-connected',props:{verifiedActorUserId:emailSession.userId||null,onBack:()=>navigation('overview')}});
+   screenRoot.render({view:'accounts-connected',props:{verifiedActorUserId:emailSession.userId||null,syncEnabled:financeSyncEnabled,onOpenSync:openBackgroundSync,refreshVersion:accountScreenVersion,onBack:()=>navigation('overview')}});
   }else if(ui.view==='bank-import'){
    screenRoot.render({view:'bank-import',props:{
     mode:guestMode?'guest':'account',
@@ -256,16 +305,28 @@ function syncAccountControls(){
   title:titles[ui.view],theme:document.body.dataset.theme==='dark'?'dark':'light',
   signedIn,busy:Boolean(emailSession.busy),
   serverAccounts:lastStorageContext===true,
+  localSnapshot:lastSyncContext,
  });
 }
 async function refreshEmailSession(){
  if(guestMode||!activeUserId||emailSession.busy)return true;
+ if(emailSession.userId!==activeUserId){
+  revokeDisplayedLedger();
+  window.location.replace('./account.html');
+  return false;
+ }
+ // A known offline transition cannot establish whether the session was
+ // revoked. Keep the already-open view, but do not authorize new online work.
+ if(globalThis.navigator?.onLine===false)return false;
  // Focus, visibility and Settings can request validation together. A single
  // in-flight check avoids a stale response falsely signing out a valid session.
  if(sessionValidation)return sessionValidation;
  const pending=(async()=>{
   const verified=await emailSession.refresh();
   if(!verified||emailSession.userId!==activeUserId){
+   // The connection may have dropped while the request was in flight. An
+   // actual HTTP rejection still revokes immediately, even during a drop.
+   if(!verified&&emailSession.userId===activeUserId&&emailSession.lastRefreshFailure==='network'&&globalThis.navigator?.onLine===false)return false;
    revokeDisplayedLedger();
    window.location.replace('./account.html');
    return false;
@@ -284,6 +345,7 @@ async function logoutEmailAccount(){
  try{
   if(await pending){
    // Revoke access to the displayed account before leaving the page.
+   forgetOfflineActor(activeUserId);
    revokeDisplayedLedger();
    try{sessionStorage.removeItem(GUEST_MODE_KEY);}catch{}
    try{authBroadcast?.postMessage({type:'logout',userId:activeUserId});}catch{}
@@ -1400,6 +1462,7 @@ async function init(){
   // A successful OAuth callback replaces guest mode with the verified account.
   const oauthSessionChanged=url.searchParams.get('auth')==='success';
   if(oauthSessionChanged){
+   forgetOfflineActor();
    try{sessionStorage.removeItem(GUEST_MODE_KEY);}catch{}
    url.searchParams.delete('auth');
    history.replaceState(null,'',url.pathname+url.search+url.hash);
@@ -1418,16 +1481,22 @@ async function init(){
    // Validate the server session BEFORE reading any account ledger.
    const verified=await emailSession.refresh();
    if(!verified||!emailSession.userId){
+    const offlineActor=financeSyncEnabled&&emailSession.lastRefreshFailure==='network'&&
+      globalThis.navigator?.onLine===false?readOfflineActor():null;
+    if(offlineActor){startOfflineSync(offlineActor);return;}
     window.location.replace('./account.html');
     return;
    }
    activeUserId=emailSession.userId;
+   const previousOfflineActor=readOfflineActor();
+   if(previousOfflineActor&&previousOfflineActor!==activeUserId)forgetOfflineActor(previousOfflineActor);
    await selectStateScope(activeUserId);
    try{
     authBroadcast=new BroadcastChannel('fh-auth-session-v2');
     authBroadcast.onmessage=event=>{
      if(event.data?.type==='session-changed'||
         (event.data?.type==='logout'&&event.data.userId===activeUserId)){
+      forgetOfflineActor(activeUserId);
       revokeDisplayedLedger();
       window.location.replace('./account.html');
      }

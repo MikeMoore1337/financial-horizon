@@ -51,7 +51,11 @@ def test_candidate_is_not_public_and_leaves_v1_contract_untouched():
     assert v2["x-go-live"] == "NO_GO"
     assert v2["x-approved"] is False
     assert v2["x-account-v2-opt-in-default"] is False
-    assert set(v2["paths"]) == {"/api/finance/v2/commands"}
+    assert set(v2["paths"]) == {"/api/finance/v2/commands", "/api/finance/v2/commands/cancel"}
+    cancel = v2["paths"]["/api/finance/v2/commands/cancel"]["post"]
+    assert cancel["security"] == [{"financeV2Cookie": []}]
+    assert {"If-Match", "Idempotency-Key", "X-FH-Expected-Profile"} == {p["name"] for p in cancel["parameters"]}
+    assert {"200", "401", "403", "409", "422", "428", "429", "503"} <= set(cancel["responses"])
     assert v2["x-authoritative-read"] == "/api/finance/v1/state"
     assert v2["x-related-bootstrap"] == "/api/auth/email/finance/session"
     assert v2["info"]["version"] != v1["info"]["version"]

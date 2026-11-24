@@ -3,13 +3,21 @@ import { Icon } from './Calendar';
 export interface ToolbarProps {
   title: string;
   serverAccounts: boolean;
+  localSnapshot?: boolean;
   theme: 'light' | 'dark';
   signedIn: boolean;
   busy: boolean;
 }
 
 /** Presentation only; existing delegated handlers own every action. */
-export function Toolbar({ title, theme, signedIn, busy, serverAccounts }: ToolbarProps) {
+export function Toolbar({
+  title,
+  theme,
+  signedIn,
+  busy,
+  serverAccounts,
+  localSnapshot = false,
+}: ToolbarProps) {
   return (
     <>
       <div className="toolbar-leading">
@@ -28,7 +36,9 @@ export function Toolbar({ title, theme, signedIn, busy, serverAccounts }: Toolba
       <div className="toolbar-actions">
         <span className="local-chip">
           <span className="privacy-dot" />
-          <span id="storage-context-chip">{serverAccounts ? 'На сервере' : 'Локально'}</span>
+          <span id="storage-context-chip">
+            {localSnapshot ? 'Локальная копия' : serverAccounts ? 'На сервере' : 'Локально'}
+          </span>
         </span>
         <button
           type="button"
