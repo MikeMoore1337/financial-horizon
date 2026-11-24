@@ -111,13 +111,18 @@ export async function refreshEncryptedCloudSnapshot({
     : cloudImage(verified, proofs, serverEtag);
   // Keep the exact pre-command image when replacing it. It is encrypted in
   // the same CAS and remains tied to the original head UUID and If-Match.
-  // It is useful only for a later exact-revision snapshot comparison; it
+  // It is useful only for a bounded, independently checked snapshot comparison; it
   // never settles the command or replaces missing journal events.
   const outbox = structuredClone(bundle.outbox);
   const head = outbox[0];
-  if (verified.revision === before.revision + 1 && head && !head.recoveryBase &&
+  if (verified.revision > before.revision && verified.revision <= before.revision + 9 &&
+      head && !head.recoveryBase &&
       ['account.create', 'account.update', 'account.archive', 'account.unarchive',
-        'transaction.record', 'account.transfer'].includes(head.command?.action) &&
+        'transaction.record', 'transaction.reverse', 'account.transfer', 'obligation.create',
+        'settlement.payment.record', 'settlement.payment.void', 'loan.payment.record', 'loan.payment.void',
+        'reserve.create', 'reserve.update', 'reserve.allocate', 'reserve.archive',
+        'reserve.skip', 'reserve.event.void', 'reserve.cycle.close', 'reserve.cycle.void']
+        .includes(head.command?.action) &&
       head.status === 'pending' && head.command?.base_revision === before.revision &&
       typeof before.serverEtag === 'string' && head.ifMatch === before.serverEtag) {
     head.recoveryBase = {revision:before.revision, serverEtag:before.serverEtag,

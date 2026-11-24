@@ -29,8 +29,8 @@ def main():
             connection.execute(text("SELECT set_config('fh.profile_id', :v, true)"), {"v": str(profile)})
             count = connection.execute(text("SELECT count(*) FROM finance.change_log WHERE profile_id=:p AND revision=:r"),
                                        {"p": profile, "r": revision}).scalar_one()
-            if count != 1:
-                raise RuntimeError("Expected one synthetic committed event")
+            if not 1 <= count <= 3:
+                raise RuntimeError("Expected a bounded synthetic committed revision")
             connection.execute(text("ALTER TABLE finance.change_log DISABLE TRIGGER protect_change_log"))
             deleted = connection.execute(text("DELETE FROM finance.change_log WHERE profile_id=:p AND revision=:r"),
                                          {"p": profile, "r": revision}).rowcount
@@ -38,7 +38,7 @@ def main():
             updated = connection.execute(text("UPDATE finance.finance_profiles SET min_available_revision=:r "
                                               "WHERE id=:p AND revision=:r"),
                                          {"p": profile, "r": revision}).rowcount
-            if deleted != 1 or updated != 1:
+            if deleted != count or updated != 1:
                 raise RuntimeError("Unexpected synthetic database state")
     finally:
         engine.dispose()

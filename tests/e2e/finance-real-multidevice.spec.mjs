@@ -1395,7 +1395,7 @@ test('#68 exact independent snapshot recovers a committed command when both jour
   expect(server.body.entities.filter(item => item.id === accountId)).toHaveLength(1);
 });
 
-for (const operation of ['create', 'expense', 'transfer']) test(`#68 recovers ${operation} using the exact snapshot after an actual synthetic PostgreSQL journal loss`, async ({page, context}) => {
+for (const operation of ['create', 'expense', 'transfer', 'obligation', 'reserve', 'reserve_allocate', 'reserve_update', 'reserve_archive', 'reserve_skip', 'reserve_event_void', 'reserve_cycle_close', 'reserve_cycle_void', 'settlement', 'loan', 'settlement_void', 'loan_void', 'reverse', 'settlement_reserved', 'settlement_reserved_void']) test(`#68 recovers ${operation} using the exact snapshot after an actual synthetic PostgreSQL journal loss`, async ({page, context}) => {
   test.setTimeout(120_000);
   if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
   await context.route('**/__e2e_138_*.js', route => route.fulfill({
@@ -1405,8 +1405,9 @@ for (const operation of ['create', 'expense', 'transfer']) test(`#68 recovers ${
   }));
   const login = await context.request.post('/__e2e__/personal-session');
   const actor = (await login.json()).user.id;
-  const accountId = randomUUID(), otherId = randomUUID(), transactionId = randomUUID();
-  if (operation !== 'create') {
+  const accountId = randomUUID(), otherId = randomUUID(), transactionId = randomUUID(), reserveId = randomUUID();
+  let obligationId = null, loanId = null, originalId = null, factId = null, reserveEventId = null;
+  if (operation !== 'create' && operation !== 'obligation') {
     await bootstrap(context);
     let initial = await state(context);
     expect((await submit(context, initial, 'account.create', {id:accountId, name:'Synthetic source',
@@ -1416,28 +1417,122 @@ for (const operation of ['create', 'expense', 'transfer']) test(`#68 recovers ${
       expect((await submit(context, initial, 'account.create', {id:otherId, name:'Synthetic destination',
         kind:'cash', currency:'RUB', opening_minor:200})).status()).toBe(201);
     }
+    if (operation.startsWith('reserve') || operation.startsWith('settlement')) {
+      const planned = await submit(context, await state(context), 'obligation.create', {title:'Synthetic reserve obligation',
+        direction:'expense', amount_minor:5000, starts_on:'2026-11-12', timezone:'Europe/Moscow',
+        recurrence_unit:'none', recurrence_every:1}, {}, 1);
+      expect(planned.status()).toBe(201);
+      obligationId = (await planned.json()).changes[0].entity_id;
+      if ((operation.startsWith('reserve') && operation !== 'reserve') || operation.startsWith('settlement_reserved')) {
+        const created = await submit(context, await state(context), 'reserve.create', {id:reserveId,
+          obligation_id:obligationId, account_id:accountId, title:'Synthetic reserve', target_minor:5000,
+          opened_on:'2026-10-12', first_due_on:'2026-11-12', period_months:1, due_day:12,
+          contribution_mode:'auto', opening_reserved_minor:['reserve_archive','reserve_cycle_close','reserve_cycle_void'].includes(operation) ? 0 : 1200},
+          {[accountId]:1,[obligationId]:1});
+        expect(created.status()).toBe(201);
+        if (operation === 'reserve_event_void') {
+          const prior = await state(context);
+          const contribution = await submit(context,prior,'reserve.allocate', {reserve_id:reserveId,
+            account_id:accountId,delta_minor:300,occurred_on:'2026-11-12'},
+          {[accountId]:versionOf(prior,accountId),[reserveId]:versionOf(prior,reserveId)});
+          expect(contribution.status()).toBe(201);
+          const recorded = await state(context);
+          reserveEventId = recorded.body.entities.find(item => item.id === reserveId)?.data.event_log.at(-1)?.id;
+          expect(reserveEventId).toBeTruthy();
+        }
+        if (['reserve_cycle_close','reserve_cycle_void'].includes(operation)) {
+          const prior = await state(context);
+          expect((await submit(context,prior,'settlement.payment.record',{account_id:accountId,
+            obligation_id:obligationId,amount_minor:5000,paid_on:'2026-11-12',occurrence_on:'2026-11-12',
+            reserve_id:reserveId,reserved_used_minor:0}, {[accountId]:versionOf(prior,accountId),
+              [obligationId]:versionOf(prior,obligationId),[reserveId]:versionOf(prior,reserveId)})).status()).toBe(201);
+          if (operation === 'reserve_cycle_void') {
+            const paid = await state(context);
+            expect((await submit(context,paid,'reserve.cycle.close',{reserve_id:reserveId,occurred_on:'2026-11-12'},
+              {[reserveId]:versionOf(paid,reserveId)})).status()).toBe(201);
+          }
+        }
+      }
+    }
+    if (operation.startsWith('loan')) {
+      const created = await context.request.post('/api/finance/v1/__e2e__/synthetic-loan', {headers:{Origin:ORIGIN}});
+      expect(created.status()).toBe(200);
+      loanId = (await created.json()).id;
+    }
+    if (['settlement_void','loan_void','reverse','settlement_reserved_void'].includes(operation)) {
+      const prior = await state(context);
+      const action = operation.startsWith('settlement_') ? 'settlement.payment.record' :
+        operation === 'loan_void' ? 'loan.payment.record' : 'transaction.record';
+      const payload = operation.startsWith('settlement_') ? {account_id:accountId,obligation_id:obligationId,
+        amount_minor:1200,paid_on:'2026-11-12',occurrence_on:'2026-11-12',
+        ...(operation === 'settlement_reserved_void' ? {reserve_id:reserveId,reserved_used_minor:700} : {})} : operation === 'loan_void' ?
+        {account_id:accountId,loan_id:loanId,amount_minor:1200,paid_on:'2026-11-12',strategy:'term'} :
+        {id:transactionId,account_id:accountId,kind:'expense',signed_minor:-1200,occurred_on:'2026-11-12'};
+      const versions = operation.startsWith('settlement_') ? {[accountId]:versionOf(prior,accountId),
+        [obligationId]:versionOf(prior,obligationId),...(operation === 'settlement_reserved_void' ? {[reserveId]:versionOf(prior,reserveId)} : {})} :
+        operation === 'loan_void' ? {[accountId]:versionOf(prior,accountId),[loanId]:versionOf(prior,loanId)} :
+        {[accountId]:versionOf(prior,accountId)};
+      const performed = await submit(context,prior,action,payload,versions);
+      expect(performed.status()).toBe(201);
+      const changes = (await performed.json()).changes;
+      originalId = changes.find(item => item.kind === 'ledger_posted').entity_id;
+      factId = changes.find(item => item.payload?.entity?.kind === (operation === 'loan_void' ? 'loan_payment' : 'settlement'))?.entity_id || null;
+    }
   }
   await page.goto('/__e2e__/ready');
-  const baseline = await page.evaluate(async ({actor, accountId, otherId, transactionId, operation}) => {
+  const baseline = await page.evaluate(async ({actor, accountId, otherId, transactionId, obligationId, reserveId, reserveEventId, loanId, originalId, factId, operation}) => {
     const {FinanceSyncController} = await import('/__e2e_138_controller__.js');
     const phrase = 'synthetic physically absent history issue sixty eight';
     const controller = new FinanceSyncController({verifiedActorUserId:actor, origin:location.origin});
     await controller.createLocal(phrase, true);
     const opened = await controller.unlock({passphrase:phrase});
-    const versions = Object.fromEntries(opened.cloud.entities.filter(item =>
-      item.kind === 'account' && [accountId, otherId].includes(item.id)).map(item => [item.id,item.entity_revision]));
-    const action = operation === 'create' ? 'account.create' : operation === 'expense' ? 'transaction.record' : 'account.transfer';
+    const ids = ['reserve_allocate','reserve_event_void'].includes(operation) ? [accountId,reserveId] :
+      ['reserve_update','reserve_archive','reserve_skip','reserve_cycle_close','reserve_cycle_void'].includes(operation) ? [reserveId] :
+      operation === 'settlement_reserved_void' ? [accountId,originalId,factId,reserveId] :
+      ['settlement_void','loan_void'].includes(operation) ? [accountId,originalId,factId] :
+      operation === 'settlement_reserved' ? [accountId,obligationId,reserveId] :
+      operation === 'reverse' ? [accountId,originalId] : [accountId,otherId,obligationId,loanId];
+    const versions = Object.fromEntries(opened.cloud.entities.filter(item => ids.includes(item.id))
+      .map(item => [item.id,item.entity_revision]));
+    const action = operation === 'create' ? 'account.create' : operation === 'expense' ? 'transaction.record' :
+      operation === 'transfer' ? 'account.transfer' : operation === 'obligation' ? 'obligation.create' :
+      operation === 'reserve_allocate' ? 'reserve.allocate' : operation === 'reserve_update' ? 'reserve.update' :
+      operation === 'reserve_archive' ? 'reserve.archive' : operation === 'reserve_skip' ? 'reserve.skip' :
+      operation === 'reserve_event_void' ? 'reserve.event.void' : operation === 'reserve_cycle_close' ? 'reserve.cycle.close' :
+      operation === 'reserve_cycle_void' ? 'reserve.cycle.void' : ['settlement','settlement_reserved'].includes(operation) ? 'settlement.payment.record' :
+      operation === 'loan' ? 'loan.payment.record' : ['settlement_void','settlement_reserved_void'].includes(operation) ? 'settlement.payment.void' :
+      operation === 'loan_void' ? 'loan.payment.void' : operation === 'reverse' ? 'transaction.reverse' : 'reserve.create';
     const payload = operation === 'create'
       ? {id:accountId, name:'Synthetic missing SQL event', kind:'cash', currency:'RUB', opening_minor:500}
       : operation === 'expense' ? {id:transactionId, account_id:accountId, kind:'expense', signed_minor:-1200,
         occurred_on:'2026-11-12', note:'Synthetic expense'}
-        : {from_account_id:accountId, to_account_id:otherId, amount_minor:1200, occurred_on:'2026-11-12'};
-    const command = {schema_version:operation === 'transfer' ? 1 : 2, client_mutation_id:crypto.randomUUID(),
+        : operation === 'transfer' ? {from_account_id:accountId, to_account_id:otherId, amount_minor:1200, occurred_on:'2026-11-12'}
+        : operation === 'obligation' ? {title:'Synthetic missing obligation', direction:'expense', amount_minor:5000,
+          starts_on:'2026-11-12', timezone:'Europe/Moscow', recurrence_unit:'none', recurrence_every:1}
+        : operation === 'reserve_allocate' ? {reserve_id:reserveId, account_id:accountId, delta_minor:300, occurred_on:'2026-11-12'}
+        : operation === 'reserve_update' ? {reserve_id:reserveId, title:'Synthetic updated reserve', target_minor:6000,
+          first_due_on:'2026-11-12', period_months:1, due_day:12, contribution_mode:'auto', occurred_on:'2026-11-12'}
+        : operation === 'reserve_archive' ? {reserve_id:reserveId}
+        : operation === 'reserve_skip' ? {reserve_id:reserveId,slot_on:'2026-11-12',occurred_on:'2026-11-12'}
+        : operation === 'reserve_event_void' ? {reserve_id:reserveId,account_id:accountId,target_event_id:reserveEventId,
+          occurred_on:'2026-11-12',reason:'Synthetic correction'}
+        : operation === 'reserve_cycle_close' ? {reserve_id:reserveId,occurred_on:'2026-11-12'}
+        : operation === 'reserve_cycle_void' ? {reserve_id:reserveId,occurred_on:'2026-11-12',reason:'Synthetic correction'}
+        : ['settlement','settlement_reserved'].includes(operation) ? {account_id:accountId,obligation_id:obligationId,amount_minor:1200,
+          paid_on:'2026-11-12',occurrence_on:'2026-11-12',...(operation === 'settlement_reserved' ? {reserve_id:reserveId,reserved_used_minor:700} : {})}
+        : operation === 'loan' ? {account_id:accountId,loan_id:loanId,amount_minor:1200,paid_on:'2026-11-12',strategy:'term'}
+        : ['settlement_void','loan_void','settlement_reserved_void'].includes(operation) ? {account_id:accountId,transaction_id:originalId,
+          fact_id:factId,reason:'Synthetic correction',...(operation === 'settlement_reserved_void' ? {reserve_id:reserveId} : {})}
+        : operation === 'reverse' ? {transaction_id:originalId,reason:'Synthetic correction'}
+        : {id:reserveId, obligation_id:obligationId, account_id:accountId, title:'Synthetic missing reserve',
+          target_minor:5000, opened_on:'2026-10-12', first_due_on:'2026-11-12', period_months:1,
+          due_day:12, contribution_mode:'auto', opening_reserved_minor:1200};
+    const command = {schema_version:['transfer','obligation','reverse'].includes(operation) ? 1 : 2, client_mutation_id:crypto.randomUUID(),
       base_revision:opened.cloud.revision, action, expected_entity_revisions:versions, payload};
     await controller.enqueue(command);
     window.__fh68test = {controller, phrase};
     return opened.cloud.revision;
-  }, {actor, accountId, otherId, transactionId, operation});
+  }, {actor, accountId, otherId, transactionId, obligationId, reserveId, reserveEventId, loanId, originalId, factId, operation});
   let removed = false;
   const statuses = [];
   page.on('response', response => {
@@ -1473,13 +1568,36 @@ for (const operation of ['create', 'expense', 'transfer']) test(`#68 recovers ${
   expect(result).toEqual({held:'SNAPSHOT_REQUIRED_HOLD', recovered:'DURABLY_CONFIRMED',
     proof:'exact_snapshot', pending:0, conflicts:0});
   const server = await state(context);
-  expect(server.body.entities.filter(item => item.id === accountId)).toHaveLength(1);
-  expect(entity(server, accountId).data.balance_minor).toBe(operation === 'create' ? 500 : 8800);
+  if (operation !== 'obligation') {
+    expect(server.body.entities.filter(item => item.id === accountId)).toHaveLength(1);
+    expect(entity(server, accountId).data.balance_minor).toBe(operation === 'create' ? 500 :
+      ['reserve_cycle_close','reserve_cycle_void'].includes(operation) ? 5000 :
+      operation.startsWith('reserve') || operation.endsWith('_void') || operation === 'reverse' ? 10000 : 8800);
+  }
   if (operation === 'transfer') expect(entity(server, otherId).data.balance_minor).toBe(1400);
-  if (operation !== 'create') expect(server.body.entities.filter(item => item.kind === 'transaction')).toHaveLength(1);
+  if (['expense','transfer'].includes(operation)) expect(server.body.entities.filter(item => item.kind === 'transaction')).toHaveLength(1);
+  if (['settlement','settlement_reserved','loan'].includes(operation)) expect(server.body.entities.filter(item => item.kind === 'transaction')).toHaveLength(1);
+  if (['settlement_void','settlement_reserved_void','loan_void','reverse'].includes(operation)) expect(server.body.entities.filter(item => item.kind === 'transaction')).toHaveLength(2);
+  if (operation === 'settlement_reserved' || operation === 'settlement_reserved_void') {
+    expect(entity(server, accountId).data.reserved_minor).toBe(operation === 'settlement_reserved' ? 500 : 1200);
+  }
+  if (operation === 'obligation') expect(server.body.entities.filter(item => item.kind === 'obligation')).toHaveLength(1);
+  if (operation.startsWith('reserve')) {
+    const expected = operation === 'reserve_allocate' ? 1500 :
+      ['reserve_archive','reserve_cycle_close','reserve_cycle_void'].includes(operation) ? 0 : 1200;
+    const reserve = server.body.entities.find(item => item.id === reserveId);
+    expect(reserve?.data.allocated_minor).toBe(expected);
+    expect(entity(server, accountId).data.reserved_minor).toBe(expected);
+    if (operation === 'reserve_update') expect(reserve.data.title).toBe('Synthetic updated reserve');
+    if (operation === 'reserve_archive') expect(reserve.data.archived_at).not.toBeNull();
+    if (operation === 'reserve_cycle_close') expect(reserve.data.cycle_number).toBe(2);
+    if (operation === 'reserve_cycle_void') expect(reserve.data.cycle_number).toBe(1);
+    if (operation === 'reserve_skip') expect(reserve.data.event_log.some(event => event.kind === 'skip')).toBe(true);
+    if (operation === 'reserve_event_void') expect(reserve.data.event_log.some(event => event.kind === 'void' && event.target_event_id === reserveEventId)).toBe(true);
+  }
 });
 
-test('#68 missing journal and a concurrent device revision preserve the queued operation', async ({browser, page, context}) => {
+for (const mode of ['new_entity', 'two_new_entities', 'updated_entity']) test(`#68 missing journal and concurrent device revision (${mode})`, async ({browser, page, context}) => {
   test.setTimeout(120_000);
   if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
   await context.route('**/__e2e_138_*.js', route => route.fulfill({
@@ -1488,7 +1606,7 @@ test('#68 missing journal and a concurrent device revision preserve the queued o
     headers:{'Cache-Control':'no-store'},
   }));
   const login = await context.request.post('/__e2e__/personal-session');
-  const actor = (await login.json()).user.id, accountId = randomUUID(), concurrentId = randomUUID();
+  const actor = (await login.json()).user.id, accountId = randomUUID(), concurrentId = randomUUID(), extraId = randomUUID();
   const other = await browser.newContext({baseURL:ORIGIN, storageState:await context.storageState()});
   try {
     await page.goto('/__e2e__/ready');
@@ -1518,19 +1636,33 @@ test('#68 missing journal and a concurrent device revision preserve the queued o
       .toBe('SNAPSHOT_REQUIRED_HOLD');
     await bootstrap(other);
     const before = await state(other);
-    expect((await submit(other, before, 'account.create', {id:concurrentId, name:'Synthetic concurrent',
-      kind:'cash', currency:'RUB', opening_minor:300})).status()).toBe(201);
+    const response = mode !== 'updated_entity'
+      ? await submit(other, before, 'account.create', {id:concurrentId, name:'Synthetic concurrent',
+        kind:'cash', currency:'RUB', opening_minor:300})
+      : await submit(other, before, 'account.update', {account_id:accountId, name:'Synthetic changed', kind:'cash'},
+        {[accountId]:entity(before,accountId).entity_revision});
+    expect(response.status()).toBe(201);
+    if (mode === 'two_new_entities') {
+      expect((await submit(other,await state(other),'account.create',{id:extraId,name:'Synthetic second concurrent',
+        kind:'cash',currency:'RUB',opening_minor:250})).status()).toBe(201);
+    }
     const result = await page.evaluate(async () => {
       const controller = window.__fh68test;
       await controller.refresh();
-      const retried = await controller.dispatchOnce();
+      let retried;
+      try {retried = await controller.dispatchOnce();}
+      catch {retried = {status:'SAFE_HOLD'};}
       const after = await controller.read();
       controller.close(); delete window.__fh68test;
-      return {status:retried.status, pending:after.outbox.length, conflicts:after.conflicts.length};
+      return {status:retried.status, proof:retried.proof || null,
+        pending:after.outbox.length, conflicts:after.conflicts.length};
     });
-    expect(result).toEqual({status:'SNAPSHOT_REQUIRED_HOLD', pending:1, conflicts:1});
+    expect(result).toEqual(mode !== 'updated_entity'
+      ? {status:'DURABLY_CONFIRMED', proof:'snapshot_and_new_entities', pending:0, conflicts:0}
+      : {status:'SAFE_HOLD', proof:null, pending:1, conflicts:1});
     const server = await state(other);
-    expect(server.body.entities.filter(item => [accountId,concurrentId].includes(item.id))).toHaveLength(2);
+    expect(server.body.entities.filter(item => [accountId,concurrentId,extraId].includes(item.id)))
+      .toHaveLength(mode === 'two_new_entities' ? 3 : mode === 'new_entity' ? 2 : 1);
   } finally {await other.close();}
 });
 

@@ -2929,7 +2929,7 @@ test('#68 missing journal can use a complete exact-revision snapshot without rep
     await refreshEncryptedCloudSnapshot({scope:USER_A, session, identity, pages,
       etag:`"fh.1.${pages[0].body.revision}.0123456789abcdef"`, expectedEpoch:4});
     const before = await readAtomicEncryptedCandidate(USER_A, session);
-    assert.equal(before.outbox[0].recoveryBase?.revision, scenario === 'later' ? undefined : 0);
+    assert.equal(before.outbox[0].recoveryBase.revision, 0);
     session.logout();
     const restored = new LocalBudgetSession(); restored.selectScope(USER_A);
     await restored.unlock(await getAtomicEncryptedKeyset(USER_A), {passphrase:PASS});
@@ -3016,6 +3016,155 @@ test('#68 snapshot recovery rejects a transfer with matching but unintended acco
     }
     session.logout();
   }
+});
+
+test('#68 missing revision with a later snapshot requires a contiguous independent insert-only tail', async () => {
+  for (const scenario of ['matching', 'update', 'gap', 'truncated', 'auth', 'mismatch']) {
+    const {session, identity} = await preparedOfflineQueue();
+    await refreshEncryptedCloudSnapshot({scope:USER_A, session, identity, pages:cloudPages(),
+      etag:'"fh.1.0.0123456789abcdef"', expectedEpoch:1});
+    await enqueueEncryptedFinanceCommandCandidate({scope:USER_A, session, identity,
+      command:pendingCommand(), ifMatch:'"fh.1.0.0123456789abcdef"', expectedEpoch:2});
+    await persistEncryptedFinanceHoldCandidate({scope:USER_A, session, identity, expectedEpoch:3,
+      mutationId:PENDING_ID, httpStatus:410, decision:'SNAPSHOT_REQUIRED_HOLD', source:'delta'});
+    const proof = confirmedReceiptData();
+    const original = structuredClone(proof.receipt.changes[0].payload.entity);
+    const next = {...structuredClone(original), id:'c0000000-0000-4000-8000-000000000003',
+      data:{...structuredClone(original.data), name:'Independent account'}};
+    const updatedOriginal = {...structuredClone(original), entity_revision:2,
+      data:{...structuredClone(original.data), name:'Later changed account'}};
+    const pages = cloudPages(); pages[0].body.revision = 2;
+    pages[0].body.entities.push(scenario === 'update' ? updatedOriginal : original);
+    if (scenario !== 'update') pages[0].body.entities.push(structuredClone(next));
+    if (scenario === 'mismatch') pages[0].body.entities[2].data.name = 'Unexpected snapshot';
+    await refreshEncryptedCloudSnapshot({scope:USER_A, session, identity, pages,
+      etag:'"fh.1.2.0123456789abcdef"', expectedEpoch:4});
+    const before = await readAtomicEncryptedCandidate(USER_A, session);
+    const tailEntity = scenario === 'update' ? updatedOriginal : next;
+    const tail = {schema_version:1, from_revision:1, to_revision:2, next_since_revision:2,
+      has_more:false, changes:[{revision:scenario === 'gap' ? 3 : 2, ordinal:0, kind:'upsert',
+        entity_id:tailEntity.id, entity_revision:tailEntity.entity_revision, payload:{entity:tailEntity}}]};
+    if (scenario === 'truncated') tail.changes = [];
+    const urls = [];
+    const args = {lockManager:TEST_LOCKS, scope:USER_A, session, identity, expectedEpoch:5,
+      origin:TEST_ORIGIN, explicitNetworkCandidateConsent:true, fetchImpl:async url=>{
+        urls.push(url);
+        if (url.endsWith('/commands')) return mockFinanceJson({...proof.receipt,replayed:true},200);
+        if (url.includes('since_revision=1')) return scenario === 'auth'
+          ? mockFinanceJson({code:'unauthenticated'},401) : mockFinanceJson(tail,200);
+        return mockFinanceJson({code:'snapshot_required'},410);
+      }};
+    if (scenario === 'matching') {
+      const result = await dispatchOneEncryptedFinanceCommandCandidate(args);
+      assert.equal(result.status,'DURABLY_CONFIRMED');
+      assert.equal(result.proof,'snapshot_and_new_entities');
+      const after = await readAtomicEncryptedCandidate(USER_A,session);
+      assert.equal(after.outbox.length,0);
+      assert.deepEqual(after.snapshot.cloudFinance.entities,before.snapshot.cloudFinance.entities);
+      assert.equal(urls.length,4);
+    } else if (scenario === 'auth') {
+      assert.equal((await dispatchOneEncryptedFinanceCommandCandidate(args)).status,'AUTH_HOLD');
+      assert.deepEqual(await readAtomicEncryptedCandidate(USER_A,session),before);
+    } else {
+      await assert.rejects(() => dispatchOneEncryptedFinanceCommandCandidate(args), /SYNC_HOLD/);
+      assert.deepEqual(await readAtomicEncryptedCandidate(USER_A,session),before);
+    }
+    session.logout();
+  }
+});
+
+test('#68 multi-page tail cannot hide an earlier change or release a queue after an incomplete read', async () => {
+  for (const scenario of ['matching', 'masked', 'partial', 'overlimit']) {
+    const {session, identity} = await preparedOfflineQueue();
+    await refreshEncryptedCloudSnapshot({scope:USER_A, session, identity, pages:cloudPages(),
+      etag:'"fh.1.0.0123456789abcdef"', expectedEpoch:1});
+    await enqueueEncryptedFinanceCommandCandidate({scope:USER_A, session, identity,
+      command:pendingCommand(), ifMatch:'"fh.1.0.0123456789abcdef"', expectedEpoch:2});
+    await persistEncryptedFinanceHoldCandidate({scope:USER_A, session, identity, expectedEpoch:3,
+      mutationId:PENDING_ID, httpStatus:410, decision:'SNAPSHOT_REQUIRED_HOLD', source:'delta'});
+    const proof = confirmedReceiptData(), original = structuredClone(proof.receipt.changes[0].payload.entity);
+    const first = {...structuredClone(original), id:'c0000000-0000-4000-8000-000000000003',
+      data:{...structuredClone(original.data), name:'First addition'}};
+    const second = scenario === 'masked'
+      ? {...structuredClone(first), entity_revision:2, data:{...structuredClone(first.data), name:'Later update'}}
+      : {...structuredClone(original), id:'d0000000-0000-4000-8000-000000000003',
+        data:{...structuredClone(original.data), name:'Second addition'}};
+    const pages = cloudPages(); pages[0].body.revision = scenario === 'overlimit' ? 10 : 3;
+    pages[0].body.entities.push(original, ...(scenario === 'masked' ? [second] : [first, second]));
+    await refreshEncryptedCloudSnapshot({scope:USER_A, session, identity, pages,
+      etag:`"fh.1.${pages[0].body.revision}.0123456789abcdef"`, expectedEpoch:4});
+    const before = await readAtomicEncryptedCandidate(USER_A, session), urls = [];
+    const event = (entity,revision) => ({revision, ordinal:0, kind:'upsert', entity_id:entity.id,
+      entity_revision:entity.entity_revision, payload:{entity}});
+    const later = [
+      {schema_version:1,from_revision:1,to_revision:3,next_since_revision:2,has_more:true,changes:[event(first,2)]},
+      {schema_version:1,from_revision:2,to_revision:3,next_since_revision:3,has_more:false,changes:[event(second,3)]},
+    ];
+    const args = {lockManager:TEST_LOCKS,scope:USER_A,session,identity,expectedEpoch:5,
+      origin:TEST_ORIGIN,explicitNetworkCandidateConsent:true,fetchImpl:async url=>{
+        urls.push(url);
+        if (url.endsWith('/commands')) return mockFinanceJson({...proof.receipt,replayed:true},200);
+        if (url.includes('since_revision=1')) return mockFinanceJson(later[0],200);
+        if (url.includes('since_revision=2')) return scenario === 'partial'
+          ? mockFinanceJson({code:'service_unavailable'},503) : mockFinanceJson(later[1],200);
+        return mockFinanceJson({code:'snapshot_required'},410);
+      }};
+    if (scenario === 'matching') {
+      const result = await dispatchOneEncryptedFinanceCommandCandidate(args);
+      assert.equal(result.proof,'snapshot_and_new_entities');
+      assert.equal((await readAtomicEncryptedCandidate(USER_A,session)).outbox.length,0);
+      assert.equal(urls.length,5);
+    } else if (scenario === 'masked') {
+      await assert.rejects(() => dispatchOneEncryptedFinanceCommandCandidate(args), /SYNC_HOLD/);
+      assert.deepEqual(await readAtomicEncryptedCandidate(USER_A,session),before);
+    } else {
+      assert.equal((await dispatchOneEncryptedFinanceCommandCandidate(args)).status,'SNAPSHOT_REQUIRED_HOLD');
+      assert.deepEqual(await readAtomicEncryptedCandidate(USER_A,session),before);
+      if (scenario === 'overlimit') assert.equal(urls.length,3);
+    }
+    session.logout();
+  }
+});
+
+test('#68 snapshot payment proof rejects an unintended account rename even when snapshot and receipt agree', async () => {
+  const obligationId = 'a0000000-0000-4000-8000-000000000003';
+  const factId = 'b0000000-0000-4000-8000-000000000005';
+  mount();
+  await createAtomicEncryptedCandidate(USER_A, PASS, {...clone(SOURCE),outbox:[],conflicts:[]});
+  const session = await unlock(USER_A), identity = cloudAuth(session), pages = cloudPages();
+  const obligation = {id:obligationId,kind:'obligation',entity_revision:1,
+    data:{title:'Synthetic obligation',direction:'expense',amount_minor:5000}};
+  pages[0].body.entities.push(obligation);
+  await initializeEncryptedCloudCacheCandidate({scope:USER_A,session,identity,pages,
+    etag:'"fh.1.0.0123456789abcdef"',expectedEpoch:0,confirmedAccountCacheInitialization:true});
+  const command = {schema_version:2,client_mutation_id:PENDING_ID,base_revision:0,action:'settlement.payment.record',
+    expected_entity_revisions:{[CLOUD_ACCOUNT]:1,[obligationId]:1},
+    payload:{obligation_id:obligationId,account_id:CLOUD_ACCOUNT,amount_minor:1200,
+      paid_on:'2026-11-11',occurrence_on:'2026-11-11'}};
+  await enqueueEncryptedFinanceCommandCandidate({scope:USER_A,session,identity,command,
+    ifMatch:'"fh.1.0.0123456789abcdef"',expectedEpoch:1});
+  await persistEncryptedFinanceHoldCandidate({scope:USER_A,session,identity,expectedEpoch:2,
+    mutationId:PENDING_ID,httpStatus:410,decision:'SNAPSHOT_REQUIRED_HOLD',source:'delta'});
+  const account = cloudAccount(2,8800); account.data.name = 'Unexpected account rename';
+  const tx = {id:CLOUD_TRANSACTION,kind:'transaction',entity_revision:1,data:{kind:'payment',
+    occurred_on:'2026-11-11',posted_at:'2026-11-11T12:00:00Z',note:null,reversed_transaction_id:null,
+    postings:[{account_id:CLOUD_ACCOUNT,signed_minor:-1200}],payment_link:{settlement_id:factId,loan_payment_id:null}}};
+  const fact = {id:factId,kind:'settlement',entity_revision:1,data:{obligation_id:obligationId,
+    amount_minor:1200,paid_on:'2026-11-11',occurrence_on:'2026-11-11',voided_at:null}};
+  const changes = [{revision:1,ordinal:0,kind:'ledger_posted',entity_id:tx.id,entity_revision:1,
+    payload:{entity:tx,accounts:[account]}}, {revision:1,ordinal:1,kind:'upsert',entity_id:fact.id,
+    entity_revision:1,payload:{entity:fact}}];
+  const newer = cloudPages(); newer[0].body.revision = 1; newer[0].body.entities = [account,obligation,tx,fact];
+  await refreshEncryptedCloudSnapshot({scope:USER_A,session,identity,pages:newer,
+    etag:'"fh.1.1.0123456789abcdef"',expectedEpoch:3});
+  const before = await readAtomicEncryptedCandidate(USER_A,session);
+  const receipt = {schema_version:2,client_mutation_id:PENDING_ID,revision:1,replayed:true,changes};
+  await assert.rejects(() => dispatchOneEncryptedFinanceCommandCandidate({lockManager:TEST_LOCKS,
+    scope:USER_A,session,identity,expectedEpoch:4,origin:TEST_ORIGIN,explicitNetworkCandidateConsent:true,
+    fetchImpl:async url => url.endsWith('/commands') ? mockFinanceJson(receipt,200)
+      : mockFinanceJson({code:'snapshot_required'},410)}), /SYNC_HOLD/);
+  assert.deepEqual(await readAtomicEncryptedCandidate(USER_A,session),before);
+  session.logout();
 });
 
 test('#68 conflict-persistence failure cannot lose a queued financial command', async () => {

@@ -277,9 +277,36 @@ async function dispatchWithoutNetworkLease({
     if (deltaResponse.status === 401 || deltaResponse.status === 403) return control('AUTH_HOLD');
     if (deltaResponse.status === 410) {
       if (bothJournalsUnavailable && recoveringDeltaHold && item.recoveryBase &&
-          cloud.revision === committedRevision && posted.status === 200) {
+          cloud.revision >= committedRevision && cloud.revision - committedRevision <= 8 && posted.status === 200) {
+        // Read every intervening revision under the same session and Web Lock.
+        // A missing, overlong or unauthorized tail keeps the original hold.
+        const laterPages = [];
+        for (let cursor = committedRevision; cursor < cloud.revision; cursor++) {
+          let response;
+          try {
+            response = await fetchImpl(server + '/api/finance/v1/changes?since_revision=' + cursor + '&limit_revisions=1',
+              {method:'GET', credentials:'same-origin', mode:'same-origin', redirect:'error',
+               cache:'no-store', referrerPolicy:'same-origin',
+               headers:{'Accept':'application/json', 'X-FH-Expected-Profile':identity.profileId},
+               signal:session.lifecycleSignal});
+            active(scope, session, identity);
+          } catch {
+            if (session.lifecycleSignal.aborted || identity.signal?.aborted) return control('AUTH_HOLD');
+            return control('SNAPSHOT_REQUIRED_HOLD', null, expectedEpoch);
+          }
+          if (response.status === 401 || response.status === 403) return control('AUTH_HOLD');
+          if (response.status !== 200) return control('SNAPSHOT_REQUIRED_HOLD', null, expectedEpoch);
+          let page;
+          try { page = await jsonResponse(response); }
+          catch { return control('SNAPSHOT_REQUIRED_HOLD', null, expectedEpoch); }
+          active(scope, session, identity);
+          if (page?.from_revision !== cursor || page?.next_since_revision !== cursor + 1) {
+            return control('SNAPSHOT_REQUIRED_HOLD', null, expectedEpoch);
+          }
+          laterPages.push(page);
+        }
         const recovered = await persistSnapshotVerifiedFinanceReceiptCandidate({
-          scope, session, identity, expectedEpoch, receipt, commandHttpStatus:posted.status,
+          scope, session, identity, expectedEpoch, receipt, commandHttpStatus:posted.status, laterPages,
         });
         return Object.freeze({...recovered, sentByThisCall:true});
       }
