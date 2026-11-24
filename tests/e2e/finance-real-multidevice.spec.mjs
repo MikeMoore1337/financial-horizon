@@ -273,7 +273,7 @@ test('#68 offline credit payment and compensation each post exactly once', async
   try {
     await page.getByText('Отменить подтверждённую операцию').click();
     await page.getByLabel('Операция для отмены').selectOption(payments[0].id);
-    await page.getByLabel('Причина отмены').fill('Synthetic loan correction');
+    await page.getByLabel('Причина отмены', {exact:true}).fill('Synthetic loan correction');
     await page.getByRole('button', {name:'Сохранить отмену'}).click();
     await expect(page.getByText('Ожидает отправки', {exact:true})).toBeVisible();
   } finally {await context.setOffline(false);}
@@ -329,7 +329,7 @@ test('#68 offline UI records an expense once after reconnecting', async ({page, 
   try {
     await page.getByText('Отменить подтверждённую операцию').click();
     await page.getByLabel('Операция для отмены').selectOption(expenses[0].id);
-    await page.getByLabel('Причина отмены').fill('Synthetic correction');
+    await page.getByLabel('Причина отмены', {exact:true}).fill('Synthetic correction');
     await page.getByRole('button', {name:'Сохранить отмену'}).click();
     await expect(page.getByText('Ожидает отправки', {exact:true})).toBeVisible();
   } finally {await context.setOffline(false);}
@@ -662,7 +662,7 @@ for (const useReserve of [false, true]) test(`#68 offline settlement creates one
   try {
     await page.getByText('Отменить подтверждённую операцию').click();
     await page.getByLabel('Операция для отмены').selectOption(transactions[0].id);
-    await page.getByLabel('Причина отмены').fill('Синтетическая отмена оплаты');
+    await page.getByLabel('Причина отмены', {exact:true}).fill('Синтетическая отмена оплаты');
     await page.getByRole('button', {name:'Сохранить отмену'}).click();
     await expect(page.getByText('Ожидает отправки', {exact:true})).toBeVisible();
   } finally {await context.setOffline(false);}
