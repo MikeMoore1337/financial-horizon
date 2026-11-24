@@ -135,6 +135,54 @@ test('#68 sync controls remain accessible in both themes and responsive widths',
       await page.screenshot({path:testInfo.outputPath(`sync-${width}-${theme}.png`), fullPage:true});
     }
   }
+  // Different platform fonts or enlarged text must not overflow long actions.
+  await page.setViewportSize({width:320, height:900});
+  await page.addStyleTag({content:'.fh-sync button { font-size: 20px; }'});
+  const enlarged = await page.evaluate(() => ({width:document.documentElement.clientWidth,
+    scroll:Math.max(document.documentElement.scrollWidth, document.body.scrollWidth)}));
+  expect(enlarged.scroll).toBeLessThanOrEqual(enlarged.width + 1);
+});
+
+test('#68 local unlock works when the server is unreachable but the browser reports online', async ({browser}) => {
+  test.setTimeout(120_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  // Isolate deterministic network fault injection from browser Service Worker routing;
+  // other restart and revocation tests exercise the real installed worker.
+  const context = await browser.newContext({baseURL:ORIGIN, serviceWorkers:'block'});
+  const page = await context.newPage();
+  try {
+    expect((await context.request.post('/__e2e__/personal-session')).status()).toBe(200);
+    await page.goto('/');
+    await openAccounts(page);
+    await page.getByRole('button', {name:'Офлайн-синхронизация'}).click();
+    const phrase = 'synthetic unavailable server phrase sixty eight';
+    await page.getByLabel('Парольная фраза', {exact:true}).fill(phrase);
+    await page.getByRole('button', {name:'Создать копию'}).click();
+    await page.getByLabel('Я сохранил ключ вне браузера').check();
+    await page.getByRole('button', {name:'Разблокировать'}).click();
+    await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible();
+    await context.route('**/api/auth/email/me', route => route.abort('failed'));
+    await page.reload();
+    expect(await page.evaluate(() => navigator.onLine)).toBe(true);
+    await page.getByLabel('Парольная фраза', {exact:true}).fill(phrase);
+    await page.getByRole('button', {name:'Разблокировать'}).click();
+    await expect(page.getByText('Нет связи с сервером', {exact:true})).toBeVisible();
+    let sent = 0;
+    page.on('request', request => {if (request.method() === 'POST' && /\/api\/finance\/v[12]\/commands$/.test(request.url())) sent++;});
+    await page.getByRole('button', {name:/Новый счёт/}).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Название').fill('Synthetic unreachable server account');
+    await dialog.getByLabel(/Начальный остаток/).fill('1,00');
+    await dialog.getByRole('button', {name:'Сохранить'}).click();
+    await expect(page.getByText(/В очереди: 1/)).toBeVisible();
+    expect(sent).toBe(0);
+    await context.unroute('**/api/auth/email/me');
+    await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible({timeout:30_000});
+    const after = await state(context);
+    expect(after.body.entities.filter(x => x.kind === 'account' &&
+      x.data.name === 'Synthetic unreachable server account')).toHaveLength(1);
+    expect(sent).toBe(1);
+  } finally {await context.close();}
 });
 
 test('#68 offline obligation is created once after reconnect', async ({page, context}) => {
@@ -547,6 +595,15 @@ test('#68 offline restart never sends a queue after remote session revocation', 
     expect(revoked.status()).toBe(200);
   } finally {await context.setOffline(false);}
   await expect(page.getByText('Доступ к аккаунту отозван. Войдите снова.')).toBeVisible({timeout:30_000});
+  expect(await page.evaluate(() => localStorage.getItem('fh-offline-sync-actor-v1'))).toBeNull();
+  await context.setOffline(true);
+  try {
+    const restarted = await context.newPage();
+    await restarted.goto('/');
+    await expect(restarted).toHaveURL(/account\.html/);
+    await expect(restarted.getByLabel('Парольная фраза', {exact:true})).toHaveCount(0);
+    await restarted.close();
+  } finally {await context.setOffline(false);}
   const before = await state(other);
   expect(before.body.entities.filter(x => x.kind === 'account' && x.data.name === 'Ожидает подтверждения сессии')).toHaveLength(0);
   await page.getByRole('button', {name:'Назад'}).click();

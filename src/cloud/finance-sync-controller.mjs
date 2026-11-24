@@ -30,7 +30,7 @@ export class FinanceSyncController {
     const offlineStart = lastVerifiedActorUserId !== undefined;
     const actor = offlineStart ? lastVerifiedActorUserId : verifiedActorUserId;
     if (!USER.test(actor || '') || (offlineStart && (verifiedActorUserId !== undefined ||
-        globalThis.navigator?.onLine !== false || readOfflineActor() !== actor)) ||
+        readOfflineActor() !== actor)) ||
         typeof origin !== 'string' || typeof fetchImpl !== 'function' || typeof onClose !== 'function') {
       fail('Нет подтверждённого аккаунта');
     }
@@ -77,7 +77,10 @@ export class FinanceSyncController {
       response = await this.#fetch(this.#origin + path, {...init, credentials:'same-origin',
         mode:'same-origin', redirect:'error', cache:'no-store', referrerPolicy:'same-origin',
         signal:this.#abort.signal, headers:{Accept:'application/json', ...(init.headers || {})}});
-    } catch { this.#active(generation); fail('Нет связи с сервером'); }
+    } catch {
+      this.#active(generation);
+      throw Object.assign(Error('SYNC_HOLD: Нет связи с сервером'), {code:'SYNC_NETWORK'});
+    }
     this.#active(generation);
     if (response.status === 401 || response.status === 403) {
       forgetOfflineActor(this.#actor); this.close(); fail('Сессия больше не действует');
@@ -179,8 +182,7 @@ export class FinanceSyncController {
    * claiming a currently valid server session. No network write is allowed. */
   async unlockOffline(credential) {
     return this.#exclusive(async generation => {
-      if (!this.#offlineStart || globalThis.navigator?.onLine !== false ||
-          readOfflineActor() !== this.#actor) fail('Локальный аккаунт больше недоступен');
+      if (!this.#offlineStart || readOfflineActor() !== this.#actor) fail('Локальный аккаунт больше недоступен');
       this.#identity = null; this.#onlineVerified = false; this.#session.logout();
       const keyset = await getAtomicEncryptedKeyset(this.#scope);
       this.#active(generation);
@@ -192,7 +194,7 @@ export class FinanceSyncController {
         const bundle = await readAtomicEncryptedCandidate(this.#scope, this.#session);
         this.#active(generation);
         const cloud = bundle?.snapshot?.cloudFinance;
-        if (readOfflineActor() !== this.#actor || globalThis.navigator?.onLine !== false ||
+        if (readOfflineActor() !== this.#actor ||
             bundle?.schemaVersion !== 2 || bundle?.snapshot?.version !== 2 ||
             cloud?.schemaVersion !== 1 || cloud.scope !== this.#scope ||
             !UUID.test(cloud.profileId || '') || !EPOCH.test(cloud.epoch || '') ||
@@ -272,7 +274,6 @@ export class FinanceSyncController {
   }); }
   async enqueue(command) { return this.#exclusive(async generation => {
     if (!this.#identity) fail('Локальная копия заблокирована');
-    if (!this.#onlineVerified && globalThis.navigator?.onLine !== false) fail('Сначала подтвердите аккаунт');
     const bundle = await readAtomicEncryptedCandidate(this.#scope, this.#session);
     this.#active(generation);
     const etag = bundle?.snapshot?.cloudFinance?.serverEtag;

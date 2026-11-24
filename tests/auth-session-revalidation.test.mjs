@@ -20,6 +20,7 @@ function setup(refresh){
   cloudImportController:null,
   scheduleLoanId:'synthetic-id',lastDialogActivator:{synthetic:'modal'},
   revokeStateScope:()=>events.push('scope-revoked'),
+  forgetOfflineActor:()=>events.push('offline-entry-disabled'),
   document:{querySelectorAll(selector){
    assert.equal(selector,'dialog');
    return [{open:true,close:()=>events.push('dialog-closed'),
@@ -56,7 +57,7 @@ test('expired session hides the old account ledger and opens login',async()=>{
  assert.equal(s.ctx.navRoots,null);
   assert.equal(s.ctx.cloudImportFile,null);
   assert.equal(s.ctx.pendingCloudImport,null);
- assert.deepEqual(s.events,['scope-revoked','react-unmount','background-unmount','background-removed','nav-unmount','ledger-cleared','dialog-closed','dialog-cleared','./account.html']);
+ assert.deepEqual(s.events,['offline-entry-disabled','scope-revoked','react-unmount','background-unmount','background-removed','nav-unmount','ledger-cleared','dialog-closed','dialog-cleared','./account.html']);
 });
 test('a different account cannot re-use previous account data',async()=>{
  const s=setup(async()=>true);s.ctx.emailSession.userId='b'.repeat(32);
@@ -64,7 +65,7 @@ test('a different account cannot re-use previous account data',async()=>{
  assert.equal(s.ctx.state,null);
  assert.equal(s.ctx.screenRoot,null);
  assert.equal(s.ctx.navRoots,null);
- assert.deepEqual(s.events,['scope-revoked','react-unmount','background-unmount','background-removed','nav-unmount','ledger-cleared','dialog-closed','dialog-cleared','./account.html']);
+ assert.deepEqual(s.events,['offline-entry-disabled','scope-revoked','react-unmount','background-unmount','background-removed','nav-unmount','ledger-cleared','dialog-closed','dialog-cleared','./account.html']);
 });
 test('offline focus preserves the open ledger and does not authorize new online work',async()=>{
  let calls=0;
@@ -93,6 +94,14 @@ test('network loss during revalidation preserves the view, but HTTP and invalid 
    assert.ok(s.events.includes('./account.html'));
   }
  }
+});
+test('unreachable server preserves the active view even if the browser reports online',async()=>{
+ const s=setup(async()=>false);
+ s.ctx.navigator={onLine:true};
+ s.ctx.emailSession.lastRefreshFailure='network';
+ assert.equal(await s.check(),false);
+ assert.notEqual(s.ctx.state,null);
+ assert.deepEqual(s.events,[]);
 });
 test('network loss never preserves a view after the account identity changes',async()=>{
  let release;

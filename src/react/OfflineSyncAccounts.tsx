@@ -47,6 +47,8 @@ type SyncState = {
 };
 const isSyncBusy = (error: unknown): boolean =>
   error instanceof Error && (error as Error & { code?: string }).code === 'SYNC_BUSY';
+const isSyncNetwork = (error: unknown): boolean =>
+  error instanceof Error && (error as Error & { code?: string }).code === 'SYNC_NETWORK';
 
 function operationLabel(command: Command, state: SyncState): string {
   const p = command.payload;
@@ -328,6 +330,7 @@ export function OfflineSyncAccounts({
     let active = true;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let attempts = 0;
+    let networkAttempts = 0;
     const verify = () => {
       if (!active || !controller.current || !navigator.onLine) return;
       void controller.current
@@ -341,7 +344,12 @@ export function OfflineSyncAccounts({
         .catch((error) => {
           if (!active) return;
           if (isSyncBusy(error) && attempts++ < 20) retry = setTimeout(verify, 250);
-          else showError(error);
+          else if (isSyncNetwork(error) && networkAttempts < 5) {
+            showError(error);
+            const delay =
+              Math.min(1000 * 2 ** networkAttempts++, 16000) * (0.75 + Math.random() * 0.5);
+            retry = setTimeout(verify, delay);
+          } else showError(error);
         });
     };
     verify();

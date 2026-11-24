@@ -25,3 +25,13 @@
 .fh-sync select {
   max-width: 100%;
 }
+.fh-sync .button-primary,
+.fh-sync .button-secondary,
+.fh-sync .button-text {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding-block: 8px;
+}
