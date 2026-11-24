@@ -23,7 +23,7 @@ test('ledger validates authenticated identity before reading any user records',(
  assert.ok(revoke.includes("document.querySelectorAll('dialog')"),'modal copies of old financial data must be cleared');
  const refresh=app.slice(app.indexOf('async function refreshEmailSession(){'),app.indexOf('\nasync function logoutEmailAccount(){'));
  assert.match(refresh,/if\(!verified\|\|emailSession\.userId!==activeUserId\)\{/);
- assert.match(refresh,/emailSession\.userId===activeUserId&&emailSession\.lastRefreshFailure==='network'\)return false/);
+ assert.match(refresh,/emailSession\.userId===activeUserId&&\['network','unavailable'\]\.includes\(emailSession\.lastRefreshFailure\)\)return false/);
  assert.match(refresh,/revokeDisplayedLedger\(\);\s*window\.location\.replace\('\.\/account\.html'\);/);
  assert.doesNotMatch(app,/emailSession\.userId!==activeUserId\|\|!emailSession\.email/);
  assert.match(app,/sessionValid:Boolean\(emailSession\.userId\)/);

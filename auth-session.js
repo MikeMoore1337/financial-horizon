@@ -17,7 +17,7 @@ export function createEmailSession(request=fetch){
     return false;
    }
    try{
-    if(!response.ok){if(current===revision)lastRefreshFailure='http';return false;}
+    if(!response.ok){if(current===revision)lastRefreshFailure=(response.status===429||response.status>=500&&response.status<=599)?'unavailable':'http';return false;}
     const result=await response.json();
     if(current!==revision)return false;
     lastRefreshFailure=null;

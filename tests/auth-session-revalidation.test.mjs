@@ -77,7 +77,7 @@ test('offline focus preserves the open ledger and does not authorize new online 
  assert.deepEqual(s.events,[]);
 });
 test('network loss during revalidation preserves the view, but HTTP and invalid replies revoke it',async()=>{
- for(const failure of ['network','http','invalid']){
+ for(const failure of ['network','unavailable','http','invalid']){
   let release;
   const s=setup(()=>new Promise(resolve=>{release=resolve;}));
   s.ctx.navigator={onLine:true};
@@ -86,7 +86,7 @@ test('network loss during revalidation preserves the view, but HTTP and invalid 
   s.ctx.emailSession.lastRefreshFailure=failure;
   release(false);
   assert.equal(await pending,false);
-  if(failure==='network'){
+  if(failure==='network'||failure==='unavailable'){
    assert.notEqual(s.ctx.state,null);
    assert.deepEqual(s.events,[]);
   }else{

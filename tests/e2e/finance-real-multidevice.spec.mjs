@@ -112,6 +112,10 @@ test('#68 sync controls remain accessible in both themes and responsive widths',
   await page.getByRole('button', {name:'Разблокировать'}).click();
   await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible();
   await page.getByText('Записать доход или расход').click();
+  await page.getByText('Создать резерв', {exact:true}).click();
+  await page.getByText('Отметить пропущенный взнос').click();
+  await page.getByText('Изменить название или цель резерва').click();
+  await page.getByText('Пополнить или освободить резерв').click();
   await page.getByText('Создать обязательство', {exact:true}).click();
   await page.getByText('Записать оплату обязательства').click();
   await page.getByText('Записать платёж по кредиту').click();
@@ -143,7 +147,7 @@ test('#68 sync controls remain accessible in both themes and responsive widths',
   expect(enlarged.scroll).toBeLessThanOrEqual(enlarged.width + 1);
 });
 
-test('#68 local unlock works when the server is unreachable but the browser reports online', async ({browser}) => {
+for (const fault of ['network', 'http503', 'http429']) test(`#68 local unlock works during ${fault} while the browser reports online`, async ({browser}) => {
   test.setTimeout(120_000);
   if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
   // Isolate deterministic network fault injection from browser Service Worker routing;
@@ -161,12 +165,14 @@ test('#68 local unlock works when the server is unreachable but the browser repo
     await page.getByLabel('Я сохранил ключ вне браузера').check();
     await page.getByRole('button', {name:'Разблокировать'}).click();
     await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible();
-    await context.route('**/api/auth/email/me', route => route.abort('failed'));
+    await context.route('**/api/auth/email/me', route => fault === 'network'
+      ? route.abort('failed')
+      : route.fulfill({status:fault === 'http503' ? 503 : 429, contentType:'application/json', body:'{}'}));
     await page.reload();
     expect(await page.evaluate(() => navigator.onLine)).toBe(true);
     await page.getByLabel('Парольная фраза', {exact:true}).fill(phrase);
     await page.getByRole('button', {name:'Разблокировать'}).click();
-    await expect(page.getByText('Нет связи с сервером', {exact:true})).toBeVisible();
+    await expect(page.getByText(fault === 'network' ? 'Нет связи с сервером' : 'Сервер временно недоступен', {exact:true})).toBeVisible();
     let sent = 0;
     page.on('request', request => {if (request.method() === 'POST' && /\/api\/finance\/v[12]\/commands$/.test(request.url())) sent++;});
     await page.getByRole('button', {name:/Новый счёт/}).click();
@@ -332,6 +338,112 @@ test('#68 offline UI records an expense once after reconnecting', async ({page, 
     x.data.kind === 'reversal' && x.data.reversed_transaction_id === expenses[0].id);
   expect(cancellations).toHaveLength(1);
   expect(cancellations[0].data.postings).toEqual([{account_id:accountId, signed_minor:125}]);
+});
+
+test('#68 offline reserve creation, changes and archive preserve real account balance', async ({page, context}) => {
+  test.setTimeout(120_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  expect((await context.request.post('/__e2e__/personal-session')).status()).toBe(200);
+  await bootstrap(context);
+  const accountId = randomUUID(), initial = await state(context);
+  expect((await submit(context, initial, 'account.create', {id:accountId,
+    name:'Synthetic allocation account', kind:'cash', currency:'RUB', opening_minor:10000})).status()).toBe(201);
+  const planned = await submit(context, await state(context), 'obligation.create', {
+    title:'Synthetic reserve obligation', direction:'expense', amount_minor:5000,
+    starts_on:'2026-11-12', timezone:'Europe/Moscow', recurrence_unit:'none', recurrence_every:1,
+  }, {}, 1);
+  expect(planned.status()).toBe(201);
+  const obligationId = (await planned.json()).changes[0].entity_id;
+  await page.goto('/');
+  await openAccounts(page);
+  await page.getByRole('button', {name:'Офлайн-синхронизация'}).click();
+  await page.getByLabel('Парольная фраза', {exact:true}).fill('synthetic reserve allocation phrase sixty eight');
+  await page.getByRole('button', {name:'Создать копию'}).click();
+  await page.getByLabel('Я сохранил ключ вне браузера').check();
+  await page.getByRole('button', {name:'Разблокировать'}).click();
+  await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible();
+  await page.getByText('Создать резерв', {exact:true}).click();
+  const createForm = page.locator('details').filter({has:page.getByText('Создать резерв', {exact:true})});
+  await context.setOffline(true);
+  try {
+    await createForm.getByLabel('Название резерва').fill('Synthetic allocation reserve');
+    await createForm.getByLabel('Расход для резерва').selectOption(obligationId);
+    await createForm.getByLabel('Счёт для резерва').selectOption(accountId);
+    await createForm.getByLabel('Цель резерва, ₽').fill('50');
+    await createForm.getByLabel('Дата открытия резерва').fill('2026-10-12');
+    await createForm.getByLabel('Первая дата оплаты резерва').fill('2026-11-12');
+    await createForm.getByRole('button', {name:'Сохранить резерв в очередь'}).click();
+    await expect(page.getByText('Ожидает отправки', {exact:true})).toBeVisible();
+  } finally {await context.setOffline(false);}
+  await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible({timeout:30_000});
+  const reserves = (await state(context)).body.entities.filter(x => x.kind === 'reserve' &&
+    x.data.title === 'Synthetic allocation reserve');
+  expect(reserves).toHaveLength(1);
+  const reserveId = reserves[0].id;
+  await page.getByText('Изменить название или цель резерва').click();
+  const editForm = page.locator('details').filter({has:page.getByText('Изменить название или цель резерва', {exact:true})});
+  await context.setOffline(true);
+  try {
+    await editForm.getByLabel('Резерв для изменения').selectOption(reserveId);
+    await editForm.getByLabel('Новое название резерва').fill('Synthetic updated reserve');
+    await editForm.getByLabel('Новая цель резерва, ₽').fill('60');
+    await editForm.getByLabel('Дата изменения резерва').fill('2026-11-12');
+    await editForm.getByRole('button', {name:'Сохранить изменение резерва в очередь'}).click();
+    await expect(page.getByText('Ожидает отправки', {exact:true})).toBeVisible();
+  } finally {await context.setOffline(false);}
+  await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible({timeout:30_000});
+  const edited = (await state(context)).body.entities.find(x => x.id === reserveId);
+  expect(edited.data.title).toBe('Synthetic updated reserve');
+  expect(edited.data.target_minor).toBe(6000);
+  expect(edited.data.allocated_minor).toBe(0);
+  expect(edited.data.event_log.filter(x => x.kind === 'target_change')).toHaveLength(1);
+  await page.getByText('Отметить пропущенный взнос').click();
+  const skipForm = page.locator('details').filter({has:page.getByText('Отметить пропущенный взнос', {exact:true})});
+  await context.setOffline(true);
+  try {
+    await skipForm.getByLabel('Резерв для пропуска').selectOption(reserveId);
+    await skipForm.getByLabel('Дата пропущенного взноса').fill('2026-11-12');
+    await skipForm.getByLabel('Дата отметки пропуска').fill('2026-11-12');
+    await skipForm.getByRole('button', {name:'Сохранить пропуск в очередь'}).click();
+    await expect(page.getByText('Ожидает отправки', {exact:true})).toBeVisible();
+  } finally {await context.setOffline(false);}
+  await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible({timeout:30_000});
+  const skipped = await state(context);
+  expect(skipped.body.entities.find(x => x.id === reserveId).data.event_log.filter(x => x.kind === 'skip')).toHaveLength(1);
+  expect(entity(skipped, accountId).data.balance_minor).toBe(10000);
+  expect(entity(skipped, accountId).data.reserved_minor).toBe(0);
+  await page.getByText('Пополнить или освободить резерв').click();
+  const form = page.locator('details').filter({has:page.getByText('Пополнить или освободить резерв', {exact:true})});
+  for (const [action, amount, expected, events] of [['contribution','12',1200,1], ['release','5',700,1], ['release','7',0,2]]) {
+    await context.setOffline(true);
+    try {
+      await form.getByRole('combobox', {name:'Резерв', exact:true}).selectOption(reserveId);
+      await form.getByLabel('Действие с резервом').selectOption(action);
+      await form.getByLabel('Сумма распределения, ₽').fill(amount);
+      await form.getByLabel('Дата распределения').fill('2026-11-12');
+      await form.getByRole('button', {name:'Сохранить распределение в очередь'}).click();
+      await expect(page.getByText('Ожидает отправки', {exact:true})).toBeVisible();
+    } finally {await context.setOffline(false);}
+    await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible({timeout:30_000});
+    const after = await state(context);
+    expect(entity(after, accountId).data.balance_minor).toBe(10000);
+    expect(entity(after, accountId).data.reserved_minor).toBe(expected);
+    const reserve = after.body.entities.find(x => x.id === reserveId);
+    expect(reserve.data.allocated_minor).toBe(expected);
+    expect(reserve.data.event_log.filter(x => x.kind === action)).toHaveLength(events);
+  }
+  await context.setOffline(true);
+  try {
+    await form.getByRole('combobox', {name:'Резерв', exact:true}).selectOption(reserveId);
+    page.once('dialog', prompt => prompt.accept());
+    await form.getByRole('button', {name:'Архивировать выбранный резерв'}).click();
+    await expect(page.getByText('Ожидает отправки', {exact:true})).toBeVisible();
+  } finally {await context.setOffline(false);}
+  await expect(page.getByText('Синхронизировано', {exact:true})).toBeVisible({timeout:30_000});
+  const archived = await state(context);
+  expect(archived.body.entities.find(x => x.id === reserveId).data.archived_at).toBeTruthy();
+  expect(entity(archived, accountId).data.balance_minor).toBe(10000);
+  expect(entity(archived, accountId).data.reserved_minor).toBe(0);
 });
 
 for (const useReserve of [false, true]) test(`#68 offline settlement creates one payment fact and one cash posting (reserve=${useReserve})`, async ({page, context}) => {

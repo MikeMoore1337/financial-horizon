@@ -19,6 +19,12 @@ const STRONG_ETAG = /^"[^"\r\n]{1,254}"$/;
 const MAX_BYTES = 32768;
 const MAX_QUEUE = 1000;
 const ACTION_FIELDS = Object.freeze({
+  'reserve.allocate': ['reserve_id', 'account_id', 'delta_minor'],
+  'reserve.archive': ['reserve_id'],
+  'reserve.create': ['id', 'obligation_id', 'account_id', 'title', 'target_minor', 'opened_on',
+    'first_due_on', 'period_months', 'due_day', 'contribution_mode', 'opening_reserved_minor'],
+  'reserve.update': ['reserve_id', 'title', 'target_minor', 'first_due_on', 'period_months', 'due_day', 'contribution_mode'],
+  'reserve.skip': ['reserve_id', 'slot_on', 'occurred_on'],
   'obligation.create': ['title', 'direction', 'amount_minor', 'starts_on', 'timezone', 'recurrence_unit', 'recurrence_every'],
   'account.transfer': ['from_account_id', 'to_account_id', 'amount_minor', 'occurred_on'],
   'transaction.reverse': ['transaction_id', 'reason'],
@@ -33,6 +39,9 @@ const ACTION_FIELDS = Object.freeze({
   'loan.payment.void': ['transaction_id', 'fact_id', 'account_id', 'reason'],
 });
 const OPTIONAL_FIELDS = Object.freeze({
+  'reserve.allocate': ['occurred_on'],
+  'reserve.create': ['fixed_monthly_minor'],
+  'reserve.update': ['fixed_monthly_minor', 'occurred_on'],
   'transaction.record': ['note'],
   'settlement.payment.record': ['reserve_id', 'reserved_used_minor'],
   'settlement.payment.void': ['reserve_id'],
@@ -473,6 +482,262 @@ function verifyLoanReceipt(command, changes, entities, previouslyApplied) {
     }
   }
 }
+function verifyReserveAllocationDependencies(command, entities) {
+  if (command.action !== 'reserve.allocate') return;
+  if (!Array.isArray(entities)) hold('Нет подтверждённого снимка резервов');
+  const p = command.payload;
+  const accounts = entities.filter(e => e.kind === 'account' && e.id === p.account_id);
+  const reserves = entities.filter(e => e.kind === 'reserve' && e.id === p.reserve_id);
+  if (accounts.length !== 1 || reserves.length !== 1 ||
+      accounts[0].entity_revision !== command.expected_entity_revisions[p.account_id] ||
+      reserves[0].entity_revision !== command.expected_entity_revisions[p.reserve_id] ||
+      accounts[0].data?.archived_at != null || reserves[0].data?.archived_at != null ||
+      !integer(reserves[0].data?.period_months, 1) ||
+      (reserves[0].data?.account_id != null && reserves[0].data.account_id !== p.account_id)) {
+    hold('Счёт или резерв недоступны');
+  }
+}
+function verifyReserveArchiveDependencies(command, entities) {
+  if (command.action !== 'reserve.archive') return;
+  const matches = Array.isArray(entities) ? entities.filter(e =>
+    e.kind === 'reserve' && e.id === command.payload.reserve_id) : [];
+  if (matches.length !== 1 || matches[0].entity_revision !== command.expected_entity_revisions[command.payload.reserve_id] ||
+      matches[0].data?.archived_at !== null || matches[0].data?.allocated_minor !== 0) {
+    hold('Архивировать можно только действующий резерв без остатка');
+  }
+}
+function verifyReserveUpdateDependencies(command, entities) {
+  if (command.action !== 'reserve.update') return;
+  const id = command.payload.reserve_id;
+  const matches = Array.isArray(entities) ? entities.filter(e => e.kind === 'reserve' && e.id === id) : [];
+  if (matches.length !== 1 || matches[0].entity_revision !== command.expected_entity_revisions[id] ||
+      matches[0].data?.archived_at !== null || typeof matches[0].data?.opened_on !== 'string') {
+    hold('План резерва недоступен');
+  }
+  verifyReservePlanDates(command.payload, matches[0].data.opened_on);
+}
+function verifyReserveSkipDependencies(command, entities) {
+  if (command.action !== 'reserve.skip') return;
+  const id = command.payload.reserve_id;
+  const matches = Array.isArray(entities) ? entities.filter(e => e.kind === 'reserve' && e.id === id) : [];
+  if (matches.length !== 1 || matches[0].entity_revision !== command.expected_entity_revisions[id] ||
+      matches[0].data?.archived_at !== null || !integer(matches[0].data?.period_months, 1)) {
+    hold('План резерва недоступен');
+  }
+}
+function verifyReserveSkipReceipt(command, changes, entities, previouslyApplied) {
+  if (command.action !== 'reserve.skip') return;
+  const p = command.payload, change = changes[0], entity = change?.payload?.entity;
+  const prior = Array.isArray(entities) ? entities.filter(e => e.kind === 'reserve' && e.id === p.reserve_id) : [];
+  const data = entity?.data;
+  if (changes.length !== 1 || change?.kind !== 'upsert' || !consistentEvent(change) ||
+      entity.kind !== 'reserve' || entity.id !== p.reserve_id ||
+      entity.entity_revision !== command.expected_entity_revisions[p.reserve_id] + 1 ||
+      !Array.isArray(data?.event_log) || prior.length !== 1 || !UUID.test(change.payload.event_id || '')) {
+    hold('Пропуск взноса не подтверждён');
+  }
+  const events = data.event_log.filter(e => e.id === change.payload.event_id && e.reserve_id === p.reserve_id &&
+    e.kind === 'skip' && e.revision === change.revision && e.cycle_number === data.cycle_number &&
+    e.slot_on === p.slot_on && e.occurred_on === p.occurred_on);
+  if (events.length !== 1) hold('Пропуск не соответствует дате исходной команды');
+  const old = prior[0].data;
+  if (previouslyApplied) {
+    if (!Array.isArray(old?.event_log) || !old.event_log.some(e => canonical(e) === canonical(events[0]))) {
+      hold('Сохранённый снимок не содержит пропуск');
+    }
+    return;
+  }
+  if (!Array.isArray(old?.event_log) || prior[0].entity_revision !== command.expected_entity_revisions[p.reserve_id] ||
+      data.event_log.length !== old.event_log.length + 1 ||
+      canonical(data.event_log.slice(0, -1)) !== canonical(old.event_log) ||
+      canonical({...old,event_log:data.event_log}) !== canonical(data)) {
+    hold('Пропуск изменил другие данные резерва');
+  }
+}
+function verifyReserveUpdateReceipt(command, changes, entities, previouslyApplied) {
+  if (command.action !== 'reserve.update') return;
+  const p = command.payload, change = changes[0], entity = change?.payload?.entity;
+  const prior = Array.isArray(entities) ? entities.filter(e => e.kind === 'reserve' && e.id === p.reserve_id) : [];
+  const data = entity?.data;
+  if (changes.length !== 1 || change?.kind !== 'upsert' || !consistentEvent(change) ||
+      entity.kind !== 'reserve' || entity.id !== p.reserve_id ||
+      entity.entity_revision !== command.expected_entity_revisions[p.reserve_id] + 1 ||
+      data?.title !== p.title.trim() || data.target_minor !== p.target_minor ||
+      data.first_due_on !== p.first_due_on || data.period_months !== p.period_months ||
+      data.due_day !== p.due_day || data.contribution_mode !== p.contribution_mode ||
+      data.fixed_monthly_minor !== (p.fixed_monthly_minor ?? null) || data.archived_at !== null ||
+      !Array.isArray(data.event_log) || prior.length !== 1) hold('План резерва не соответствует команде');
+  const old = prior[0].data;
+  if (previouslyApplied) {
+    if (prior[0].entity_revision !== entity.entity_revision || canonical(old) !== canonical(data)) {
+      hold('Историческое изменение плана не подтверждено снимком');
+    }
+    return;
+  }
+  if (!Array.isArray(old?.event_log)) hold('Нет истории плана резерва');
+  const changedTarget = old.target_minor !== p.target_minor;
+  const last = data.event_log.at(-1);
+  if (data.event_log.length !== old.event_log.length + (changedTarget ? 1 : 0) ||
+      canonical(data.event_log.slice(0, old.event_log.length)) !== canonical(old.event_log) ||
+      (changedTarget && (!plain(last) || !UUID.test(last.id || '') || last.reserve_id !== p.reserve_id ||
+        last.kind !== 'target_change' || last.revision !== change.revision || last.target_minor !== p.target_minor ||
+        last.cycle_number !== old.cycle_number || (Object.hasOwn(p, 'occurred_on') && last.occurred_on !== p.occurred_on)))) {
+    hold('История изменения цели резерва не совпадает');
+  }
+  const expected = {...old, title:p.title.trim(), target_minor:p.target_minor,
+    target_on:old.cycle_number === 1 ? p.first_due_on : old.target_on, first_due_on:p.first_due_on,
+    period_months:p.period_months, due_day:p.due_day, contribution_mode:p.contribution_mode,
+    fixed_monthly_minor:p.fixed_monthly_minor ?? null, event_log:data.event_log};
+  if (prior[0].entity_revision !== command.expected_entity_revisions[p.reserve_id] ||
+      canonical(expected) !== canonical(data)) hold('Изменение плана затронуло другие данные резерва');
+}
+function verifyReservePlanDates(p, openedOn) {
+  const [openedYear, openedMonth] = openedOn.split('-').map(Number);
+  const [dueYear, dueMonth, dueDay] = p.first_due_on.split('-').map(Number);
+  const elapsed = (dueYear - openedYear) * 12 + dueMonth - openedMonth;
+  const lastDay = new Date(Date.UTC(dueYear, dueMonth, 0)).getUTCDate();
+  if (p.first_due_on < openedOn || elapsed > p.period_months || dueDay !== Math.min(p.due_day, lastDay)) {
+    hold('Дата резерва не соответствует периоду');
+  }
+}
+function verifyReserveCreateDependencies(command, entities) {
+  if (command.action !== 'reserve.create') return;
+  const p = command.payload;
+  const accounts = Array.isArray(entities) ? entities.filter(e => e.kind === 'account' && e.id === p.account_id) : [];
+  const obligations = Array.isArray(entities) ? entities.filter(e => e.kind === 'obligation' && e.id === p.obligation_id) : [];
+  if (accounts.length !== 1 || obligations.length !== 1 ||
+      accounts[0].entity_revision !== command.expected_entity_revisions[p.account_id] ||
+      obligations[0].entity_revision !== command.expected_entity_revisions[p.obligation_id] ||
+      accounts[0].data?.archived_at !== null || obligations[0].data?.deleted_at !== null ||
+      obligations[0].data?.direction !== 'expense' ||
+      (p.opening_reserved_minor > 0 && (!integer(accounts[0].data?.available_minor, 0) ||
+        accounts[0].data.available_minor < p.opening_reserved_minor)) || entities.some(e => e.id === p.id) ||
+      entities.some(e => e.kind === 'reserve' && e.data?.obligation_id === p.obligation_id && e.data?.archived_at === null)) {
+    hold('Счёт или обязательство недоступны для создания резерва');
+  }
+}
+function verifyReserveCreateReceipt(command, changes, entities, previouslyApplied) {
+  if (command.action !== 'reserve.create') return;
+  const p = command.payload, opening = p.opening_reserved_minor;
+  const reserves = changes.filter(e => e.kind === 'upsert' && e.payload?.entity?.kind === 'reserve');
+  const accounts = changes.filter(e => e.kind === 'upsert' && e.payload?.entity?.kind === 'account');
+  if (!Array.isArray(entities) || changes.length !== (opening ? 2 : 1) || reserves.length !== 1 ||
+      accounts.length !== (opening ? 1 : 0) || !consistentEvent(reserves[0]) ||
+      (opening && !consistentEvent(accounts[0]))) hold('Неполная квитанция создания резерва');
+  const entity = reserves[0].payload.entity, data = entity.data;
+  if (entity.id !== p.id || entity.entity_revision !== 1 || data?.title !== p.title.trim() ||
+      data.obligation_id !== p.obligation_id || data.account_id !== p.account_id ||
+      data.target_minor !== p.target_minor || data.opening_target_minor !== p.target_minor ||
+      data.opening_reserved_minor !== opening || data.allocated_minor !== opening ||
+      data.opened_on !== p.opened_on || data.first_due_on !== p.first_due_on || data.target_on !== p.first_due_on ||
+      data.period_months !== p.period_months || data.due_day !== p.due_day ||
+      data.contribution_mode !== p.contribution_mode || data.fixed_monthly_minor !== (p.fixed_monthly_minor ?? null) ||
+      data.cycle_number !== 1 || data.archived_at !== null || !Array.isArray(data.event_log) || data.event_log.length ||
+      canonical(data.allocations_by_account) !== canonical(opening ? [{account_id:p.account_id, allocated_minor:opening}] : [])) {
+    hold('Созданный резерв не соответствует исходной команде');
+  }
+  if (previouslyApplied) {
+    const stored = entities.filter(e => e.kind === 'reserve' && e.id === p.id);
+    if (stored.length !== 1 || stored[0].data?.account_id !== p.account_id ||
+        stored[0].data?.obligation_id !== p.obligation_id ||
+        stored[0].data?.opening_reserved_minor !== opening || stored[0].data?.opening_target_minor !== p.target_minor ||
+        stored[0].data?.opened_on !== p.opened_on) hold('Сохранённый снимок не подтверждает создание резерва');
+    return;
+  }
+  if (opening) {
+    const prior = entities.filter(e => e.kind === 'account' && e.id === p.account_id);
+    const updated = accounts[0].payload.entity;
+    const omit = value => Object.fromEntries(Object.entries(value || {}).filter(([key]) => !['reserved_minor','available_minor'].includes(key)));
+    if (prior.length !== 1 || updated.id !== p.account_id ||
+        updated.entity_revision !== command.expected_entity_revisions[p.account_id] + 1 ||
+        canonical(omit(prior[0].data)) !== canonical(omit(updated.data)) ||
+        updated.data?.reserved_minor !== prior[0].data?.reserved_minor + opening ||
+        updated.data?.available_minor !== prior[0].data?.available_minor - opening) {
+      hold('Начальное распределение не соответствует остатку счёта');
+    }
+  }
+}
+function verifyReserveArchiveReceipt(command, changes, entities, previouslyApplied) {
+  if (command.action !== 'reserve.archive') return;
+  const id = command.payload.reserve_id, change = changes[0], entity = change?.payload?.entity;
+  const prior = Array.isArray(entities) ? entities.filter(e => e.kind === 'reserve' && e.id === id) : [];
+  if (changes.length !== 1 || change?.kind !== 'upsert' || !consistentEvent(change) ||
+      entity.kind !== 'reserve' || entity.id !== id ||
+      entity.entity_revision !== command.expected_entity_revisions[id] + 1 ||
+      entity.data?.allocated_minor !== 0 || typeof entity.data?.archived_at !== 'string' ||
+      !Number.isFinite(Date.parse(entity.data.archived_at)) || prior.length !== 1) {
+    hold('Архивирование резерва не подтверждено');
+  }
+  if (previouslyApplied) {
+    if (canonical(prior[0].data) !== canonical(entity.data)) hold('Сохранённый архив резерва не совпадает');
+  } else {
+    const expected = {...prior[0].data, archived_at:entity.data.archived_at};
+    if (prior[0].entity_revision !== command.expected_entity_revisions[id] ||
+        prior[0].data?.archived_at !== null || canonical(expected) !== canonical(entity.data)) {
+      hold('Архивирование неожиданно изменило свойства резерва');
+    }
+  }
+}
+function verifyReserveAllocationReceipt(command, changes, entities, previouslyApplied) {
+  if (command.action !== 'reserve.allocate') return;
+  const p = command.payload;
+  if (!Array.isArray(entities) || changes.length !== 2) hold('Нет подтверждения распределения резерва');
+  const reserveEvents = changes.filter(e => e.kind === 'upsert' && e.payload?.entity?.kind === 'reserve');
+  const accountEvents = changes.filter(e => e.kind === 'upsert' && e.payload?.entity?.kind === 'account');
+  const priorReserves = entities.filter(e => e.kind === 'reserve' && e.id === p.reserve_id);
+  const priorAccounts = entities.filter(e => e.kind === 'account' && e.id === p.account_id);
+  if (reserveEvents.length !== 1 || accountEvents.length !== 1 ||
+      !consistentEvent(reserveEvents[0]) || !consistentEvent(accountEvents[0]) ||
+      priorReserves.length !== 1 || priorAccounts.length !== 1) hold('Неполная квитанция резерва');
+  const change = reserveEvents[0], updated = change.payload.entity, account = accountEvents[0].payload.entity;
+  const oldReserve = priorReserves[0].data, oldAccount = priorAccounts[0].data;
+  const data = updated.data, nextAccount = account.data;
+  if (updated.id !== p.reserve_id || account.id !== p.account_id ||
+      updated.entity_revision !== command.expected_entity_revisions[p.reserve_id] + 1 ||
+      account.entity_revision !== command.expected_entity_revisions[p.account_id] + 1 ||
+      change.payload.account_id !== p.account_id || change.payload.delta_minor !== p.delta_minor ||
+      !UUID.test(change.payload.allocation_id || '') || !Array.isArray(data?.allocations_by_account) ||
+      !Array.isArray(data?.event_log)) hold('Квитанция не соответствует распределению');
+  const expectedKind = p.delta_minor > 0 ? 'contribution' : 'release';
+  const event = data.event_log.filter(e => e.allocation_id === change.payload.allocation_id &&
+    e.revision === change.revision && e.reserve_id === p.reserve_id && e.kind === expectedKind &&
+    e.amount_minor === Math.abs(p.delta_minor) && e.cycle_number === data.cycle_number &&
+    (!Object.hasOwn(p, 'occurred_on') || e.occurred_on === p.occurred_on));
+  if (data.period_months != null && (event.length !== 1 || !UUID.test(event[0].id || ''))) {
+    hold('История резерва не подтверждает распределение');
+  }
+  if (previouslyApplied) {
+    if (data.period_months == null || !Array.isArray(oldReserve?.event_log) ||
+        !oldReserve.event_log.some(e => canonical(e) === canonical(event[0]))) {
+      hold('Историческое распределение не подтверждено снимком');
+    }
+    return;
+  }
+  const omit = (value, keys) => Object.fromEntries(Object.entries(value || {}).filter(([key]) => !keys.includes(key)));
+  const priorPairs = oldReserve?.allocations_by_account;
+  if (!Array.isArray(priorPairs) || !Array.isArray(oldReserve?.event_log) ||
+      canonical(omit(oldReserve, ['allocated_minor', 'allocations_by_account', 'event_log'])) !==
+        canonical(omit(data, ['allocated_minor', 'allocations_by_account', 'event_log'])) ||
+      canonical(omit(oldAccount, ['reserved_minor', 'available_minor'])) !==
+        canonical(omit(nextAccount, ['reserved_minor', 'available_minor'])) ||
+      data.allocated_minor !== oldReserve.allocated_minor + p.delta_minor ||
+      nextAccount.reserved_minor !== oldAccount.reserved_minor + p.delta_minor ||
+      nextAccount.available_minor !== oldAccount.available_minor - p.delta_minor) {
+    hold('Остатки не соответствуют распределению резерва');
+  }
+  const pairs = new Map(priorPairs.map(pair => [pair.account_id, pair.allocated_minor]));
+  const amount = (pairs.get(p.account_id) || 0) + p.delta_minor;
+  if (!integer(amount) || pairs.size !== priorPairs.length) hold('Некорректное распределение по счетам');
+  if (amount) pairs.set(p.account_id, amount); else pairs.delete(p.account_id);
+  const expectedPairs = [...pairs].sort(([a], [b]) => a.localeCompare(b))
+    .map(([account_id, allocated_minor]) => ({account_id, allocated_minor}));
+  if (canonical(expectedPairs) !== canonical(data.allocations_by_account) ||
+      (data.period_months == null ? canonical(data.event_log) !== canonical(oldReserve.event_log) :
+        data.event_log.length !== oldReserve.event_log.length + 1 ||
+        canonical(data.event_log.slice(0, -1)) !== canonical(oldReserve.event_log))) {
+    hold('Изменение истории или распределения резерва не совпадает с командой');
+  }
+}
 function validateCommand(command) {
   const dto = safeJson(command);
   keysExactly(dto, [
@@ -483,7 +748,8 @@ function validateCommand(command) {
       !integer(dto.base_revision) ||
       typeof dto.action !== 'string' ||
       !Object.hasOwn(ACTION_FIELDS, dto.action) ||
-      (dto.schema_version === 1) !== ['obligation.create', 'account.transfer', 'transaction.reverse'].includes(dto.action)) {
+      (dto.action !== 'reserve.allocate' &&
+       (dto.schema_version === 1) !== ['obligation.create', 'account.transfer', 'transaction.reverse'].includes(dto.action))) {
     hold('Недопустимая версия или действие команды');
   }
   keysExactly(dto.payload, ACTION_FIELDS[dto.action], OPTIONAL_FIELDS[dto.action] || []);
@@ -504,6 +770,16 @@ function validateCommand(command) {
   let requiredRevisions;
   if (dto.action === 'account.create' || dto.action === 'obligation.create') {
     requiredRevisions = [];
+  } else if (dto.action === 'reserve.allocate') {
+    requiredRevisions = [dto.payload.account_id, dto.payload.reserve_id];
+  } else if (dto.action === 'reserve.create') {
+    requiredRevisions = [dto.payload.account_id, dto.payload.obligation_id];
+  } else if (dto.action === 'reserve.archive') {
+    requiredRevisions = [dto.payload.reserve_id];
+  } else if (dto.action === 'reserve.update') {
+    requiredRevisions = [dto.payload.reserve_id];
+  } else if (dto.action === 'reserve.skip') {
+    requiredRevisions = [dto.payload.reserve_id];
   } else if (dto.action === 'account.transfer') {
     requiredRevisions = [dto.payload.from_account_id, dto.payload.to_account_id];
   } else if (dto.action === 'transaction.reverse') {
@@ -557,6 +833,16 @@ function validateCommand(command) {
     try { new Intl.DateTimeFormat('en', {timeZone:p.timezone}); }
     catch { hold('Недопустимый часовой пояс'); }
   }
+  if (['reserve.create', 'reserve.update'].includes(dto.action)) {
+    const p = dto.payload;
+    if (typeof p.title !== 'string' || !p.title.trim() || p.title.length > 160 ||
+        !integer(p.target_minor, 1, 1_000_000_000_000) ||
+        (dto.action === 'reserve.create' && !integer(p.opening_reserved_minor, 0, 1_000_000_000_000)) ||
+        !integer(p.period_months, 1, 60) || !integer(p.due_day, 1, 31) ||
+        !['auto','fixed'].includes(p.contribution_mode) ||
+        (p.contribution_mode === 'fixed' ? !integer(p.fixed_monthly_minor, 1, 1_000_000_000_000) :
+          p.fixed_monthly_minor != null)) hold('Некорректные параметры резерва');
+  }
   for (const name of ['name', 'reason']) {
     if (Object.hasOwn(dto.payload, name) &&
         (typeof dto.payload[name] !== 'string' ||
@@ -570,15 +856,21 @@ function validateCommand(command) {
       (typeof dto.payload.note !== 'string' || dto.payload.note.length > 500)) {
     hold('Недопустимое примечание');
   }
-  for (const name of ['paid_on', 'occurred_on', 'occurrence_on', 'starts_on']) {
+  for (const name of ['paid_on', 'occurred_on', 'occurrence_on', 'starts_on', 'opened_on', 'first_due_on', 'slot_on']) {
     if (Object.hasOwn(dto.payload, name)) {
       const value = dto.payload[name];
-      if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+      if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value) || value.startsWith('0000-') ||
           !Number.isFinite(Date.parse(value + 'T00:00:00Z')) ||
           new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) !== value) {
         hold('Недопустимая дата финансовой операции');
       }
     }
+  }
+  if (dto.action === 'reserve.create') {
+    verifyReservePlanDates(dto.payload, dto.payload.opened_on);
+  }
+  if (dto.action === 'reserve.skip' && dto.payload.slot_on > dto.payload.occurred_on) {
+    hold('Пропуск взноса не может предшествовать дате взноса');
   }
   if (dto.action === 'transaction.record') {
     const minor = dto.payload.signed_minor;
@@ -592,6 +884,9 @@ function validateCommand(command) {
     if ((name === 'opening_minor' || name === 'signed_minor') &&
         !integer(value, -1_000_000_000_000, 1_000_000_000_000)) {
       hold('Недопустимая сумма');
+    }
+    if (name === 'delta_minor' && (!integer(value, -1_000_000_000_000, 1_000_000_000_000) || value === 0)) {
+      hold('Недопустимая сумма резерва');
     }
     if (name === 'amount_minor' && !integer(value, dto.action === 'obligation.create' ? 0 : 1, 1_000_000_000_000)) {
       hold('Недопустимая сумма');
@@ -924,6 +1219,11 @@ export async function enqueueEncryptedFinanceCommandCandidate({
   }
   verifySettlementDependencies(pinned, cloud.entities);
   verifyLoanDependencies(pinned, cloud.entities);
+  verifyReserveAllocationDependencies(pinned, cloud.entities);
+  verifyReserveArchiveDependencies(pinned, cloud.entities);
+  verifyReserveCreateDependencies(pinned, cloud.entities);
+  verifyReserveUpdateDependencies(pinned, cloud.entities);
+  verifyReserveSkipDependencies(pinned, cloud.entities);
   verifyCashMovementDependencies(pinned, cloud.entities);
   verifyReversalDependencies(pinned, cloud.entities);
   verifyTransferDependencies(pinned, cloud.entities);
@@ -1056,6 +1356,11 @@ export async function persistAuthenticatedFinanceReceiptCandidate({
   verifySettlementReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   verifySettlementReversalReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   verifyLoanReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
+  verifyReserveAllocationReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
+  verifyReserveArchiveReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
+  verifyReserveCreateReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
+  verifyReserveUpdateReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
+  verifyReserveSkipReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   verifyObligationReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   verifyAccountReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   verifyCashMovementReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
@@ -1461,6 +1766,11 @@ export async function resolveStaleFinanceConflict({
     }
     verifySettlementDependencies(replacement, cloud.entities);
     verifyLoanDependencies(replacement, cloud.entities);
+    verifyReserveAllocationDependencies(replacement, cloud.entities);
+    verifyReserveArchiveDependencies(replacement, cloud.entities);
+    verifyReserveCreateDependencies(replacement, cloud.entities);
+    verifyReserveUpdateDependencies(replacement, cloud.entities);
+    verifyReserveSkipDependencies(replacement, cloud.entities);
     verifyCashMovementDependencies(replacement, cloud.entities);
     verifyReversalDependencies(replacement, cloud.entities);
     verifyTransferDependencies(replacement, cloud.entities);

@@ -62,6 +62,27 @@ function operationLabel(command: Command, state: SyncState): string {
       ? formatRubMinor(value)
       : 'сумма недоступна';
   switch (command.action) {
+    case 'reserve.create':
+      return `Создать резерв «${String(p.title)}» на ${amount(p.target_minor)}`;
+    case 'reserve.update':
+      return `Изменить резерв «${String(p.title)}»: цель ${amount(p.target_minor)}`;
+    case 'reserve.skip':
+      return `Отметить пропущенный взнос за ${String(p.slot_on)}`;
+    case 'reserve.allocate': {
+      const reserve = state.cloud.entities.find(
+        (x) => x.kind === 'reserve' && x.id === p.reserve_id,
+      );
+      const title = (reserve?.data as { title?: unknown } | undefined)?.title;
+      const delta = Number(p.delta_minor);
+      return `${delta > 0 ? 'Пополнить' : 'Освободить'} резерв «${typeof title === 'string' ? title : 'резерв'}» на ${amount(Math.abs(delta))}`;
+    }
+    case 'reserve.archive': {
+      const reserve = state.cloud.entities.find(
+        (x) => x.kind === 'reserve' && x.id === p.reserve_id,
+      );
+      const title = (reserve?.data as { title?: unknown } | undefined)?.title;
+      return `Архивировать резерв «${typeof title === 'string' ? title : 'резерв'}»`;
+    }
     case 'obligation.create':
       return `Создать обязательство «${String(p.title)}» на ${amount(p.amount_minor)}`;
     case 'account.create':
@@ -157,6 +178,23 @@ export function OfflineSyncAccounts({
   const [obligationRecurrence, setObligationRecurrence] = useState<'none' | 'month' | 'year'>(
     'none',
   );
+  const [allocationReserve, setAllocationReserve] = useState('');
+  const [allocationAmount, setAllocationAmount] = useState('');
+  const [allocationDate, setAllocationDate] = useState('');
+  const [allocationKind, setAllocationKind] = useState<'contribution' | 'release'>('contribution');
+  const [reserveTitle, setReserveTitle] = useState('');
+  const [reserveObligation, setReserveObligation] = useState('');
+  const [reserveAccount, setReserveAccount] = useState('');
+  const [reserveTarget, setReserveTarget] = useState('');
+  const [reserveOpened, setReserveOpened] = useState('');
+  const [reserveDue, setReserveDue] = useState('');
+  const [editReserveId, setEditReserveId] = useState('');
+  const [editReserveTitle, setEditReserveTitle] = useState('');
+  const [editReserveTarget, setEditReserveTarget] = useState('');
+  const [editReserveDate, setEditReserveDate] = useState('');
+  const [skipReserveId, setSkipReserveId] = useState('');
+  const [skipSlot, setSkipSlot] = useState('');
+  const [skipDate, setSkipDate] = useState('');
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retries = useRef(0);
   const busyRetries = useRef(0);
@@ -689,6 +727,234 @@ export function OfflineSyncAccounts({
     }
   };
 
+  const skipReserveContribution = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!state || busy || state.status === 'CONFLICT') return;
+    try {
+      const reserve = state.cloud.entities.find(
+        (x) => x.kind === 'reserve' && x.id === skipReserveId,
+      );
+      const data = reserve?.data as { archived_at?: unknown; period_months?: unknown } | undefined;
+      if (
+        !reserve ||
+        data?.archived_at !== null ||
+        typeof data.period_months !== 'number' ||
+        !isValidLedgerDate(skipSlot) ||
+        !isValidLedgerDate(skipDate)
+      )
+        throw Error('Выберите резерв и укажите корректные даты');
+      setBusy(true);
+      await enqueue({
+        schema_version: 2,
+        client_mutation_id: crypto.randomUUID(),
+        base_revision: state.cloud.revision,
+        action: 'reserve.skip',
+        expected_entity_revisions: { [reserve.id]: reserve.entity_revision },
+        payload: { reserve_id: reserve.id, slot_on: skipSlot, occurred_on: skipDate },
+      });
+    } catch (error) {
+      showError(error);
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
+
+  const updateReserve = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!state || busy || state.status === 'CONFLICT') return;
+    try {
+      const reserve = state.cloud.entities.find(
+        (x) => x.kind === 'reserve' && x.id === editReserveId,
+      );
+      const data = reserve?.data as
+        | {
+            archived_at?: unknown;
+            first_due_on?: unknown;
+            period_months?: unknown;
+            due_day?: unknown;
+            contribution_mode?: unknown;
+            fixed_monthly_minor?: unknown;
+          }
+        | undefined;
+      const target = parseRubMinor(editReserveTarget);
+      if (
+        !reserve ||
+        data?.archived_at !== null ||
+        typeof data.first_due_on !== 'string' ||
+        typeof data.period_months !== 'number' ||
+        typeof data.due_day !== 'number' ||
+        !['auto', 'fixed'].includes(String(data.contribution_mode)) ||
+        !editReserveTitle.trim() ||
+        editReserveTitle.length > 160 ||
+        target <= 0 ||
+        !isValidLedgerDate(editReserveDate)
+      )
+        throw Error('Проверьте резерв, название, цель и дату изменения');
+      const payload: Record<string, unknown> = {
+        reserve_id: reserve.id,
+        title: editReserveTitle.trim(),
+        target_minor: target,
+        first_due_on: data.first_due_on,
+        period_months: data.period_months,
+        due_day: data.due_day,
+        contribution_mode: data.contribution_mode,
+        occurred_on: editReserveDate,
+      };
+      if (data.contribution_mode === 'fixed')
+        payload.fixed_monthly_minor = data.fixed_monthly_minor;
+      setBusy(true);
+      await enqueue({
+        schema_version: 2,
+        client_mutation_id: crypto.randomUUID(),
+        base_revision: state.cloud.revision,
+        action: 'reserve.update',
+        expected_entity_revisions: { [reserve.id]: reserve.entity_revision },
+        payload,
+      });
+      if (mounted.current) setEditReserveId('');
+    } catch (error) {
+      showError(error);
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
+
+  const createReserve = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!state || busy || state.status === 'CONFLICT') return;
+    try {
+      const obligation = state.cloud.entities.find(
+        (x) => x.kind === 'obligation' && x.id === reserveObligation,
+      );
+      const account = state.cloud.entities.find(
+        (x) => x.kind === 'account' && x.id === reserveAccount,
+      );
+      const data = obligation?.data as { deleted_at?: unknown; direction?: unknown } | undefined;
+      const target = parseRubMinor(reserveTarget);
+      if (
+        !obligation ||
+        data?.deleted_at !== null ||
+        data.direction !== 'expense' ||
+        !account ||
+        (account.data as { archived_at?: unknown })?.archived_at !== null ||
+        !reserveTitle.trim() ||
+        reserveTitle.length > 160 ||
+        target <= 0 ||
+        !isValidLedgerDate(reserveOpened) ||
+        !isValidLedgerDate(reserveDue)
+      )
+        throw Error('Проверьте название, обязательство, счёт, сумму и даты');
+      setBusy(true);
+      await enqueue({
+        schema_version: 2,
+        client_mutation_id: crypto.randomUUID(),
+        base_revision: state.cloud.revision,
+        action: 'reserve.create',
+        expected_entity_revisions: {
+          [obligation.id]: obligation.entity_revision,
+          [account.id]: account.entity_revision,
+        },
+        payload: {
+          id: crypto.randomUUID(),
+          obligation_id: obligation.id,
+          account_id: account.id,
+          title: reserveTitle.trim(),
+          target_minor: target,
+          opened_on: reserveOpened,
+          first_due_on: reserveDue,
+          period_months: 1,
+          due_day: Number(reserveDue.slice(-2)),
+          contribution_mode: 'auto',
+          opening_reserved_minor: 0,
+        },
+      });
+      if (mounted.current) {
+        setReserveTitle('');
+        setReserveTarget('');
+      }
+    } catch (error) {
+      showError(error);
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
+
+  const archiveReserve = async () => {
+    if (!state || busy || state.status === 'CONFLICT') return;
+    try {
+      const reserve = state.cloud.entities.find(
+        (x) => x.kind === 'reserve' && x.id === allocationReserve,
+      );
+      const data = reserve?.data as
+        { title?: unknown; archived_at?: unknown; allocated_minor?: unknown } | undefined;
+      if (!reserve || data?.archived_at !== null || data.allocated_minor !== 0)
+        throw Error('Сначала выберите резерв без остатка');
+      if (!window.confirm(`Архивировать резерв «${String(data.title)}»?`)) return;
+      setBusy(true);
+      await enqueue({
+        schema_version: 2,
+        client_mutation_id: crypto.randomUUID(),
+        base_revision: state.cloud.revision,
+        action: 'reserve.archive',
+        expected_entity_revisions: { [reserve.id]: reserve.entity_revision },
+        payload: { reserve_id: reserve.id },
+      });
+      if (mounted.current) setAllocationReserve('');
+    } catch (error) {
+      showError(error);
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
+
+  const allocateReserve = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!state || busy || state.status === 'CONFLICT') return;
+    try {
+      const reserve = state.cloud.entities.find(
+        (x) => x.kind === 'reserve' && x.id === allocationReserve,
+      );
+      const data = reserve?.data as
+        { account_id?: unknown; archived_at?: unknown; period_months?: unknown } | undefined;
+      const account = state.cloud.entities.find(
+        (x) => x.kind === 'account' && x.id === data?.account_id,
+      );
+      if (
+        !reserve ||
+        data?.archived_at !== null ||
+        typeof data.period_months !== 'number' ||
+        !account ||
+        (account.data as { archived_at?: unknown })?.archived_at !== null
+      )
+        throw Error('Выберите действующий резерв, связанный со счётом');
+      const amount = parseRubMinor(allocationAmount);
+      if (amount <= 0 || !isValidLedgerDate(allocationDate))
+        throw Error('Укажите сумму и корректную дату');
+      setBusy(true);
+      await enqueue({
+        schema_version: 2,
+        client_mutation_id: crypto.randomUUID(),
+        base_revision: state.cloud.revision,
+        action: 'reserve.allocate',
+        expected_entity_revisions: {
+          [reserve.id]: reserve.entity_revision,
+          [account.id]: account.entity_revision,
+        },
+        payload: {
+          reserve_id: reserve.id,
+          account_id: account.id,
+          delta_minor: allocationKind === 'contribution' ? amount : -amount,
+          occurred_on: allocationDate,
+        },
+      });
+      if (mounted.current) setAllocationAmount('');
+    } catch (error) {
+      showError(error);
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
+
   const createObligation = async (event: FormEvent) => {
     event.preventDefault();
     if (!state || busy || state.status === 'CONFLICT') return;
@@ -922,8 +1188,8 @@ export function OfflineSyncAccounts({
           гостевые записи не переносятся автоматически.
         </p>
         <p>
-          Здесь синхронизируются счета, переводы, отдельные доходы и расходы и оплаты обязательств.
-          Кредиты, управление резервами и остальные разделы работают отдельно.
+          Здесь синхронизируются счета, переводы, отдельные доходы и расходы, обязательства, платежи
+          по кредитам и распределения существующих резервов. Остальные операции работают отдельно.
         </p>
         <form onSubmit={unlock}>
           <label className="field">
@@ -1028,7 +1294,8 @@ export function OfflineSyncAccounts({
     <section className="fh-sync">
       <p>
         Синхронизация счетов, переводов, отдельных доходов и расходов, обязательств и платежей по
-        кредитам. Управление резервами и остальные разделы работают отдельно.
+        кредитам и распределения существующих резервов. Остальные операции с резервами и разделы
+        работают отдельно.
       </p>
       <div role="status" aria-live="polite">
         <strong>
@@ -1145,6 +1412,313 @@ export function OfflineSyncAccounts({
             disabled={busy || state.status === 'CONFLICT'}
           >
             Сохранить операцию
+          </button>
+        </form>
+      </details>
+      <details>
+        <summary>Создать резерв</summary>
+        <form onSubmit={(event) => void createReserve(event)}>
+          <label className="field">
+            <span>Название резерва</span>
+            <input
+              value={reserveTitle}
+              onChange={(event) => setReserveTitle(event.target.value)}
+              maxLength={160}
+              required
+            />
+          </label>
+          <label className="field">
+            <span>Расход для резерва</span>
+            <select
+              value={reserveObligation}
+              onChange={(event) => setReserveObligation(event.target.value)}
+              required
+            >
+              <option value="">Выберите обязательство</option>
+              {state.cloud.entities
+                .filter((entity) => {
+                  const data = entity.data as { deleted_at?: unknown; direction?: unknown };
+                  return (
+                    entity.kind === 'obligation' &&
+                    data?.deleted_at === null &&
+                    data.direction === 'expense'
+                  );
+                })
+                .map((entity) => (
+                  <option key={entity.id} value={entity.id}>
+                    {String((entity.data as { title: string }).title)}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Счёт для резерва</span>
+            <select
+              value={reserveAccount}
+              onChange={(event) => setReserveAccount(event.target.value)}
+              required
+            >
+              <option value="">Выберите счёт</option>
+              {state.cloud.entities
+                .filter(
+                  (entity) =>
+                    entity.kind === 'account' &&
+                    (entity.data as { archived_at?: unknown })?.archived_at === null,
+                )
+                .map((entity) => (
+                  <option key={entity.id} value={entity.id}>
+                    {String((entity.data as { name: string }).name)}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Цель резерва, ₽</span>
+            <input
+              value={reserveTarget}
+              onChange={(event) => setReserveTarget(event.target.value)}
+              inputMode="decimal"
+              required
+            />
+          </label>
+          <label className="field">
+            <span>Дата открытия резерва</span>
+            <input
+              type="date"
+              value={reserveOpened}
+              onChange={(event) => setReserveOpened(event.target.value)}
+              required
+            />
+          </label>
+          <label className="field">
+            <span>Первая дата оплаты резерва</span>
+            <input
+              type="date"
+              value={reserveDue}
+              onChange={(event) => setReserveDue(event.target.value)}
+              required
+            />
+          </label>
+          <p>Создаётся ежемесячный резерв с автоматическим взносом и нулевым начальным остатком.</p>
+          <button
+            type="submit"
+            className="button-secondary"
+            disabled={busy || state.status === 'CONFLICT'}
+          >
+            Сохранить резерв в очередь
+          </button>
+        </form>
+      </details>
+      <details>
+        <summary>Отметить пропущенный взнос</summary>
+        <form onSubmit={(event) => void skipReserveContribution(event)}>
+          <label className="field">
+            <span>Резерв для пропуска</span>
+            <select
+              value={skipReserveId}
+              onChange={(event) => setSkipReserveId(event.target.value)}
+              required
+            >
+              <option value="">Выберите резерв</option>
+              {state.cloud.entities
+                .filter((entity) => {
+                  const data = entity.data as { archived_at?: unknown; period_months?: unknown };
+                  return (
+                    entity.kind === 'reserve' &&
+                    data?.archived_at === null &&
+                    typeof data.period_months === 'number'
+                  );
+                })
+                .map((entity) => (
+                  <option key={entity.id} value={entity.id}>
+                    {String((entity.data as { title: string }).title)}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Дата пропущенного взноса</span>
+            <input
+              type="date"
+              value={skipSlot}
+              onChange={(event) => setSkipSlot(event.target.value)}
+              required
+            />
+          </label>
+          <label className="field">
+            <span>Дата отметки пропуска</span>
+            <input
+              type="date"
+              value={skipDate}
+              onChange={(event) => setSkipDate(event.target.value)}
+              required
+            />
+          </label>
+          <p>Остаток счёта и резерва не изменится.</p>
+          <button
+            type="submit"
+            className="button-secondary"
+            disabled={busy || state.status === 'CONFLICT'}
+          >
+            Сохранить пропуск в очередь
+          </button>
+        </form>
+      </details>
+      <details>
+        <summary>Изменить название или цель резерва</summary>
+        <form onSubmit={(event) => void updateReserve(event)}>
+          <label className="field">
+            <span>Резерв для изменения</span>
+            <select
+              value={editReserveId}
+              onChange={(event) => {
+                const id = event.target.value;
+                const selected = state.cloud.entities.find(
+                  (item) => item.kind === 'reserve' && item.id === id,
+                );
+                const data = selected?.data as
+                  { title?: unknown; target_minor?: unknown } | undefined;
+                setEditReserveId(id);
+                setEditReserveTitle(typeof data?.title === 'string' ? data.title : '');
+                setEditReserveTarget(
+                  typeof data?.target_minor === 'number'
+                    ? (data.target_minor / 100).toFixed(2).replace('.', ',')
+                    : '',
+                );
+              }}
+              required
+            >
+              <option value="">Выберите резерв</option>
+              {state.cloud.entities
+                .filter((entity) => {
+                  const data = entity.data as { archived_at?: unknown; period_months?: unknown };
+                  return (
+                    entity.kind === 'reserve' &&
+                    data?.archived_at === null &&
+                    typeof data.period_months === 'number'
+                  );
+                })
+                .map((entity) => (
+                  <option key={entity.id} value={entity.id}>
+                    {String((entity.data as { title: string }).title)}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Новое название резерва</span>
+            <input
+              value={editReserveTitle}
+              onChange={(event) => setEditReserveTitle(event.target.value)}
+              maxLength={160}
+              required
+            />
+          </label>
+          <label className="field">
+            <span>Новая цель резерва, ₽</span>
+            <input
+              value={editReserveTarget}
+              onChange={(event) => setEditReserveTarget(event.target.value)}
+              inputMode="decimal"
+              required
+            />
+          </label>
+          <label className="field">
+            <span>Дата изменения резерва</span>
+            <input
+              type="date"
+              value={editReserveDate}
+              onChange={(event) => setEditReserveDate(event.target.value)}
+              required
+            />
+          </label>
+          <p>Действующий график и остаток резерва сохранятся.</p>
+          <button
+            type="submit"
+            className="button-secondary"
+            disabled={busy || state.status === 'CONFLICT'}
+          >
+            Сохранить изменение резерва в очередь
+          </button>
+        </form>
+      </details>
+      <details>
+        <summary>Пополнить или освободить резерв</summary>
+        <form onSubmit={(event) => void allocateReserve(event)}>
+          <label className="field">
+            <span>Резерв</span>
+            <select
+              value={allocationReserve}
+              onChange={(event) => setAllocationReserve(event.target.value)}
+              required
+            >
+              <option value="">Выберите резерв</option>
+              {state.cloud.entities
+                .filter((entity) => {
+                  const data = entity.data as {
+                    archived_at?: unknown;
+                    period_months?: unknown;
+                    account_id?: unknown;
+                  };
+                  return (
+                    entity.kind === 'reserve' &&
+                    data?.archived_at === null &&
+                    typeof data.period_months === 'number' &&
+                    typeof data.account_id === 'string'
+                  );
+                })
+                .map((entity) => (
+                  <option key={entity.id} value={entity.id}>
+                    {String((entity.data as { title: string }).title)}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Действие с резервом</span>
+            <select
+              value={allocationKind}
+              onChange={(event) =>
+                setAllocationKind(event.target.value as 'contribution' | 'release')
+              }
+            >
+              <option value="contribution">Пополнить</option>
+              <option value="release">Освободить</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Сумма распределения, ₽</span>
+            <input
+              value={allocationAmount}
+              onChange={(event) => setAllocationAmount(event.target.value)}
+              inputMode="decimal"
+              required
+            />
+          </label>
+          <label className="field">
+            <span>Дата распределения</span>
+            <input
+              type="date"
+              value={allocationDate}
+              onChange={(event) => setAllocationDate(event.target.value)}
+              required
+            />
+          </label>
+          <p>Доступный и зарезервированный остатки изменятся после подтверждения сервером.</p>
+          <button
+            type="submit"
+            className="button-secondary"
+            disabled={busy || state.status === 'CONFLICT'}
+          >
+            Сохранить распределение в очередь
+          </button>
+          <button
+            type="button"
+            className="button-secondary"
+            onClick={() => void archiveReserve()}
+            disabled={busy || state.status === 'CONFLICT' || !allocationReserve}
+          >
+            Архивировать выбранный резерв
           </button>
         </form>
       </details>

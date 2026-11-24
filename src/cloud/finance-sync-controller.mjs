@@ -85,6 +85,9 @@ export class FinanceSyncController {
     if (response.status === 401 || response.status === 403) {
       forgetOfflineActor(this.#actor); this.close(); fail('Сессия больше не действует');
     }
+    if (response.status === 429 || (response.status >= 500 && response.status <= 599)) {
+      throw Object.assign(Error('SYNC_HOLD: Сервер временно недоступен'), {code:'SYNC_NETWORK'});
+    }
     if (!response.ok || response.redirected ||
         (response.url && new URL(response.url).origin !== this.#origin) ||
         response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json' ||

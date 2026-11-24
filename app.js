@@ -327,7 +327,7 @@ async function refreshEmailSession(){
   if(!verified||emailSession.userId!==activeUserId){
    // The connection may have dropped while the request was in flight. An
    // actual HTTP rejection still revokes immediately, even during a drop.
-   if(!verified&&emailSession.userId===activeUserId&&emailSession.lastRefreshFailure==='network')return false;
+   if(!verified&&emailSession.userId===activeUserId&&['network','unavailable'].includes(emailSession.lastRefreshFailure))return false;
    forgetOfflineActor(activeUserId);
    revokeDisplayedLedger();
    window.location.replace('./account.html');
@@ -1483,9 +1483,9 @@ async function init(){
    // Validate the server session BEFORE reading any account ledger.
    const verified=await emailSession.refresh();
    if(!verified||!emailSession.userId){
-    const offlineActor=financeSyncEnabled&&emailSession.lastRefreshFailure==='network'?readOfflineActor():null;
+    const offlineActor=financeSyncEnabled&&['network','unavailable'].includes(emailSession.lastRefreshFailure)?readOfflineActor():null;
     if(offlineActor){startOfflineSync(offlineActor);return;}
-    if(emailSession.lastRefreshFailure!=='network')forgetOfflineActor();
+    if(!['network','unavailable'].includes(emailSession.lastRefreshFailure))forgetOfflineActor();
     window.location.replace('./account.html');
     return;
    }

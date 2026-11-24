@@ -62,6 +62,8 @@ test('session refresh distinguishes network loss from a server rejection',async(
  const session=createEmailSession(async()=>{
   if(mode==='network')throw Error('offline');
   if(mode==='http')return {ok:false,status:401};
+  if(mode==='unavailable')return {ok:false,status:503};
+  if(mode==='rate')return {ok:false,status:429};
   if(mode==='invalid')return {ok:true,json:async()=>{throw Error('invalid JSON');}};
   return {ok:true,json:async()=>({authenticated:true,user:{id:'f'.repeat(32),email:null}})};
  });
@@ -73,6 +75,11 @@ test('session refresh distinguishes network loss from a server rejection',async(
  mode='http';
  assert.equal(await session.refresh(),false);
  assert.equal(session.lastRefreshFailure,'http');
+ for(const temporary of ['unavailable','rate']){
+  mode=temporary;
+  assert.equal(await session.refresh(),false);
+  assert.equal(session.lastRefreshFailure,'unavailable');
+ }
  mode='invalid';
  assert.equal(await session.refresh(),false);
  assert.equal(session.lastRefreshFailure,'invalid');
