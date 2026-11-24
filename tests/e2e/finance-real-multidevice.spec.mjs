@@ -342,6 +342,70 @@ test('#68 offline UI records an expense once after reconnecting', async ({page, 
   expect(cancellations[0].data.postings).toEqual([{account_id:accountId, signed_minor:125}]);
 });
 
+test('#68 offline reserve supports fixed plans, opening allocation and schedule edits', async ({page, context}) => {
+  test.setTimeout(120_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  expect((await context.request.post('/__e2e__/personal-session')).status()).toBe(200);
+  await bootstrap(context);
+  const accountId=randomUUID();
+  expect((await submit(context,await state(context),'account.create',{id:accountId,
+    name:'Synthetic fixed plan account',kind:'cash',currency:'RUB',opening_minor:10000})).status()).toBe(201);
+  const planned=await submit(context,await state(context),'obligation.create',{title:'Synthetic fixed plan expense',
+    direction:'expense',amount_minor:5000,starts_on:'2026-11-12',timezone:'Europe/Moscow',
+    recurrence_unit:'none',recurrence_every:1},{},1);
+  expect(planned.status()).toBe(201);
+  const obligationId=(await planned.json()).changes[0].entity_id;
+  await page.goto('/');
+  await openAccounts(page);
+  await page.getByRole('button',{name:'Офлайн-синхронизация'}).click();
+  await page.getByLabel('Парольная фраза',{exact:true}).fill('synthetic fixed plan phrase sixty eight');
+  await page.getByRole('button',{name:'Создать копию'}).click();
+  await page.getByLabel('Я сохранил ключ вне браузера').check();
+  await page.getByRole('button',{name:'Разблокировать'}).click();
+  await expect(page.getByText('Синхронизировано',{exact:true})).toBeVisible();
+  await page.getByText('Создать резерв',{exact:true}).click();
+  const create=page.locator('details').filter({has:page.getByText('Создать резерв',{exact:true})});
+  await context.setOffline(true);
+  try {
+    await create.getByLabel('Название резерва').fill('Synthetic fixed plan reserve');
+    await create.getByLabel('Расход для резерва').selectOption(obligationId);
+    await create.getByLabel('Счёт для резерва').selectOption(accountId);
+    await create.getByLabel('Цель резерва, ₽').fill('50');
+    await create.getByLabel('Дата открытия резерва').fill('2026-10-12');
+    await create.getByLabel('Первая дата оплаты резерва').fill('2026-11-12');
+    await create.getByLabel('Период резерва, месяцев').fill('2');
+    await create.getByLabel('Режим взноса резерва').selectOption('fixed');
+    await create.getByLabel('Фиксированный взнос, ₽').fill('3');
+    await create.getByLabel('Начальное распределение резерва, ₽').fill('12');
+    await create.getByRole('button',{name:'Сохранить резерв в очередь'}).click();
+    await expect(page.getByText('Ожидает отправки',{exact:true})).toBeVisible();
+  } finally {await context.setOffline(false);}
+  await expect(page.getByText('Синхронизировано',{exact:true})).toBeVisible({timeout:30_000});
+  const after=await state(context), reserve=after.body.entities.find(x=>x.kind==='reserve'&&x.data.title==='Synthetic fixed plan reserve');
+  expect(reserve.data).toMatchObject({allocated_minor:1200,period_months:2,contribution_mode:'fixed',fixed_monthly_minor:300});
+  expect(entity(after,accountId).data.balance_minor).toBe(10000);
+  expect(entity(after,accountId).data.reserved_minor).toBe(1200);
+  await page.getByText('Изменить название или цель резерва').click();
+  const edit=page.locator('details').filter({has:page.getByText('Изменить название или цель резерва',{exact:true})});
+  await context.setOffline(true);
+  try {
+    await edit.getByLabel('Резерв для изменения').selectOption(reserve.id);
+    await edit.getByLabel('Первая дата оплаты изменённого резерва').fill('2026-11-15');
+    await edit.getByLabel('Период изменённого резерва, месяцев').fill('3');
+    await edit.getByLabel('День месяца изменённого резерва').fill('15');
+    await edit.getByLabel('Новый фиксированный взнос, ₽').fill('4');
+    await edit.getByLabel('Дата изменения резерва').fill('2026-11-12');
+    await edit.getByRole('button',{name:'Сохранить изменение резерва в очередь'}).click();
+    await expect(page.getByText('Ожидает отправки',{exact:true})).toBeVisible();
+  } finally {await context.setOffline(false);}
+  await expect(page.getByText('Синхронизировано',{exact:true})).toBeVisible({timeout:30_000});
+  const updated=await state(context), final=updated.body.entities.find(x=>x.id===reserve.id);
+  expect(final.data).toMatchObject({allocated_minor:1200,period_months:3,due_day:15,
+    first_due_on:'2026-11-15',target_on:'2026-11-15',contribution_mode:'fixed',fixed_monthly_minor:400});
+  expect(entity(updated,accountId).data.balance_minor).toBe(10000);
+  expect(entity(updated,accountId).data.reserved_minor).toBe(1200);
+});
+
 test('#68 offline reserve cycle close and undo preserve paid balance', async ({page, context}) => {
   test.setTimeout(120_000);
   if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();

@@ -63,7 +63,7 @@ function operationLabel(command: Command, state: SyncState): string {
       : 'сумма недоступна';
   switch (command.action) {
     case 'reserve.create':
-      return `Создать резерв «${String(p.title)}» на ${amount(p.target_minor)}`;
+      return `Создать резерв «${String(p.title)}» на ${amount(p.target_minor)}, начальное распределение ${amount(p.opening_reserved_minor)}`;
     case 'reserve.update':
       return `Изменить резерв «${String(p.title)}»: цель ${amount(p.target_minor)}`;
     case 'reserve.skip':
@@ -194,10 +194,20 @@ export function OfflineSyncAccounts({
   const [reserveTarget, setReserveTarget] = useState('');
   const [reserveOpened, setReserveOpened] = useState('');
   const [reserveDue, setReserveDue] = useState('');
+  const [reservePeriod, setReservePeriod] = useState('1');
+  const [reserveDay, setReserveDay] = useState('');
+  const [reserveMode, setReserveMode] = useState<'auto' | 'fixed'>('auto');
+  const [reserveFixed, setReserveFixed] = useState('');
+  const [reserveOpening, setReserveOpening] = useState('0');
   const [editReserveId, setEditReserveId] = useState('');
   const [editReserveTitle, setEditReserveTitle] = useState('');
   const [editReserveTarget, setEditReserveTarget] = useState('');
   const [editReserveDate, setEditReserveDate] = useState('');
+  const [editReserveDue, setEditReserveDue] = useState('');
+  const [editReservePeriod, setEditReservePeriod] = useState('');
+  const [editReserveDay, setEditReserveDay] = useState('');
+  const [editReserveMode, setEditReserveMode] = useState<'auto' | 'fixed'>('auto');
+  const [editReserveFixed, setEditReserveFixed] = useState('');
   const [skipReserveId, setSkipReserveId] = useState('');
   const [skipSlot, setSkipSlot] = useState('');
   const [skipDate, setSkipDate] = useState('');
@@ -916,14 +926,14 @@ export function OfflineSyncAccounts({
         reserve_id: reserve.id,
         title: editReserveTitle.trim(),
         target_minor: target,
-        first_due_on: data.first_due_on,
-        period_months: data.period_months,
-        due_day: data.due_day,
-        contribution_mode: data.contribution_mode,
+        first_due_on: editReserveDue,
+        period_months: Number(editReservePeriod),
+        due_day: Number(editReserveDay),
+        contribution_mode: editReserveMode,
         occurred_on: editReserveDate,
       };
-      if (data.contribution_mode === 'fixed')
-        payload.fixed_monthly_minor = data.fixed_monthly_minor;
+      if (editReserveMode === 'fixed')
+        payload.fixed_monthly_minor = parseRubMinor(editReserveFixed);
       setBusy(true);
       await enqueue({
         schema_version: 2,
@@ -953,6 +963,7 @@ export function OfflineSyncAccounts({
       );
       const data = obligation?.data as { deleted_at?: unknown; direction?: unknown } | undefined;
       const target = parseRubMinor(reserveTarget);
+      const opening = parseRubMinor(reserveOpening);
       if (
         !obligation ||
         data?.deleted_at !== null ||
@@ -984,10 +995,11 @@ export function OfflineSyncAccounts({
           target_minor: target,
           opened_on: reserveOpened,
           first_due_on: reserveDue,
-          period_months: 1,
-          due_day: Number(reserveDue.slice(-2)),
-          contribution_mode: 'auto',
-          opening_reserved_minor: 0,
+          period_months: Number(reservePeriod),
+          due_day: Number(reserveDay),
+          contribution_mode: reserveMode,
+          opening_reserved_minor: opening,
+          ...(reserveMode === 'fixed' ? { fixed_monthly_minor: parseRubMinor(reserveFixed) } : {}),
         },
       });
       if (mounted.current) {
@@ -1617,11 +1629,68 @@ export function OfflineSyncAccounts({
             <input
               type="date"
               value={reserveDue}
-              onChange={(event) => setReserveDue(event.target.value)}
+              onChange={(event) => {
+                setReserveDue(event.target.value);
+                setReserveDay(String(Number(event.target.value.slice(-2)) || ''));
+              }}
               required
             />
           </label>
-          <p>Создаётся ежемесячный резерв с автоматическим взносом и нулевым начальным остатком.</p>
+          <label className="field">
+            <span>Период резерва, месяцев</span>
+            <input
+              type="number"
+              min="1"
+              max="60"
+              step="1"
+              value={reservePeriod}
+              onChange={(event) => setReservePeriod(event.target.value)}
+              required
+            />
+          </label>
+          <label className="field">
+            <span>День месяца резерва</span>
+            <input
+              type="number"
+              min="1"
+              max="31"
+              step="1"
+              value={reserveDay}
+              onChange={(event) => setReserveDay(event.target.value)}
+              required
+            />
+          </label>
+          <label className="field">
+            <span>Режим взноса резерва</span>
+            <select
+              value={reserveMode}
+              onChange={(event) => setReserveMode(event.target.value as 'auto' | 'fixed')}
+            >
+              <option value="auto">Автоматический</option>
+              <option value="fixed">Фиксированный</option>
+            </select>
+          </label>
+          {reserveMode === 'fixed' && (
+            <label className="field">
+              <span>Фиксированный взнос, ₽</span>
+              <input
+                value={reserveFixed}
+                onChange={(event) => setReserveFixed(event.target.value)}
+                inputMode="decimal"
+                required
+              />
+            </label>
+          )}
+          <label className="field">
+            <span>Начальное распределение резерва, ₽</span>
+            <input
+              value={reserveOpening}
+              onChange={(event) => setReserveOpening(event.target.value)}
+              inputMode="decimal"
+              required
+            />
+          </label>
+          <p>Начальное распределение повлияет на доступный остаток после подтверждения сервером.</p>
           <button
             type="submit"
             className="button-secondary"
@@ -1865,12 +1934,32 @@ export function OfflineSyncAccounts({
                   (item) => item.kind === 'reserve' && item.id === id,
                 );
                 const data = selected?.data as
-                  { title?: unknown; target_minor?: unknown } | undefined;
+                  | {
+                      title?: unknown;
+                      target_minor?: unknown;
+                      first_due_on?: unknown;
+                      period_months?: unknown;
+                      due_day?: unknown;
+                      contribution_mode?: unknown;
+                      fixed_monthly_minor?: unknown;
+                    }
+                  | undefined;
                 setEditReserveId(id);
                 setEditReserveTitle(typeof data?.title === 'string' ? data.title : '');
                 setEditReserveTarget(
                   typeof data?.target_minor === 'number'
                     ? (data.target_minor / 100).toFixed(2).replace('.', ',')
+                    : '',
+                );
+                setEditReserveDue(typeof data?.first_due_on === 'string' ? data.first_due_on : '');
+                setEditReservePeriod(
+                  typeof data?.period_months === 'number' ? String(data.period_months) : '',
+                );
+                setEditReserveDay(typeof data?.due_day === 'number' ? String(data.due_day) : '');
+                setEditReserveMode(data?.contribution_mode === 'fixed' ? 'fixed' : 'auto');
+                setEditReserveFixed(
+                  typeof data?.fixed_monthly_minor === 'number'
+                    ? (data.fixed_monthly_minor / 100).toFixed(2).replace('.', ',')
                     : '',
                 );
               }}
@@ -1912,6 +2001,60 @@ export function OfflineSyncAccounts({
             />
           </label>
           <label className="field">
+            <span>Первая дата оплаты изменённого резерва</span>
+            <input
+              type="date"
+              value={editReserveDue}
+              onChange={(event) => setEditReserveDue(event.target.value)}
+              required
+            />
+          </label>
+          <label className="field">
+            <span>Период изменённого резерва, месяцев</span>
+            <input
+              type="number"
+              min="1"
+              max="60"
+              step="1"
+              value={editReservePeriod}
+              onChange={(event) => setEditReservePeriod(event.target.value)}
+              required
+            />
+          </label>
+          <label className="field">
+            <span>День месяца изменённого резерва</span>
+            <input
+              type="number"
+              min="1"
+              max="31"
+              step="1"
+              value={editReserveDay}
+              onChange={(event) => setEditReserveDay(event.target.value)}
+              required
+            />
+          </label>
+          <label className="field">
+            <span>Режим взноса изменённого резерва</span>
+            <select
+              value={editReserveMode}
+              onChange={(event) => setEditReserveMode(event.target.value as 'auto' | 'fixed')}
+            >
+              <option value="auto">Автоматический</option>
+              <option value="fixed">Фиксированный</option>
+            </select>
+          </label>
+          {editReserveMode === 'fixed' && (
+            <label className="field">
+              <span>Новый фиксированный взнос, ₽</span>
+              <input
+                value={editReserveFixed}
+                onChange={(event) => setEditReserveFixed(event.target.value)}
+                inputMode="decimal"
+                required
+              />
+            </label>
+          )}
+          <label className="field">
             <span>Дата изменения резерва</span>
             <input
               type="date"
@@ -1920,7 +2063,7 @@ export function OfflineSyncAccounts({
               required
             />
           </label>
-          <p>Действующий график и остаток резерва сохранятся.</p>
+          <p>Остаток резерва сохраняется. Изменение графика доступно до первых событий.</p>
           <button
             type="submit"
             className="button-secondary"
