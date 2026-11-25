@@ -31,6 +31,7 @@ function invoke({email='test@example.com',userId=email?'a'.repeat(32):null,logou
    cloudImportFile:{synthetic:'backup'},pendingCloudImport:{synthetic:'plaintext'},
    cloudImportController:{abort:()=>events.push('import-aborted')},
   scheduleLoanId:'private-loan',lastDialogActivator:{synthetic:'private'},
+  forgetOfflineActor:()=>events.push('offline-entry-disabled'),
   revokeStateScope:()=>events.push('scope-revoked'),
   document:{querySelectorAll(selector){
    assert.equal(selector,'dialog');
@@ -38,8 +39,10 @@ function invoke({email='test@example.com',userId=email?'a'.repeat(32):null,logou
     replaceChildren:()=>events.push('dialog-cleared')}];
   }},
   screenRoot:{unmount:()=>events.push('react-unmount')},
+  backgroundSyncRoot:{unmount:()=>events.push('background-unmount')},
+  backgroundSyncHost:{remove:()=>events.push('background-removed')},offlineSyncView:false,
   navRoots:{unmount:()=>events.push('nav-unmount')},
-  $:()=>({replaceChildren:()=>events.push('ledger-cleared')}),
+  $:()=>({style:{},replaceChildren:()=>events.push('ledger-cleared')}),
   GUEST_MODE_KEY:'fh-guest-session-v2',
   sessionStorage:{removeItem:key=>events.push('storage-remove:'+key)},
   emailSession:session,
@@ -62,6 +65,8 @@ test('successful logout returns to the login page after server confirmation',asy
  assert.ok(ui.events.indexOf('logout-request')<ui.events.indexOf('redirect:./account.html'));
  assert.ok(ui.events.indexOf('react-unmount')>ui.events.indexOf('logout-request'));
  assert.ok(ui.events.includes('scope-revoked'));
+ assert.ok(ui.events.includes('offline-entry-disabled'));
+ assert.ok(ui.events.includes('background-unmount'));
   assert.ok(ui.events.includes('import-aborted'));
  assert.ok(ui.events.indexOf('scope-revoked')<ui.events.indexOf('ledger-cleared'));
  assert.ok(ui.events.includes('dialog-closed'));

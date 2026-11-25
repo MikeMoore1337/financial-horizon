@@ -41,6 +41,61 @@ const SOURCE = 'b0000000-0000-4000-8000-000000000001';
 const CREATED = 'c0000000-0000-4000-8000-000000000002';
 const MUTATION = 'd0000000-0000-4000-8000-000000000003';
 
+test('native snapshot recovery retains the original encrypted pending command', async ({page, context}) => {
+  await context.route('**/__e2e_cloud68_*.js', route => route.fulfill({
+    status: 200, contentType: 'text/javascript',
+    body: sources.get(new URL(route.request().url()).pathname),
+    headers: {'Cache-Control': 'no-store'},
+  }));
+  await page.goto('/__e2e__/ready');
+  await page.evaluate(async ({profile, created, mutation}) => {
+    const atomic = await import('/__e2e_cloud68_atomic__.js');
+    const {LocalBudgetSession} = await import('/__e2e_cloud68_session__.js');
+    const cache = await import('/__e2e_cloud68_cache__.js');
+    const outbox = await import('/__e2e_cloud68_outbox__.js');
+    const scope = 'account:' + 'a'.repeat(32);
+    const passphrase = 'independent encrypted cloud 68 phrase 2026';
+    await atomic.createAtomicEncryptedCandidate(scope, passphrase, {
+      snapshot: {version: 2, revision: 0}, outbox: [], conflicts: [],
+    }, 2);
+    const session = new LocalBudgetSession(); session.selectScope(scope);
+    await session.unlock(await atomic.getAtomicEncryptedKeyset(scope), {passphrase});
+    const identity = {scope, profileId: profile, generation: session.lifecycleVersion,
+      epoch: 'e'.repeat(32), signal: session.lifecycleSignal};
+    const pages = revision => [{cursorSent: null, body: {schema_version: 1,
+      profile_id: profile, currency: 'RUB', revision, entities: []}}];
+    await cache.initializeEncryptedCloudCacheCandidate({scope, session, identity,
+      pages: pages(0), etag: '"fh.1.0.0123456789abcdef"', expectedEpoch: 0,
+      confirmedAccountCacheInitialization: true});
+    await outbox.enqueueEncryptedFinanceCommandCandidate({scope, session, identity,
+      expectedEpoch: 1, ifMatch: '"fh.1.0.0123456789abcdef"',
+      command: {schema_version: 2, client_mutation_id: mutation, base_revision: 0,
+        action: 'account.create', expected_entity_revisions: {},
+        payload: {id: created, name: 'synthetic account', kind: 'cash',
+          currency: 'RUB', opening_minor: 100}}});
+    await cache.refreshEncryptedCloudSnapshot({scope, session, identity,
+      pages: pages(1), etag: '"fh.1.1.0123456789abcdef"', expectedEpoch: 2});
+    session.logout();
+  }, {profile: PROFILE, created: CREATED, mutation: MUTATION});
+  await page.reload();
+  const saved = await page.evaluate(async () => {
+    const atomic = await import('/__e2e_cloud68_atomic__.js');
+    const {LocalBudgetSession} = await import('/__e2e_cloud68_session__.js');
+    const scope = 'account:' + 'a'.repeat(32);
+    const session = new LocalBudgetSession(); session.selectScope(scope);
+    await session.unlock(await atomic.getAtomicEncryptedKeyset(scope),
+      {passphrase: 'independent encrypted cloud 68 phrase 2026'});
+    const value = await atomic.readAtomicEncryptedCandidate(scope, session);
+    const result = {revision: value.snapshot.cloudFinance.revision,
+      etag: value.snapshot.cloudFinance.serverEtag, pending: value.outbox.length,
+      mutation: value.outbox[0].mutationId, originalEtag: value.outbox[0].ifMatch};
+    session.logout();
+    return result;
+  });
+  expect(saved).toEqual({revision: 1, etag: '"fh.1.1.0123456789abcdef"',
+    pending: 1, mutation: MUTATION, originalEtag: '"fh.1.0.0123456789abcdef"'});
+});
+
 test('native encrypted cloud cache+outbox+server ACK survive reload with exact cash', async({page,context})=>{
   const errors=[];
   page.on('pageerror', error=>errors.push(error.message));
@@ -149,7 +204,7 @@ test('native encrypted cloud cache+outbox+server ACK survive reload with exact c
     const identity={scope,profileId:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       generation:s.lifecycleVersion,epoch:'e'.repeat(32),signal:s.lifecycleSignal};
     const newAccount={id:created,kind:'account',entity_revision:1,
-      data:{name:'SYNTHETIC_SERVER_CONFIRMED_ACCOUNT',type:'cash',
+      data:{name:'SECRET_PENDING_ACCOUNT',type:'cash',
         currency:'RUB',opening_minor:2000,balance_minor:2000,
         reserved_minor:0,available_minor:2000,archived_at:null}};
     const change={revision:1,ordinal:0,kind:'upsert',

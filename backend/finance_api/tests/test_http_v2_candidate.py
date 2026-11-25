@@ -35,6 +35,7 @@ def v2_env(env):
     app = create_app(
         config=config, store=store, finance_engine=env["engine"],
         finance_profile_namespace=NAMESPACE, enable_account_v2_candidate=True,
+        finance_sync_test_allow_all=True,
     )
 
     def client(token: str):
@@ -91,6 +92,30 @@ def test_v2_candidate_has_no_http_route_by_default(env):
     response = client.post("/api/finance/v2/commands",
                            headers={"Origin": ORIGIN}, json={})
     assert response.status_code == 404
+
+
+def test_v2_cancellation_uses_same_fingerprint_as_account_and_payment_submission(v2_env):
+    _, token = v2_env["first"]
+    client = v2_env["v2_client"](token)
+    state = snapshot(client)
+    account_id, obligation_id = str(uuid4()), str(uuid4())
+    commands = [
+        request(state, "account.create", {"id": account_id, "name": "Synthetic cancelled",
+                "kind": "bank", "currency": "RUB", "opening_minor": 500}),
+        request(state, "settlement.payment.record", {"account_id": account_id,
+                "obligation_id": obligation_id, "amount_minor": 100,
+                "paid_on": "2026-11-12", "occurrence_on": "2026-11-12"},
+                {account_id: 1, obligation_id: 1}),
+    ]
+    for body in commands:
+        headers = {"Origin": ORIGIN, "If-Match": state.headers["etag"],
+                   "Idempotency-Key": body["client_mutation_id"]}
+        cancelled = client.post("/api/finance/v2/commands/cancel", json=body, headers=headers)
+        assert cancelled.status_code == 200, cancelled.text
+        assert cancelled.json()["code"] == "command_cancelled"
+        replay = client.post("/api/finance/v2/commands", json=body, headers=headers)
+        assert replay.status_code == 409 and replay.json()["code"] == "command_cancelled"
+    assert snapshot(client).json()["entities"] == state.json()["entities"]
 
 
 def test_v2_candidate_http_full_account_lifecycle_and_replay(v2_env):

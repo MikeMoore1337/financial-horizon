@@ -3,13 +3,54 @@ import { Accounts, type AccountsProps } from './Accounts';
 import { AccountsFinanceGateway, FinanceBridgeError } from './accounts-finance-gateway';
 import type { AccountServerView } from '../domain/accounts/server-snapshot.ts';
 
-/** Review-only integration point. The production app.js never routes here. */
 export interface ConnectedAccountsProps {
   verifiedActorUserId: string | null;
+  syncEnabled: boolean;
+  onOpenSync: () => void;
+  refreshVersion: number;
   onBack: () => void;
 }
 
-export function ConnectedAccounts({ verifiedActorUserId, onBack }: ConnectedAccountsProps) {
+export function ConnectedAccounts({
+  verifiedActorUserId,
+  syncEnabled,
+  onOpenSync,
+  refreshVersion,
+  onBack,
+}: ConnectedAccountsProps) {
+  const [syncActor, setSyncActor] = useState<string | null>(null);
+  return (
+    <>
+      {syncEnabled && verifiedActorUserId && syncActor === verifiedActorUserId && (
+        <button
+          type="button"
+          className="button-secondary"
+          onClick={onOpenSync}
+          disabled={!verifiedActorUserId}
+        >
+          Офлайн-синхронизация
+        </button>
+      )}
+      <OnlineAccounts
+        key={refreshVersion}
+        verifiedActorUserId={verifiedActorUserId}
+        syncEnabled={syncEnabled}
+        onOpenSync={onOpenSync}
+        refreshVersion={refreshVersion}
+        onBack={onBack}
+        onSyncAvailability={setSyncActor}
+      />
+    </>
+  );
+}
+
+function OnlineAccounts({
+  verifiedActorUserId,
+  onBack,
+  onSyncAvailability,
+}: ConnectedAccountsProps & {
+  onSyncAvailability: (actor: string | null) => void;
+}) {
   const gateway = useMemo(() => new AccountsFinanceGateway(), [verifiedActorUserId]);
   const [serverView, setServerView] = useState<AccountServerView | null>(null);
   const [status, setStatus] = useState<AccountsProps['status']>('locked');
@@ -33,6 +74,7 @@ export function ConnectedAccounts({ verifiedActorUserId, onBack }: ConnectedAcco
         .then((view) => {
           if (abort.signal.aborted) return;
           setServerView(view);
+          onSyncAvailability(gateway.syncRolloutAllowed ? verifiedActorUserId : null);
           setBlocked(false);
           setStatus('ready');
         })
@@ -43,8 +85,9 @@ export function ConnectedAccounts({ verifiedActorUserId, onBack }: ConnectedAcco
     return () => {
       abort.abort();
       gateway.invalidate();
+      onSyncAvailability(null);
     };
-  }, [gateway, verifiedActorUserId, fail]);
+  }, [gateway, verifiedActorUserId, fail, onSyncAvailability]);
 
   const refresh = useCallback(() => {
     if (!verifiedActorUserId) return;

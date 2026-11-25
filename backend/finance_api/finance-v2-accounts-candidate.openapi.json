@@ -12,6 +12,30 @@
   "x-authoritative-read": "/api/finance/v1/state",
   "x-supported-currency": "RUB",
   "paths": {
+    "/api/finance/v2/commands/cancel": {
+      "post": {
+        "summary": "Explicitly fence an exact uncommitted v2 request without reversing a committed operation",
+        "x-feature-off": true,
+        "x-verified-session-required": true,
+        "security": [{"financeV2Cookie":[]}],
+        "parameters": [
+          {"name":"If-Match","in":"header","required":true,"schema":{"type":"string"},"description":"Original strong ETag, not the current snapshot tag"},
+          {"name":"Idempotency-Key","in":"header","required":true,"schema":{"type":"string","format":"uuid"}},
+          {"name":"X-FH-Expected-Profile","in":"header","required":false,"schema":{"type":"string","format":"uuid"}}
+        ],
+        "requestBody": {"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/AccountV2Candidate"}}}},
+        "responses": {
+          "200": {"description":"A durable tombstone fences the exact request without a financial revision", "content":{"application/json":{"schema":{"$ref":"#/components/schemas/CommandCancellation"}}}},
+          "401": {"description":"Session missing or expired"},
+          "403": {"description":"Origin or profile mismatch"},
+          "409": {"description":"Command already committed or UUID belongs to a different request", "content":{"application/json":{"schema":{"$ref":"#/components/schemas/FinanceError"}}}},
+          "422": {"description":"Invalid command"},
+          "428": {"description":"Original write precondition missing"},
+          "429": {"description":"Rate limited"},
+          "503": {"description":"Cancellation outcome unavailable; preserve the original queue"}
+        }
+      }
+    },
     "/api/finance/v2/commands": {
       "post": {
         "summary": "Account CRUD, actual cash, verified linked payment record or atomic fact void and cash compensation (unapproved candidate)",
@@ -48,6 +72,13 @@
               "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
             },
             "description": "Must exactly match the body client_mutation_id; preserve both on network retries"
+          },
+          {
+            "name": "X-FH-Offline-Sync",
+            "in": "header",
+            "required": false,
+            "schema": {"type": "string", "const": "1"},
+            "description": "Marks an offline queue write; the verified actor must be enabled for sync."
           }
         ],
         "requestBody": {
@@ -704,6 +735,16 @@
           }
         }
       },
+      "CommandCancellation": {
+        "type":"object", "additionalProperties":false,
+        "required":["code","schema_version","client_mutation_id","base_revision"],
+        "properties": {
+          "code":{"const":"command_cancelled"},
+          "schema_version":{"const":2},
+          "client_mutation_id":{"type":"string","format":"uuid"},
+          "base_revision":{"type":"integer","minimum":0}
+        }
+      },
       "FinanceError": {
         "type": "object",
         "additionalProperties": false,
@@ -719,6 +760,8 @@
               "forbidden",
               "invalid_command",
               "idempotency_key_reuse",
+              "command_cancelled",
+              "command_already_committed",
               "semantic_conflict",
               "stale_revision",
               "precondition_required",

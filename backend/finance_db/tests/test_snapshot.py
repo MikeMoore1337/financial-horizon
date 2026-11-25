@@ -1,7 +1,8 @@
 """#67: full authorized snapshot and revision-aligned change feed on real PostgreSQL."""
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
+import json
 import os
 
 import pytest
@@ -12,7 +13,7 @@ from backend.finance_db.ledger_service import (
     FinanceCommandError, VerifiedFinanceScope, ensure_verified_profile,
     get_account_snapshot, submit_account_command,
 )
-from backend.finance_db.snapshot import get_finance_snapshot, get_finance_delta
+from backend.finance_db.snapshot import get_finance_snapshot, get_finance_delta, get_committed_command_delta
 
 
 @pytest.fixture
@@ -40,6 +41,37 @@ def do(engine, scope, action, payload, versions=None):
         if_match=snap.etag, idempotency_key=mutation,
         allow_internal=True,
     )
+
+
+def test_receipt_recovery_reads_only_retained_owner_journal_and_never_invents_missing_rows(scoped):
+    engine, scope = scoped
+    account_id = str(uuid4())
+    committed = do(engine, scope, "account.create", {"id": account_id, "name": "Synthetic account",
+        "kind": "cash", "currency": "RUB", "opening_minor": 500})
+    mutation = committed.body["client_mutation_id"]
+    with finance_transaction(engine, verified_user_id=scope.user_id, profile_id=scope.profile_id) as db:
+        db.execute(text("UPDATE finance_profiles SET min_available_revision=1 WHERE id=:p"), {"p": scope.profile_id})
+    with pytest.raises(FinanceCommandError) as expired:
+        get_finance_delta(engine, scope=scope, since_revision=0)
+    assert expired.value.status == 410
+    recovered = get_committed_command_delta(engine, scope=scope, mutation_id=mutation)
+    assert recovered.body["changes"] == committed.body["changes"]
+    assert recovered.body["from_revision"] == 0
+    assert recovered.body["next_since_revision"] == 1
+    other = ensure_verified_profile(engine, verified_user_id=uuid4().hex, server_namespace=uuid4())
+    with pytest.raises(FinanceCommandError) as foreign:
+        get_committed_command_delta(engine, scope=other, mutation_id=mutation)
+    assert foreign.value.status == 410
+    fake_id = str(uuid4())
+    with finance_transaction(engine, verified_user_id=scope.user_id, profile_id=scope.profile_id) as db:
+        db.execute(text("""
+            INSERT INTO command_receipts(profile_id,client_mutation_id,request_sha256,status_code,committed_revision,response_body)
+            VALUES (:p,:id,decode(repeat('00',32),'hex'),201,1,CAST(:body AS jsonb))
+        """), {"p":scope.profile_id,"id":UUID(fake_id),"body":json.dumps({
+            "client_mutation_id":fake_id,"revision":1,"changes":[{},{}]})})
+    with pytest.raises(FinanceCommandError) as incomplete:
+        get_committed_command_delta(engine, scope=scope, mutation_id=fake_id)
+    assert incomplete.value.status == 410
 
 
 def test_complete_snapshot_contains_accounts_and_immutable_signed_transactions(scoped):

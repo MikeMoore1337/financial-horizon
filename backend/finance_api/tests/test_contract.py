@@ -43,7 +43,9 @@ def test_candidate_is_feature_off_and_does_not_replace_accepted_design():
         "/api/auth/email/finance/session",
         "/api/finance/v1/state",
         "/api/finance/v1/changes",
+        "/api/finance/v1/commands/{mutation_id}/changes",
         "/api/finance/v1/commands",
+        "/api/finance/v1/commands/cancel",
     }
 
 
@@ -83,10 +85,14 @@ def test_protocol_documents_auth_rate_bounds_pagination_and_exact_conflicts():
     ]
     bootstrap_schema = paths["/api/auth/email/finance/session"]["post"]["responses"]["200"]["content"]["application/json"]["schema"]
     assert bootstrap_schema["properties"]["payment_guard_v1"]["type"] == "boolean"
+    assert bootstrap_schema["properties"]["sync_profile_fence_v1"]["type"] == "boolean"
+    assert bootstrap_schema["properties"]["sync_cancel_fence_v1"]["type"] == "boolean"
     for path, verb in [
         ("/api/finance/v1/state", "get"),
         ("/api/finance/v1/changes", "get"),
+        ("/api/finance/v1/commands/{mutation_id}/changes", "get"),
         ("/api/finance/v1/commands", "post"),
+        ("/api/finance/v1/commands/cancel", "post"),
     ]:
         assert paths[path][verb]["security"] == [{"financeCookie": []}]
         assert paths[path][verb]["x-feature-off"] is True
@@ -103,8 +109,16 @@ def test_protocol_documents_auth_rate_bounds_pagination_and_exact_conflicts():
     assert {"unauthenticated", "forbidden", "rate_limited",
             "service_unavailable", "invalid_command"} <= allowed_errors
     assert "unauthorized" not in allowed_errors
+    assert {"command_cancelled", "command_already_committed"} <= allowed_errors
+    cancel = paths["/api/finance/v1/commands/cancel"]["post"]
+    assert {"If-Match", "Idempotency-Key", "X-FH-Expected-Profile"} == {p["name"] for p in cancel["parameters"]}
+    assert {"200", "401", "403", "409", "422", "428", "429", "503"} <= set(cancel["responses"])
     changes = paths["/api/finance/v1/changes"]["get"]
     assert {"200", "401", "410", "422", "429", "503"} <= set(changes["responses"])
+    recovery = paths["/api/finance/v1/commands/{mutation_id}/changes"]["get"]
+    assert {p["name"] for p in recovery["parameters"]} == {"mutation_id", "X-FH-Expected-Profile"}
+    assert {"200", "401", "403", "410", "422", "429", "503"} <= set(recovery["responses"])
+    assert recovery["responses"]["200"]["headers"]["Cache-Control"]["schema"]["const"] == "private, no-store"
     cmd = paths["/api/finance/v1/commands"]["post"]
     assert cmd["x-http-body-max-bytes"] == 32768
     assert cmd["x-no-duplicate-json-keys"] is True

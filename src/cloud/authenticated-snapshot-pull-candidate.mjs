@@ -111,7 +111,7 @@ export async function downloadVerifiedFinanceSnapshotCandidate({
         method: 'GET', credentials: 'same-origin', mode: 'same-origin',
         redirect: 'error', cache: 'no-store',
         referrerPolicy: 'same-origin',
-        headers: {Accept:'application/json'},
+        headers: {Accept:'application/json', 'X-FH-Expected-Profile': identity.profileId},
         signal: session.lifecycleSignal,
       });
     } catch {

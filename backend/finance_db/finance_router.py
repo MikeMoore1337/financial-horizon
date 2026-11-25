@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
+import hmac
+import re
 from typing import Callable
 from uuid import UUID
 
@@ -20,13 +22,13 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from backend.finance_api.contracts import parse_v1_command
 from backend.finance_api.contracts_v2_candidate import parse_v2_account_command
-from backend.finance_api.accounts_v2_service import submit_account_v2_candidate
+from backend.finance_api.accounts_v2_service import prepare_account_v2_command, submit_account_v2_candidate
 
 from .ledger_service import (
     FinanceCommandError, VerifiedFinanceScope, derive_verified_scope,
-    ensure_verified_profile, submit_account_command,
+    ensure_verified_profile, submit_account_command, cancel_uncommitted_account_command,
 )
-from .snapshot import get_finance_snapshot, get_finance_delta
+from .snapshot import get_finance_snapshot, get_finance_delta, get_committed_command_delta
 
 log = logging.getLogger("fh.finance_api")
 AUTH_COOKIE = "fh_email_session"
@@ -88,6 +90,8 @@ def mount_finance_routes(
     enable_account_v2_candidate: bool = False,
     enable_import_candidate: bool = False,
     enable_bank_import_candidate: bool = False,
+    sync_allowed_actor: str | None = None,
+    sync_test_allow_all: bool = False,
 ) -> None:
     """Explicit application wiring only; create_app() default does not call it.
 
@@ -99,8 +103,11 @@ def mount_finance_routes(
         raise ValueError("Finance routes require validated PostgreSQL and server namespace")
     if (type(enable_account_v2_candidate) is not bool or
         type(enable_import_candidate) is not bool or
-        type(enable_bank_import_candidate) is not bool):
+        type(enable_bank_import_candidate) is not bool or type(sync_test_allow_all) is not bool):
         raise ValueError("Candidate route opt-in must be explicit boolean")
+    if sync_allowed_actor is not None and (not isinstance(sync_allowed_actor, str) or
+            not re.fullmatch(r"[a-f0-9]{32}", sync_allowed_actor)):
+        raise ValueError("Invalid sync rollout actor")
     if enable_bank_import_candidate and not enable_account_v2_candidate:
         raise ValueError("Bank import requires private finance v2 routing")
     if enable_import_candidate and not enable_account_v2_candidate:
@@ -168,7 +175,29 @@ def mount_finance_routes(
         return user["id"]
 
     def scope(request: Request) -> VerifiedFinanceScope:
-        return derive_verified_scope(require_user(request, finance_cookie=True), namespace)
+        verified = derive_verified_scope(require_user(request, finance_cookie=True), namespace)
+        # A stale browser tab can share cookies with a newly signed-in user.
+        # This optional precondition never grants access: it only rejects a
+        # mismatch against the profile derived from the verified FH cookie.
+        expected = request.headers.getlist("x-fh-expected-profile")
+        if len(expected) > 1 or (expected and expected[0] != str(verified.profile_id)):
+            raise HTTPException(status_code=403, detail="Финансовый профиль изменился")
+        return verified
+
+    def sync_allowed(user_id: str) -> bool:
+        return sync_test_allow_all or (
+            sync_allowed_actor is not None and hmac.compare_digest(user_id, sync_allowed_actor)
+        )
+
+    def require_sync(user_id: str) -> None:
+        if not sync_allowed(user_id):
+            raise HTTPException(status_code=403, detail="Синхронизация недоступна для аккаунта")
+
+    def sync_write_marker(request: Request) -> bool:
+        values = request.headers.getlist('x-fh-offline-sync')
+        if values and values != ['1']:
+            raise HTTPException(status_code=400, detail="Некорректный признак синхронизации")
+        return bool(values)
 
     def rate(request: Request, action: str) -> None:
         if rate_limiter is None:
@@ -213,7 +242,9 @@ def mount_finance_routes(
             )
         response.headers["Cache-Control"] = "private, no-store"
         return {"ok": True, "profile_id": str(verified.profile_id),
-                "payment_guard_v1": bool(enable_account_v2_candidate)}
+                "payment_guard_v1": bool(enable_account_v2_candidate),
+                "sync_profile_fence_v1": True, "sync_cancel_fence_v1": True,
+                "sync_allowed_v1": sync_allowed(user_id)}
 
     router = APIRouter(prefix="/api/finance/v1", include_in_schema=False)
 
@@ -260,13 +291,33 @@ def mount_finance_routes(
                 "service_unavailable", "Финансовый сервис недоступен", 503
             ))
 
+    @router.get("/commands/{mutation_id}/changes")
+    def committed_command_changes(mutation_id: str, request: Request):
+        rate(request, "finance-read")
+        verified = scope(request)
+        require_sync(verified.user_id)
+        try:
+            if request.query_params:
+                raise FinanceCommandError("invalid_command", "Недопустимый параметр журнала", 422)
+            return _finance_response(get_committed_command_delta(engine, scope=verified, mutation_id=mutation_id))
+        except FinanceCommandError as exc:
+            return _finance_error(exc)
+        except SQLAlchemyError:
+            log.error("finance_receipt_delta_read_failed")
+            return _finance_error(FinanceCommandError(
+                "service_unavailable", "Финансовый сервис недоступен", 503
+            ))
+
     @router.post("/commands")
     async def commands(request: Request):
         _guard_origin(request, public_origin)
+        is_sync = sync_write_marker(request)
         # Do not run SQLite rate limits or blocking PostgreSQL row locks in
         # the ASGI event loop; unrelated sessions must remain responsive.
         await run_in_threadpool(rate, request, "finance-write")
         verified = await run_in_threadpool(scope, request)
+        if is_sync:
+            require_sync(verified.user_id)
         try:
             body = await parse_v1_command(request)
         except FinanceCommandError as exc:
@@ -279,6 +330,8 @@ def mount_finance_routes(
             current = scope(request)
             if current != verified:
                 raise HTTPException(status_code=401, detail="Сеанс изменился")
+            if is_sync:
+                require_sync(current.user_id)
             return submit_account_command(
                 engine, scope=current, command=body,
                 if_match=request.headers.get("if-match", ""),
@@ -298,6 +351,44 @@ def mount_finance_routes(
             return _finance_error(FinanceCommandError(
                 "service_unavailable", "Операция не подтверждена сервером", 503
             ))
+
+    async def cancel_command(request: Request, *, v2: bool):
+        _guard_origin(request, public_origin)
+        await run_in_threadpool(rate, request, "finance-write")
+        verified = await run_in_threadpool(scope, request)
+        require_sync(verified.user_id)
+        try:
+            body = await (parse_v2_account_command(request) if v2 else parse_v1_command(request))
+        except FinanceCommandError as exc:
+            return _finance_error(exc)
+
+        def fence_with_fresh_session():
+            current = scope(request)
+            if current != verified:
+                raise HTTPException(status_code=401, detail="Сеанс изменился")
+            require_sync(current.user_id)
+            tag = request.headers.get("if-match", "")
+            mutation = request.headers.get("idempotency-key", "")
+            normalized = (prepare_account_v2_command(scope=current, command=body,
+                          if_match=tag, idempotency_key=mutation) if v2 else body)
+            return cancel_uncommitted_account_command(
+                engine, scope=current, command=normalized, if_match=tag,
+                idempotency_key=mutation, allow_account_v2=v2,
+            )
+
+        try:
+            return _finance_response(await run_in_threadpool(fence_with_fresh_session))
+        except FinanceCommandError as exc:
+            return _finance_error(exc)
+        except SQLAlchemyError:
+            log.error("finance_cancel_db_failed")
+            return _finance_error(FinanceCommandError(
+                "service_unavailable", "Отмена не подтверждена сервером", 503,
+            ))
+
+    @router.post("/commands/cancel")
+    async def cancel_v1_command(request: Request):
+        return await cancel_command(request, v2=False)
 
     # Inactive default: owner-confirmed, source-preserving personal import.
     # Actual authenticated FH session and idempotent SQL commit are mandatory.
@@ -439,11 +530,18 @@ def mount_finance_routes(
     if enable_account_v2_candidate:
         v2 = APIRouter(prefix="/api/finance/v2", include_in_schema=False)
 
+        @v2.post("/commands/cancel")
+        async def cancel_v2_command(request: Request):
+            return await cancel_command(request, v2=True)
+
         @v2.post("/commands")
         async def account_v2_commands(request: Request):
             _guard_origin(request, public_origin)
+            is_sync = sync_write_marker(request)
             await run_in_threadpool(rate, request, "finance-write")
             verified = await run_in_threadpool(scope, request)
+            if is_sync:
+                require_sync(verified.user_id)
             try:
                 body = await parse_v2_account_command(request)
             except FinanceCommandError as exc:
@@ -456,6 +554,8 @@ def mount_finance_routes(
                 current = scope(request)
                 if current != verified:
                     raise HTTPException(status_code=401, detail="Сеанс изменился")
+                if is_sync:
+                    require_sync(current.user_id)
                 return submit_account_v2_candidate(
                     engine, scope=current, command=body,
                     if_match=request.headers.get("if-match", ""),

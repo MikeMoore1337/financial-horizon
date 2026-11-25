@@ -1,24 +1,32 @@
 /* Only the auth API controls session state. Financial records stay in IndexedDB. */
 export function createEmailSession(request=fetch){
- let email=null,userId=null,revision=0,busy=false;
+ let email=null,userId=null,revision=0,busy=false,lastRefreshFailure=null;
  return {
   get email(){return email;},
   get userId(){return userId;},
   get busy(){return busy;},
+  get lastRefreshFailure(){return lastRefreshFailure;},
   async refresh(){
    if(busy)return false;
    const current=++revision;
+   let response;
    try{
-    const response=await request('./api/auth/email/me',{credentials:'same-origin',cache:'no-store'});
-    if(!response.ok)return false;
+    response=await request('./api/auth/email/me',{credentials:'same-origin',cache:'no-store'});
+   }catch{
+    if(current===revision)lastRefreshFailure='network';
+    return false;
+   }
+   try{
+    if(!response.ok){if(current===revision)lastRefreshFailure=(response.status===429||response.status>=500&&response.status<=599)?'unavailable':'http';return false;}
     const result=await response.json();
     if(current!==revision)return false;
+    lastRefreshFailure=null;
     const valid=result?.authenticated===true&&typeof result.user?.id==='string'&&/^[a-f0-9]{32}$/.test(result.user.id)&&(result.user.email===null||typeof result.user.email==='string');
     email=valid?result.user.email:null;
     userId=valid?result.user.id:null;
     return true;
    }catch{
-    // The local-first ledger remains available when auth is offline or gated.
+    if(current===revision)lastRefreshFailure='invalid';
     return false;
    }
   },

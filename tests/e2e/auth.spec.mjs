@@ -4,6 +4,29 @@ import {
  registerViaUi,loginViaUi,logoutViaUi,currentUser,mailToken,view,
 } from './helpers.mjs';
 
+test('a real rejected session still clears the ledger if connectivity drops after the response',async({page,context})=>{
+ const session=await context.request.post('/__e2e__/personal-session');
+ expect(session.status()).toBe(200);
+ await page.goto('/');
+ await expect(page.locator('#save-indicator')).toHaveText(/Локальная база готова|Серверный раздел/);
+ await context.clearCookies();
+ await page.evaluate(()=>{
+  const original=window.fetch;
+  window.fetch=async (...args)=>{
+   const response=await original(...args);
+   if(String(args[0]).includes('/api/auth/email/me')){
+    const body=await response.clone().json();
+    if(body.authenticated===false){
+     Object.defineProperty(navigator,'onLine',{configurable:true,get:()=>false});
+    }
+   }
+   return response;
+  };
+  window.dispatchEvent(new Event('focus'));
+ });
+ await expect(page).toHaveURL(/account\.html/);
+});
+
 test('email registration, true browser cookie, logout and repeat login',async({page,context,request})=>{
  const watcher=await observe(context,page);
  const email='e2e-auth-one+'+test.info().project.name+'@example.invalid';

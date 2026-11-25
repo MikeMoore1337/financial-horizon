@@ -19,17 +19,10 @@ from backend.finance_db.ledger_service import (
 from .contracts_v2_candidate import validate_v2_account_candidate
 
 
-def submit_account_v2_candidate(
-    engine: Engine, *, scope: VerifiedFinanceScope, command: object,
-    if_match: str, idempotency_key: str,
-) -> FinanceResult:
-    """Validate the exact scoped v2 candidate before a single SQL transaction.
-
-    Unlike the internal compatibility mode, this entrypoint exposes only
-    strictly validated account, linked-payment and mandatory reserve-plan v2
-    actions. Loan/reserve internal-only actions remain unavailable. The SQL
-    core enforces the same whitelist if transport validation is bypassed.
-    """
+def prepare_account_v2_command(
+    *, scope: VerifiedFinanceScope, command: object, if_match: str, idempotency_key: str,
+) -> dict:
+    """Produce the identical v2 SQL request for submission and cancellation."""
     try:
         validated = validate_v2_account_candidate(
             command, if_match=if_match, idempotency_key=idempotency_key,
@@ -55,6 +48,16 @@ def submit_account_v2_candidate(
             },
         }
 
+    return validated
+
+
+def submit_account_v2_candidate(
+    engine: Engine, *, scope: VerifiedFinanceScope, command: object,
+    if_match: str, idempotency_key: str,
+) -> FinanceResult:
+    """Validate the public v2 candidate before its SQL transaction."""
+    validated = prepare_account_v2_command(scope=scope, command=command,
+                                           if_match=if_match, idempotency_key=idempotency_key)
     return submit_account_command(
         engine, scope=scope, command=validated, if_match=if_match,
         idempotency_key=idempotency_key, allow_internal=False,

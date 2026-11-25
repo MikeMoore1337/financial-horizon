@@ -61,6 +61,7 @@ test('#33 reviewed production entry uses existing FH session and reads only auth
   await expect(page.locator('[data-settings-card="finance-accounts"]')).toBeVisible();
   await page.locator('[data-settings-card="finance-accounts"] [data-view="accounts-connected"]').click();
   await expect(page.locator('#toolbar-title')).toHaveText('Счета и кошельки');
+  await expect(page.getByRole('button', {name:'Офлайн-синхронизация'})).toHaveCount(0);
   await expect(page.locator('#storage-context-chip')).toHaveText('На сервере');
   await expect(page.locator('#storage-context-title')).toHaveText('Счета в аккаунте');
   await expect(page.locator('#storage-context-footnote')).toContainText('Счета хранятся на сервере');

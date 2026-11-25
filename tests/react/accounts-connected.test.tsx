@@ -72,6 +72,32 @@ function sequence(...responses: Array<Response | Error>) {
 }
 
 describe('#33 verified account UI -> finance HTTP gateway, feature off', () => {
+  it('exposes sync only when the authenticated bootstrap explicitly permits this account', async () => {
+    for (const allowed of [true, false, undefined]) {
+      const fetcher = sequence(
+        reply({
+          ok: true,
+          profile_id: PROFILE,
+          sync_allowed_v1: allowed,
+          payment_guard_v1: true,
+          sync_profile_fence_v1: true,
+        }),
+        reply(state()),
+      );
+      const gateway = new AccountsFinanceGateway(fetcher, 'https://fh.example');
+      await gateway.open(ACTOR);
+      expect(gateway.syncRolloutAllowed).toBe(allowed === true);
+      gateway.invalidate();
+      expect(gateway.syncRolloutAllowed).toBe(false);
+    }
+    const legacy = sequence(
+      reply({ ok: true, profile_id: PROFILE, sync_allowed_v1: true }),
+      reply(state()),
+    );
+    const oldGateway = new AccountsFinanceGateway(legacy, 'https://fh.example');
+    await oldGateway.open(ACTOR);
+    expect(oldGateway.syncRolloutAllowed).toBe(false);
+  });
   it('boots through FH session and displays only a complete scoped server snapshot', async () => {
     const fetcher = sequence(reply({ ok: true, profile_id: PROFILE }), reply(state()));
     const gateway = new AccountsFinanceGateway(fetcher, 'https://fh.example');

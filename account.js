@@ -1,4 +1,11 @@
 /* Account registration with no external calls in guest or disabled mode. */
+// Keep this standalone: old installed shells load the unbundled account.js.
+function forgetOfflineActor(actor=null){
+ try{
+  const key='fh-offline-sync-actor-v1';
+  if(actor===null||localStorage.getItem(key)===actor)localStorage.removeItem(key);
+ }catch{}
+}
 const $=selector=>document.querySelector(selector);
 const MODES={
  login:["Войти по email","Войти по email"],
@@ -237,6 +244,7 @@ async function logout(){
   const result=await request('logout',{});
   if(result.ok!==true)throw Error('Сервер не подтвердил выход');
   if(formerId){
+   forgetOfflineActor(formerId);
    try{
     const channel=new BroadcastChannel('fh-auth-session-v2');
     channel.postMessage({type:'logout',userId:formerId});
@@ -279,6 +287,11 @@ async function submit(event){
    if(!await refreshSession()){
     throw Error("Вход выполнен, но браузер не подтвердил сессию. Проверьте настройки cookies и повторите вход.");
    }
+   forgetOfflineActor();
+   // A different tab may still display the previous authenticated account.
+   // Notify it only after the new cookie has been verified.
+   try{const channel=new BroadcastChannel('fh-auth-session-v2');
+    channel.postMessage({type:'session-changed'});channel.close();}catch{}
    token=null;
    if(changeToken){
     await confirmEmailChange();

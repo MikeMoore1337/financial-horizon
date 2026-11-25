@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from concurrent.futures import ThreadPoolExecutor
-from threading import Event
+from threading import Barrier, Event
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -15,6 +15,7 @@ from backend.fh_email_auth.config import Settings
 from backend.fh_email_auth.store import AuthStore
 from backend.finance_db.db import create_finance_engine
 from backend.finance_db.ledger_service import (
+    FinanceCommandError, cancel_uncommitted_account_command,
     derive_verified_scope, get_account_snapshot, submit_account_command,
 )
 
@@ -54,6 +55,7 @@ def auth_finance(tmp_path):
             secret == "synthetic-turnstile-secret" and
             origin == ORIGIN and token == "valid-" + action,
         finance_engine=engine, finance_profile_namespace=namespace,
+        finance_sync_test_allow_all=True,
     )
     with TestClient(app) as client:
         yield client, app, mail, store, engine, namespace
@@ -97,6 +99,34 @@ def seed(engine, scope, opening, kind="bank"):
     )
     assert result.status == 201
     return acc
+
+
+def test_committed_revision_recovery_requires_owner_and_profile_fence(auth_finance):
+    client, app, mail, _, engine, namespace = auth_finance
+    mutation = str(uuid4())
+    url = f"/api/finance/v1/commands/{mutation}/changes"
+    assert client.get(url).status_code == 401
+    uid = authenticate(client, mail)
+    assert bootstrap(client).status_code == 200
+    scope = derive_verified_scope(uid, namespace)
+    before = get_account_snapshot(engine, scope=scope)
+    command = {"schema_version":1, "client_mutation_id":mutation, "base_revision":before.body["revision"],
+        "action":"account.create", "expected_entity_revisions":{}, "payload":{"id":str(uuid4()),
+        "name":"Synthetic account", "kind":"cash", "currency":"RUB", "opening_minor":500}}
+    result = submit_account_command(engine, scope=scope, command=command, if_match=before.etag,
+                                    idempotency_key=mutation, allow_internal=True)
+    recovered = client.get(url)
+    assert recovered.status_code == 200
+    assert recovered.json()["changes"] == result.body["changes"]
+    assert "no-store" in recovered.headers["cache-control"]
+    assert client.get(url, headers={"X-FH-Expected-Profile":str(uuid4())}).status_code == 403
+    assert client.get(url + "?extra=1").status_code == 422
+    with TestClient(app) as foreign:
+        authenticate(foreign, mail, email="foreign@example.invalid")
+        assert bootstrap(foreign).status_code == 200
+        assert foreign.get(url).status_code == 410
+    assert client.post("/api/auth/email/logout", headers={"Origin":ORIGIN}, json={}).status_code == 200
+    assert client.get(url).status_code == 401
 
 
 def test_opt_in_finance_routes_reject_anonymous_requests_and_unsafe_origins(auth_finance):
@@ -206,6 +236,32 @@ def test_fresh_login_cannot_inherit_stale_finance_cookie_from_another_user(auth_
     assert alice_view.json()["profile_id"] == before.json()["profile_id"]
 
 
+def test_expected_profile_rejects_a_stale_tab_after_account_switch(auth_finance):
+    client, _, mail, _, _, _ = auth_finance
+    authenticate(client, mail, "fence-a@example.invalid")
+    first = bootstrap(client)
+    assert first.json()["sync_profile_fence_v1"] is True
+    profile_a = first.json()["profile_id"]
+    authenticate(client, mail, "fence-b@example.invalid")
+    second = bootstrap(client)
+    profile_b = second.json()["profile_id"]
+    assert profile_a != profile_b
+    header = {"X-FH-Expected-Profile": profile_a}
+    assert client.get("/api/finance/v1/state", headers=header).status_code == 403
+    assert client.get("/api/finance/v1/changes?since_revision=0", headers=header).status_code == 403
+    assert client.post("/api/finance/v1/commands", headers={**header, "Origin": ORIGIN},
+                       json={}).status_code == 403
+    state = client.get("/api/finance/v1/state", headers={"X-FH-Expected-Profile": profile_b})
+    assert state.status_code == 200
+    assert state.json()["revision"] == 0
+    assert state.json()["entities"] == []
+    duplicate = client.get("/api/finance/v1/state", headers=[
+        ("X-FH-Expected-Profile", profile_b), ("X-FH-Expected-Profile", profile_a),
+    ])
+    assert duplicate.status_code == 403
+    assert client.get("/api/finance/v1/state").status_code == 200  # Existing clients remain compatible.
+
+
 def test_v1_transfer_idempotency_and_revision_conflict_from_real_authenticated_browser(auth_finance):
     client, _, mail, _, engine, namespace = auth_finance
     uid = authenticate(client, mail)
@@ -257,6 +313,92 @@ def test_v1_transfer_idempotency_and_revision_conflict_from_real_authenticated_b
     reuse = client.post("/api/finance/v1/commands", json=changed, headers=headers)
     assert reuse.status_code == 409
     assert reuse.json()["code"] == "idempotency_key_reuse"
+
+
+def test_explicit_cancel_fences_only_the_exact_uncommitted_transfer(auth_finance):
+    client, app, mail, _, engine, namespace = auth_finance
+    uid = authenticate(client, mail)
+    assert bootstrap(client).status_code == 200
+    scope = derive_verified_scope(uid, namespace)
+    first, second = seed(engine, scope, 10_000), seed(engine, scope, 500, "cash")
+    before = client.get("/api/finance/v1/state")
+    versions = {item["id"]: item["entity_revision"] for item in before.json()["entities"]}
+    mutation = str(uuid4())
+    command = {"schema_version": 1, "client_mutation_id": mutation,
+               "base_revision": before.json()["revision"], "action": "account.transfer",
+               "expected_entity_revisions": {first: versions[first], second: versions[second]},
+               "payload": {"from_account_id": first, "to_account_id": second,
+                           "amount_minor": 1000, "occurred_on": "2026-11-08"}}
+    headers = {"Origin": ORIGIN, "If-Match": before.headers["etag"], "Idempotency-Key": mutation}
+    denied = client.post("/api/finance/v1/commands/cancel", json=command,
+                         headers={**headers, "Origin": "https://evil.invalid"})
+    assert denied.status_code == 403
+    cancelled = client.post("/api/finance/v1/commands/cancel", json=command, headers=headers)
+    assert cancelled.status_code == 200
+    assert cancelled.json() == {"code": "command_cancelled", "schema_version": 1,
+                                "client_mutation_id": mutation, "base_revision": command["base_revision"]}
+    assert client.post("/api/finance/v1/commands/cancel", json=command, headers=headers).json() == cancelled.json()
+    replay = client.post("/api/finance/v1/commands", json=command, headers=headers)
+    assert replay.status_code == 409 and replay.json()["code"] == "command_cancelled"
+    altered = {**command, "payload": {**command["payload"], "amount_minor": 2000}}
+    mismatch = client.post("/api/finance/v1/commands/cancel", json=altered, headers=headers)
+    assert mismatch.status_code == 409 and mismatch.json()["code"] == "idempotency_key_reuse"
+    with TestClient(app) as other:
+        authenticate(other, mail, "another@example.invalid")
+        assert bootstrap(other).status_code == 200
+        cross_scope = other.post("/api/finance/v1/commands/cancel", json=command,
+                                 headers={**headers, "X-FH-Expected-Profile": str(scope.profile_id)})
+        assert cross_scope.status_code == 403
+    after = client.get("/api/finance/v1/state")
+    assert after.json()["revision"] == before.json()["revision"]
+    assert after.json()["entities"] == before.json()["entities"]
+
+    # A committed request can never be fenced or have its postings undone.
+    second_id = str(uuid4())
+    committed = {**command, "client_mutation_id": second_id}
+    committed_headers = {**headers, "Idempotency-Key": second_id}
+    assert client.post("/api/finance/v1/commands", json=committed, headers=committed_headers).status_code == 201
+    refused = client.post("/api/finance/v1/commands/cancel", json=committed, headers=committed_headers)
+    assert refused.status_code == 409 and refused.json()["code"] == "command_already_committed"
+    assert client.post("/api/finance/v1/commands", json=committed, headers=committed_headers).json()["replayed"] is True
+
+
+def test_submit_and_cancel_are_serialized_under_the_same_profile_lock(auth_finance):
+    client, _, mail, _, engine, namespace = auth_finance
+    uid = authenticate(client, mail)
+    assert bootstrap(client).status_code == 200
+    scope = derive_verified_scope(uid, namespace)
+    first, second = seed(engine, scope, 10_000), seed(engine, scope, 500, "cash")
+    for _ in range(6):
+        state = client.get("/api/finance/v1/state")
+        versions = {item["id"]: item["entity_revision"] for item in state.json()["entities"]}
+        mutation = str(uuid4())
+        command = {"schema_version": 1, "client_mutation_id": mutation,
+                   "base_revision": state.json()["revision"], "action": "account.transfer",
+                   "expected_entity_revisions": {first: versions[first], second: versions[second]},
+                   "payload": {"from_account_id": first, "to_account_id": second,
+                               "amount_minor": 100, "occurred_on": "2026-11-08"}}
+        barrier = Barrier(2)
+
+        def run(cancel):
+            barrier.wait(timeout=10)
+            try:
+                operation = cancel_uncommitted_account_command if cancel else submit_account_command
+                result = operation(engine, scope=scope, command=command, if_match=state.headers["etag"],
+                                   idempotency_key=mutation)
+                return result.status, result.body.get("code")
+            except FinanceCommandError as error:
+                return error.status, error.code
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            cancel = pool.submit(run, True)
+            submit = pool.submit(run, False)
+            outcome = (cancel.result(timeout=20), submit.result(timeout=20))
+        assert outcome in (((200, "command_cancelled"), (409, "command_cancelled")),
+                           ((409, "command_already_committed"), (201, None)))
+        after = client.get("/api/finance/v1/state")
+        change = 0 if outcome[0][0] == 200 else 1
+        assert after.json()["revision"] == state.json()["revision"] + change
 
 
 def test_public_v1_rejects_unapproved_account_creation_and_cross_scope_data(auth_finance):

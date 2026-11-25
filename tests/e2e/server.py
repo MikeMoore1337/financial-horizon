@@ -82,6 +82,8 @@ def local_app(directory):
             # Only the disposable SQL E2E server opts into the #38 candidate.
             # The actual application startup defaults to OFF.
             enable_bank_import_candidate=True,
+            # Synthetic disposable actors only; production cannot opt into this.
+            finance_sync_test_allow_all=True,
         )
     app = create_app(
         config=config,
@@ -101,6 +103,29 @@ def local_app(directory):
     finance_stub_users = set()
     finance_requests = {}
     reserves_stub = ReserveStub()
+
+    @app.post("/api/finance/v1/__e2e__/synthetic-loan")
+    def synthetic_loan(request: Request):
+        # Test-only fixture, available solely in the isolated SQL E2E server.
+        if not real_finance or request.headers.get("origin") != ORIGIN:
+            raise HTTPException(404)
+        user = store.current(request.cookies.get("fh_finance_session"))
+        if not user or not user.get("email", "").endswith(".invalid"):
+            raise HTTPException(401)
+        from sqlalchemy import text
+        from backend.finance_db.db import finance_transaction
+        from backend.finance_db.ledger_service import derive_verified_scope
+        scope = derive_verified_scope(user["id"], finance_args["finance_profile_namespace"])
+        loan_id = uuid4()
+        with finance_transaction(finance_args["finance_engine"], verified_user_id=user["id"],
+                                 profile_id=scope.profile_id) as db:
+            db.execute(text("""
+                INSERT INTO loans
+                  (profile_id,id,title,opening_minor,payment_minor,apr_basis_points,
+                   term_months,due_day,as_of_date)
+                VALUES (:p,:id,'Synthetic loan',50000,5000,1200,24,8,'2026-11-08')
+            """), {"p": scope.profile_id, "id": loan_id})
+        return {"id": str(loan_id)}
 
     @app.post("/__e2e__/personal-session")
     def synthetic_personal_session(response: Response, request: Request,
@@ -293,6 +318,16 @@ def local_app(directory):
             bank_disabled = '<meta name="fh-finance-bank-import" content="disabled">'
             if contents.count(bank_enabled) + contents.count(bank_disabled) != 1:
                 raise HTTPException(503)
+            sync_enabled = '<meta name="fh-finance-sync" content="enabled">'
+            sync_disabled = '<meta name="fh-finance-sync" content="disabled">'
+            if contents.count(sync_enabled) + contents.count(sync_disabled) != 1:
+                raise HTTPException(503)
+            # Only the disposable real-FH/PostgreSQL test server opts in.
+            # The production static build keeps its independently reviewed flag.
+            contents = contents.replace(
+                sync_disabled if real_finance else sync_enabled,
+                sync_enabled if real_finance else sync_disabled,
+            )
             if real_finance and (
                 contents.count(bank_enabled) != 1
                 or contents.count('<meta name="fh-finance-accounts" content="enabled">') != 1
