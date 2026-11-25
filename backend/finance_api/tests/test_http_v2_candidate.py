@@ -35,6 +35,7 @@ def v2_env(env):
     app = create_app(
         config=config, store=store, finance_engine=env["engine"],
         finance_profile_namespace=NAMESPACE, enable_account_v2_candidate=True,
+        finance_sync_test_allow_all=True,
     )
 
     def client(token: str):

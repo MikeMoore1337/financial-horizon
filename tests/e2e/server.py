@@ -82,6 +82,8 @@ def local_app(directory):
             # Only the disposable SQL E2E server opts into the #38 candidate.
             # The actual application startup defaults to OFF.
             enable_bank_import_candidate=True,
+            # Synthetic disposable actors only; production cannot opt into this.
+            finance_sync_test_allow_all=True,
         )
     app = create_app(
         config=config,

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
+import hmac
+import re
 from typing import Callable
 from uuid import UUID
 
@@ -88,6 +90,8 @@ def mount_finance_routes(
     enable_account_v2_candidate: bool = False,
     enable_import_candidate: bool = False,
     enable_bank_import_candidate: bool = False,
+    sync_allowed_actor: str | None = None,
+    sync_test_allow_all: bool = False,
 ) -> None:
     """Explicit application wiring only; create_app() default does not call it.
 
@@ -99,8 +103,11 @@ def mount_finance_routes(
         raise ValueError("Finance routes require validated PostgreSQL and server namespace")
     if (type(enable_account_v2_candidate) is not bool or
         type(enable_import_candidate) is not bool or
-        type(enable_bank_import_candidate) is not bool):
+        type(enable_bank_import_candidate) is not bool or type(sync_test_allow_all) is not bool):
         raise ValueError("Candidate route opt-in must be explicit boolean")
+    if sync_allowed_actor is not None and (not isinstance(sync_allowed_actor, str) or
+            not re.fullmatch(r"[a-f0-9]{32}", sync_allowed_actor)):
+        raise ValueError("Invalid sync rollout actor")
     if enable_bank_import_candidate and not enable_account_v2_candidate:
         raise ValueError("Bank import requires private finance v2 routing")
     if enable_import_candidate and not enable_account_v2_candidate:
@@ -177,6 +184,21 @@ def mount_finance_routes(
             raise HTTPException(status_code=403, detail="Финансовый профиль изменился")
         return verified
 
+    def sync_allowed(user_id: str) -> bool:
+        return sync_test_allow_all or (
+            sync_allowed_actor is not None and hmac.compare_digest(user_id, sync_allowed_actor)
+        )
+
+    def require_sync(user_id: str) -> None:
+        if not sync_allowed(user_id):
+            raise HTTPException(status_code=403, detail="Синхронизация недоступна для аккаунта")
+
+    def sync_write_marker(request: Request) -> bool:
+        values = request.headers.getlist('x-fh-offline-sync')
+        if values and values != ['1']:
+            raise HTTPException(status_code=400, detail="Некорректный признак синхронизации")
+        return bool(values)
+
     def rate(request: Request, action: str) -> None:
         if rate_limiter is None:
             # A public finance service must have a shared, cross-worker limiter.
@@ -221,7 +243,8 @@ def mount_finance_routes(
         response.headers["Cache-Control"] = "private, no-store"
         return {"ok": True, "profile_id": str(verified.profile_id),
                 "payment_guard_v1": bool(enable_account_v2_candidate),
-                "sync_profile_fence_v1": True, "sync_cancel_fence_v1": True}
+                "sync_profile_fence_v1": True, "sync_cancel_fence_v1": True,
+                "sync_allowed_v1": sync_allowed(user_id)}
 
     router = APIRouter(prefix="/api/finance/v1", include_in_schema=False)
 
@@ -272,6 +295,7 @@ def mount_finance_routes(
     def committed_command_changes(mutation_id: str, request: Request):
         rate(request, "finance-read")
         verified = scope(request)
+        require_sync(verified.user_id)
         try:
             if request.query_params:
                 raise FinanceCommandError("invalid_command", "Недопустимый параметр журнала", 422)
@@ -287,10 +311,13 @@ def mount_finance_routes(
     @router.post("/commands")
     async def commands(request: Request):
         _guard_origin(request, public_origin)
+        is_sync = sync_write_marker(request)
         # Do not run SQLite rate limits or blocking PostgreSQL row locks in
         # the ASGI event loop; unrelated sessions must remain responsive.
         await run_in_threadpool(rate, request, "finance-write")
         verified = await run_in_threadpool(scope, request)
+        if is_sync:
+            require_sync(verified.user_id)
         try:
             body = await parse_v1_command(request)
         except FinanceCommandError as exc:
@@ -303,6 +330,8 @@ def mount_finance_routes(
             current = scope(request)
             if current != verified:
                 raise HTTPException(status_code=401, detail="Сеанс изменился")
+            if is_sync:
+                require_sync(current.user_id)
             return submit_account_command(
                 engine, scope=current, command=body,
                 if_match=request.headers.get("if-match", ""),
@@ -327,6 +356,7 @@ def mount_finance_routes(
         _guard_origin(request, public_origin)
         await run_in_threadpool(rate, request, "finance-write")
         verified = await run_in_threadpool(scope, request)
+        require_sync(verified.user_id)
         try:
             body = await (parse_v2_account_command(request) if v2 else parse_v1_command(request))
         except FinanceCommandError as exc:
@@ -336,6 +366,7 @@ def mount_finance_routes(
             current = scope(request)
             if current != verified:
                 raise HTTPException(status_code=401, detail="Сеанс изменился")
+            require_sync(current.user_id)
             tag = request.headers.get("if-match", "")
             mutation = request.headers.get("idempotency-key", "")
             normalized = (prepare_account_v2_command(scope=current, command=body,
@@ -506,8 +537,11 @@ def mount_finance_routes(
         @v2.post("/commands")
         async def account_v2_commands(request: Request):
             _guard_origin(request, public_origin)
+            is_sync = sync_write_marker(request)
             await run_in_threadpool(rate, request, "finance-write")
             verified = await run_in_threadpool(scope, request)
+            if is_sync:
+                require_sync(verified.user_id)
             try:
                 body = await parse_v2_account_command(request)
             except FinanceCommandError as exc:
@@ -520,6 +554,8 @@ def mount_finance_routes(
                 current = scope(request)
                 if current != verified:
                     raise HTTPException(status_code=401, detail="Сеанс изменился")
+                if is_sync:
+                    require_sync(current.user_id)
                 return submit_account_v2_candidate(
                     engine, scope=current, command=body,
                     if_match=request.headers.get("if-match", ""),

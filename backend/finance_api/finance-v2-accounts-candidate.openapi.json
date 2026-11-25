@@ -72,6 +72,13 @@
               "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
             },
             "description": "Must exactly match the body client_mutation_id; preserve both on network retries"
+          },
+          {
+            "name": "X-FH-Offline-Sync",
+            "in": "header",
+            "required": false,
+            "schema": {"type": "string", "const": "1"},
+            "description": "Marks an offline queue write; the verified actor must be enabled for sync."
           }
         ],
         "requestBody": {

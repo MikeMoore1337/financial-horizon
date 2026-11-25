@@ -66,8 +66,12 @@ def create_app(
     enable_account_v2_candidate: bool=False,
     enable_import_candidate: bool=False,
     enable_bank_import_candidate: bool=False,
+    finance_sync_allowed_actor: str|None=None,
+    finance_sync_test_allow_all: bool=False,
 ) -> FastAPI:
     config=config or Settings.from_env()
+    if type(finance_sync_test_allow_all) is not bool or (finance_sync_test_allow_all and not config.test_mode):
+        raise ValueError("Sync test rollout requires an isolated test app")
     app=FastAPI(title="Financial Horizon Email Auth", docs_url=None, redoc_url=None,
                 openapi_url=None)
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=[urlsplit(config.public_origin).hostname]+(["testserver"] if config.test_mode else []))
@@ -369,8 +373,39 @@ def create_app(
             enable_account_v2_candidate=enable_account_v2_candidate,
             enable_import_candidate=enable_import_candidate,
             enable_bank_import_candidate=enable_bank_import_candidate,
+            sync_allowed_actor=finance_sync_allowed_actor,
+            sync_test_allow_all=finance_sync_test_allow_all,
         )
     return app
+
+
+def _read_sync_actor_credential() -> str:
+    """Read a service-private systemd credential without exposing an actor ID."""
+    import os
+    import re
+    import stat
+    from pathlib import Path
+    directory = os.environ.get("CREDENTIALS_DIRECTORY", "")
+    if directory != "/run/credentials/fh-email-auth.service":
+        raise ValueError("Sync rollout credential directory is unavailable")
+    path = Path(directory) / "fh_sync68_actor"
+    fd = None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        info = os.fstat(fd)
+        # systemd credentials are root-owned 0440 with a service-user ACL.
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_gid != 0 or
+                stat.S_IMODE(info.st_mode) != 0o440 or info.st_nlink != 1 or info.st_size != 32):
+            raise ValueError("Sync rollout credential is invalid")
+        value = os.read(fd, 33).decode("ascii")
+        if not re.fullmatch(r"[a-f0-9]{32}", value):
+            raise ValueError("Sync rollout credential is invalid")
+        return value
+    except (OSError, UnicodeError):
+        raise ValueError("Sync rollout credential is unavailable") from None
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def _personal_finance_runtime_options() -> dict:
@@ -389,12 +424,15 @@ def _personal_finance_runtime_options() -> dict:
     # #38 is independent of the #69 legacy import window. Never make bank
     # writes live by inheriting its existing production enablement.
     bank_import_mode = os.environ.get("FH_FINANCE_BANK_IMPORT_RUNTIME", "off")
+    sync_mode = os.environ.get("FH_FINANCE_SYNC_CREDENTIAL", "off")
+    if sync_mode not in ("off", "on"):
+        raise ValueError("Invalid sync rollout configuration")
     if (mode not in ("off", "personal") or v2_mode not in ("off", "on")
             or import_mode not in ("off", "on")
             or bank_import_mode not in ("off", "on")):
         raise ValueError("Invalid finance feature configuration")
     if mode == "off":
-        if v2_mode != "off" or import_mode != "off" or bank_import_mode != "off":
+        if v2_mode != "off" or import_mode != "off" or bank_import_mode != "off" or sync_mode != "off":
             raise ValueError("Finance v2/import requires enabled private finance runtime")
         return {}
 
@@ -423,6 +461,7 @@ def _personal_finance_runtime_options() -> dict:
         "enable_account_v2_candidate": v2_mode == "on",
         "enable_import_candidate": import_mode == "on",
         "enable_bank_import_candidate": bank_import_mode == "on",
+        "finance_sync_allowed_actor": _read_sync_actor_credential() if sync_mode == "on" else None,
     }
 
 

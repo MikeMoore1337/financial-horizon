@@ -96,6 +96,26 @@ async function openAccounts(page) {
   await expect(page.locator('#main .fh-accounts-total')).toBeVisible();
 }
 
+for (const mode of ['denied', 'legacy']) test(`#68 ${mode} accounts retain online finance without a sync entry`, async ({browser}) => {
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  const context = await browser.newContext({baseURL:ORIGIN, serviceWorkers:'block'});
+  try {
+    expect((await context.request.post('/__e2e__/personal-session')).status()).toBe(200);
+    await context.route('**/api/auth/email/finance/session', async route => {
+      const response = await route.fetch();
+      const body = await response.json();
+      if (mode === 'legacy') delete body.sync_allowed_v1;
+      else body.sync_allowed_v1 = false;
+      await route.fulfill({response, json:body});
+    });
+    const page = await context.newPage();
+    await page.goto('/');
+    await openAccounts(page);
+    await expect(page.getByRole('button', {name:'Офлайн-синхронизация'})).toHaveCount(0);
+    await expect(page.locator('#main .fh-accounts-total')).toBeVisible();
+  } finally {await context.close();}
+});
+
 test('#68 sync controls remain accessible in both themes and responsive widths', async ({page, context}, testInfo) => {
   test.setTimeout(120_000);
   if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();

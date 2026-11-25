@@ -116,6 +116,42 @@ def snapshot(env, token):
     return result
 
 
+def test_sync_rollout_is_scoped_to_one_verified_actor_without_blocking_existing_finance(env):
+    allowed_id, allowed_token = env['first']
+    other_id, other_token = env['new_user']()
+    assert allowed_id != other_id
+    store = env['store']
+    config = Settings(True, ORIGIN, store.path, 'r' * 48, 'synthetic-turnstile', 'synthetic-site',
+                      'smtp.invalid', 465, 'synthetic-user', 'synthetic-password',
+                      'noreply@example.invalid', True)
+    app = create_app(config=config, store=store, finance_engine=env['engine'],
+                     finance_profile_namespace=NAMESPACE, enable_account_v2_candidate=True,
+                     finance_sync_allowed_actor=allowed_id)
+    path = '/api/finance/v1/commands/00000000-0000-4000-8000-000000000000/changes'
+    for token, allowed in ((allowed_token, True), (other_token, False)):
+        with TestClient(app, base_url=ORIGIN, raise_server_exceptions=False) as client:
+            client.cookies.set(COOKIE, token, domain='127.0.0.1', path='/api/auth')
+            boot = client.post('/api/auth/email/finance/session', headers={'Origin': ORIGIN}, json={})
+            assert boot.status_code == 200
+            assert boot.json()['sync_allowed_v1'] is allowed
+            assert client.get('/api/finance/v1/state').status_code == 200
+            assert client.get(path).status_code == (410 if allowed else 403)
+            for version in (1, 2):
+                headers = {'Origin': ORIGIN, 'If-Match': '"synthetic"',
+                           'Idempotency-Key': '00000000-0000-4000-8000-000000000000'}
+                response = client.post(f'/api/finance/v{version}/commands/cancel',
+                                       headers=headers, json={})
+                assert response.status_code == (422 if allowed else 403)
+                ordinary = client.post(f'/api/finance/v{version}/commands', headers=headers, json={})
+                assert ordinary.status_code == 422
+                marked = client.post(f'/api/finance/v{version}/commands',
+                                     headers={**headers, 'X-FH-Offline-Sync':'1'}, json={})
+                assert marked.status_code == (422 if allowed else 403)
+                malformed = client.post(f'/api/finance/v{version}/commands',
+                                        headers={**headers, 'X-FH-Offline-Sync':'invalid'}, json={})
+                assert malformed.status_code == 400
+
+
 def command(state, action, payload, versions=None, ident=None):
     return {"schema_version": 1, "client_mutation_id": ident or str(uuid4()),
             "base_revision": state.json()["revision"], "action": action,

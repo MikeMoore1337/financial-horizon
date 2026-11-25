@@ -70,6 +70,10 @@
                     "sync_cancel_fence_v1": {
                       "type": "boolean",
                       "description": "The server can atomically fence an exact uncommitted command."
+                    },
+                    "sync_allowed_v1": {
+                      "type": "boolean",
+                      "description": "Offline synchronization is enabled for this authenticated account."
                     }
                   }
                 }
@@ -434,6 +438,13 @@
               "format": "uuid"
             },
             "example": "11111111-1111-4111-8111-111111111111"
+          },
+          {
+            "name": "X-FH-Offline-Sync",
+            "in": "header",
+            "required": false,
+            "schema": {"type": "string", "const": "1"},
+            "description": "Marks an offline queue write; the verified actor must be enabled for sync."
           }
         ],
         "requestBody": {

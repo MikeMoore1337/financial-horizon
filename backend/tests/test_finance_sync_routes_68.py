@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import sqlite3
 import sys
 
 import pytest
@@ -66,6 +67,9 @@ def fake_deployment(monkeypatch, tmp_path):
     state = {'caddy': original, 'backup': None, 'reloads': 0}
     monkeypatch.setenv('FH_SYNC68_ROUTES', 'ENABLE')
     monkeypatch.setattr(m, 'preflight', lambda _sha: (original, 0o644))
+    monkeypatch.setattr(m, 'OWNER_SECRET', tmp_path / 'owner-secret')
+    monkeypatch.setattr(m, 'OWNER_DROPIN', tmp_path / 'owner-dropin')
+    monkeypatch.setattr(m, 'live_environment', lambda: {})
     monkeypatch.setattr(m, 'backup_path', lambda _sha: tmp_path / 'backup')
     monkeypatch.setattr(m.finance, 'caddy_snapshot', lambda: (state['caddy'], 0o644))
     monkeypatch.setattr(m.finance, 'write_exclusive', lambda _path, data, mode: state.update(backup=data))
@@ -115,6 +119,15 @@ def test_enable_refuses_without_explicit_release_mode(monkeypatch, tmp_path):
     sha, original, state = fake_deployment(monkeypatch, tmp_path)
     monkeypatch.delenv('FH_SYNC68_ROUTES')
     with pytest.raises(m.Hold, match='EXPLICIT_SYNC_ENABLE_REQUIRED'):
+        m.enable(sha)
+    assert state['caddy'] == original
+    assert state['backup'] is None
+
+
+def test_routes_cannot_be_opened_after_owner_was_enabled(monkeypatch, tmp_path):
+    sha, original, state = fake_deployment(monkeypatch, tmp_path)
+    monkeypatch.setattr(m, 'live_environment', lambda: {b'FH_FINANCE_SYNC_CREDENTIAL': b'on'})
+    with pytest.raises(m.Hold, match='SYNC_OWNER_MUST_BE_DISABLED_WHEN_OPENING_ROUTES'):
         m.enable(sha)
     assert state['caddy'] == original
     assert state['backup'] is None
@@ -187,3 +200,91 @@ def test_disable_refuses_github_actions_even_with_root_and_explicit_mode(monkeyp
         m.disable(sha)
     assert state['caddy'] == original
     assert state['reloads'] == 0
+
+
+def test_google_actor_selection_requires_exactly_one_active_account(monkeypatch, tmp_path):
+    path = tmp_path / 'synthetic.sqlite'
+    connection = sqlite3.connect(path)
+    connection.executescript('CREATE TABLE users(id TEXT, disabled INTEGER);'
+                             'CREATE TABLE oauth_identities(user_id TEXT, provider TEXT);')
+    connection.executemany('INSERT INTO users VALUES (?,?)', [('a' * 32, 0), ('b' * 32, 0), ('c' * 32, 1)])
+    connection.executemany('INSERT INTO oauth_identities VALUES (?,?)',
+                           [('a' * 32, 'google'), ('a' * 32, 'google'),
+                            ('b' * 32, 'vk'), ('c' * 32, 'google')])
+    connection.commit()
+    monkeypatch.setattr(m, 'AUTH_DATA_ROOT', tmp_path)
+    monkeypatch.setattr(m, 'live_environment', lambda: {b'FH_AUTH_DATABASE_PATH': str(path).encode()})
+    assert m.unique_google_actor() == b'a' * 32
+    connection.execute('INSERT INTO oauth_identities VALUES (?,?)', ('b' * 32, 'google'))
+    connection.commit()
+    with pytest.raises(m.Hold, match='SYNC_GOOGLE_ACTOR_NOT_UNIQUE'):
+        m.unique_google_actor()
+    connection.close()
+
+
+def test_owner_activation_rolls_back_dropin_and_credential_on_restart_failure(monkeypatch, tmp_path):
+    sha = 'a' * 40
+    secret, dropin = tmp_path / 'secret', tmp_path / 'dropin'
+    monkeypatch.setattr(m, 'OWNER_SECRET', secret)
+    monkeypatch.setattr(m, 'OWNER_DROPIN', dropin)
+    monkeypatch.setenv('FH_SYNC68_OWNER', 'ENABLE')
+    monkeypatch.setattr(m, 'enabled_route_preflight', lambda _sha: None)
+    monkeypatch.setattr(m, 'unique_google_actor', lambda: b'a' * 32)
+    monkeypatch.setattr(m, 'check_owner_directories', lambda: None)
+    monkeypatch.setattr(m, 'live_environment', lambda: {})
+    monkeypatch.setattr(m.source, 'backup_live_auth_db', lambda: None)
+    monkeypatch.setattr(m.finance, 'write_exclusive', lambda path, data, mode: path.write_bytes(data))
+    monkeypatch.setattr(m.finance, 'secure_file', lambda path, owner, mode: path.read_bytes())
+    restarts = []
+    def restart():
+        restarts.append(True)
+        if len(restarts) == 1:
+            raise m.Hold('SYNTHETIC_RESTART_FAILURE')
+    monkeypatch.setattr(m, 'restart_auth', restart)
+    with pytest.raises(m.Hold, match='SYNTHETIC_RESTART_FAILURE'):
+        m.activate_owner(sha)
+    assert not secret.exists() and not dropin.exists()
+    assert len(restarts) == 2
+
+
+def test_owner_activation_uses_private_credential_without_exposing_actor_in_unit(monkeypatch, tmp_path, capsys):
+    sha = 'a' * 40
+    actor = b'b' * 32
+    secret, dropin = tmp_path / 'secret', tmp_path / 'dropin'
+    monkeypatch.setattr(m, 'OWNER_SECRET', secret)
+    monkeypatch.setattr(m, 'OWNER_DROPIN', dropin)
+    monkeypatch.setenv('FH_SYNC68_OWNER', 'ENABLE')
+    monkeypatch.setattr(m, 'enabled_route_preflight', lambda _sha: None)
+    monkeypatch.setattr(m, 'unique_google_actor', lambda: actor)
+    monkeypatch.setattr(m, 'check_owner_directories', lambda: None)
+    running = {'enabled': False}
+    monkeypatch.setattr(m, 'live_environment', lambda: {b'FH_FINANCE_SYNC_CREDENTIAL': b'on'} if running['enabled'] else {})
+    monkeypatch.setattr(m.source, 'backup_live_auth_db', lambda: None)
+    monkeypatch.setattr(m.finance, 'write_exclusive', lambda path, data, mode: path.write_bytes(data))
+    monkeypatch.setattr(m.finance, 'secure_file', lambda path, owner, mode: path.read_bytes())
+    monkeypatch.setattr(m, 'restart_auth', lambda: running.update(enabled=dropin.exists()))
+    monkeypatch.setattr(m.backend, 'live_state', lambda: m.source.RELEASES / sha)
+    monkeypatch.setattr(m.bank, 'postgres_ready', lambda: None)
+    monkeypatch.setattr(m, 'public_guards', lambda: None)
+    m.activate_owner(sha)
+    assert secret.read_bytes() == actor
+    assert dropin.read_bytes() == m.OWNER_UNIT
+    assert actor not in dropin.read_bytes()
+    assert actor.decode() not in capsys.readouterr().out
+
+
+def test_routes_cannot_open_when_owner_or_runtime_changes(monkeypatch, tmp_path):
+    actor = b'a' * 32
+    def secure_file(path, owner, mode):
+        return m.OWNER_UNIT if path == m.OWNER_DROPIN else actor
+    monkeypatch.setattr(m.finance, 'secure_file', secure_file)
+    monkeypatch.setattr(m, 'unique_google_actor', lambda: actor)
+    monkeypatch.setattr(m, 'live_environment', lambda: {b'FH_FINANCE_SYNC_CREDENTIAL': b'on'})
+    m.owner_ready()
+    monkeypatch.setattr(m, 'unique_google_actor', lambda: b'b' * 32)
+    with pytest.raises(m.Hold, match='SYNC_OWNER_NOT_READY'):
+        m.owner_ready()
+    monkeypatch.setattr(m, 'unique_google_actor', lambda: actor)
+    monkeypatch.setattr(m, 'live_environment', lambda: {})
+    with pytest.raises(m.Hold, match='SYNC_OWNER_NOT_READY'):
+        m.owner_ready()

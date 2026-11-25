@@ -121,7 +121,8 @@ export class FinanceSyncController {
     const result = await this.#json('/api/auth/email/finance/session', {method:'POST',
       headers:{'Content-Type':'application/json'}, body:'{}'}, generation);
     if (result?.ok !== true || !UUID.test(result.profile_id || '') ||
-        result.sync_profile_fence_v1 !== true || result.payment_guard_v1 !== true) {
+        result.sync_profile_fence_v1 !== true || result.payment_guard_v1 !== true ||
+        result.sync_allowed_v1 !== true) {
       fail('Сервер не поддерживает безопасную синхронизацию');
     }
     await this.#assertActor(generation);

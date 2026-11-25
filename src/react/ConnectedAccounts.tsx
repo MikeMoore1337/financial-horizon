@@ -18,9 +18,10 @@ export function ConnectedAccounts({
   refreshVersion,
   onBack,
 }: ConnectedAccountsProps) {
+  const [syncActor, setSyncActor] = useState<string | null>(null);
   return (
     <>
-      {syncEnabled && (
+      {syncEnabled && verifiedActorUserId && syncActor === verifiedActorUserId && (
         <button
           type="button"
           className="button-secondary"
@@ -37,12 +38,19 @@ export function ConnectedAccounts({
         onOpenSync={onOpenSync}
         refreshVersion={refreshVersion}
         onBack={onBack}
+        onSyncAvailability={setSyncActor}
       />
     </>
   );
 }
 
-function OnlineAccounts({ verifiedActorUserId, onBack }: ConnectedAccountsProps) {
+function OnlineAccounts({
+  verifiedActorUserId,
+  onBack,
+  onSyncAvailability,
+}: ConnectedAccountsProps & {
+  onSyncAvailability: (actor: string | null) => void;
+}) {
   const gateway = useMemo(() => new AccountsFinanceGateway(), [verifiedActorUserId]);
   const [serverView, setServerView] = useState<AccountServerView | null>(null);
   const [status, setStatus] = useState<AccountsProps['status']>('locked');
@@ -66,6 +74,7 @@ function OnlineAccounts({ verifiedActorUserId, onBack }: ConnectedAccountsProps)
         .then((view) => {
           if (abort.signal.aborted) return;
           setServerView(view);
+          onSyncAvailability(gateway.syncRolloutAllowed ? verifiedActorUserId : null);
           setBlocked(false);
           setStatus('ready');
         })
@@ -76,8 +85,9 @@ function OnlineAccounts({ verifiedActorUserId, onBack }: ConnectedAccountsProps)
     return () => {
       abort.abort();
       gateway.invalidate();
+      onSyncAvailability(null);
     };
-  }, [gateway, verifiedActorUserId, fail]);
+  }, [gateway, verifiedActorUserId, fail, onSyncAvailability]);
 
   const refresh = useCallback(() => {
     if (!verifiedActorUserId) return;

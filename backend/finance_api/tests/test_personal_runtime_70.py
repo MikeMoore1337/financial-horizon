@@ -5,14 +5,66 @@ Only synthetic/CI settings; no real production URLs, accounts or secrets.
 from __future__ import annotations
 
 from uuid import UUID
+import importlib
+import os
+import stat
+from types import SimpleNamespace
 
 import pytest
 
-from backend.fh_email_auth.app import _personal_finance_runtime_options
+from backend.fh_email_auth.app import _personal_finance_runtime_options, create_app
+from backend.fh_email_auth.config import Settings
 
 
 NAMESPACE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 FAKE_POSTGRES = "postgresql+psycopg://fh_finance_runtime:synthetic@127.0.0.1:54329/fh_finance_ci"
+
+
+def test_sync_rollout_is_fail_closed_and_test_override_cannot_run_in_production(monkeypatch, tmp_path):
+    monkeypatch.setenv('FH_FINANCE_RUNTIME_MODE', 'personal')
+    monkeypatch.setenv('FH_FINANCE_V2_RUNTIME', 'on')
+    monkeypatch.setenv('FH_FINANCE_PROFILE_NAMESPACE', NAMESPACE)
+    monkeypatch.setenv('FH_FINANCE_DATABASE_URL', FAKE_POSTGRES)
+    monkeypatch.delenv('FH_FINANCE_SYNC_CREDENTIAL', raising=False)
+    options = _personal_finance_runtime_options()
+    try:
+        assert options['finance_sync_allowed_actor'] is None
+    finally:
+        options['finance_engine'].dispose()
+    monkeypatch.setenv('FH_FINANCE_SYNC_CREDENTIAL', 'on')
+    app_module = importlib.import_module('backend.fh_email_auth.app')
+    monkeypatch.setattr(app_module, '_read_sync_actor_credential', lambda: 'a' * 32)
+    options = _personal_finance_runtime_options()
+    try:
+        assert options['finance_sync_allowed_actor'] == 'a' * 32
+    finally:
+        options['finance_engine'].dispose()
+    monkeypatch.setenv('FH_FINANCE_SYNC_CREDENTIAL', 'invalid')
+    with pytest.raises(ValueError):
+        _personal_finance_runtime_options()
+    config = Settings(False, 'https://example.invalid', tmp_path / 'auth.sqlite',
+                      '', '', '', '', 465, '', '', '', False)
+    with pytest.raises(ValueError, match='isolated test app'):
+        create_app(config=config, finance_sync_test_allow_all=True)
+
+
+@pytest.mark.skipif(not hasattr(os, 'O_NOFOLLOW'), reason='systemd credential requires Unix')
+def test_sync_actor_credential_is_private_and_rejects_wrong_permissions(monkeypatch):
+    module = importlib.import_module('backend.fh_email_auth.app')
+    monkeypatch.setenv('CREDENTIALS_DIRECTORY', '/run/credentials/fh-email-auth.service')
+    for mode, valid in ((0o440, True), (0o444, False), (0o640, False)):
+        info = SimpleNamespace(st_mode=stat.S_IFREG | mode, st_uid=0, st_gid=0,
+                               st_nlink=1, st_size=32)
+        with monkeypatch.context() as patch:
+            patch.setattr(os, 'open', lambda *args: 123)
+            patch.setattr(os, 'fstat', lambda fd: info)
+            patch.setattr(os, 'read', lambda fd, size: b'a' * 32)
+            patch.setattr(os, 'close', lambda fd: None)
+            if valid:
+                assert module._read_sync_actor_credential() == 'a' * 32
+            else:
+                with pytest.raises(ValueError, match='credential is invalid'):
+                    module._read_sync_actor_credential()
 
 
 def test_default_auth_service_has_no_finance_routes_or_postgres_dependency(monkeypatch):

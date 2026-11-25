@@ -41,6 +41,7 @@ export class AccountsFinanceGateway {
   private readSequence = 0;
   private writing = false;
   private uncertain = false;
+  private syncAllowed = false;
 
   private readonly transport: typeof fetch;
   private readonly origin: string;
@@ -65,6 +66,7 @@ export class AccountsFinanceGateway {
   }
 
   get profileId(): string | null { return this.profile; }
+  get syncRolloutAllowed(): boolean { return this.syncAllowed; }
   get writeBlocked(): boolean { return this.uncertain || this.writing || !this.view; }
 
   invalidate(): void {
@@ -72,6 +74,7 @@ export class AccountsFinanceGateway {
     this.readSequence += 1;
     this.actorId = null;
     this.profile = null;
+    this.syncAllowed = false;
     this.view = null;
     this.etag = null;
     this.uncertain = true;
@@ -170,6 +173,8 @@ export class AccountsFinanceGateway {
       throw new FinanceBridgeError('error');
     }
     this.profile = response.body.profile_id;
+    this.syncAllowed = response.body.sync_allowed_v1 === true &&
+      response.body.payment_guard_v1 === true && response.body.sync_profile_fence_v1 === true;
     this.uncertain = false;
     return this.refresh(verifiedActorId, signal);
   }

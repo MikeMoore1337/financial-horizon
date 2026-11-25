@@ -4,11 +4,16 @@
 Run on the trusted production host, after exact-main CI and backend rollout:
   python3 scripts/fh_finance_sync_routes_68.py --sha SHA --preflight
   FH_SYNC68_ROUTES=ENABLE python3 scripts/fh_finance_sync_routes_68.py --sha SHA --enable
+  FH_SYNC68_OWNER=ENABLE python3 scripts/fh_finance_sync_routes_68.py --sha SHA --activate-owner
+  FH_SYNC68_OWNER=DISABLE python3 scripts/fh_finance_sync_routes_68.py --sha SHA --deactivate-owner
   FH_SYNC68_ROUTES=DISABLE python3 scripts/fh_finance_sync_routes_68.py --sha SHA --disable
 
-No finance command, account change, database migration or service restart is
-performed. If public negative checks fail, restore the exact previous Caddy
-bytes, unless another operator changed them in the meantime.
+The owner step restarts only the auth service to load a private systemd
+credential. No finance command, account change or database migration is
+performed. On failures, restore exact prior state unless it changed concurrently.
+For rollback, deactivate the owner first, close sync routes second, then use
+the existing backend/static rollback procedure. Bank #38 rollback also requires
+sync routes to be closed first so its original Caddy bytes match exactly.
 """
 from __future__ import annotations
 
@@ -17,6 +22,8 @@ import os
 from pathlib import Path
 import re
 import stat
+import sqlite3
+from contextlib import closing
 
 import fh_bank38_release as bank
 import fh_finance_active_backend_upgrade as backend
@@ -46,6 +53,14 @@ ROUTES = (
 )
 READ = '/api/finance/v1/commands/00000000-0000-4000-8000-000000000000/changes'
 WRITES = ('/api/finance/v1/commands/cancel', '/api/finance/v2/commands/cancel')
+OWNER_SECRET = finance.SECRETS.parent / 'sync68_actor'
+OWNER_DROPIN = Path('/etc/systemd/system/fh-email-auth.service.d/96-sync68-owner.conf')
+AUTH_DATA_ROOT = Path('/var/lib/financial-horizon')
+OWNER_UNIT = (
+    '[Service]\n'
+    'LoadCredential=fh_sync68_actor:/etc/financial-horizon/finance/secrets/sync68_actor\n'
+    'Environment=FH_FINANCE_SYNC_CREDENTIAL=on\n'
+).encode('ascii')
 
 
 class Hold(Exception):
@@ -103,8 +118,8 @@ def public_guards() -> None:
         deny('FINANCE_EXISTING_PUBLIC_GUARD_FAILED')
 
 
-def preflight(sha: str) -> tuple[bytes, int]:
-    target = backup_path(sha)
+def backend_ready(sha: str) -> None:
+    backup_path(sha)
     backend.check_checkout(sha)
     if backend.live_state() != source.RELEASES / sha:
         deny('BACKEND_EXACT_SHA_REQUIRED')
@@ -115,6 +130,11 @@ def preflight(sha: str) -> tuple[bytes, int]:
         deny('BANK_FLAG_CHANGED')
     bank.postgres_ready()
     local_guards()
+
+
+def preflight(sha: str) -> tuple[bytes, int]:
+    target = backup_path(sha)
+    backend_ready(sha)
     original, mode = finance.caddy_snapshot()
     patch_caddy(original)
     if (source.BACKUPS.is_symlink() or not source.BACKUPS.is_dir() or
@@ -132,16 +152,170 @@ def preflight(sha: str) -> tuple[bytes, int]:
     return original, mode
 
 
+def enabled_route_preflight(sha: str) -> None:
+    backend_ready(sha)
+    original = finance.secure_file(backup_path(sha), 0, 0o600)
+    current, _ = finance.caddy_snapshot()
+    if current != patch_caddy(original):
+        deny('SYNC_PUBLIC_ROUTES_NOT_EXACT')
+    public_guards()
+
+
 def reload_caddy() -> None:
     finance.run(['caddy', 'validate', '--config', str(finance.CADDYFILE)],
                 error='SYNC_CADDY_VALIDATE_FAILED')
     finance.run(['systemctl', 'reload', 'caddy.service'], error='SYNC_CADDY_RELOAD_FAILED')
 
 
+def live_environment() -> dict[bytes, bytes]:
+    pid = source.systemd_value('MainPID')
+    if not pid.isdecimal() or int(pid) <= 1:
+        deny('SYNC_AUTH_PROCESS_UNAVAILABLE')
+    try:
+        raw = (Path('/proc') / pid / 'environ').read_bytes()
+    except OSError:
+        deny('SYNC_AUTH_ENV_UNAVAILABLE')
+    return dict(item.split(b'=', 1) for item in raw.split(b'\0') if b'=' in item)
+
+
+def unique_google_actor() -> bytes:
+    """Read one owner-selected Google identity without printing identifiers."""
+    env = live_environment()
+    try:
+        db = Path(env.get(b'FH_AUTH_DATABASE_PATH', b'/var/lib/financial-horizon/auth.sqlite3').decode('utf-8')).resolve(strict=True)
+        if not db.is_file() or not db.is_relative_to(AUTH_DATA_ROOT):
+            deny('SYNC_AUTH_DB_PATH_UNTRUSTED')
+        with closing(sqlite3.connect(db.as_uri() + '?mode=ro', uri=True, timeout=5)) as connection:
+            rows = connection.execute(
+                'SELECT DISTINCT u.id FROM users u JOIN oauth_identities oi ON oi.user_id=u.id '
+                'WHERE u.disabled=0 AND oi.provider=? LIMIT 2', ('google',),
+            ).fetchall()
+    except (OSError, UnicodeError, sqlite3.Error):
+        deny('SYNC_GOOGLE_ACTOR_LOOKUP_FAILED')
+    if len(rows) != 1 or not isinstance(rows[0][0], str) or not re.fullmatch(r'[a-f0-9]{32}', rows[0][0]):
+        deny('SYNC_GOOGLE_ACTOR_NOT_UNIQUE')
+    return rows[0][0].encode('ascii')
+
+
+def restart_auth() -> None:
+    finance.run(['systemctl', 'daemon-reload'], error='SYNC_SYSTEMD_RELOAD_FAILED')
+    bank.restart_auth()
+
+
+def check_owner_directories() -> None:
+    for directory in (OWNER_SECRET.parent, OWNER_DROPIN.parent):
+        if (directory.is_symlink() or not directory.is_dir() or directory.stat().st_uid != 0 or
+                stat.S_IMODE(directory.stat().st_mode) & 0o022):
+            deny('SYNC_OWNER_DIRECTORY_UNTRUSTED')
+
+
+def activate_owner(sha: str) -> None:
+    if os.environ.get('FH_SYNC68_OWNER') != 'ENABLE':
+        deny('EXPLICIT_OWNER_ENABLE_REQUIRED')
+    enabled_route_preflight(sha)
+    actor = unique_google_actor()
+    check_owner_directories()
+    if (OWNER_SECRET.exists() or OWNER_SECRET.is_symlink() or
+            OWNER_DROPIN.exists() or OWNER_DROPIN.is_symlink() or
+            live_environment().get(b'FH_FINANCE_SYNC_CREDENTIAL', b'off') != b'off'):
+        deny('SYNC_OWNER_STATE_NOT_EMPTY')
+    source.backup_live_auth_db()
+    secret_created = dropin_created = False
+    try:
+        finance.write_exclusive(OWNER_SECRET, actor, mode=0o600)
+        secret_created = True
+        if finance.secure_file(OWNER_SECRET, 0, 0o600) != actor:
+            deny('SYNC_OWNER_CREDENTIAL_WRITE_FAILED')
+        finance.write_exclusive(OWNER_DROPIN, OWNER_UNIT, mode=0o644)
+        dropin_created = True
+        if finance.secure_file(OWNER_DROPIN, 0, 0o644) != OWNER_UNIT:
+            deny('SYNC_OWNER_DROPIN_WRITE_FAILED')
+        restart_auth()
+        if (backend.live_state() != source.RELEASES / sha or
+                live_environment().get(b'FH_FINANCE_SYNC_CREDENTIAL') != b'on' or
+                unique_google_actor() != actor):
+            deny('SYNC_OWNER_POSTCHECK_FAILED')
+        owner_ready()
+        bank.postgres_ready()
+        public_guards()
+    except Exception:
+        print('FH_SYNC68_OWNER_ROLLBACK=STARTED')
+        try:
+            if dropin_created:
+                if finance.secure_file(OWNER_DROPIN, 0, 0o644) != OWNER_UNIT:
+                    deny('SYNC_OWNER_DROPIN_CONCURRENT_CHANGE')
+                OWNER_DROPIN.unlink()
+            if secret_created:
+                if finance.secure_file(OWNER_SECRET, 0, 0o600) != actor:
+                    deny('SYNC_OWNER_CREDENTIAL_CONCURRENT_CHANGE')
+                OWNER_SECRET.unlink()
+            if dropin_created:
+                restart_auth()
+            print('FH_SYNC68_OWNER_ROLLBACK=PASS')
+        except Exception:
+            print('FH_SYNC68_OWNER_ROLLBACK=MANUAL_REVIEW_REQUIRED')
+        raise
+    print('FH_SYNC68_OWNER_ACTIVATED=PASS')
+    print('FH_SYNC68_NO_FINANCIAL_WRITES=YES')
+
+
+def deactivate_owner(sha: str) -> None:
+    backup_path(sha)
+    if (os.geteuid() != 0 or os.environ.get('GITHUB_ACTIONS') == 'true' or
+            os.environ.get('FH_SYNC68_OWNER') != 'DISABLE'):
+        deny('EXPLICIT_NATIVE_OWNER_DISABLE_REQUIRED')
+    original = finance.secure_file(backup_path(sha), 0, 0o600)
+    current, _ = finance.caddy_snapshot()
+    if current not in (original, patch_caddy(original)):
+        deny('SYNC_CADDY_CHANGED_MANUAL_REVIEW')
+    if finance.secure_file(OWNER_DROPIN, 0, 0o644) != OWNER_UNIT:
+        deny('SYNC_OWNER_DROPIN_CHANGED')
+    actor = finance.secure_file(OWNER_SECRET, 0, 0o600)
+    if not re.fullmatch(rb'[a-f0-9]{32}', actor):
+        deny('SYNC_OWNER_CREDENTIAL_INVALID')
+    try:
+        OWNER_DROPIN.unlink()
+        OWNER_SECRET.unlink()
+        restart_auth()
+        if live_environment().get(b'FH_FINANCE_SYNC_CREDENTIAL', b'off') != b'off':
+            deny('SYNC_OWNER_STILL_ENABLED')
+        bank.public_negative_checks()
+    except Exception:
+        print('FH_SYNC68_OWNER_DEACTIVATION_ROLLBACK=STARTED')
+        try:
+            if OWNER_SECRET.exists() or OWNER_SECRET.is_symlink():
+                if finance.secure_file(OWNER_SECRET, 0, 0o600) != actor:
+                    deny('SYNC_OWNER_CREDENTIAL_CONCURRENT_CHANGE')
+            else:
+                finance.write_exclusive(OWNER_SECRET, actor, mode=0o600)
+            if OWNER_DROPIN.exists() or OWNER_DROPIN.is_symlink():
+                if finance.secure_file(OWNER_DROPIN, 0, 0o644) != OWNER_UNIT:
+                    deny('SYNC_OWNER_DROPIN_CONCURRENT_CHANGE')
+            else:
+                finance.write_exclusive(OWNER_DROPIN, OWNER_UNIT, mode=0o644)
+            restart_auth()
+            print('FH_SYNC68_OWNER_DEACTIVATION_ROLLBACK=PASS')
+        except Exception:
+            print('FH_SYNC68_OWNER_DEACTIVATION_ROLLBACK=MANUAL_REVIEW_REQUIRED')
+        raise
+    print('FH_SYNC68_OWNER_DEACTIVATED=PASS')
+
+
+def owner_ready() -> None:
+    if (finance.secure_file(OWNER_DROPIN, 0, 0o644) != OWNER_UNIT or
+            finance.secure_file(OWNER_SECRET, 0, 0o600) != unique_google_actor() or
+            live_environment().get(b'FH_FINANCE_SYNC_CREDENTIAL') != b'on'):
+        deny('SYNC_OWNER_NOT_READY')
+
+
 def enable(sha: str) -> None:
     if os.environ.get('FH_SYNC68_ROUTES') != 'ENABLE':
         deny('EXPLICIT_SYNC_ENABLE_REQUIRED')
     original, mode = preflight(sha)
+    if (OWNER_SECRET.exists() or OWNER_SECRET.is_symlink() or
+            OWNER_DROPIN.exists() or OWNER_DROPIN.is_symlink() or
+            live_environment().get(b'FH_FINANCE_SYNC_CREDENTIAL', b'off') != b'off'):
+        deny('SYNC_OWNER_MUST_BE_DISABLED_WHEN_OPENING_ROUTES')
     patched = patch_caddy(original)
     finance.write_exclusive(backup_path(sha), original, mode=0o600)
     if finance.secure_file(backup_path(sha), 0, 0o600) != original:
@@ -173,6 +347,10 @@ def disable(sha: str) -> None:
     if (os.geteuid() != 0 or os.environ.get('GITHUB_ACTIONS') == 'true' or
             os.environ.get('FH_SYNC68_ROUTES') != 'DISABLE'):
         deny('EXPLICIT_NATIVE_SYNC_DISABLE_REQUIRED')
+    if (OWNER_SECRET.exists() or OWNER_SECRET.is_symlink() or
+            OWNER_DROPIN.exists() or OWNER_DROPIN.is_symlink() or
+            live_environment().get(b'FH_FINANCE_SYNC_CREDENTIAL', b'off') != b'off'):
+        deny('SYNC_OWNER_MUST_BE_DISABLED_FIRST')
     original = finance.secure_file(backup_path(sha), 0, 0o600)
     patched = patch_caddy(original)
     current, mode = finance.caddy_snapshot()
@@ -190,7 +368,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--sha', required=True)
     choice = parser.add_mutually_exclusive_group(required=True)
-    for action in ('preflight', 'enable', 'disable'):
+    for action in ('preflight', 'enable', 'disable', 'activate-owner', 'deactivate-owner'):
         choice.add_argument('--' + action, action='store_true')
     args = parser.parse_args()
     try:
@@ -198,8 +376,12 @@ def main() -> int:
             preflight(args.sha)
         elif args.enable:
             enable(args.sha)
-        else:
+        elif args.disable:
             disable(args.sha)
+        elif args.activate_owner:
+            activate_owner(args.sha)
+        else:
+            deactivate_owner(args.sha)
         return 0
     except (Hold, backend.Hold, source.NoGo, finance.NoGo, bank.Hold, legacy.Hold) as exc:
         print('FH_SYNC68_ROUTES=NO_GO')

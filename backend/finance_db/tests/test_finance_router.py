@@ -55,6 +55,7 @@ def auth_finance(tmp_path):
             secret == "synthetic-turnstile-secret" and
             origin == ORIGIN and token == "valid-" + action,
         finance_engine=engine, finance_profile_namespace=namespace,
+        finance_sync_test_allow_all=True,
     )
     with TestClient(app) as client:
         yield client, app, mail, store, engine, namespace

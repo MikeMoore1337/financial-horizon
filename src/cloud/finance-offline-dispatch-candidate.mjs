@@ -221,6 +221,7 @@ async function dispatchWithoutNetworkLease({
     headers: {
       'Content-Type': 'application/json',
       'X-FH-Expected-Profile': identity.profileId,
+      'X-FH-Offline-Sync': '1',
       'If-Match': item.ifMatch,
       'Idempotency-Key': item.mutationId,
     },

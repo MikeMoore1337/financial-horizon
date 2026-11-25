@@ -20,6 +20,20 @@ test('controller refuses a server without the profile fence before opening Index
   } finally {controller.close(); globalThis.indexedDB = previous;}
 });
 
+for (const allowed of [false, undefined]) test(`controller refuses sync before touching storage when rollout is ${allowed}`, async () => {
+  let calls = 0;
+  const previous = globalThis.indexedDB;
+  globalThis.indexedDB = {open() {throw Error('IndexedDB must not be opened');}};
+  const controller = new FinanceSyncController({verifiedActorUserId:actor, origin,
+    fetchImpl:async () => ++calls === 1 ? json({authenticated:true,user:{id:actor}})
+      : json({ok:true,profile_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',payment_guard_v1:true,
+        sync_profile_fence_v1:true,sync_allowed_v1:allowed})});
+  try {
+    await assert.rejects(() => controller.createLocal('synthetic passphrase for testing', true), /безопасную синхронизацию/);
+    assert.equal(calls,2);
+  } finally {controller.close(); globalThis.indexedDB = previous;}
+});
+
 test('controller revokes its UI when the live authenticated actor differs', async () => {
   let closed = 0, calls = 0;
   const controller = new FinanceSyncController({verifiedActorUserId:actor, origin,
