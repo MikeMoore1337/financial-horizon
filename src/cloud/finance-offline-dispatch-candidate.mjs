@@ -1,0 +1,421 @@
+/**
+ * #68 - explicit one-command sync dispatcher.
+ *
+ * Scheduling and lifecycle belong to the feature-gated authenticated UI.
+ * Each invocation sends at most ONE persisted command to the same-origin FH
+ * finance API. Uncertain outcomes retain it for safe idempotent retry.
+ */
+import {readAtomicEncryptedCandidate} from '../security/protected-atomic-candidate.ts';
+import {
+  persistAuthenticatedFinanceReceiptCandidate,
+  journalEvidenceMatchesReceiptCandidate,
+  persistSnapshotVerifiedFinanceReceiptCandidate,
+  classifyFinanceOutboxResponseCandidate,
+  recordEncryptedFinanceRetryCandidate,
+  persistEncryptedFinanceHoldCandidate,
+} from './encrypted-command-outbox-candidate.mjs';
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const SCOPE = /^account:[0-9a-f]{32}$/;
+const EPOCH = /^[0-9a-f]{32}$/;
+const STRONG_ETAG = /^"[^"\r\n]{1,254}"$/;
+const LIMIT = 512 * 1024;
+function hold(message) { throw new Error('SYNC_HOLD: ' + message); }
+function safeRevision(x) { return Number.isSafeInteger(x) && x >= 0; }
+function active(scope, session, identity) {
+  if (!SCOPE.test(scope) || identity?.scope !== scope ||
+      !UUID.test(identity?.profileId) || !EPOCH.test(identity?.epoch) ||
+      !Number.isSafeInteger(identity?.generation) ||
+      identity.generation < 1 ||
+      session?.state !== 'unlocked' || session.selectedScope !== scope ||
+      session.lifecycleVersion !== identity.generation ||
+      session.lifecycleSignal?.aborted || identity.signal?.aborted) {
+    hold('Финансовая сессия истекла');
+  }
+}
+function authority(origin) {
+  if (typeof origin !== 'string') hold('Нет подтверждённого HTTPS origin');
+  let host;
+  try { host = new URL(origin); }
+  catch { hold('Неверный адрес финансового сервера'); }
+  if ((host.protocol !== 'https:' &&
+       !(host.protocol === 'http:' && host.hostname === '127.0.0.1')) || host.origin !== origin ||
+      host.username || host.password || host.pathname !== '/' ||
+      host.search || host.hash) {
+    hold('Требуется точный HTTPS origin без учётных данных');
+  }
+  // Browser users must be same-origin; a supplied URL must never become an
+  // open relay to exfiltrate encrypted or plaintext financial commands.
+  if (globalThis.location?.origin && globalThis.location.origin !== origin) {
+    hold('Запрещена отправка команд на чужой сервер');
+  }
+  return origin;
+}
+async function jsonResponse(response) {
+  if (response?.redirected || !response?.headers?.get ||
+      response.headers.get('content-type')?.split(';')[0]?.trim()?.toLowerCase()
+        !== 'application/json' ||
+      !response.body?.getReader) {
+    hold('Некорректный финансовый ответ');
+  }
+  const length = response.headers.get('content-length');
+  if (length !== null && (!/^[0-9]{1,10}$/.test(length) ||
+      Number(length) > LIMIT)) hold('Ответ слишком большой');
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const part = await reader.read();
+      if (part.done) break;
+      if (!(part.value instanceof Uint8Array)) hold('Неверный формат ответа');
+      size += part.value.byteLength;
+      if (size > LIMIT) hold('Ответ слишком большой');
+      chunks.push(part.value);
+    }
+    const bytes = new Uint8Array(size);
+    let i = 0;
+    for (const chunk of chunks) {bytes.set(chunk, i); i += chunk.byteLength;}
+    const raw = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+    return JSON.parse(raw);
+  } finally { reader.releaseLock(); }
+}
+
+/** Fetch one independent journal revision for encrypted crash recovery. */
+export async function downloadPendingFinanceJournalCandidate({
+  scope, session, identity, origin, sinceRevision, fetchImpl = globalThis.fetch,
+}) {
+  active(scope, session, identity);
+  const server = authority(origin);
+  if (!safeRevision(sinceRevision) || typeof fetchImpl !== 'function') return null;
+  try {
+    const response = await fetchImpl(server + '/api/finance/v1/changes?since_revision=' +
+      sinceRevision + '&limit_revisions=1',
+    {method:'GET', credentials:'same-origin', mode:'same-origin', redirect:'error',
+     cache:'no-store', referrerPolicy:'same-origin',
+     headers:{'Accept':'application/json','X-FH-Expected-Profile':identity.profileId},
+     signal:session.lifecycleSignal});
+    active(scope, session, identity);
+    if (response.status !== 200) return null;
+    const page = await jsonResponse(response);
+    active(scope, session, identity);
+    return page?.from_revision === sinceRevision && page?.next_since_revision === sinceRevision + 1 &&
+      Array.isArray(page.changes) && page.changes.length > 0 && page.changes.length <= 100 ? page : null;
+  } catch {
+    active(scope, session, identity);
+    return null;
+  }
+}
+function control(action, delay = null, bundleEpoch = null) {
+  return Object.freeze({status: action, retryDelayMs: delay,
+    bundleEpoch, sentByThisCall: true, queuePreserved: true,
+    serverCommitNotYetReconciled: true});
+}
+function retryJitter(delay) {
+  let sample;
+  try { sample = Math.random(); } catch { return delay; }
+  // Keep every retry bounded even if the random source is unavailable or
+  // unexpectedly replaced by host code. No financial value feeds the jitter.
+  if (!Number.isFinite(sample) || sample < 0 || sample > 1) return delay;
+  return Math.floor(delay * (0.5 + sample * 0.5));
+}
+async function retryAfterTransientFailure({
+  scope, session, identity, expectedEpoch, item, httpStatus, negativeAck = null,
+}) {
+  const policy = classifyFinanceOutboxResponseCandidate(
+    httpStatus, item.attempts,
+  );
+  if (policy.decision === 'CONFLICT_HOLD' ||
+      policy.decision === 'SNAPSHOT_REQUIRED_HOLD') {
+    const stopped = await persistEncryptedFinanceHoldCandidate({
+      scope, session, identity, expectedEpoch,
+      mutationId: item.mutationId, httpStatus,
+      decision: policy.decision, source: 'command', negativeAck,
+    });
+    return control(stopped.status, null, stopped.bundleEpoch);
+  }
+  if (policy.decision !== 'RETRY_SAME_UUID') {
+    return control(policy.decision, policy.retryDelayMs);
+  }
+  // Retry count persists in the SAME encrypted account outbox. No
+  // unbounded loop, timer or automatic network request is scheduled.
+  const saved = await recordEncryptedFinanceRetryCandidate({
+    scope, session, identity, expectedEpoch, mutationId: item.mutationId,
+  });
+  return control(policy.decision, retryJitter(policy.retryDelayMs), saved.bundleEpoch);
+}
+
+/**
+ * Opt-in one-shot dispatcher. The selected first mutation ID, body and original
+ * strong ETag are reused verbatim on network retry. Both HTTP responses are
+ * parsed with bounded memory; no amount, key or identity is logged.
+ *
+ * A POST 200/201 is *not* a local success. Only an independently downloaded
+ * /changes event matching the complete receipt may trigger the encrypted CAS
+ * in persistAuthenticatedFinanceReceiptCandidate.
+ */
+async function dispatchWithoutNetworkLease({
+  scope, session, identity, expectedEpoch, origin,
+  explicitNetworkCandidateConsent = false,
+  fetchImpl = globalThis.fetch,
+}) {
+  if (explicitNetworkCandidateConsent !== true) {
+    hold('Сетевые финансовые команды ещё выключены');
+  }
+  active(scope, session, identity);
+  const server = authority(origin);
+  if (typeof fetchImpl !== 'function' || !safeRevision(expectedEpoch)) {
+    hold('Недоступен проверенный финансовый транспорт');
+  }
+  const bundle = await readAtomicEncryptedCandidate(scope, session);
+  active(scope, session, identity);
+  if (!bundle || bundle.epoch !== expectedEpoch ||
+      bundle.schemaVersion !== 2 || bundle.snapshot?.version !== 2 ||
+      !Array.isArray(bundle.outbox)) hold('Зашифрованная очередь недоступна');
+  const cloud = bundle.snapshot.cloudFinance;
+  if (!cloud || cloud.scope !== scope ||
+      cloud.profileId !== identity.profileId ||
+      cloud.epoch !== identity.epoch ||
+      !safeRevision(cloud.revision)) {
+    hold('Финансовый профиль не совпадает');
+  }
+  const item = bundle.outbox[0];
+  if (!item) return Object.freeze({
+    status: 'EMPTY_OUTBOX', pending: 0, sentByThisCall: false,
+    serverCommitNotYetReconciled: false,
+  });
+  if (item.scope !== scope || item.profileId !== identity.profileId ||
+      item.epoch !== identity.epoch || item.status !== 'pending' ||
+      !UUID.test(item.mutationId) ||
+      !STRONG_ETAG.test(item.ifMatch) ||
+      ![1, 2].includes(item.command?.schema_version) ||
+      item.command.client_mutation_id !== item.mutationId ||
+      !safeRevision(item.command.base_revision)) {
+    hold('Повреждена ожидающая финансовая операция');
+  }
+  const stop = bundle.conflicts?.find(value =>
+    value?.kind === 'finance_sync_hold' && value.mutationId === item.mutationId);
+  let recoveringDeltaHold = false;
+  if (stop) {
+    if (stop.scope !== scope || stop.profileId !== identity.profileId ||
+        !['CONFLICT_HOLD','SNAPSHOT_REQUIRED_HOLD'].includes(stop.decision)) {
+      hold('Повреждена финансовая остановка');
+    }
+    recoveringDeltaHold = stop.decision === 'SNAPSHOT_REQUIRED_HOLD' &&
+      stop.httpStatus === 410 && stop.source === 'delta' &&
+      stop.baseRevision === item.command.base_revision &&
+      stop.manualChoice === undefined && stop.verifiedCancellationFingerprint === undefined &&
+      bundle.conflicts.filter(value => value?.kind === 'finance_sync_hold' &&
+        value.mutationId === item.mutationId).length === 1;
+    if (!recoveringDeltaHold) return Object.freeze({
+      status: stop.decision, sentByThisCall: false,
+      bundleEpoch: expectedEpoch, queuePreserved: true,
+      serverCommitNotYetReconciled: true,
+    });
+  }
+  // A committed operation may be replayed safely even if the server has
+  // since advanced; do not rewrite its persisted ETag/baseRevision.
+  const postOptions = {
+    method: 'POST', credentials: 'same-origin', mode: 'same-origin',
+    redirect: 'error', cache: 'no-store', referrerPolicy: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-FH-Expected-Profile': identity.profileId,
+      'X-FH-Offline-Sync': '1',
+      'If-Match': item.ifMatch,
+      'Idempotency-Key': item.mutationId,
+    },
+    body: JSON.stringify(item.command),
+    signal: session.lifecycleSignal,
+  };
+  let posted;
+  try {
+    posted = await fetchImpl(server + '/api/finance/v' + item.command.schema_version + '/commands', postOptions);
+    active(scope, session, identity);
+  } catch {
+    if (session.lifecycleSignal.aborted || identity.signal?.aborted) {
+      return control('AUTH_HOLD');
+    }
+    return retryAfterTransientFailure({
+      scope, session, identity, expectedEpoch, item, httpStatus: null,
+    });
+  }
+  if (posted.status !== 200 && posted.status !== 201) {
+    let negativeAck = null;
+    if (posted.status === 412 && !posted.redirected &&
+        (!posted.url || new URL(posted.url).origin === server)) {
+      try { negativeAck = await jsonResponse(posted); } catch { /* Hold without proof. */ }
+      active(scope, session, identity);
+    }
+    return retryAfterTransientFailure({
+      scope, session, identity, expectedEpoch, item,
+      httpStatus: posted.status, negativeAck,
+    });
+  }
+  let receipt;
+  try { receipt = await jsonResponse(posted); }
+  catch { return control('RECOVERY_HOLD'); }
+  active(scope, session, identity);
+  // A previous sync may have applied the committed server revision before
+  // the ACK was durably recorded. Ask the server for exactly that historical
+  // revision, not the already-advanced local cursor. The independent ACK
+  // reconciliation still validates the complete receipt and delta.
+  const committedRevision = Number.isSafeInteger(receipt?.revision) &&
+    receipt.revision >= 1 ? receipt.revision : null;
+  const savedJournal = item.recoveryJournal;
+  if (Object.hasOwn(item, 'recoveryJournal') &&
+      (!savedJournal || typeof savedJournal !== 'object' || Array.isArray(savedJournal) ||
+       savedJournal.fingerprint !== item.fingerprint || savedJournal.ifMatch !== item.ifMatch ||
+       !journalEvidenceMatchesReceiptCandidate(receipt, savedJournal.page))) {
+    // Two independent server observations disagree. Do not discard either
+    // observation or accept a different proof path as a silent fallback.
+    return control('RECOVERY_HOLD', null, expectedEpoch);
+  }
+  const sinceRevision = committedRevision !== null &&
+    committedRevision <= cloud.revision
+    ? committedRevision - 1 : cloud.revision;
+  let deltaResponse;
+  try {
+    deltaResponse = await fetchImpl(
+      server + '/api/finance/v1/changes?since_revision=' +
+      sinceRevision + '&limit_revisions=1',
+      {method: 'GET', credentials: 'same-origin', mode: 'same-origin',
+       redirect: 'error', cache: 'no-store', referrerPolicy: 'same-origin',
+       headers: {'Accept': 'application/json', 'X-FH-Expected-Profile': identity.profileId},
+       signal: session.lifecycleSignal},
+    );
+    active(scope, session, identity);
+  } catch {
+    return control(session.lifecycleSignal.aborted ? 'AUTH_HOLD' : 'RECOVERY_HOLD');
+  }
+  // A watermark or a gap in a later revision can prevent the general feed
+  // even when this command's exact independent revision is still available.
+  // A missing or incomplete exact journal still holds the queue.
+  let exactJournalUnavailable = false;
+  if ((deltaResponse.status === 410 || deltaResponse.status === 503) && committedRevision !== null) {
+    try {
+      const recovery = await fetchImpl(
+        server + '/api/finance/v1/commands/' + item.mutationId + '/changes',
+        {method:'GET', credentials:'same-origin', mode:'same-origin', redirect:'error',
+         cache:'no-store', referrerPolicy:'same-origin',
+         headers:{'Accept':'application/json', 'X-FH-Expected-Profile':identity.profileId},
+         signal:session.lifecycleSignal},
+      );
+      active(scope, session, identity);
+      exactJournalUnavailable = recovery.status === 410;
+      if (recovery.status === 200 || recovery.status === 401 || recovery.status === 403) {
+        deltaResponse = recovery;
+      }
+    } catch {
+      if (session.lifecycleSignal.aborted || identity.signal?.aborted) return control('AUTH_HOLD');
+    }
+  }
+  if (exactJournalUnavailable && posted.status === 200 && savedJournal) {
+    const recovered = await persistAuthenticatedFinanceReceiptCandidate({
+      scope, session, identity, expectedEpoch, receipt, deltaPage:savedJournal.page,
+      commandHttpStatus:posted.status, deltaHttpStatus:200, recoverDeltaHold:recoveringDeltaHold,
+    });
+    return Object.freeze({...recovered, sentByThisCall:true, proof:'cached_independent_journal'});
+  }
+  if (deltaResponse.status !== 200) {
+    if (deltaResponse.status === 401 || deltaResponse.status === 403) return control('AUTH_HOLD');
+    if (deltaResponse.status === 410) {
+      if (exactJournalUnavailable && recoveringDeltaHold && item.recoveryBase &&
+          cloud.revision >= committedRevision && cloud.revision - committedRevision <= 8 && posted.status === 200) {
+        // Read every intervening revision under the same session and Web Lock.
+        // A missing, overlong or unauthorized tail keeps the original hold.
+        const laterPages = [];
+        for (let cursor = committedRevision; cursor < cloud.revision; cursor++) {
+          let response;
+          try {
+            response = await fetchImpl(server + '/api/finance/v1/changes?since_revision=' + cursor + '&limit_revisions=1',
+              {method:'GET', credentials:'same-origin', mode:'same-origin', redirect:'error',
+               cache:'no-store', referrerPolicy:'same-origin',
+               headers:{'Accept':'application/json', 'X-FH-Expected-Profile':identity.profileId},
+               signal:session.lifecycleSignal});
+            active(scope, session, identity);
+          } catch {
+            if (session.lifecycleSignal.aborted || identity.signal?.aborted) return control('AUTH_HOLD');
+            return control('SNAPSHOT_REQUIRED_HOLD', null, expectedEpoch);
+          }
+          if (response.status === 401 || response.status === 403) return control('AUTH_HOLD');
+          if (response.status !== 200) return control('SNAPSHOT_REQUIRED_HOLD', null, expectedEpoch);
+          let page;
+          try { page = await jsonResponse(response); }
+          catch { return control('SNAPSHOT_REQUIRED_HOLD', null, expectedEpoch); }
+          active(scope, session, identity);
+          if (page?.from_revision !== cursor || page?.next_since_revision !== cursor + 1) {
+            return control('SNAPSHOT_REQUIRED_HOLD', null, expectedEpoch);
+          }
+          laterPages.push(page);
+        }
+        const recovered = await persistSnapshotVerifiedFinanceReceiptCandidate({
+          scope, session, identity, expectedEpoch, receipt, commandHttpStatus:posted.status, laterPages,
+        });
+        return Object.freeze({...recovered, sentByThisCall:true});
+      }
+      const stopped = await persistEncryptedFinanceHoldCandidate({
+        scope, session, identity, expectedEpoch,
+        mutationId: item.mutationId, httpStatus: 410,
+        decision: 'SNAPSHOT_REQUIRED_HOLD', source: 'delta',
+      });
+      return control(stopped.status, null, stopped.bundleEpoch);
+    }
+    return control('RECOVERY_HOLD');
+  }
+  let deltaPage;
+  try { deltaPage = await jsonResponse(deltaResponse); }
+  catch { return control('RECOVERY_HOLD'); }
+  active(scope, session, identity);
+  // This either commits a complete validated server delta and receipt in one
+  // IDB transaction or throws with the previous outbox still encrypted.
+  const reconciled = await persistAuthenticatedFinanceReceiptCandidate({
+    scope, session, identity, expectedEpoch, receipt, deltaPage,
+    commandHttpStatus: posted.status, deltaHttpStatus: deltaResponse.status,
+    recoverDeltaHold: recoveringDeltaHold,
+  });
+  return Object.freeze({...reconciled, sentByThisCall: true});
+}
+
+
+/**
+ * Single same-origin network leader across concurrent tabs. Browser Web
+ * Locks serialize the POST + independently fetched delta + encrypted ACK
+ * commit, so a second tab cannot send the same pending mutation while the
+ * first tab is mid-flight. Server-side idempotency remains mandatory across
+ * devices and after browser crashes.
+ *
+ * Missing Web Locks (including browsers with hardened/Lockdown settings)
+ * fail closed; no unprotected HTTP fallback or localStorage pseudo-lock.
+ * Feature OFF: no production PWA entrypoint imports this function.
+ */
+export async function dispatchOneEncryptedFinanceCommandCandidate({
+  lockManager = globalThis.navigator?.locks,
+  ...input
+}) {
+  const {scope, session, identity, explicitNetworkCandidateConsent} = input;
+  if (explicitNetworkCandidateConsent !== true) {
+    hold('Сетевые финансовые команды ещё выключены');
+  }
+  active(scope, session, identity);
+  if (!lockManager || typeof lockManager.request !== 'function') {
+    hold('Недоступна межвкладочная блокировка финансовых операций');
+  }
+  // One fixed origin-wide name intentionally contains NO user/profile IDs.
+  // It blocks only competing sends, never native encrypted cache reads.
+  return lockManager.request(
+    'financial-horizon-finance-v2-network-dispatch',
+    {mode: 'exclusive', ifAvailable: true},
+    async lock => {
+      if (!lock) {
+        return Object.freeze({
+          status: 'LEASE_BUSY', sentByThisCall: false,
+          queuePreserved: true, serverCommitNotYetReconciled: true,
+          retryDelayMs: null,
+        });
+      }
+      active(scope, session, identity);
+      return dispatchWithoutNetworkLease(input);
+    },
+  );
+}

@@ -24,6 +24,29 @@ test('React calendar settlement saves exactly once and survives reload',async({p
  watcher.assertClean();
 });
 
+test('calendar confirmed flow follows actual payment date across months',async({page,context})=>{
+ await page.clock.setFixedTime(new Date('2026-11-20T12:00:00'));
+ const watcher=await observe(context,page);
+ await visitGuest(page);
+ await addEntry(page,'E2E payment date differs',{amount:'100'});
+ await view(page,'calendar');
+ await page.locator('.cal-day[data-date="2026-11-15"]').click();
+ const row=page.locator('.cal-layout .plain-list .list-row').filter({hasText:'E2E payment date differs'});
+ await row.locator('[data-action="settle"]').click();
+ await page.locator('#settlement-form [name="amount"]').fill('50.25');
+ await page.locator('#settlement-form [name="date"]').fill('2026-12-03');
+ await page.locator('#settlement-form button[type="submit"]').click();
+ await expect(page.locator('#settlement-dialog')).not.toBeVisible();
+ await expect(row).toContainText('Частично');
+ await expect(page.locator('.cal-layout')).toContainText(/Подтверждённый поток:\s*0/);
+ await page.locator('.month-controls [data-action="next-month"]').click();
+ await expect(page.locator('.cal-layout')).toContainText(/Подтверждённый поток:\s*-50,25/);
+ const state=await scopedState(page,'state');
+ expect(state.settlements).toHaveLength(1);
+ expect(state.settlements[0]).toMatchObject({occurrence:'2026-11',date:'2026-12-03',amountCents:5025});
+ watcher.assertClean();
+});
+
 test('React calendar loan payment dispatches the original domain operation only once',async({page,context})=>{
  const watcher=await observe(context,page);
  await visitGuest(page);

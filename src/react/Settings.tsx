@@ -18,6 +18,9 @@ export interface SettingsProps {
   audit: readonly SettingsAuditItem[];
   storageMessage: string;
   formatDate: CalendarProps['formatDate'];
+  showFinanceAccounts?: boolean;
+  showFinanceImport?: boolean;
+  showBankStatementImport?: boolean;
 }
 
 function SettingsCard({
@@ -51,6 +54,9 @@ export function Settings({
   audit,
   storageMessage,
   formatDate,
+  showFinanceAccounts = false,
+  showFinanceImport = false,
+  showBankStatementImport = false,
 }: SettingsProps) {
   return (
     <>
@@ -63,6 +69,17 @@ export function Settings({
         <div className="header-tools" />
       </header>
       <div className="settings-grid">
+        {showFinanceAccounts && (
+          <SettingsCard id="finance-accounts" icon="credit">
+            <h2>Счета и кошельки</h2>
+            <p>Подтверждённые остатки с сервера. Локальные данные не меняются.</p>
+            <div className="setting-actions">
+              <button type="button" className="button-secondary" data-view="accounts-connected">
+                <Icon name="credit" /> Открыть счета
+              </button>
+            </div>
+          </SettingsCard>
+        )}
         <SettingsCard id="security" icon="shield">
           <h2>Локальная безопасность</h2>
           <p>
@@ -88,10 +105,29 @@ export function Settings({
             <button className="button-primary" data-action="backup">
               <Icon name="download" /> Скачать копию
             </button>
+            <button className="button-secondary" data-action="verify-backup">
+              <Icon name="shield" /> Проверить копию
+            </button>
             <button className="button-secondary" data-action="restore">
               <Icon name="upload" /> Восстановить
             </button>
+            {showFinanceAccounts && showFinanceImport && (
+              <>
+                <button className="button-secondary" data-action="cloud-import">
+                  <Icon name="upload" /> Перенести данные в аккаунт
+                </button>
+                <button className="button-secondary" data-action="cloud-import-guest">
+                  <Icon name="upload" /> Перенести гостевые данные
+                </button>
+              </>
+            )}
           </div>
+          <p
+            id="backup-verify-status"
+            className="small-hint settings-footnote"
+            role="status"
+            aria-live="polite"
+          />
         </SettingsCard>
         <SettingsCard id="import" icon="sheet">
           <h2>Импорт из Excel</h2>
@@ -109,6 +145,20 @@ export function Settings({
             остатки.
           </p>
         </SettingsCard>
+        {showBankStatementImport && (
+          <SettingsCard id="bank-statement-import" icon="sheet">
+            <h2>Импорт банковской выписки</h2>
+            <p>
+              Загрузите CSV или XLSX, проверьте сопоставление колонок и исключите уже проведённые
+              операции. Оригинал файла остаётся в браузере.
+            </p>
+            <div className="setting-actions">
+              <button type="button" className="button-secondary" data-view="bank-import">
+                <Icon name="upload" /> Импортировать выписку
+              </button>
+            </div>
+          </SettingsCard>
+        )}
         <SettingsCard id="categories" icon="tag">
           <h2>Категории</h2>
           <p>

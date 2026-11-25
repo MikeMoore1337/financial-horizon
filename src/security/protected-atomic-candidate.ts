@@ -4,6 +4,7 @@
  */
 import {
   createLocalKeyset,
+  rotateLocalRecoveryKey,
   type EncryptedLocalRecordV1,
   type LocalKeysetV1,
   type LocalScope,
@@ -207,8 +208,12 @@ function activeSession(session: LocalBudgetSession, scope: LocalScope, lease: nu
  */
 export async function createAtomicEncryptedCandidate(
   scope: LocalScope, passphrase: string, contents: ProtectedAtomicContents,
-  schemaVersion = 2,
+  schemaVersion = 2, signal?: AbortSignal,
 ): Promise<{epoch: 0; recoveryKey: string}> {
+  const checkActive = () => {
+    if (signal?.aborted) throw Error('Создание защищённой копии отменено');
+  };
+  checkActive();
   validScope(scope);
   safeInteger(schemaVersion, 1, 65535, 'schemaVersion');
   // Reject invisible/symbol fields and class instances BEFORE structuredClone
@@ -218,16 +223,25 @@ export async function createAtomicEncryptedCandidate(
   validContents(pinnedContents);
   const {keyset, recoveryKey, vault} = await createLocalKeyset(scope, passphrase);
   try {
+    checkActive();
     const records = await sealParts(vault, pinnedContents, 0, schemaVersion);
+    checkActive();
     const bundle = newBundle(scope, keyset.keyId, 0, schemaVersion, records);
     const db = await openDb();
     try {
+      checkActive();
       await new Promise<void>((resolve, reject) => {
         const tx = db.transaction([KEYSETS, BUNDLES], 'readwrite');
+        const stopPending = () => {
+          try { tx.abort(); } catch { /* already committed or aborted */ }
+        };
+        const cleanup = () => signal?.removeEventListener('abort', stopPending);
+        signal?.addEventListener('abort', stopPending, {once:true});
         const oldKey = tx.objectStore(KEYSETS).get(scope);
         const oldBundle = tx.objectStore(BUNDLES).get(scope);
         let cause: Error | null = null;
         oldBundle.onsuccess = () => {
+          if (signal?.aborted) { stopPending(); return; }
           if (oldKey.result !== undefined || oldBundle.result !== undefined) {
             cause = Error('Локальная зашифрованная копия уже существует');
             tx.abort();
@@ -238,14 +252,18 @@ export async function createAtomicEncryptedCandidate(
             tx.objectStore(BUNDLES).put(bundle, scope);
           } catch (error) {
             cause = error instanceof Error ? error : Error('Ошибка атомарной записи');
-            tx.abort();
+            stopPending();
           }
         };
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(cause || tx.error || Error('Ошибка атомарной записи'));
-        tx.onabort = () => reject(cause || tx.error || Error('Создание защищённой копии отменено'));
+        tx.oncomplete = () => {
+          cleanup();
+          try { checkActive(); resolve(); } catch (error) { reject(error); }
+        };
+        tx.onerror = () => { cleanup(); reject(cause || tx.error || Error('Ошибка атомарной записи')); };
+        tx.onabort = () => { cleanup(); reject(cause || tx.error || Error('Создание защищённой копии отменено')); };
       });
     } finally { db.close(); }
+    checkActive();
     return {epoch: 0, recoveryKey};
   } finally { vault.lock(); }
 }
@@ -287,6 +305,7 @@ export async function compareAndSwapAtomicEncryptedCandidate(
   safeInteger(expectedEpoch, 0, Number.MAX_SAFE_INTEGER - 1, 'expectedEpoch');
   safeInteger(schemaVersion, 1, 65535, 'schemaVersion');
   const lease = session.lifecycleVersion;
+  const signal = session.lifecycleSignal;
   activeSession(session, scope, lease);
   const nextEpoch = expectedEpoch + 1;
   const records = await sealParts(session, contents, nextEpoch, schemaVersion);
@@ -295,8 +314,14 @@ export async function compareAndSwapAtomicEncryptedCandidate(
   const next = newBundle(scope, keyId, nextEpoch, schemaVersion, records);
   const db = await openDb();
   try {
+    activeSession(session, scope, lease);
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction([KEYSETS, BUNDLES], 'readwrite');
+      const stopPending = () => {
+        try { tx.abort(); } catch { /* transaction already committed or aborted */ }
+      };
+      const cleanup = () => signal.removeEventListener('abort', stopPending);
+      signal.addEventListener('abort', stopPending, {once: true});
       const keyReq = tx.objectStore(KEYSETS).get(scope);
       const oldReq = tx.objectStore(BUNDLES).get(scope);
       let cause: Error | null = null;
@@ -317,12 +342,99 @@ export async function compareAndSwapAtomicEncryptedCandidate(
         }
       };
       tx.oncomplete = () => {
+        cleanup();
         try { activeSession(session, scope, lease); resolve(); }
         catch (error) { reject(error); } // A concurrent logout must not publish success.
       };
-      tx.onerror = () => reject(cause || tx.error || Error('Ошибка записи защищённой копии'));
-      tx.onabort = () => reject(cause || tx.error || Error('Запись защищённой копии отменена'));
+      tx.onerror = () => { cleanup(); reject(cause || tx.error || Error('Ошибка записи защищённой копии')); };
+      tx.onabort = () => {
+        cleanup();
+        reject(cause || (signal.aborted ? Error('Локальный бюджет заблокирован') : null) ||
+          tx.error || Error('Запись защищённой копии отменена'));
+      };
     });
   } finally { db.close(); }
   return nextEpoch;
+}
+
+
+/**
+ * Atomic replacement of ONLY the recovery wrapping slot. Requires both an
+ * unlocked, scope-bound local session and the original LOCAL passphrase.
+ *
+ * The passphrase is deliberately mandatory, not an old recovery key: should
+ * the tab close after commit but before the secret can be shown, the owner can
+ * unlock with the unchanged passphrase and reissue again, without data loss.
+ * The encrypted snapshot, outbox, conflict inbox and epoch are NEVER touched.
+ */
+export async function rotateAtomicEncryptedRecoveryKey(
+  scope: LocalScope, session: LocalBudgetSession, passphrase: string,
+): Promise<{recoveryKey: string}> {
+  validScope(scope);
+  const lease = session.lifecycleVersion;
+  const signal = session.lifecycleSignal;
+  activeSession(session, scope, lease);
+  const original = await readPair(scope);
+  activeSession(session, scope, lease);
+  if (!original) throw Error('Защищённая копия отсутствует');
+  const pinned = JSON.stringify(original.keyset);
+  const rotated = await rotateLocalRecoveryKey(original.keyset, passphrase, scope);
+  activeSession(session, scope, lease);
+  const db = await openDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction([KEYSETS, BUNDLES], 'readwrite');
+      // Abort a still-active native transaction synchronously on logout,
+      // account switch or manual lock. A postcommit logout cannot be rolled
+      // back, but the LOCAL passphrase remains valid for reissue.
+      let committed = false;
+      const stopPending = () => {
+        if (committed) return;
+        try { tx.abort(); } catch { /* transaction already committed or aborted */ }
+      };
+      const cleanup = () => signal.removeEventListener('abort', stopPending);
+      signal.addEventListener('abort', stopPending, {once: true});
+      if (signal.aborted) stopPending();
+      const currentKey = tx.objectStore(KEYSETS).get(scope);
+      const currentBundle = tx.objectStore(BUNDLES).get(scope);
+      let cause: Error | null = null;
+      currentBundle.onsuccess = () => {
+        try {
+          activeSession(session, scope, lease);
+          const keyset = currentKey.result as LocalKeysetV1 | undefined;
+          const bundle = currentBundle.result as ProtectedAtomicBundle | undefined;
+          if (!keyset || !bundle) throw Error('Защищённая копия отсутствует');
+          validateBundle(bundle, keyset, scope);
+          // No lost key rotation or concurrent outbox update; compare under
+          // the native readwrite lock, never around an async Web Crypto await.
+          if (JSON.stringify(keyset) !== pinned ||
+            bundle.epoch !== original.bundle.epoch ||
+            bundle.keyId !== original.bundle.keyId ||
+            bundle.schemaVersion !== original.bundle.schemaVersion) {
+            throw Error('Ключи или финансовые данные изменились в другой вкладке');
+          }
+          tx.objectStore(KEYSETS).put(rotated.keyset, scope);
+        } catch (error) {
+          cause = error instanceof Error ? error : Error('Ошибка смены ключа восстановления');
+          tx.abort();
+        }
+      };
+      tx.oncomplete = () => {
+        committed = true;
+        cleanup();
+        try { activeSession(session, scope, lease); resolve(); }
+        catch (error) { reject(error); }
+      };
+      tx.onerror = () => {
+        cleanup();
+        reject(cause || tx.error || Error('Ошибка смены ключа восстановления'));
+      };
+      tx.onabort = () => {
+        cleanup();
+        reject(cause || (signal.aborted ? Error('Локальный бюджет заблокирован') : null) ||
+          tx.error || Error('Смена ключа восстановления отменена'));
+      };
+    });
+  } finally { db.close(); }
+  return {recoveryKey: rotated.recoveryKey};
 }

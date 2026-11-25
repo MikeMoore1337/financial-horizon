@@ -1,4 +1,7 @@
 import { Icon, type CalendarProps } from './Calendar';
+import { LoanReadOnlyComparison } from './LoanReadOnlyComparison';
+import type { StoredLoanSnapshot } from '../domain/loans/legacy-preview.ts';
+import type { BankScheduleRow } from '../domain/loans/types.ts';
 
 export interface LoanSummary {
   id: string;
@@ -27,6 +30,11 @@ export interface LoanDetails extends LoanSummary {
   scheduleSource: string;
   scheduleCount: number;
   history: readonly LoanHistoryItem[];
+  /** Full, not the truncated four-row display schedule. */
+  bankSchedule: readonly BankScheduleRow[];
+  legacySnapshot: StoredLoanSnapshot;
+  /** Invalidate ephemeral confirmation after any financial-state revision. */
+  stateRevision: number;
 }
 export interface LoansProps {
   loans: readonly LoanSummary[];
@@ -194,6 +202,13 @@ export function Loans({ loans, selected, currentDate, rubles, formatDate }: Loan
                 просрочки. Итоговые даты проверяйте по официальному графику.
               </p>
             </div>
+            <LoanReadOnlyComparison
+              key={selected.id + ':' + selected.stateRevision}
+              snapshot={selected.legacySnapshot}
+              bankSchedule={selected.bankSchedule}
+              rubles={rubles}
+              formatDate={formatDate}
+            />
             {selected.scheduleCount ? (
               <>
                 <div className="section-title">

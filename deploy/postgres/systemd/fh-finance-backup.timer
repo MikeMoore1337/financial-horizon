@@ -1,0 +1,11 @@
+[Unit]
+Description=Financial Horizon encrypted PostgreSQL backups
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:10:00 UTC
+Persistent=true
+RandomizedDelaySec=2m
+Unit=fh-finance-backup.service
+
+[Install]
+WantedBy=timers.target

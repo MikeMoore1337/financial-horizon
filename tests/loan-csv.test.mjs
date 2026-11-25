@@ -69,3 +69,34 @@ test('historical monthly APR/12 loan model remains usable and unchanged', () => 
     maxExtensionMonths: 0 }, [], {mode:'plan'});
   assert.equal(newModel.complete, true);
 });
+
+test('opt-in read-only CSV comparison keeps unknown bank balance nullable without changing legacy import', () => {
+  const csv = 'Date;Payment;Interest;Principal\n' +
+    '2026-02-01;5074,10;101,92;4972,18\n' +
+    '2026-03-01;5074,10;46,28;5027,82\n';
+  assert.throws(() => parseSchedule(csv), /Остаток/);
+  assert.throws(() => parseSchedule(csv, { allowMissingBalance: 'yes' }),
+    /Неизвестный режим/);
+  const imported = parseSchedule(csv, { allowMissingBalance: true });
+  assert.deepEqual(imported.map(row => row.balanceCents), [null, null]);
+  const result = reconcileLoanSchedule(calculateLoan(terms, [], { mode: 'plan' }), imported);
+  assert.equal(result.matchingKnownFields, true);
+  assert.equal(result.comparisonComplete, false);
+  assert.equal(result.exactMatch, false);
+  assert.equal(result.importedClosureDate, null);
+  assert.deepEqual(result.rows[0].missingFields, ['balanceCents']);
+  assert.ok(result.rows.every(row => row.balanceDeltaCents === null));
+});
+
+test('comparison handles blank bank balance cells as unknown rather than zero', () => {
+  const csv = 'Date;Payment;Interest;Principal;Balance\n' +
+    '2026-02-01;5074,10;101,92;4972,18;5027,82\n' +
+    '2026-03-01;5074,10;46,28;5027,82;\n';
+  const imported = parseSchedule(csv, { allowMissingBalance: true });
+  assert.deepEqual(imported.map(row => row.balanceCents), [502_782, null]);
+  const result = reconcileLoanSchedule(calculateLoan(terms, [], { mode: 'plan' }), imported);
+  assert.equal(result.mismatchedRows, 0);
+  assert.equal(result.comparisonComplete, false);
+  assert.equal(result.exactMatch, false);
+  assert.deepEqual(result.rows[1].missingFields, ['balanceCents']);
+});

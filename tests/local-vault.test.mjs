@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createLocalKeyset, unlockLocalKeyset, changeLocalPassphrase} from '../src/security/local-vault.ts';
+import {createLocalKeyset, unlockLocalKeyset, changeLocalPassphrase, rotateLocalRecoveryKey} from '../src/security/local-vault.ts';
 
 const user1 = 'account:' + 'a'.repeat(32);
 const user2 = 'account:' + 'b'.repeat(32);
@@ -242,4 +242,55 @@ test('async passphrase rewrap pins the original keyset when caller mutates it', 
     assert.deepEqual(updated.recovery, created.keyset.recovery);
     assert.equal((await unlockLocalKeyset(updated, {passphrase: 'rotated local passphrase 2026'}, user1)).scope, user1);
   } finally { subtle.decrypt = nativeDecrypt; }
+});
+
+
+test('reissue recovery key with local passphrase; DEK, ciphertext and passphrase wrapper remain unchanged', async () => {
+  const {keyset, recoveryKey, vault} = await createLocalKeyset(user1, pass);
+  const record = await vault.encrypt(finance, context);
+  const prior = clone(keyset);
+  const rotated = await rotateLocalRecoveryKey(keyset, pass, user1);
+  assert.notEqual(rotated.recoveryKey, recoveryKey);
+  assert.equal(rotated.recoveryKey.length, 43);
+  assert.deepEqual(rotated.keyset.passphrase, prior.passphrase);
+  assert.equal(rotated.keyset.scope, prior.scope);
+  assert.equal(rotated.keyset.keyId, prior.keyId);
+  assert.notDeepEqual(rotated.keyset.recovery, prior.recovery);
+  assert.deepEqual(keyset, prior, 'pure rotation must not write to the caller keyset');
+  const persisted = JSON.stringify({keyset:rotated.keyset,record});
+  assert.ok(!persisted.includes(rotated.recoveryKey));
+  assert.ok(!persisted.includes(pass));
+  await assert.rejects(() => unlockLocalKeyset(rotated.keyset, {recoveryKey}, user1), /Неверный ключ/);
+  assert.deepEqual(await (await unlockLocalKeyset(rotated.keyset, {recoveryKey:rotated.recoveryKey}, user1)).decrypt(record,context),finance);
+  assert.deepEqual(await (await unlockLocalKeyset(rotated.keyset, {passphrase:pass}, user1)).decrypt(record,context),finance);
+});
+
+test('failed recovery reissue preserves the existing keyset and old recovery secret', async () => {
+  const created = await createLocalKeyset(user1, pass);
+  const old = clone(created.keyset);
+  await assert.rejects(() => rotateLocalRecoveryKey(created.keyset, 'incorrect local password 2026', user1), /Неверный ключ/);
+  await assert.rejects(() => rotateLocalRecoveryKey(created.keyset, pass, user2), /другого пользователя/);
+  await assert.rejects(() => rotateLocalRecoveryKey(created.keyset, 'short', user1), /Неверный ключ/);
+  assert.deepEqual(created.keyset, old);
+  assert.equal((await unlockLocalKeyset(created.keyset,{recoveryKey:created.recoveryKey},user1)).scope,user1);
+});
+
+test('a second recovery reissue invalidates the previous secret without losing the passphrase', async () => {
+  const created = await createLocalKeyset(user1, pass);
+  const one = await rotateLocalRecoveryKey(created.keyset,pass,user1);
+  const two = await rotateLocalRecoveryKey(one.keyset,pass,user1);
+  assert.notEqual(one.recoveryKey,two.recoveryKey);
+  await assert.rejects(() => unlockLocalKeyset(two.keyset,{recoveryKey:one.recoveryKey},user1),/Неверный ключ/);
+  assert.equal((await unlockLocalKeyset(two.keyset,{recoveryKey:two.recoveryKey},user1)).scope,user1);
+  assert.equal((await unlockLocalKeyset(two.keyset,{passphrase:pass},user1)).scope,user1);
+});
+
+test('recovery key reissue is offline and independent of the login/session cookie', async () => {
+  const created=await createLocalKeyset(guest,pass);
+  const before=globalThis.fetch;
+  globalThis.fetch=async()=>{throw Error('Network disabled')};
+  try {
+    const rotated=await rotateLocalRecoveryKey(created.keyset,pass,guest);
+    assert.equal((await unlockLocalKeyset(rotated.keyset,{recoveryKey:rotated.recoveryKey},guest)).scope,guest);
+  }finally{globalThis.fetch=before}
 });

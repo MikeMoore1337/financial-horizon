@@ -20,7 +20,12 @@ const steps = new Map<number, (state: MutableState) => void>([
 
 export function migrateState(source: unknown): FinanceStateV2 {
   const checked = validateState(source) as PersistedFinanceState;
-  if (checked.version === CURRENT_STATE_VERSION) return checked;
+  // Optional entry sub-schema v1: old records without methods stay byte-for-byte intact.
+  // Only records already carrying methods but missing their marker require a rewrite.
+  const needsMethodsMarker = checked.entries.some(
+    (entry) => entry.paymentMethods !== undefined && entry.paymentMethodsVersion === undefined,
+  );
+  if (checked.version === CURRENT_STATE_VERSION && !needsMethodsMarker) return checked;
   const result = structuredClone(checked) as MutableState;
   while (result.version < CURRENT_STATE_VERSION) {
     const step = steps.get(result.version);
@@ -28,6 +33,11 @@ export function migrateState(source: unknown): FinanceStateV2 {
     step(result);
     validateState(result);
   }
+  for (const entry of result.entries) {
+    if (entry.paymentMethods !== undefined && entry.paymentMethodsVersion === undefined)
+      entry.paymentMethodsVersion = 1;
+  }
+  validateState(result);
   return result as FinanceStateV2;
 }
 

@@ -72,7 +72,7 @@ export async function verifyBankLoanReferences(manifestPath) {
     const bankCsv = await readLimited(bankFile, CSV_LIMIT);
     // Normalize parsed dates, currency minor units and missing optional fields.
     // Equivalent CSVs with different formatting are the same reference.
-    const normalizedRows = parseSchedule(bankCsv).map(row => [
+    const normalizedRows = parseSchedule(bankCsv, { allowMissingBalance: true }).map(row => [
       row.date, row.amountCents, row.interestCents ?? null,
       row.principalCents ?? null, row.balanceCents ?? null,
     ]);

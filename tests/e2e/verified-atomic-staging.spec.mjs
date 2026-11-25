@@ -26,6 +26,88 @@ const sources=new Map([
    .replace(/['"]\.\/local-budget-session\.ts['"]/g,"'/__e2e_s6_session__.js'")
    .replace(/['"]\.\/protected-staging\.ts['"]/g,"'/__e2e_s6_stage__.js'")],
 ]);
+
+test('profile revocation cancels candidate creation and never returns its recovery secret', async({page,context})=>{
+  await context.route('**/__e2e_s6_*.js',route=>route.fulfill({
+    status:200,contentType:'text/javascript',
+    body:sources.get(new URL(route.request().url()).pathname),
+  }));
+  await page.goto('/__e2e__/ready');
+  const results=await page.evaluate(async()=>{
+    const {createSampleState}=await import('/finance.js');
+    const {encryptBackup}=await import('/backup.js');
+    const {prepareVerifiedAtomicCandidate}=await import('/__e2e_s6_bridge__.js');
+    const atomic=await import('/__e2e_s6_atomic__.js');
+    const {LocalBudgetSession}=await import('/__e2e_s6_session__.js');
+    const state=createSampleState();
+    const backupPassword='synthetic backup phrase 2026';
+    const localPassphrase='synthetic local phrase 2026';
+    const backupText=await encryptBackup(state,backupPassword);
+    const db=await new Promise((resolve,reject)=>{
+      const request=indexedDB.open('financial-horizon-browser-v1',1);
+      request.onupgradeneeded=()=>request.result.createObjectStore('finance');
+      request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
+    });
+    const ids=['a','b','c'].map(c=>c.repeat(32));
+    await new Promise((resolve,reject)=>{
+      const tx=db.transaction('finance','readwrite');
+      for(const id of ids)tx.objectStore('finance').put(state,'account-state-v2:'+id);
+      tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);
+    });
+    db.close();
+    const out=[];
+    for(const [index,stage] of ['preflight','transaction','postcommit'].entries()){
+      const id=ids[index],scope='account:'+id,controller=new AbortController();
+      const input={selection:{kind:'account',verifiedUserId:id},backupText,backupPassword,
+        localPassphrase,signal:controller.signal,
+        consent:{savedEncryptedBackupOutsideThisBrowser:true,confirmedReadOnlyPreflight:true,
+          confirmedSeparateEncryptedCandidate:true,acknowledgedOneTimeRecovery:true}};
+      const originalPut=IDBObjectStore.prototype.put;
+      const originalTransaction=IDBDatabase.prototype.transaction;
+      let reached=false,committedWrite=false,rejected=false,secretReturned=false;
+      try{
+        IDBObjectStore.prototype.put=function(...args){
+          const result=originalPut.apply(this,args);
+          if(this.name==='bundles'){
+            committedWrite=true;
+            if(stage==='transaction'){reached=true;controller.abort();}
+          }
+          return result;
+        };
+        IDBDatabase.prototype.transaction=function(names,mode,...rest){
+          if(stage==='postcommit'&&committedWrite&&this.name===atomic.ATOMIC_ENCRYPTED_DB&&mode==='readonly'){
+            reached=true;controller.abort();
+          }
+          return originalTransaction.call(this,names,mode,...rest);
+        };
+        const pending=prepareVerifiedAtomicCandidate(input);
+        if(stage==='preflight'){reached=true;controller.abort();}
+        try{const receipt=await pending;secretReturned=typeof receipt.recoveryKey==='string';}
+        catch{rejected=true;}
+      }finally{
+        IDBObjectStore.prototype.put=originalPut;
+        IDBDatabase.prototype.transaction=originalTransaction;
+      }
+      const keyset=await atomic.getAtomicEncryptedKeyset(scope);
+      let recoveryReissued=false;
+      if(keyset){
+        const session=new LocalBudgetSession();session.selectScope(scope);
+        await session.unlock(keyset,{passphrase:localPassphrase});
+        const receipt=await atomic.rotateAtomicEncryptedRecoveryKey(scope,session,localPassphrase);
+        recoveryReissued=receipt.recoveryKey.length===43;
+        session.logout();
+      }
+      out.push({stage,reached,rejected,secretReturned,persisted:!!keyset,recoveryReissued});
+    }
+    return out;
+  });
+  expect(results).toEqual([
+    {stage:'preflight',reached:true,rejected:true,secretReturned:false,persisted:false,recoveryReissued:false},
+    {stage:'transaction',reached:true,rejected:true,secretReturned:false,persisted:false,recoveryReissued:false},
+    {stage:'postcommit',reached:true,rejected:true,secretReturned:false,persisted:true,recoveryReissued:true},
+  ]);
+});
+
 test('verified external backup stages inactive encrypted candidate with offline recovery', async({page,context})=>{
   const errors=[];
   page.on('pageerror',e=>errors.push(e.message));
@@ -54,18 +136,35 @@ test('verified external backup stages inactive encrypted candidate with offline 
     await new Promise((resolve,reject)=>{
       const tx=db.transaction('finance','readwrite');
       tx.objectStore('finance').put(state,'account-state-v2:'+id);
+      tx.objectStore('finance').put({mutationId:'SYNTHETIC_PENDING'},'online-payment-pending-v1:'+id);
       tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);
     });
-    db.close();
     const backupPassword='independent encrypted backup password 2026';
     const localPassphrase='separate local unlock phrase 2026';
     const backupText=await encryptBackup(state,backupPassword);
-    const receipt=await prepareVerifiedAtomicCandidate({
+    const input={
       selection:{kind:'account',verifiedUserId:id},
       backupText,backupPassword,localPassphrase,
+      signal:new AbortController().signal,
       consent:{savedEncryptedBackupOutsideThisBrowser:true,confirmedReadOnlyPreflight:true,
         confirmedSeparateEncryptedCandidate:true,acknowledgedOneTimeRecovery:true},
+    };
+    let pendingRejected=false;
+    try{await prepareVerifiedAtomicCandidate(input);}catch{pendingRejected=true;}
+    const pendingPreserved=await new Promise((resolve,reject)=>{
+      const tx=db.transaction('finance','readonly');
+      const request=tx.objectStore('finance').get('online-payment-pending-v1:'+id);
+      tx.oncomplete=()=>resolve(request.result?.mutationId==='SYNTHETIC_PENDING');
+      tx.onerror=()=>reject(tx.error);
     });
+    // Simulated reconciliation for this isolated fixture only.
+    await new Promise((resolve,reject)=>{
+      const tx=db.transaction('finance','readwrite');
+      tx.objectStore('finance').delete('online-payment-pending-v1:'+id);
+      tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);
+    });
+    db.close();
+    const receipt=await prepareVerifiedAtomicCandidate(input);
     const session=new LocalBudgetSession();
     session.selectScope(scope);
     await session.unlock(await getAtomicEncryptedKeyset(scope),{recoveryKey:receipt.recoveryKey});
@@ -84,7 +183,7 @@ test('verified external backup stages inactive encrypted candidate with offline 
       tx.onerror=()=>reject(tx.error);
     });
     protectedDb.close();
-    return {status:receipt.status,active:receipt.active,revision:receipt.sourceRevision,
+    return {pendingRejected,pendingPreserved,status:receipt.status,active:receipt.active,revision:receipt.sourceRevision,
       keyLen:receipt.recoveryKey.length,entries:copy.snapshot.entries.length,
       sameTitle:copy.snapshot.entries[0].title===state.entries[0].title,
       queue:copy.outbox.length,conflicts:copy.conflicts.length,
@@ -92,7 +191,7 @@ test('verified external backup stages inactive encrypted candidate with offline 
         !sealed.includes(localPassphrase) && !sealed.includes(receipt.recoveryKey) &&
         !sealed.includes(String(state.entries[0].amountCents))};
   });
-  expect(first).toEqual({status:'prepared',active:false,revision:0,keyLen:43,
+  expect(first).toEqual({pendingRejected:true,pendingPreserved:true,status:'prepared',active:false,revision:0,keyLen:43,
     entries:first.entries,sameTitle:true,queue:0,conflicts:0,safe:true});
   expect(first.entries).toBeGreaterThan(0);
 

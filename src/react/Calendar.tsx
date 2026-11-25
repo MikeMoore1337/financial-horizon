@@ -1,3 +1,5 @@
+import { ReserveHighlights } from './ReserveHighlights';
+import type { ReservesServerView } from './reserves-finance-gateway';
 export interface CalendarEvent {
   id: string;
   title: string;
@@ -19,6 +21,11 @@ export interface CalendarProps {
   netFactCents: number;
   formatDate: (date: string) => string;
   rubles: (cents: number) => string;
+  financeEnabled?: boolean;
+  verifiedActorUserId?: string | null;
+  serverView?: boolean;
+  serverReserveView?: ReservesServerView;
+  onSourceChange?: (source: 'server' | 'local') => void;
 }
 
 export function Icon({ name }: { name: string }) {
@@ -33,10 +40,12 @@ export function EventRow({
   event,
   rubles,
   formatDate,
+  serverView = false,
 }: {
   event: CalendarEvent;
   rubles: CalendarProps['rubles'];
   formatDate: CalendarProps['formatDate'];
+  serverView?: boolean;
 }) {
   const remaining = Math.max(0, event.plannedCents - event.paidCents);
   const status = event.paidCents <= 0 ? 'Ожидается' : remaining === 0 ? 'Оплачено' : 'Частично';
@@ -66,15 +75,25 @@ export function EventRow({
           {status}
         </span>
       </div>
-      <button
-        className="mini-action"
-        aria-label={(isIncome ? 'Отметить поступление: ' : 'Отметить оплату: ') + event.title}
-        data-action={event.source === 'loan' ? 'pay' : 'settle'}
-        data-id={event.id}
-        data-month={event.source === 'loan' ? undefined : event.date.slice(0, 7)}
-      >
-        <Icon name="check" />
-      </button>
+      {(!serverView || !isIncome) && (
+        <button
+          className="mini-action"
+          aria-label={
+            (serverView
+              ? 'Открыть центр оплат: '
+              : isIncome
+                ? 'Отметить поступление: '
+                : 'Отметить оплату: ') + event.title
+          }
+          data-action={
+            serverView ? 'open-server-payments' : event.source === 'loan' ? 'pay' : 'settle'
+          }
+          data-id={event.id}
+          data-month={event.source === 'loan' ? undefined : event.date.slice(0, 7)}
+        >
+          <Icon name="check" />
+        </button>
+      )}
     </div>
   );
 }
@@ -89,6 +108,10 @@ export function Calendar({
   netFactCents,
   formatDate,
   rubles,
+  financeEnabled = false,
+  verifiedActorUserId = null,
+  serverView = false,
+  serverReserveView,
 }: CalendarProps) {
   const [year, monthNumber] = month.split('-').map(Number);
   const blanks = (new Date(year!, monthNumber! - 1, 1, 12).getDay() + 6) % 7;
@@ -108,8 +131,11 @@ export function Calendar({
           </p>
         </div>
         <div className="header-tools">
-          <button className="button-primary" data-action="new-entry">
-            <Icon name="plus" /> Запись
+          <button
+            className="button-primary"
+            data-action={serverView ? 'open-server-payments' : 'new-entry'}
+          >
+            <Icon name={serverView ? 'check' : 'plus'} /> {serverView ? 'К оплате' : 'Запись'}
           </button>
         </div>
       </header>
@@ -206,6 +232,7 @@ export function Calendar({
                     event={event}
                     rubles={rubles}
                     formatDate={formatDate}
+                    serverView={serverView}
                   />
                 ))
               ) : (
@@ -223,6 +250,14 @@ export function Calendar({
           </div>
         </div>
       </div>
+      {financeEnabled && verifiedActorUserId ? (
+        <ReserveHighlights
+          verifiedActorUserId={verifiedActorUserId}
+          currentDate={currentDate}
+          month={month}
+          providedView={serverReserveView}
+        />
+      ) : null}
     </>
   );
 }

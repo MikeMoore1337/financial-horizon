@@ -1,19 +1,52 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
-import { Calendar, type CalendarProps } from './Calendar';
-import { Overview, type OverviewProps } from './Overview';
+import { type CalendarProps } from './Calendar';
+import { ConnectedCalendar } from './ConnectedCalendar';
+import { type OverviewProps } from './Overview';
+import { ConnectedOverview } from './ConnectedOverview';
 import { Obligations, type ObligationsProps } from './Obligations';
 import { Loans, type LoansProps } from './Loans';
 import { Settings, type SettingsProps } from './Settings';
 import { AuthBoundary, type AuthAccess } from './AuthBoundary';
+import { Accounts, type AccountsProps } from './Accounts';
+import { ConnectedAccounts, type ConnectedAccountsProps } from './ConnectedAccounts';
+import { OfflineSyncAccounts } from './OfflineSyncAccounts';
+import { BankImport, type BankImportProps } from '../importers/bank-statements/BankImport';
 
 export type ScreenView =
   | { view: 'calendar'; props: CalendarProps }
   | { view: 'overview'; props: OverviewProps }
   | { view: 'obligations'; props: ObligationsProps }
   | { view: 'loans'; props: LoansProps }
-  | { view: 'settings'; props: SettingsProps };
+  | { view: 'settings'; props: SettingsProps }
+  | { view: 'accounts'; props: AccountsProps }
+  | { view: 'accounts-connected'; props: ConnectedAccountsProps }
+  | { view: 'bank-import'; props: BankImportProps };
+
+/** Separate local-key entry: never mounts the legacy account or guest ledger. */
+export function createOfflineSyncRoot(
+  host: HTMLElement,
+  actor: string,
+  onBack: () => void,
+  offlineOnly = true,
+  onSessionRevoked?: () => void,
+) {
+  const root = createRoot(host);
+  flushSync(() =>
+    root.render(
+      <StrictMode>
+        <OfflineSyncAccounts
+          actor={actor}
+          offlineOnly={offlineOnly}
+          onBack={onBack}
+          onSessionRevoked={onSessionRevoked}
+        />
+      </StrictMode>,
+    ),
+  );
+  return { unmount: () => root.unmount() };
+}
 
 /** One React owner for any migrated screen, never shared with legacy innerHTML. */
 export function createScreenRoot(
@@ -29,13 +62,25 @@ export function createScreenRoot(
           <StrictMode>
             <AuthBoundary access={getAccess()}>
               {screen.view === 'calendar' ? (
-                <Calendar {...screen.props} />
+                <ConnectedCalendar {...screen.props} />
               ) : screen.view === 'overview' ? (
-                <Overview {...screen.props} />
+                <ConnectedOverview {...screen.props} />
               ) : screen.view === 'obligations' ? (
                 <Obligations {...screen.props} />
               ) : screen.view === 'loans' ? (
                 <Loans {...screen.props} />
+              ) : screen.view === 'accounts' ? (
+                <Accounts key={screen.props.activeProfileId ?? 'locked'} {...screen.props} />
+              ) : screen.view === 'accounts-connected' ? (
+                <ConnectedAccounts
+                  key={screen.props.verifiedActorUserId ?? 'locked'}
+                  {...screen.props}
+                />
+              ) : screen.view === 'bank-import' ? (
+                <BankImport
+                  key={screen.props.verifiedActorUserId ?? screen.props.mode}
+                  {...screen.props}
+                />
               ) : (
                 <Settings {...screen.props} />
               )}

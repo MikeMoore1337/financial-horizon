@@ -1,5 +1,8 @@
 import {cents,rubles,numberInput,monthKey,monthIndex,shiftMonth,monthLabel,dayInMonth,loanLedger,previewLoanPayment,getMonthEvents,monthTotals,createSampleState,isActive,emptyState,payoffMonths} from './finance.js';
-import {readState,updateState,replaceState,askPersistentStorage,storageStatus,selectStateScope} from './storage.js?rev=auth-scopes-v18';
+// Namespace import keeps mixed old-SW/new-shell compatibility even if an
+// earlier cached storage module does not export the new revocation hook.
+import * as legacyStorage from './storage.js?rev=auth-scopes-v18';
+const {readState,updateState,replaceState,askPersistentStorage,storageStatus,selectStateScope}=legacyStorage;
 import {encryptBackup,decryptBackup} from './backup.js';
 import {parseSchedule} from './schedule.js';
 import {readXlsxRows,parseBudgetRows,previewImportChanges} from './excel-import.js';
@@ -17,6 +20,18 @@ let state=null,ui={view:'overview',month:monthKey(today()),selectedDate:today(),
 const emailSession=createEmailSession();
 let guestMode=false,activeUserId=null,authBroadcast=null,sessionValidation=null,lastDialogActivator=null;
 const GUEST_MODE_KEY='fh-guest-session-v2';
+function revokeDisplayedLedger(){
+ // Always clear UI, including if an obsolete mixed-version cache lacks the
+ // synchronous revocation hook. Account mode is gated at startup below.
+ if(typeof legacyStorage.revokeStateScope==='function')legacyStorage.revokeStateScope();
+ state=null;restoreFile=null;pendingExcelImport=null;scheduleLoanId=null;lastDialogActivator=null;
+ $('#main').replaceChildren();
+ for(const dialog of document.querySelectorAll('dialog')){
+  if(dialog.open)dialog.close();
+  dialog.replaceChildren();
+ }
+}
+
 const hasData=()=>state.entries.some(isActive)||state.loans.some(isActive);
 const monthEvents=()=>getMonthEvents(state,ui.month);
 function toast(message,kind='success'){$('#toast').textContent=message;$('#toast').classList.add('visible');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('visible'),3800);$('#save-indicator').textContent=kind==='error'?'Ошибка':'Сохранено на устройстве';}
@@ -46,7 +61,7 @@ async function refreshEmailSession(){
  const pending=(async()=>{
   const verified=await emailSession.refresh();
   if(!verified||emailSession.userId!==activeUserId||!emailSession.email){
-   state=null;
+   revokeDisplayedLedger();
    window.location.replace('./account.html');
    return false;
   }
@@ -64,7 +79,7 @@ async function logoutEmailAccount(){
  try{
   if(await pending){
    // Revoke access to the displayed account before leaving the page.
-   state=null;
+   revokeDisplayedLedger();
    try{sessionStorage.removeItem(GUEST_MODE_KEY);}catch{}
    try{authBroadcast?.postMessage({type:'logout',userId:activeUserId});}catch{}
    window.location.replace('./account.html');
@@ -262,7 +277,9 @@ function openSettlement(entryId,occurrence=ui.month,paymentId=null){
 function requireConfirm(title,text){return new Promise(resolve=>{
  const dialog=$('#confirmation-dialog');$('#confirmation-title').textContent=title;$('#confirmation-text').textContent=text;
  let done=false;
- const finish=value=>{if(done)return;done=true;dialog.close();resolve(value);};
+ const onClose=()=>{if(!dialog.open)finish(false);};
+ const finish=value=>{if(done)return;done=true;dialog.removeEventListener('close',onClose);if(dialog.open)dialog.close();resolve(value);};
+ dialog.addEventListener('close',onClose);
  const yes=$('#confirm-yes'),no=$('#confirm-cancel');
  yes.onclick=()=>finish(true);no.onclick=()=>finish(false);
  dialog.oncancel=e=>{e.preventDefault();finish(false);};
@@ -417,13 +434,25 @@ async function saveSettlement(form){
  $('#settlement-dialog').close();
 }
 async function performBackup(password){
- const file=await encryptBackup(await readState(),password);const url=URL.createObjectURL(new Blob([file],{type:'application/json'}));
+ if(typeof legacyStorage.captureStateScope!=='function')
+  throw Error('Обновите приложение через интернет для безопасного создания резервной копии');
+ const assertCurrentScope=legacyStorage.captureStateScope();
+ const source=await readState();assertCurrentScope();
+ const file=await encryptBackup(source,password);assertCurrentScope();
+ const url=URL.createObjectURL(new Blob([file],{type:'application/json'}));
  const a=document.createElement('a');a.href=url;a.download=`finansovyi-gorizont-${today()}-encrypted.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),12000);toast('Шифрованная резервная копия подготовлена');
 }
 async function performRestore(password){
+ if(typeof legacyStorage.captureStateScope!=='function')
+  throw Error('Обновите приложение через интернет для безопасного восстановления резервной копии');
+ const assertCurrentScope=legacyStorage.captureStateScope(),file=restoreFile;
+ if(!file)throw Error('Выберите сохранённую резервную копию');
  const originalRevision=state?.revision;
- const decrypted=await decryptBackup(await restoreFile.text(),password);
- if(!await requireConfirm('Заменить локальные данные?', 'Импорт заменит всю текущую бухгалтерию данными из резервной копии. При необходимости сохраните текущую копию перед продолжением.'))return;
+ const backupText=await file.text();assertCurrentScope();
+ const decrypted=await decryptBackup(backupText,password);assertCurrentScope();
+ const confirmed=await requireConfirm('Заменить локальные данные?', 'Импорт заменит всю текущую бухгалтерию данными из резервной копии. При необходимости сохраните текущую копию перед продолжением.');
+ assertCurrentScope();
+ if(!confirmed)return;
  await mutate(s=>{for(const key of Object.keys(s))delete s[key];Object.assign(s,structuredClone(decrypted));audit(s,'restore-backup','Восстановлена резервная копия');},'Данные восстановлены',originalRevision);
 }
 async function onFormSubmit(event){
@@ -443,12 +472,14 @@ async function onFormSubmit(event){
    await mutate(s=>{s.categories.push(title);audit(s,'category',`Добавлена категория: ${title}`);},'Категория добавлена');
   }
   if(form.getAttribute('id')==='password-form'){
-   const password=form.elements.password.value;
+   const passwordInput=form.elements.password,password=passwordInput.value;
    if(password.length<12)throw Error('Пароль должен содержать не менее 12 символов');
-   if(passwordMode==='export')await performBackup(password);else await performRestore(password);
-   form.elements.password.value='';$('#password-dialog').close();
+   try{if(passwordMode==='export')await performBackup(password);else await performRestore(password);}
+   finally{passwordInput.value='';}
+   if(!form.isConnected)return;
+   $('#password-dialog').close();
   }
- }catch(e){fail(e);}
+ }catch(e){if(state)fail(e);}
 }
 function bindEvents(){
  // Safari does not always focus clicked buttons; retain the actual dialog trigger.
@@ -486,17 +517,13 @@ function bindEvents(){
  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&!guestMode&&activeUserId)void refreshEmailSession();});
  window.addEventListener('pageshow',event=>{
   if(!event.persisted||guestMode||!activeUserId)return;
-  // A restored page from back/forward cache must re-validate authorization
-  // before it can show any finance records.
-  state=null;
-  $('#main').textContent='Проверяем доступ к бухгалтерии…';
-  void (async()=>{
-   if(!await refreshEmailSession())return;
-   state=await readState();
-   render();
-  })().catch(()=>window.location.replace('./account.html'));
+  // A BFCache restore can contain stale rendered finance and modal values.
+  // Revoke first; the full new navigation repeats authentication and rebuilds
+  // forms from a clean document. Failed navigation remains blank, not stale.
+  revokeDisplayedLedger();
+  window.location.replace('./');
  });
- try{channel=new BroadcastChannel('financial-horizon-updates');channel.onmessage=async()=>{try{state=await readState();render();}catch(e){fail(e);}};}catch{}
+ try{channel=new BroadcastChannel('financial-horizon-updates');channel.onmessage=async()=>{if(!state)return;try{state=await readState();render();}catch(e){fail(e);}};}catch{}
 }
 async function init(){
  try{themeSet(localStorage.getItem('fh-theme')||((window.matchMedia?.('(prefers-color-scheme: dark)').matches)?'dark':'light'));}catch{themeSet('light');}
@@ -515,6 +542,10 @@ async function init(){
   if(guestMode){
    await selectStateScope(null);
   }else{
+   // A mismatched old cached storage.js has no abort hook. Fail closed for
+   // authenticated records rather than enabling a mixed-version session.
+   if(typeof legacyStorage.revokeStateScope!=='function')
+    throw Error('Обновите приложение через интернет для безопасного входа в финансовый профиль');
    // Validate the server session BEFORE reading any account ledger.
    const verified=await emailSession.refresh();
    if(!verified||!emailSession.userId){
@@ -527,7 +558,7 @@ async function init(){
     authBroadcast=new BroadcastChannel('fh-auth-session-v2');
     authBroadcast.onmessage=event=>{
      if(event.data?.type==='logout'&&event.data.userId===activeUserId){
-      state=null;
+      revokeDisplayedLedger();
       window.location.replace('./account.html');
      }
     };

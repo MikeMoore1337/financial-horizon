@@ -40,7 +40,7 @@ test('password is not requested on email-only registration and CSS honors hidden
 test('service worker caches only app assets and includes account UI for offline support',()=>{
  const sw=get('sw.js');
  assert.match(sw,/financial-horizon-shell-v25-theme-auth/);
- for(const file of ['account.html','account.css?rev=auth-theme-v25','account.js?rev=auth-theme-v25']){
+ for(const file of ['account.html','account.css?rev=auth-theme-v26','account.js?rev=auth-theme-v25']){
    assert.ok(sw.includes("'./"+file+"'"),file);
  }
  assert.doesNotMatch(sw,/auth\.sqlite|email_session|token=|SMTP_PASSWORD/);
@@ -66,8 +66,12 @@ test('signed-in ledger exposes accessible logout controls with a vendored Lucide
  assert.doesNotMatch(app,/id="account-session" hidden/);
  assert.doesNotMatch(app,/id="account-logout-settings" data-action="account-logout"/);
  assert.match(app,/await logoutEmailAccount\(\)/);
- assert.match(app,/toolbarButton\.hidden=!signedIn/);
- assert.match(app,/'#account-entry-toolbar'\)\.hidden=!signedIn/);
+ const toolbar=get('src/react/Toolbar.tsx');
+ assert.match(app,/const signedIn=Boolean\(emailSession\.userId\)/);
+ assert.match(toolbar,/id="account-logout-toolbar"/);
+ assert.match(toolbar,/id="account-entry-toolbar"/);
+ assert.match(toolbar,/hidden=\{!signedIn\}/);
+ assert.match(toolbar,/disabled=\{busy\}/);
  assert.match(main,/id="account-entry-toolbar"[^>]*aria-label="Управление аккаунтом"/);
  assert.match(css,/mask:url\('\.\/assets\/icons\/user-round\.svg'\)/);
  assert.match(sw,/'\.\/assets\/icons\/user-round\.svg'/);

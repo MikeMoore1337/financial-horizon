@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 import { EventRow, Icon, type CalendarEvent, type CalendarProps } from './Calendar';
+import { ReserveHighlights } from './ReserveHighlights';
+import type { ReservesServerView } from './reserves-finance-gateway';
 
 export interface OverviewTotals {
   netPlanCents: number;
@@ -31,6 +33,12 @@ export interface OverviewProps {
   loan: OverviewLoan | null;
   rubles: CalendarProps['rubles'];
   formatDate: CalendarProps['formatDate'];
+  financeEnabled?: boolean;
+  verifiedActorUserId?: string | null;
+  month?: string;
+  serverView?: boolean;
+  serverReserveView?: ReservesServerView;
+  onSourceChange?: (source: 'server' | 'local') => void;
 }
 
 function PageHeader({
@@ -68,6 +76,10 @@ export function Overview({
   loan,
   rubles,
   formatDate,
+  financeEnabled = false,
+  verifiedActorUserId = null,
+  serverView = false,
+  serverReserveView,
 }: OverviewProps) {
   if (!hasData) {
     return (
@@ -76,27 +88,50 @@ export function Overview({
           title="Обзор месяца"
           currentDate={currentDate}
           formatDate={formatDate}
-          subtitle="Начните без регистрации. Все записи сохранятся только в этом браузере."
+          subtitle={
+            serverView
+              ? 'Обязательства и оплаты в аккаунте.'
+              : 'Начните без регистрации. Все записи сохранятся только в этом браузере.'
+          }
         />
         <div className="surface empty-panel">
           <Icon name="lock" />
-          <h3>Ваша бухгалтерия пока пуста</h3>
-          <p>
-            Добавьте поступления, обязательные платежи и ипотеку. Можно сначала включить вымышленные
-            данные, чтобы посмотреть приложение.
-          </p>
-          <div className="setting-actions" style={{ justifyContent: 'center' }}>
-            <button className="button-primary" data-action="new-entry" data-kind="income">
-              Добавить доход
+          <h3>{serverView ? 'В аккаунте пока нет обязательств' : 'Ваша бухгалтерия пока пуста'}</h3>
+          {serverView ? (
+            <p>
+              Создайте обязательство или перенесите проверенную локальную копию через настройки.
+            </p>
+          ) : (
+            <p>
+              Добавьте поступления, обязательные платежи и ипотеку. Можно сначала включить
+              вымышленные данные, чтобы посмотреть приложение.
+            </p>
+          )}
+          {serverView ? (
+            <button className="button-primary" data-action="open-server-payments">
+              Открыть центр оплат
             </button>
-            <button className="button-secondary" data-action="new-loan">
-              Добавить кредит
-            </button>
-            <button className="button-secondary" data-action="sample">
-              Показать пример
-            </button>
-          </div>
+          ) : (
+            <div className="setting-actions" style={{ justifyContent: 'center' }}>
+              <button className="button-primary" data-action="new-entry" data-kind="income">
+                Добавить доход
+              </button>
+              <button className="button-secondary" data-action="new-loan">
+                Добавить кредит
+              </button>
+              <button className="button-secondary" data-action="sample">
+                Показать пример
+              </button>
+            </div>
+          )}
         </div>
+        {financeEnabled && verifiedActorUserId ? (
+          <ReserveHighlights
+            verifiedActorUserId={verifiedActorUserId}
+            currentDate={currentDate}
+            providedView={serverReserveView}
+          />
+        ) : null}
       </>
     );
   }
@@ -138,7 +173,11 @@ export function Overview({
           </div>
           <div className="section-title">
             <h2>Распределение платежей</h2>
-            <button className="button-text" data-view="obligations">
+            <button
+              className="button-text"
+              data-view={serverView ? undefined : 'obligations'}
+              data-action={serverView ? 'open-server-payments' : undefined}
+            >
               Все записи <Icon name="chevron" />
             </button>
           </div>
@@ -175,6 +214,7 @@ export function Overview({
                   event={event}
                   rubles={rubles}
                   formatDate={formatDate}
+                  serverView={serverView}
                 />
               ))
             ) : (
@@ -206,15 +246,26 @@ export function Overview({
               </>
             ) : (
               <>
-                <p className="small-hint">Кредитов пока нет.</p>
-                <button className="button-primary" data-action="new-loan">
-                  Добавить кредит
-                </button>
+                <p className="small-hint">
+                  {serverView ? 'Кредиты доступны в локальном разделе.' : 'Кредитов пока нет.'}
+                </p>
+                {!serverView && (
+                  <button className="button-primary" data-action="new-loan">
+                    Добавить кредит
+                  </button>
+                )}
               </>
             )}
           </div>
         </div>
       </div>
+      {financeEnabled && verifiedActorUserId ? (
+        <ReserveHighlights
+          verifiedActorUserId={verifiedActorUserId}
+          currentDate={currentDate}
+          providedView={serverReserveView}
+        />
+      ) : null}
     </>
   );
 }

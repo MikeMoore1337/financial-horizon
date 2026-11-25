@@ -14,6 +14,64 @@ const sessionJS = toJS('../../src/security/local-budget-session.ts')
 const atomicJS = toJS('../../src/security/protected-atomic-candidate.ts')
   .replace(/['"]\.\/local-vault\.ts['"]/g, JSON.stringify(vaultUrl));
 
+test('native pending bundle write is aborted on logout, lock and profile switch', async ({page, context}) => {
+  const scripts = new Map([
+    [vaultUrl, vaultJS],
+    ['/__e2e_atomic_session__.js', sessionJS],
+    ['/__e2e_atomic_store__.js', atomicJS],
+  ]);
+  await context.route('**/__e2e_atomic_*.js', route => route.fulfill({
+    status:200, contentType:'text/javascript',
+    body:scripts.get(new URL(route.request().url()).pathname),
+  }));
+  await page.goto('/__e2e__/ready');
+  const results = await page.evaluate(async () => {
+    const store = await import('/__e2e_atomic_store__.js');
+    const {LocalBudgetSession} = await import('/__e2e_atomic_session__.js');
+    const passphrase = 'local synthetic transaction abort phrase';
+    const contents = {snapshot:{title:'SYNTHETIC'}, outbox:[{id:'PENDING'}], conflicts:[{id:'CONFLICT'}]};
+    const output = [];
+    for (const mode of ['logout', 'lock', 'switch']) {
+      const scope = `guest:abort-${mode}`;
+      await store.createAtomicEncryptedCandidate(scope, passphrase, contents);
+      const keys = await store.getAtomicEncryptedKeyset(scope);
+      const session = new LocalBudgetSession();
+      session.selectScope(scope);
+      await session.unlock(keys, {passphrase});
+      const put = IDBObjectStore.prototype.put;
+      let triggered = false, rejected = false;
+      try {
+        IDBObjectStore.prototype.put = function (...args) {
+          const request = put.apply(this, args);
+          if (this.name === 'bundles') {
+            triggered = true;
+            if (mode === 'logout') session.logout();
+            else if (mode === 'lock') session.lock();
+            else session.selectScope('guest:other-profile');
+          }
+          return request;
+        };
+        try {
+          await store.compareAndSwapAtomicEncryptedCandidate(scope, session, 0, 2,
+            {...contents, outbox:[{id:'MUST_NOT_COMMIT'}]});
+        } catch { rejected = true; }
+      } finally { IDBObjectStore.prototype.put = put; }
+      const reopened = new LocalBudgetSession();
+      reopened.selectScope(scope);
+      await reopened.unlock(await store.getAtomicEncryptedKeyset(scope), {passphrase});
+      const restored = await store.readAtomicEncryptedCandidate(scope, reopened);
+      output.push({mode, triggered, rejected, epoch:restored.epoch,
+        snapshot:restored.snapshot, outbox:restored.outbox, conflicts:restored.conflicts});
+      reopened.logout();
+    }
+    return output;
+  });
+  for (const result of results) {
+    expect(result).toEqual({mode:result.mode, triggered:true, rejected:true, epoch:0,
+      snapshot:{title:'SYNTHETIC'}, outbox:[{id:'PENDING'}], conflicts:[{id:'CONFLICT'}]});
+  }
+});
+
 test('native IDB atomic encrypted offline snapshot, outbox, CAS, restart and tampering', async ({page, context}) => {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -197,5 +255,90 @@ test('native IDB atomic encrypted offline snapshot, outbox, CAS, restart and tam
     expect(reopened).toEqual({offline:true, wrongDenied:true, tamperDenied:true,
       epoch:2, queue:3, amount:123456789, locked:true});
   } finally {await context.setOffline(false);}
+  expect(errors).toEqual([]);
+});
+
+
+test('native recovery secret reissue keeps ciphertext stable and survives offline reload', async ({page,context}) => {
+  const errors=[];
+  page.on('pageerror',e=>errors.push(e.message));
+  const resources=new Map([
+    [vaultUrl,vaultJS],
+    ['/__e2e_atomic_session__.js',sessionJS],
+    ['/__e2e_atomic_store__.js',atomicJS],
+  ]);
+  await context.route('**/__e2e_atomic_*.js',route=>route.fulfill({
+    status:200,contentType:'text/javascript',
+    body:resources.get(new URL(route.request().url()).pathname),
+    headers:{'Cache-Control':'no-store'},
+  }));
+  await page.goto('/__e2e__/ready');
+  const first=await page.evaluate(async()=>{
+    const db=await import('/__e2e_atomic_store__.js');
+    const {LocalBudgetSession}=await import('/__e2e_atomic_session__.js');
+    const scope='guest:recovery-browser-qa';
+    const passphrase='local only recovery rotation phrase 2026';
+    const contents={snapshot:{title:'PRIVATE_ROTATED_LEDGER',amountCents:675829},
+      outbox:[{id:'PENDING_NEVER_LOST',amountCents:4}],conflicts:[]};
+    const created=await db.createAtomicEncryptedCandidate(scope,passphrase,contents,2);
+    const open=()=>new Promise((resolve,reject)=>{
+      const r=indexedDB.open(db.ATOMIC_ENCRYPTED_DB,1);
+      r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);
+    });
+    const bundle=async()=>{
+      const idb=await open();
+      try{return await new Promise((resolve,reject)=>{
+        const tx=idb.transaction('bundles','readonly');
+        const r=tx.objectStore('bundles').get(scope);
+        tx.oncomplete=()=>resolve(JSON.stringify(r.result));
+        tx.onerror=()=>reject(tx.error);
+      });}finally{idb.close();}
+    };
+    const before=await bundle();
+    const session=new LocalBudgetSession();
+    session.selectScope(scope);
+    await session.unlock(await db.getAtomicEncryptedKeyset(scope),{passphrase});
+    const result=await db.rotateAtomicEncryptedRecoveryKey(scope,session,passphrase);
+    const after=await bundle();
+    const freshKeyset=await db.getAtomicEncryptedKeyset(scope);
+    const invalid=new LocalBudgetSession();invalid.selectScope(scope);
+    let oldRejected=false;
+    try{await invalid.unlock(freshKeyset,{recoveryKey:created.recoveryKey});}
+    catch{oldRejected=invalid.state==='locked';}
+    const recovered=new LocalBudgetSession();recovered.selectScope(scope);
+    await recovered.unlock(freshKeyset,{recoveryKey:result.recoveryKey});
+    const restored=await db.readAtomicEncryptedCandidate(scope,recovered);
+    session.logout();recovered.logout();
+    const persisted=after+JSON.stringify(freshKeyset);
+    return {recoveryKey:result.recoveryKey,unchanged:before===after,oldRejected,
+      correct:restored.snapshot.amountCents===675829&&restored.outbox.length===1,
+      sealed:!['PRIVATE_ROTATED_LEDGER','PENDING_NEVER_LOST',passphrase,result.recoveryKey]
+        .some(secret=>persisted.includes(secret))};
+  });
+  expect({unchanged:first.unchanged,oldRejected:first.oldRejected,
+    correct:first.correct,sealed:first.sealed}).toEqual({
+      unchanged:true,oldRejected:true,correct:true,sealed:true,
+    });
+  expect(first.recoveryKey).toHaveLength(43);
+  await page.reload();
+  await page.evaluate(async()=>{
+    globalThis.__rotationStore=await import('/__e2e_atomic_store__.js');
+    globalThis.__rotationSession=await import('/__e2e_atomic_session__.js');
+  });
+  await context.setOffline(true);
+  try{
+    const restored=await page.evaluate(async({recoveryKey})=>{
+      const scope='guest:recovery-browser-qa';
+      const s=new globalThis.__rotationSession.LocalBudgetSession();
+      s.selectScope(scope);
+      const keys=await globalThis.__rotationStore.getAtomicEncryptedKeyset(scope);
+      await s.unlock(keys,{recoveryKey});
+      const value=await globalThis.__rotationStore.readAtomicEncryptedCandidate(scope,s);
+      s.logout();
+      return {offline:!navigator.onLine,epoch:value.epoch,payments:value.outbox.length,
+        amount:value.snapshot.amountCents,locked:s.state==='unselected'};
+    },{recoveryKey:first.recoveryKey});
+    expect(restored).toEqual({offline:true,epoch:0,payments:1,amount:675829,locked:true});
+  }finally{await context.setOffline(false)}
   expect(errors).toEqual([]);
 });

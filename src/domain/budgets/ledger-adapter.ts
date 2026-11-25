@@ -1,8 +1,11 @@
 /**
  * Read-only structural adapter for the public #33 ledger contracts.
- * No runtime dependency on #33 while its PR is unmerged. The caller must load
- * an authorized, validated snapshot (assertLedgerState / server RLS).
+ * Legacy structural snapshots cannot prove atomic linked-payment cancellation.
+ * Use the authoritative entry point for an authorized, complete #33 ledger.
+ * Validation checks consistency, not authentication; session/RLS belong upstream.
  */
+import { assertLedgerState } from '../accounts/invariants.ts';
+import type { LedgerState } from '../accounts/ledger.ts';
 import {
   calculateBudgetReport,
   MAX_MINOR,
@@ -50,6 +53,32 @@ export function toBudgetOperations(
   snapshot: LedgerBudgetSnapshot,
   assignments: readonly BudgetCategoryAssignment[] = [],
   planned: readonly BudgetOperation[] = [],
+): BudgetOperation[] {
+  return projectBudgetOperations(snapshot, assignments, planned, new Map());
+}
+
+/** #33's current complete ledger includes exact server fact-void proofs.
+ * The full ledger invariant check is required before honoring them. The caller
+ * must obtain the ledger from the authenticated finance state or trusted guest
+ * scope, never directly from a command body. No state or posting is rewritten.
+ */
+export function toAuthoritativeBudgetOperations(
+  snapshot: LedgerState,
+  assignments: readonly BudgetCategoryAssignment[] = [],
+  planned: readonly BudgetOperation[] = [],
+): BudgetOperation[] {
+  assertLedgerState(snapshot);
+  const voided = new Map((snapshot.linkedPaymentVoids ?? []).map(
+    proof => [proof.transactionId, proof.reversedByTransactionId],
+  ));
+  return projectBudgetOperations(snapshot, assignments, planned, voided);
+}
+
+function projectBudgetOperations(
+  snapshot: LedgerBudgetSnapshot,
+  assignments: readonly BudgetCategoryAssignment[],
+  planned: readonly BudgetOperation[],
+  voided: ReadonlyMap<string, string>,
 ): BudgetOperation[] {
   if (!snapshot || typeof snapshot.profileId !== 'string'
     || !Array.isArray(snapshot.transactions) || !Array.isArray(snapshot.postings)
@@ -138,10 +167,10 @@ export function toBudgetOperations(
     if (tx.kind === 'reversal' && (!source || source.kind === 'reversal')) {
       fail('missing reversal target');
     }
-    // #33 explicitly prohibits a standalone reversal of linked payments. It
-    // would hide a posted expense while the obligation/loan remains settled.
-    // A future #67 atomic fact-void contract needs its own verified adapter.
-    if (tx.kind === 'reversal' && source?.kind === 'payment') {
+    // Standalone linked-payment reversal remains forbidden. Only the full
+    // #33 validated ledger may supply a matching atomic fact-void proof.
+    const paymentReversal = tx.kind === 'reversal' && source?.kind === 'payment';
+    if (paymentReversal && voided.get(source!.id) !== tx.id) {
       fail('linked payment reversal requires atomic fact cancellation');
     }
     const expectedCount = tx.kind === 'transfer' || source?.kind === 'transfer' ? 2 : 1;
@@ -163,12 +192,16 @@ export function toBudgetOperations(
         fail('reversal postings do not compensate original');
       }
     }
+    // The core deliberately refuses direct linked-payment reversals. Project
+    // the verified pair as one voided payment (including its category history)
+    // after validating compensation; it consumes no budget in either month.
+    if (paymentReversal) continue;
     results.push({
       id: tx.id,
       profileId: tx.profileId,
       occurredOn: tx.occurredOn,
       kind: tx.kind,
-      status: 'confirmed',
+      status: voided.has(tx.id) ? 'voided' : 'confirmed',
       signedMinor,
       categoryId: categories.get(tx.id) ?? null,
       reversedTransactionId: tx.reversedTransactionId,
@@ -196,5 +229,21 @@ export function calculateLedgerBudgetReport(input: {
     month: input.month,
     rules: input.rules,
     operations: toBudgetOperations(input.snapshot, input.assignments, input.planned),
+  });
+}
+
+/** Budget projection from the current, invariant-checked #33 ledger contract. */
+export function calculateAuthoritativeLedgerBudgetReport(input: {
+  snapshot: LedgerState;
+  month: string;
+  rules: readonly BudgetRule[];
+  assignments?: readonly BudgetCategoryAssignment[];
+  planned?: readonly BudgetOperation[];
+}): BudgetReport {
+  return calculateBudgetReport({
+    profileId: input.snapshot.profileId,
+    month: input.month,
+    rules: input.rules,
+    operations: toAuthoritativeBudgetOperations(input.snapshot, input.assignments, input.planned),
   });
 }

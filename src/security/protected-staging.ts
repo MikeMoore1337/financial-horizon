@@ -1,6 +1,7 @@
 /**
- * Staging-only encrypted IndexedDB. Deliberately not imported by storage.js, UI,
- * auth, sync or the Service Worker. It NEVER reads, modifies or deletes legacy DBs.
+ * Staging-only encrypted IndexedDB. The JSON comparison helper is also used by
+ * active import flows; staging itself is not an active finance source and NEVER
+ * reads, modifies or deletes legacy DBs.
  *
  * A caller MUST first validate the financial schema, decrypt & independently
  * verify the user's saved legacy backup, and obtain explicit opt-in. Those gates
@@ -11,6 +12,7 @@ import {
   type LocalKeysetV1, type LocalScope, type RecordContext,
   type EncryptedLocalRecordV1,
 } from './local-vault.ts';
+import {assertFinancialJson} from '../../backup.js';
 
 export const PROTECTED_STAGING_DB = 'financial-horizon-protected-staging-v1';
 const KEYSETS = 'keysets', RECORDS = 'records';
@@ -42,6 +44,7 @@ function validateScope(value: unknown): asserts value is LocalScope {
 /** Canonical JSON equivalence: object key order is not data; array order is. */
 export function sameFinancialJSON(a: unknown, b: unknown): boolean {
   const stable = (input: unknown): string => {
+    assertFinancialJson(input);
     const text = JSON.stringify(input);
     if (text === undefined) throw Error('Недопустимое значение финансового снимка');
     return JSON.stringify(JSON.parse(text), (_key, value) => {
@@ -192,6 +195,7 @@ export async function stageProtectedSnapshot(
     throw Error('Допустим только зашифрованный снимок бюджета');
   }
   // Snapshot the source before any async operation; never trust a mutable caller.
+  assertFinancialJson(state);
   const source = structuredClone(state);
   if (source === null || typeof source !== 'object' || Array.isArray(source)) {
     throw Error('Некорректный финансовый снимок');

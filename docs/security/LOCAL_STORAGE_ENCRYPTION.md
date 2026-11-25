@@ -33,7 +33,7 @@ Web Crypto uses AES-GCM 256-bit with 128-bit tags. Wrapped keys are 32-byte plai
 
 ## Approved local unlock scenario (2026-11-08) - **UI integration not implemented**
 
-The owner approved the flow and memory key lifecycle; visual layout and migration activation remain separate gates. See [the approved interaction contract](APPROVED_LOCAL_UNLOCK_FLOW.md) and the standalone `LocalBudgetSession` controller.
+The owner approved the flow and memory key lifecycle, and approved the visual proposal in the task conversation on 2026-11-23. Migration activation remains a separate gate. See [the approved interaction contract](APPROVED_LOCAL_UNLOCK_FLOW.md) and the standalone `LocalBudgetSession` controller.
 
 1. After account authentication (or guest selection), detect whether that **specific** scope has an encrypted local keyset. Do not infer local unlock from a server cookie, and never show previous-user data before unlock.
 2. First opt-in: explain local encryption and offline access, ask for a **separate** passphrase; create keyset; display recovery key **once**, require acknowledgment of safe offline storage; then verify separately encrypted backup and user consent before any actual migration. If canceled, leave original storage unchanged.

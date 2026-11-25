@@ -1,0 +1,7 @@
+# Owner-approved personal mode only. Never use this override for public DB access.
+# The existing host-level FH auth service can reach PostgreSQL on loopback.
+# No wildcard binding, no external ports, and no change to strict base Compose.
+services:
+  db:
+    ports:
+      - "127.0.0.1:54329:5432"
