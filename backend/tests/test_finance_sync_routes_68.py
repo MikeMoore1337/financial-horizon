@@ -155,6 +155,7 @@ def test_disable_restores_only_original_and_rechecks_bank(monkeypatch, tmp_path)
     sha, original, state = fake_deployment(monkeypatch, tmp_path)
     state.update(caddy=m.patch_caddy(original), backup=original)
     monkeypatch.setenv('FH_SYNC68_ROUTES', 'DISABLE')
+    monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
     monkeypatch.setattr(m.os, 'geteuid', lambda: 0)
     monkeypatch.setattr(m.finance, 'public_probe', lambda *_args, **_kwargs: 404)
     checked = []
@@ -169,8 +170,20 @@ def test_disable_refuses_to_overwrite_a_concurrent_change(monkeypatch, tmp_path)
     sha, original, state = fake_deployment(monkeypatch, tmp_path)
     state.update(caddy=b'other operator change', backup=original)
     monkeypatch.setenv('FH_SYNC68_ROUTES', 'DISABLE')
+    monkeypatch.delenv('GITHUB_ACTIONS', raising=False)
     monkeypatch.setattr(m.os, 'geteuid', lambda: 0)
     with pytest.raises(m.Hold, match='SYNC_CADDY_CHANGED_OR_ALREADY_DISABLED'):
         m.disable(sha)
     assert state['caddy'] == b'other operator change'
+    assert state['reloads'] == 0
+
+
+def test_disable_refuses_github_actions_even_with_root_and_explicit_mode(monkeypatch, tmp_path):
+    sha, original, state = fake_deployment(monkeypatch, tmp_path)
+    monkeypatch.setenv('FH_SYNC68_ROUTES', 'DISABLE')
+    monkeypatch.setenv('GITHUB_ACTIONS', 'true')
+    monkeypatch.setattr(m.os, 'geteuid', lambda: 0)
+    with pytest.raises(m.Hold, match='EXPLICIT_NATIVE_SYNC_DISABLE_REQUIRED'):
+        m.disable(sha)
+    assert state['caddy'] == original
     assert state['reloads'] == 0
