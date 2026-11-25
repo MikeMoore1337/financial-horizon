@@ -149,3 +149,28 @@ def test_public_guard_rejects_unprotected_cross_origin_write(monkeypatch):
     monkeypatch.setattr(m.finance, 'public_probe', lambda *args, **kwargs: 401)
     with pytest.raises(m.Hold, match='SYNC_PUBLIC_WRITE_AUTH_OR_ORIGIN_FAILED'):
         m.public_guards()
+
+
+def test_disable_restores_only_original_and_rechecks_bank(monkeypatch, tmp_path):
+    sha, original, state = fake_deployment(monkeypatch, tmp_path)
+    state.update(caddy=m.patch_caddy(original), backup=original)
+    monkeypatch.setenv('FH_SYNC68_ROUTES', 'DISABLE')
+    monkeypatch.setattr(m.os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(m.finance, 'public_probe', lambda *_args, **_kwargs: 404)
+    checked = []
+    monkeypatch.setattr(m.bank, 'public_negative_checks', lambda: checked.append(True))
+    m.disable(sha)
+    assert state['caddy'] == original
+    assert state['reloads'] == 1
+    assert checked == [True]
+
+
+def test_disable_refuses_to_overwrite_a_concurrent_change(monkeypatch, tmp_path):
+    sha, original, state = fake_deployment(monkeypatch, tmp_path)
+    state.update(caddy=b'other operator change', backup=original)
+    monkeypatch.setenv('FH_SYNC68_ROUTES', 'DISABLE')
+    monkeypatch.setattr(m.os, 'geteuid', lambda: 0)
+    with pytest.raises(m.Hold, match='SYNC_CADDY_CHANGED_OR_ALREADY_DISABLED'):
+        m.disable(sha)
+    assert state['caddy'] == b'other operator change'
+    assert state['reloads'] == 0
