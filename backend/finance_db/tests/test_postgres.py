@@ -51,6 +51,7 @@ def test_mapping_covers_all_finance_tables():
         "ledger_payment_links", "reserve_allocations", "reserve_events", "command_receipts",
         "change_log", "import_batches", "import_record_map",
         "bank_import_batches", "bank_import_rows",
+        "budget_categories", "budget_rules", "budget_assignments",
     }
     assert {t.name for t in Base.metadata.tables.values()} == expected
 
@@ -60,14 +61,14 @@ def test_migration_head():
     engine = create_engine(dsn, connect_args={"options": "-csearch_path=finance,pg_catalog"})
     try:
         with engine.connect() as c:
-            assert c.execute(text("SELECT version_num FROM finance.alembic_version")).scalar_one() == "0007_bank_statements"
+            assert c.execute(text("SELECT version_num FROM finance.alembic_version")).scalar_one() == "0008_budget_rules"
             policies = c.execute(text("""
                 SELECT count(*) FROM pg_class c
                 JOIN pg_namespace n ON n.oid=c.relnamespace
                 WHERE n.nspname='finance' AND c.relkind='r'
                   AND c.relname <> 'alembic_version' AND c.relrowsecurity AND c.relforcerowsecurity
             """)).scalar_one()
-            assert policies == 18
+            assert policies == 21
     finally:
         engine.dispose()
 

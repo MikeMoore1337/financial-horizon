@@ -181,6 +181,7 @@ def ensure_verified_profile(
 
 def _validated(command: object, if_match: str, idem_key: str,
                *, allow_internal: bool, allow_account_v2: bool = False,
+               allow_budget_candidate: bool = False,
                ) -> tuple[Mapping[str, Any], UUID, int, dict[str, int], bytes]:
     body = _shape(command, {
         "schema_version", "client_mutation_id", "base_revision", "action",
@@ -192,7 +193,12 @@ def _validated(command: object, if_match: str, idem_key: str,
     if type(body["schema_version"]) is not int:
         raise _reject("Неподдерживаемая версия схемы")
     version = body["schema_version"]
-    if version == 1 and not allow_account_v2:
+    if allow_budget_candidate:
+        if version != 2 or allow_internal or allow_account_v2:
+            raise _reject("Недопустимый режим бюджетного API")
+        from .budget_service import BUDGET_ACTIONS
+        actions = BUDGET_ACTIONS
+    elif version == 1 and not allow_account_v2:
         actions = _INTERNAL_ACTIONS if allow_internal else _PUBLIC_V1_ACTIONS
     elif version == 2 and allow_account_v2 and not allow_internal:
         actions = _PUBLIC_V2_ACCOUNT_ACTIONS
@@ -665,7 +671,12 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
     change_payload: dict[str, Any] = {}
     extra_changes: list[tuple[str, UUID, int, dict[str, Any]]] = []
 
-    if action == "obligation.create":
+    if action.startswith("budget."):
+        from .budget_service import apply_budget_candidate
+        changes = apply_budget_candidate(session, scope, cmd, versions)
+        change_kind, target, affected_revision, change_payload = changes[0]
+        extra_changes.extend(changes[1:])
+    elif action == "obligation.create":
         required = {
             "title", "direction", "amount_minor", "starts_on",
             "timezone", "recurrence_unit", "recurrence_every",
@@ -1799,20 +1810,21 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
 def submit_account_command(
     engine: Engine, *, scope: VerifiedFinanceScope, command: object,
     if_match: str, idempotency_key: str, allow_internal: bool = False,
-    allow_account_v2: bool = False,
+    allow_account_v2: bool = False, allow_budget_candidate: bool = False,
 ) -> FinanceResult:
     """One RLS-protected SQL COMMIT for a validated finance command and its receipt.
 
     'allow_internal' is only for trusted existing v1 internal consumers.
     'allow_account_v2' is only for the validated, unmounted v2 account
     proposal, and never accepts other internal actions.
-    Neither option may be set from an untrusted client request.
+    The budget candidate flag is server-only and deliberately not mounted.
+    No transport option may be set from an untrusted client request.
     """
-    if allow_internal and allow_account_v2:
-        raise ValueError("Internal and proposed public v2 modes are mutually exclusive")
+    if sum((allow_internal, allow_account_v2, allow_budget_candidate)) > 1:
+        raise ValueError("Finance command modes are mutually exclusive")
     body, mutation_id, base_revision, versions, request_hash = _validated(
         command, if_match, idempotency_key, allow_internal=allow_internal,
-        allow_account_v2=allow_account_v2,
+        allow_account_v2=allow_account_v2, allow_budget_candidate=allow_budget_candidate,
     )
     with finance_transaction(engine, verified_user_id=scope.user_id,
                              profile_id=scope.profile_id) as session:

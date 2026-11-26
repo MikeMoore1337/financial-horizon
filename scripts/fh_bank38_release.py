@@ -107,7 +107,9 @@ def postgres_ready() -> None:
             error="BANK_SCHEMA_SQL_UNAVAILABLE",
         ).strip()
 
-    if sql("SELECT version_num FROM finance.alembic_version") != "0007_bank_statements":
+    version = sql("SELECT version_num FROM finance.alembic_version")
+    expected_tables = {"0007_bank_statements": "18", "0008_budget_rules": "21"}.get(version)
+    if expected_tables is None:
         refuse("BANK_SCHEMA_0007_REQUIRED")
     tables = sql("""
         SELECT count(*) FROM pg_class c
@@ -116,8 +118,8 @@ def postgres_ready() -> None:
         AND c.relname<>'alembic_version'
         AND c.relrowsecurity AND c.relforcerowsecurity
     """)
-    if tables != "18":
-        refuse("BANK_ALL_18_FORCE_RLS_TABLES_REQUIRED")
+    if tables != expected_tables:
+        refuse("BANK_ALL_FORCE_RLS_TABLES_REQUIRED")
     allowed = sql("""
         SELECT has_table_privilege('fh_finance_runtime',
                     'finance.bank_import_batches','SELECT')
