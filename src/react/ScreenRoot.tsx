@@ -1,4 +1,4 @@
-import { StrictMode } from 'react';
+import { StrictMode, type ComponentProps } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { type CalendarProps } from './Calendar';
@@ -13,7 +13,6 @@ import { Accounts, type AccountsProps } from './Accounts';
 import { ConnectedAccounts, type ConnectedAccountsProps } from './ConnectedAccounts';
 import { OfflineSyncAccounts } from './OfflineSyncAccounts';
 import { Budgets } from './Budgets';
-import type { ComponentProps } from 'react';
 import { BankImport, type BankImportProps } from '../importers/bank-statements/BankImport';
 
 export type ScreenView =
