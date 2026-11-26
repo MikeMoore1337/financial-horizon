@@ -1871,6 +1871,7 @@ def submit_account_command(
 def cancel_uncommitted_account_command(
     engine: Engine, *, scope: VerifiedFinanceScope, command: object,
     if_match: str, idempotency_key: str, allow_account_v2: bool = False,
+    allow_budget_candidate: bool = False,
 ) -> FinanceResult:
     """Fence an exact pending request without reversing an already committed one.
 
@@ -1881,6 +1882,7 @@ def cancel_uncommitted_account_command(
     body, mutation_id, base_revision, _, request_hash = _validated(
         command, if_match, idempotency_key,
         allow_internal=False, allow_account_v2=allow_account_v2,
+        allow_budget_candidate=allow_budget_candidate,
     )
     with finance_transaction(engine, verified_user_id=scope.user_id,
                              profile_id=scope.profile_id) as session:

@@ -2604,3 +2604,92 @@ test('#138 online payment center survives a lost response and synchronizes two d
     await second.close();
   }
 });
+
+test('#35 encrypted offline budget command survives browser reload and reconciles exact SQL receipts', async ({page, context, browser}) => {
+  test.setTimeout(120_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  const modules = async ctx => ctx.route('**/__e2e_138_*.js', route => route.fulfill({
+    status:200,contentType:'text/javascript',
+    body:testModuleSources.get(new URL(route.request().url()).pathname),
+    headers:{'Cache-Control':'no-store'},
+  }));
+  await modules(context);
+  const login = await context.request.post('/__e2e__/personal-session');
+  expect(login.status()).toBe(200);
+  const actor=(await login.json()).user.id;
+  const profile=await bootstrap(context);
+  const accountId=randomUUID(), transactionId=randomUUID(), categoryId=randomUUID(), ruleId=randomUUID();
+  expect((await submit(context,await state(context),'account.create',{
+    id:accountId,name:'Synthetic FH35 account',kind:'cash',currency:'RUB',opening_minor:1_000_000,
+  })).status()).toBe(201);
+  const accountState=await state(context);
+  expect((await submit(context,accountState,'transaction.record',{
+    id:transactionId,account_id:accountId,kind:'expense',signed_minor:-150_000,occurred_on:'2026-11-12',
+  },{[accountId]:versionOf(accountState,accountId)})).status()).toBe(201);
+  await page.goto('/__e2e__/ready');
+  const phrase='synthetic FH35 encrypted queue recovery phrase';
+  const result=await page.evaluate(async ({actor,phrase,categoryId})=>{
+    const {FinanceSyncController}=await import('/__e2e_138_controller__.js');
+    const controller=new FinanceSyncController({verifiedActorUserId:actor,origin:location.origin});
+    await controller.createLocal(phrase,true);
+    await controller.unlock({passphrase:phrase});
+    const s=await controller.read();
+    await controller.enqueue({schema_version:2,client_mutation_id:crypto.randomUUID(),
+      base_revision:s.cloud.revision,action:'budget.category.create',
+      expected_entity_revisions:{},payload:{id:categoryId,name:'Продукты'}});
+    const done=await controller.dispatchOnce();
+    await controller.refresh();
+    globalThis.__fh35Controller=controller;
+    return done.status;
+  },{actor,phrase,categoryId});
+  expect(result).toBe('DURABLY_CONFIRMED');
+  const before=await state(context);
+  await context.setOffline(true);
+  const pending=await page.evaluate(async ({categoryId,ruleId})=>{
+    const controller=globalThis.__fh35Controller;
+    controller.markOffline();
+    const s=await controller.read();
+    const queued=await controller.enqueue({schema_version:2,client_mutation_id:crypto.randomUUID(),
+      base_revision:s.cloud.revision,action:'budget.create',expected_entity_revisions:{},
+      payload:{id:ruleId,category_id:categoryId,limit_minor:1_000_000,recurrence:'monthly',from_month:'2026-11'}});
+    const after=await controller.read();
+    controller.close();
+    return {status:queued.status,pending:after.outbox.length,confirmed:after.cloud.entities.some(x=>x.id===ruleId)};
+  },{categoryId,ruleId});
+  expect(pending).toEqual({status:'QUEUED_ENCRYPTED',pending:1,confirmed:false});
+  await context.setOffline(false);
+  expect((await state(context)).revision).toBe(before.revision);
+  await page.reload();
+  const recovered=await page.evaluate(async ({actor,phrase,categoryId,transactionId})=>{
+    const {FinanceSyncController}=await import('/__e2e_138_controller__.js');
+    const controller=new FinanceSyncController({verifiedActorUserId:actor,origin:location.origin});
+    const opened=await controller.unlock({passphrase:phrase});
+    const first=await controller.dispatchOnce();
+    await controller.refresh();
+    const s=await controller.read();
+    const tx=s.cloud.entities.find(x=>x.id===transactionId);
+    await controller.enqueue({schema_version:2,client_mutation_id:crypto.randomUUID(),
+      base_revision:s.cloud.revision,action:'budget.category.assign',expected_entity_revisions:{[transactionId]:tx.entity_revision},
+      payload:{transaction_id:transactionId,category_id:categoryId}});
+    const second=await controller.dispatchOnce();
+    const after=await controller.refresh();
+    controller.close();
+    return {pendingBefore:opened.outbox.length,first:first.status,second:second.status,
+      pendingAfter:after.outbox.length,entities:after.cloud.entities};
+  },{actor,phrase,categoryId,transactionId});
+  expect(recovered.pendingBefore).toBe(1);
+  expect(recovered.first).toBe('DURABLY_CONFIRMED');
+  expect(recovered.second).toBe('DURABLY_CONFIRMED');
+  expect(recovered.pendingAfter).toBe(0);
+  expect(recovered.entities.find(x=>x.id===ruleId).data.limit_minor).toBe(1_000_000);
+  expect(recovered.entities.find(x=>x.id===accountId).data.balance_minor).toBe(850_000);
+  expect(recovered.entities.filter(x=>x.kind==='budget_assignment'&&x.data.transaction_id===transactionId)).toHaveLength(1);
+  const secondDevice=await browser.newContext({baseURL:ORIGIN,storageState:await context.storageState(),serviceWorkers:'block'});
+  try {
+    expect(await bootstrap(secondDevice)).toBe(profile);
+    const remote=await state(secondDevice);
+    expect(remote.body.entities.find(x=>x.id===ruleId).data.limit_minor).toBe(1_000_000);
+    expect(remote.body.entities.find(x=>x.id===accountId).data.balance_minor).toBe(850_000);
+    expect(remote.body.entities.filter(x=>x.kind==='budget_assignment'&&x.data.transaction_id===transactionId)).toHaveLength(1);
+  } finally {await secondDevice.close();}
+});

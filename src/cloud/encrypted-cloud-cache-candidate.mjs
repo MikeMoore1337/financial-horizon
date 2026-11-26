@@ -142,7 +142,9 @@ export async function refreshEncryptedCloudSnapshot({
         'transaction.record', 'transaction.reverse', 'account.transfer', 'obligation.create',
         'settlement.payment.record', 'settlement.payment.void', 'loan.payment.record', 'loan.payment.void',
         'reserve.create', 'reserve.update', 'reserve.allocate', 'reserve.archive',
-        'reserve.skip', 'reserve.event.void', 'reserve.cycle.close', 'reserve.cycle.void']
+        'reserve.skip', 'reserve.event.void', 'reserve.cycle.close', 'reserve.cycle.void',
+        'budget.create','budget.amend','budget.archive','budget.category.create',
+        'budget.category.rename','budget.category.archive','budget.category.assign']
         .includes(head.command?.action) &&
       head.status === 'pending' && head.command?.base_revision === before.revision &&
       typeof before.serverEtag === 'string' && head.ifMatch === before.serverEtag) {

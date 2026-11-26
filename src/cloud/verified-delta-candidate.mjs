@@ -7,6 +7,7 @@
  * This module NEVER opens IndexedDB, requests a URL, or writes to the PWA.
  */
 import {budgetEntityKinds, decodeBudgetEntity, decodeBudgetEntities} from '../domain/budgets/server-snapshot.ts';
+export {decodeBudgetEntity, decodeBudgetEntities};
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const scopePattern = /^account:[0-9a-f]{32}$/;

@@ -10,7 +10,7 @@ import {
   readAtomicEncryptedCandidate,
   compareAndSwapAtomicEncryptedCandidate,
 } from '../security/protected-atomic-candidate.ts';
-import {applyFinanceDeltaCandidate} from './verified-delta-candidate.mjs';
+import {applyFinanceDeltaCandidate, decodeBudgetEntity, decodeBudgetEntities} from './verified-delta-candidate.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SCOPE = /^account:[a-f0-9]{32}$/;
@@ -19,6 +19,13 @@ const STRONG_ETAG = /^"[^"\r\n]{1,254}"$/;
 const MAX_BYTES = 32768;
 const MAX_QUEUE = 1000;
 const ACTION_FIELDS = Object.freeze({
+  'budget.category.create': ['id', 'name'],
+  'budget.category.rename': ['id', 'name'],
+  'budget.category.archive': ['id'],
+  'budget.create': ['id', 'category_id', 'limit_minor', 'recurrence', 'from_month'],
+  'budget.amend': ['rule_id', 'effective_from_month', 'replacement_id', 'limit_minor'],
+  'budget.archive': ['rule_id', 'archived_from_month'],
+  'budget.category.assign': ['transaction_id', 'category_id'],
   'reserve.allocate': ['reserve_id', 'account_id', 'delta_minor'],
   'reserve.archive': ['reserve_id'],
   'reserve.create': ['id', 'obligation_id', 'account_id', 'title', 'target_minor', 'opened_on',
@@ -42,6 +49,7 @@ const ACTION_FIELDS = Object.freeze({
   'loan.payment.void': ['transaction_id', 'fact_id', 'account_id', 'reason'],
 });
 const OPTIONAL_FIELDS = Object.freeze({
+  'budget.create': ['ends_before_month'],
   'reserve.allocate': ['occurred_on'],
   'reserve.create': ['fixed_monthly_minor'],
   'reserve.update': ['fixed_monthly_minor', 'occurred_on'],
@@ -927,7 +935,9 @@ function validateCommand(command) {
   // Rejecting invalid commands before queueing prevents persistent offline
   // entries that can never succeed after a network reconnect.
   let requiredRevisions;
-  if (dto.action === 'account.create' || dto.action === 'obligation.create') {
+  if (dto.action.startsWith('budget.')) {
+    requiredRevisions = budgetCommandVersions(dto);
+  } else if (dto.action === 'account.create' || dto.action === 'obligation.create') {
     requiredRevisions = [];
   } else if (dto.action === 'reserve.allocate') {
     requiredRevisions = [dto.payload.account_id, dto.payload.reserve_id];
@@ -972,6 +982,7 @@ function validateCommand(command) {
         !Object.hasOwn(dto.expected_entity_revisions, id))) {
     hold('Отсутствуют точные ревизии финансовых сущностей');
   }
+  if (dto.action.startsWith('budget.')) validateBudgetPayload(dto);
   if (Object.hasOwn(dto.payload, 'currency') && dto.payload.currency !== 'RUB') {
     hold('Поддерживаются только рубли');
   }
@@ -1061,6 +1072,170 @@ function validateCommand(command) {
     }
   }
   return dto;
+}
+
+// #35: use the same sealed outbox, exact profile revision and independent
+// receipt/journal checks as all other commands. Budget changes cannot post cash.
+function budgetCommandVersions(command) {
+  const {action, payload:p} = command;
+  if (['budget.create','budget.category.create'].includes(action)) return [];
+  if (['budget.amend','budget.archive'].includes(action)) return [p.rule_id];
+  if (action === 'budget.category.assign') return [p.transaction_id];
+  return [p.id];
+}
+function budgetMonth(value) {
+  return typeof value === 'string' && /^[0-9]{4}-(0[1-9]|1[0-2])$/.test(value) &&
+    !value.startsWith('0000');
+}
+function validateBudgetPayload(command) {
+  const p = command.payload;
+  for (const [key,value] of Object.entries(p)) {
+    if (['id','rule_id','replacement_id','transaction_id','category_id'].includes(key) &&
+        !(key === 'category_id' && value === null) &&
+        (typeof value !== 'string' || !UUID.test(value))) hold('Неверный бюджетный идентификатор');
+    if (['from_month','effective_from_month','archived_from_month','ends_before_month'].includes(key) &&
+        !(key === 'ends_before_month' && value === null) && !budgetMonth(value)) hold('Неверный месяц бюджета');
+  }
+  if (Object.hasOwn(p,'limit_minor') && !integer(p.limit_minor,0,1_000_000_000_000)) hold('Неверный лимит');
+  if (Object.hasOwn(p,'recurrence') && !['monthly','once'].includes(p.recurrence)) hold('Неверная периодичность');
+  if (p.ends_before_month != null && p.ends_before_month <= p.from_month) hold('Неверный период лимита');
+  if (Object.hasOwn(p,'name') && (typeof p.name !== 'string' || !p.name ||
+      p.name !== p.name.trim() || Array.from(p.name).length > 40 ||
+      /[\x00-\x1f\x7f]/.test(p.name))) hold('Неверное название категории');
+}
+function budgetActive(data, month) {
+  return month >= data.from_month && (data.recurrence === 'monthly' || month === data.from_month) &&
+    (data.ends_before_month === null || month < data.ends_before_month) &&
+    (data.archived_from_month === null || month < data.archived_from_month);
+}
+function budgetChange(entity, extra = {}) {
+  return {kind:'upsert',entity_id:entity.id,entity_revision:entity.entity_revision,
+    payload:{entity,...extra}};
+}
+function projectBudgetChanges(command, entities, profileId, assignmentId) {
+  decodeBudgetEntities(entities, profileId);
+  const {action, payload:p, expected_entity_revisions:versions} = command;
+  const find = (kind,id) => entities.find(x=>x.kind===kind && x.id===id);
+  const require = (kind,id) => {
+    const row = find(kind,id);
+    if (!row || versions[id] !== row.entity_revision) hold('Бюджетная запись изменилась');
+    return row;
+  };
+  const newId = id => {
+    if (entities.some(x=>x.id===id)) hold('Бюджетный идентификатор уже используется');
+  };
+  const category = id => {
+    if (id !== null && find('budget_category',id)?.data.archived !== false) hold('Категория недоступна');
+  };
+  const entity = (kind,id,data,entity_revision=1) => ({kind,id,data,entity_revision});
+  const update = (row,patch) => ({...row,entity_revision:row.entity_revision+1,data:{...row.data,...patch}});
+  let changes;
+  if (action === 'budget.category.create') {
+    newId(p.id);
+    changes = [budgetChange(entity('budget_category',p.id,{name:p.name,archived:false}))];
+  } else if (['budget.category.rename','budget.category.archive'].includes(action)) {
+    const row = require('budget_category',p.id);
+    if (row.data.archived) hold('Категория архивирована');
+    changes = [budgetChange(update(row,action.endsWith('rename')?{name:p.name}:{archived:true}))];
+  } else if (action === 'budget.create') {
+    newId(p.id); category(p.category_id);
+    changes = [budgetChange(entity('budget_rule',p.id,{category_id:p.category_id,limit_minor:p.limit_minor,
+      recurrence:p.recurrence,from_month:p.from_month,ends_before_month:p.ends_before_month??null,
+      archived_from_month:null}))];
+  } else if (['budget.amend','budget.archive'].includes(action)) {
+    const row = require('budget_rule',p.rule_id);
+    const month = action.endsWith('amend')?p.effective_from_month:p.archived_from_month;
+    if (!budgetActive(row.data,month)) hold('Лимит не действует в выбранном месяце');
+    if (action.endsWith('archive')) {
+      if (row.data.archived_from_month!==null) hold('Лимит уже архивирован');
+      changes = [budgetChange(update(row,{archived_from_month:month}))];
+    } else if (month === row.data.from_month) {
+      if (p.replacement_id !== row.id) hold('Неверный идентификатор изменения');
+      changes = [budgetChange(update(row,{limit_minor:p.limit_minor}))];
+    } else {
+      newId(p.replacement_id);
+      changes = [budgetChange(update(row,{ends_before_month:month})),
+        budgetChange(entity('budget_rule',p.replacement_id,{...row.data,from_month:month,limit_minor:p.limit_minor}))];
+    }
+  } else if (action === 'budget.category.assign') {
+    const tx = require('transaction',p.transaction_id), data = tx.data;
+    if (!['expense','payment'].includes(data.kind) || data.postings?.length!==1 ||
+        !integer(data.postings[0].signed_minor,-1_000_000_000_000,-1) ||
+        (data.kind==='payment'&&!plain(data.payment_link)) ||
+        entities.some(x=>x.kind==='transaction' && x.data.reversed_transaction_id===tx.id)) {
+      hold('Операция не является подтверждённым расходом');
+    }
+    category(p.category_id);
+    const previous = entities.find(x=>x.kind==='budget_assignment'&&x.data.transaction_id===tx.id);
+    if (!previous) newId(assignmentId);
+    const next = previous?update(previous,{category_id:p.category_id}):
+      entity('budget_assignment',assignmentId,{transaction_id:tx.id,category_id:p.category_id});
+    changes = [budgetChange(next,{previous_category_id:previous?.data.category_id??null})];
+  } else hold('Неизвестная бюджетная команда');
+  const changed = new Map(entities.map(x=>[x.id,x]));
+  for (const change of changes) changed.set(change.entity_id,change.payload.entity);
+  decodeBudgetEntities([...changed.values()],profileId);
+  return changes;
+}
+function verifyBudgetDependencies(command, entities, profileId) {
+  if (!command.action.startsWith('budget.')) return;
+  projectBudgetChanges(command,entities,profileId,command.client_mutation_id);
+}
+
+/** Verify the exact durable budget intent before removing any encrypted queue item. */
+export function verifyBudgetReceiptCandidate(command, changes, entities, previouslyApplied, profileId) {
+  if (!command.action.startsWith('budget.')) return;
+  const checked = validateCommand(command), p = checked.payload;
+  if (!Array.isArray(entities) || !Array.isArray(changes) || changes.length<1 || changes.length>2) hold('Неполная квитанция бюджета');
+  const shape = changes.map(c=>{
+    if (c.kind!=='upsert'||!consistentEvent(c)) hold('Бюджетная команда изменила финансовый журнал');
+    keysExactly(c.payload,['entity'],checked.action==='budget.category.assign'?['previous_category_id']:[]);
+    decodeBudgetEntity(c.payload.entity,profileId);
+    return budgetChange(c.payload.entity,Object.hasOwn(c.payload,'previous_category_id')?
+      {previous_category_id:c.payload.previous_category_id}:{});
+  });
+  if (!previouslyApplied) {
+    const expected = projectBudgetChanges(checked,entities,profileId,shape[0].entity_id);
+    if (canonical(shape)!==canonical(expected)) hold('Квитанция бюджета не соответствует исходной команде');
+    return;
+  }
+  // Historical receipt + independently authenticated exact revision may be
+  // reconciled after later edits. Never reinterpret later rows as the old image.
+  const first=shape[0].payload.entity, d=first.data;
+  const second=shape[1]?.payload.entity;
+  const one=(kind,id,revision)=>shape.length===1&&first.kind===kind&&first.id===id&&
+    first.entity_revision===revision;
+  let ok=false;
+  switch(checked.action) {
+    case 'budget.category.create':
+      ok=one('budget_category',p.id,1)&&d.name===p.name&&!d.archived; break;
+    case 'budget.category.rename':
+      ok=one('budget_category',p.id,checked.expected_entity_revisions[p.id]+1)&&d.name===p.name&&!d.archived; break;
+    case 'budget.category.archive':
+      ok=one('budget_category',p.id,checked.expected_entity_revisions[p.id]+1)&&d.archived===true; break;
+    case 'budget.create':
+      ok=one('budget_rule',p.id,1)&&d.category_id===p.category_id&&d.limit_minor===p.limit_minor&&
+        d.recurrence===p.recurrence&&d.from_month===p.from_month&&d.ends_before_month===(p.ends_before_month??null)&&
+        d.archived_from_month===null; break;
+    case 'budget.archive':
+      ok=one('budget_rule',p.rule_id,checked.expected_entity_revisions[p.rule_id]+1)&&
+        d.archived_from_month===p.archived_from_month; break;
+    case 'budget.amend':
+      if(p.replacement_id===p.rule_id) ok=one('budget_rule',p.rule_id,checked.expected_entity_revisions[p.rule_id]+1)&&
+        d.from_month===p.effective_from_month&&d.limit_minor===p.limit_minor;
+      else ok=shape.length===2&&first.kind==='budget_rule'&&first.id===p.rule_id&&
+        first.entity_revision===checked.expected_entity_revisions[p.rule_id]+1&&
+        d.ends_before_month===p.effective_from_month&&second.kind==='budget_rule'&&
+        second.id===p.replacement_id&&second.entity_revision===1&&second.data.from_month===p.effective_from_month&&
+        second.data.limit_minor===p.limit_minor&&second.data.category_id===d.category_id&&
+        second.data.recurrence===d.recurrence&&second.data.archived_from_month===d.archived_from_month;
+      break;
+    case 'budget.category.assign':
+      ok=shape.length===1&&first.kind==='budget_assignment'&&d.transaction_id===p.transaction_id&&
+        d.category_id===p.category_id&&Object.hasOwn(shape[0].payload,'previous_category_id')&&
+        (shape[0].payload.previous_category_id===null||UUID.test(shape[0].payload.previous_category_id)); break;
+  }
+  if(!ok) hold('Историческая квитанция бюджета не соответствует команде');
 }
 
 function verifyObligationReceipt(command, changes, entities, previouslyApplied) {
@@ -1392,6 +1567,7 @@ export async function enqueueEncryptedFinanceCommandCandidate({
   verifyCashMovementDependencies(pinned, cloud.entities);
   verifyReversalDependencies(pinned, cloud.entities);
   verifyTransferDependencies(pinned, cloud.entities);
+  verifyBudgetDependencies(pinned, cloud.entities, identity.profileId);
   if (current.outbox.length >= MAX_QUEUE) hold('Достигнут лимит офлайн-операций');
   const item = {
     scope, profileId: identity.profileId,
@@ -1547,6 +1723,7 @@ export async function persistAuthenticatedFinanceReceiptCandidate({
   verifyCashMovementReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   verifyReversalReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   verifyTransferReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
+  verifyBudgetReceiptCandidate(first.command, ack.changes, cloud.entities, previouslyApplied, identity.profileId);
   let checked;
   if (previouslyApplied) {
     // The authenticated cloud image already contains revision ack.revision.
@@ -1589,7 +1766,7 @@ export async function persistAuthenticatedFinanceReceiptCandidate({
     status: 'DURABLY_CONFIRMED',
     bundleEpoch: nextEpoch, serverRevision: ack.revision,
     pending: current.outbox.length - 1,
-    serverBalanceChanged: !previouslyApplied,
+    serverBalanceChanged: !previouslyApplied && !first.command.action.startsWith('budget.'),
     // The server already committed it; this method only reconciles locally.
     sentByThisFunction: false,
   });
@@ -1639,7 +1816,9 @@ export async function persistSnapshotVerifiedFinanceReceiptCandidate({
         'transaction.record', 'transaction.reverse', 'account.transfer', 'obligation.create',
         'settlement.payment.record', 'settlement.payment.void', 'loan.payment.record', 'loan.payment.void',
         'reserve.create', 'reserve.update', 'reserve.allocate', 'reserve.archive',
-        'reserve.skip', 'reserve.event.void', 'reserve.cycle.close', 'reserve.cycle.void']
+        'reserve.skip', 'reserve.event.void', 'reserve.cycle.close', 'reserve.cycle.void',
+        'budget.create','budget.amend','budget.archive','budget.category.create',
+        'budget.category.rename','budget.category.archive','budget.category.assign']
         .includes(head.command.action) ||
       !plain(base) || base.revision !== ack.revision - 1 ||
       head.command.base_revision !== base.revision || base.serverEtag !== head.ifMatch ||
@@ -1667,6 +1846,7 @@ export async function persistSnapshotVerifiedFinanceReceiptCandidate({
   verifyCashMovementReceipt(head.command, ack.changes, base.entities, false);
   verifyReversalReceipt(head.command, ack.changes, base.entities, false);
   verifyTransferReceipt(head.command, ack.changes, base.entities, false);
+  verifyBudgetReceiptCandidate(head.command, ack.changes, base.entities, false, identity.profileId);
   verifyObligationReceipt(head.command, ack.changes, base.entities, false);
   if (['settlement.payment.record', 'settlement.payment.void'].includes(head.command.action) &&
       ack.changes.length !== (Object.hasOwn(head.command.payload, 'reserve_id') ? 3 : 2)) {
@@ -2132,6 +2312,7 @@ export async function resolveStaleFinanceConflict({
     verifyCashMovementDependencies(replacement, cloud.entities);
     verifyReversalDependencies(replacement, cloud.entities);
     verifyTransferDependencies(replacement, cloud.entities);
+    verifyBudgetDependencies(replacement, cloud.entities, identity.profileId);
     const digest = await fingerprint(scope, identity.profileId, cloud.serverEtag, replacement);
     active(scope, session, identity);
     nextItem = {scope, profileId: identity.profileId, generation: identity.generation,

@@ -344,6 +344,113 @@ class AccountV2Candidate(Wire):
         return versions
 
 
+class BudgetCategoryWriteV2(Wire):
+    id: str = Field(pattern=UUID_PATTERN)
+    name: str = Field(min_length=1, max_length=40)
+
+    @field_validator("name")
+    @classmethod
+    def category_name(cls, value):
+        if value != value.strip() or any(ord(c) < 32 or ord(c) == 127 for c in value):
+            raise ValueError("Invalid category name")
+        return value
+
+
+class BudgetCategoryArchiveV2(Wire):
+    id: str = Field(pattern=UUID_PATTERN)
+
+
+_MONTH_PATTERN = r"^[0-9]{4}-(0[1-9]|1[0-2])$"
+
+
+class BudgetCreateV2(Wire):
+    id: str = Field(pattern=UUID_PATTERN)
+    category_id: str | None = Field(pattern=UUID_PATTERN)
+    limit_minor: StrictInt = Field(ge=0, le=MAX_MINOR)
+    recurrence: Literal["once", "monthly"]
+    from_month: str = Field(pattern=_MONTH_PATTERN)
+    ends_before_month: str | None = Field(default=None, pattern=_MONTH_PATTERN)
+
+    @model_validator(mode="after")
+    def month_bounds(self):
+        if self.from_month.startswith("0000") or (
+            self.ends_before_month is not None and self.ends_before_month <= self.from_month
+        ):
+            raise ValueError("Invalid budget interval")
+        return self
+
+
+class BudgetAmendV2(Wire):
+    rule_id: str = Field(pattern=UUID_PATTERN)
+    effective_from_month: str = Field(pattern=_MONTH_PATTERN)
+    replacement_id: str = Field(pattern=UUID_PATTERN)
+    limit_minor: StrictInt = Field(ge=0, le=MAX_MINOR)
+
+    @field_validator("effective_from_month")
+    @classmethod
+    def valid_month(cls, value):
+        if value.startswith("0000"):
+            raise ValueError("Invalid budget month")
+        return value
+
+
+class BudgetArchiveV2(Wire):
+    rule_id: str = Field(pattern=UUID_PATTERN)
+    archived_from_month: str = Field(pattern=_MONTH_PATTERN)
+
+    @field_validator("archived_from_month")
+    @classmethod
+    def valid_month(cls, value):
+        if value.startswith("0000"):
+            raise ValueError("Invalid budget month")
+        return value
+
+
+class BudgetAssignmentV2(Wire):
+    transaction_id: str = Field(pattern=UUID_PATTERN)
+    category_id: str | None = Field(pattern=UUID_PATTERN)
+
+
+_BUDGET_PAYLOADS = {
+    "budget.category.create": BudgetCategoryWriteV2,
+    "budget.category.rename": BudgetCategoryWriteV2,
+    "budget.category.archive": BudgetCategoryArchiveV2,
+    "budget.create": BudgetCreateV2,
+    "budget.amend": BudgetAmendV2,
+    "budget.archive": BudgetArchiveV2,
+    "budget.category.assign": BudgetAssignmentV2,
+}
+
+
+class BudgetV2Candidate(AccountV2Candidate):
+    action: Literal[
+        "budget.category.create", "budget.category.rename", "budget.category.archive",
+        "budget.create", "budget.amend", "budget.archive", "budget.category.assign",
+    ]
+
+
+def validate_v2_budget_candidate(
+    command: object, *, if_match: str, idempotency_key: str,
+) -> dict[str, Any]:
+    candidate = BudgetV2Candidate.model_validate(command)
+    if (not isinstance(if_match, str) or re.fullmatch(r'"[^"\r\n]{1,254}"', if_match) is None
+            or idempotency_key != candidate.client_mutation_id):
+        raise ValueError("Missing budget preconditions")
+    payload = _BUDGET_PAYLOADS[candidate.action].model_validate(candidate.payload)
+    action = candidate.action
+    if action in ("budget.create", "budget.category.create"):
+        expected = set()
+    elif action in ("budget.amend", "budget.archive"):
+        expected = {payload.rule_id}
+    elif action == "budget.category.assign":
+        expected = {payload.transaction_id}
+    else:
+        expected = {payload.id}
+    if set(candidate.expected_entity_revisions) != expected:
+        raise ValueError("Missing or extraneous budget entity revisions")
+    return {**candidate.model_dump(), "payload": payload.model_dump(exclude_unset=True)}
+
+
 def validate_v2_account_candidate(
     command: object, *, if_match: str, idempotency_key: str,
 ) -> dict[str, Any]:
@@ -390,7 +497,7 @@ def validate_v2_account_candidate(
         "payload": payload.model_dump(exclude_unset=True),
     }
 
-async def parse_v2_account_command(request: Request) -> dict[str, Any]:
+async def parse_v2_account_command(request: Request, *, allow_budget: bool = False) -> dict[str, Any]:
     """Validate an opt-in candidate with v1-equivalent bounded JSON transport.
 
     Revalidate the real FH session after the final streamed chunk and before
@@ -424,7 +531,12 @@ async def parse_v2_account_command(request: Request) -> dict[str, Any]:
             parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite")),
             object_pairs_hook=_reject_duplicate_json_keys,
         )
-        return validate_v2_account_candidate(
+        validator = (
+            validate_v2_budget_candidate if allow_budget and isinstance(raw, dict)
+            and isinstance(raw.get("action"), str) and raw["action"].startswith("budget.")
+            else validate_v2_account_candidate
+        )
+        return validator(
             raw,
             if_match=request.headers.get("if-match", ""),
             idempotency_key=request.headers.get("idempotency-key", ""),
