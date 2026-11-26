@@ -51,10 +51,12 @@ def upgrade() -> None:
         CREATE TABLE finance.budget_assignments (
           profile_id uuid NOT NULL REFERENCES finance.finance_profiles(id) ON DELETE RESTRICT,
           id uuid NOT NULL,
+          transaction_id uuid NOT NULL,
           category_id uuid,
           entity_revision bigint NOT NULL DEFAULT 1 CHECK (entity_revision>0),
           PRIMARY KEY (profile_id,id),
-          FOREIGN KEY (profile_id,id)
+          UNIQUE (profile_id,transaction_id),
+          FOREIGN KEY (profile_id,transaction_id)
             REFERENCES finance.ledger_transactions(profile_id,id) ON DELETE RESTRICT,
           FOREIGN KEY (profile_id,category_id)
             REFERENCES finance.budget_categories(profile_id,id) ON DELETE RESTRICT

@@ -7,7 +7,7 @@ the profile-owned catalogue before enabling this transport. No ledger write.
 from datetime import date
 import re
 from typing import Any, Mapping
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -80,7 +80,25 @@ def _existing(session: Session, p: UUID, kind: str, target: UUID):
 
 
 def _new(session: Session, p: UUID, kind: str, target: UUID) -> None:
-    if _row(session, p, kind, target) is not None:
+    if kind not in _TABLES:
+        raise _reject("Неизвестная бюджетная сущность")
+    # The currently deployed encrypted client indexes entities globally by UUID.
+    # Check all projected kinds under the same profile lock before accepting
+    # client-supplied IDs. Foreign profiles remain invisible under RLS.
+    if session.execute(text("""
+        SELECT 1 FROM (
+          SELECT id FROM accounts WHERE profile_id=:p AND id=:id
+          UNION ALL SELECT id FROM obligations WHERE profile_id=:p AND id=:id
+          UNION ALL SELECT id FROM loans WHERE profile_id=:p AND id=:id
+          UNION ALL SELECT id FROM reserves WHERE profile_id=:p AND id=:id
+          UNION ALL SELECT id FROM ledger_transactions WHERE profile_id=:p AND id=:id
+          UNION ALL SELECT id FROM settlements WHERE profile_id=:p AND id=:id
+          UNION ALL SELECT id FROM loan_payments WHERE profile_id=:p AND id=:id
+          UNION ALL SELECT id FROM budget_categories WHERE profile_id=:p AND id=:id
+          UNION ALL SELECT id FROM budget_rules WHERE profile_id=:p AND id=:id
+          UNION ALL SELECT id FROM budget_assignments WHERE profile_id=:p AND id=:id
+        ) AS existing LIMIT 1
+    """), {"p": p, "id": target}).first():
         raise _conflict("Идентификатор уже используется")
 
 
@@ -276,16 +294,24 @@ def apply_budget_candidate(session: Session, scope: VerifiedFinanceScope,
             raise _conflict("Операция не является подтверждённым расходом")
         _versions(versions, target, tx["entity_revision"])
         category = _category(session, p, payload["category_id"])
-        before = _row(session, p, "budget_assignment", target)
+        before = session.execute(text("""
+            SELECT id,category_id FROM budget_assignments
+            WHERE profile_id=:p AND transaction_id=:tx
+        """), {"p": p, "tx": target}).mappings().one_or_none()
+        # The existing encrypted delta cache indexes entities by UUID.
+        # Never reuse the original transaction UUID as the assignment ID.
+        assignment_id = before["id"] if before else uuid4()
+        if before is None:
+            _new(session, p, "budget_assignment", assignment_id)
         session.execute(text("""
-            INSERT INTO budget_assignments (profile_id,id,category_id)
-            VALUES (:p,:id,:category)
-            ON CONFLICT (profile_id,id) DO UPDATE SET
+            INSERT INTO budget_assignments (profile_id,id,transaction_id,category_id)
+            VALUES (:p,:id,:tx,:category)
+            ON CONFLICT (profile_id,transaction_id) DO UPDATE SET
                 category_id=EXCLUDED.category_id,
                 entity_revision=budget_assignments.entity_revision+1
-        """), {"p": p, "id": target, "category": category})
+        """), {"p": p, "id": assignment_id, "tx": target, "category": category})
         previous = before["category_id"] if before else None
-        return [_change(session, p, "budget_assignment", target,
+        return [_change(session, p, "budget_assignment", assignment_id,
                         previous_category_id=str(previous) if previous else None)]
 
     raise _reject("Неизвестная бюджетная команда")

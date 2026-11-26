@@ -410,19 +410,21 @@ class BudgetRule(ProfileEntity, Revisable, Base):
 
 
 class BudgetAssignment(ProfileEntity, Revisable, Base):
-    """The ID is the ledger transaction ID, not a second financial posting."""
+    """Independent sync identity; transaction_id uniquely references a posting."""
     __tablename__ = "budget_assignments"
     __table_args__ = (
         profile_fk(),
         ForeignKeyConstraint(
-            ["profile_id", "id"],
+            ["profile_id", "transaction_id"],
             ["finance.ledger_transactions.profile_id", "finance.ledger_transactions.id"],
             ondelete="RESTRICT",
         ),
+        UniqueConstraint("profile_id", "transaction_id"),
         ForeignKeyConstraint(
             ["profile_id", "category_id"],
             ["finance.budget_categories.profile_id", "finance.budget_categories.id"],
             ondelete="RESTRICT",
         ),
     )
+    transaction_id: Mapped[Uuid] = mapped_column(UUID(as_uuid=True))
     category_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))

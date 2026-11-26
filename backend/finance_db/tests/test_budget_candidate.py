@@ -10,7 +10,7 @@ from backend.finance_db.db import create_finance_engine, finance_transaction
 from backend.finance_db.ledger_service import (
     FinanceCommandError, ensure_verified_profile, submit_account_command,
 )
-from backend.finance_db.snapshot import get_finance_delta
+from backend.finance_db.snapshot import get_finance_delta, get_finance_snapshot
 
 
 @pytest.fixture
@@ -167,15 +167,21 @@ def test_reclassification_isolated_and_archived_category_preserves_history(scope
         with pytest.raises(FinanceCommandError):
             act(engine, a, "budget.category.assign", {"transaction_id": target, "category_id": category}, {target: 1})
     assigned = act(engine, a, "budget.category.assign", {"transaction_id": txid, "category_id": cat}, {txid: 1})
+    assignment_id = assigned.body["changes"][0]["entity_id"]
+    assert assignment_id != txid
     act(engine, a, "budget.category.archive", {"id": cat}, {cat: 1})
-    assert entities(engine, a, "budget_assignment")[txid]["data"]["category_id"] == cat
+    assert entities(engine, a, "budget_assignment")[assignment_id]["data"]["category_id"] == cat
     assert entities(engine, a, "budget_category")[cat]["data"]["archived"] is True
     with pytest.raises(FinanceCommandError):
         act(engine, a, "budget.category.assign", {"transaction_id": txid, "category_id": cat}, {txid: 1})
     cleared = act(engine, a, "budget.category.assign", {"transaction_id": txid, "category_id": None}, {txid: 1})
     assert assigned.body["changes"][0]["payload"]["previous_category_id"] is None
     assert cleared.body["changes"][0]["payload"]["previous_category_id"] == cat
-    assert entities(engine, a, "budget_assignment")[txid]["data"]["category_id"] is None
+    assert cleared.body["changes"][0]["entity_id"] == assignment_id
+    stored = entities(engine, a, "budget_assignment")[assignment_id]
+    assert stored["data"]["category_id"] is None
+    assert stored["data"]["transaction_id"] == txid
+    assert stored["entity_revision"] == 2
     with finance_transaction(engine, verified_user_id=a.user_id, profile_id=a.profile_id) as s:
         assert s.execute(text("SELECT * FROM ledger_postings ORDER BY transaction_id,account_id")).all() == before
         assert s.execute(text("SELECT count(*) FROM budget_assignments")).scalar_one() == 1
@@ -222,3 +228,32 @@ def test_rollback_after_split_collision_and_profile_identity_privileges(scoped):
             assert not s.execute(text(
                 "SELECT has_table_privilege(current_user,:table,'DELETE')"
             ), {"table": "finance." + table}).scalar_one()
+
+
+def test_budget_snapshot_pages_match_atomic_candidate_entities(scoped):
+    engine, a, _ = scoped
+    cat = create_category(engine, a)
+    act(engine, a, "budget.create", rule_payload(cat))
+    aid = create_account(engine, a)
+    txid = expense(engine, a, aid)
+    act(engine, a, "budget.category.assign", {"transaction_id": txid, "category_id": cat}, {txid: 1})
+    candidate = get_budget_candidate_snapshot(engine, scope=a)
+    before = get_finance_snapshot(engine, scope=a)
+    kinds = {"budget_category", "budget_rule", "budget_assignment"}
+    rows = [e for e in before.body["entities"] if e["kind"] in kinds]
+    assert rows == candidate.body["entities"]
+    assert before.etag == candidate.etag
+    cursor = None
+    paged = []
+    for _ in range(12):
+        result = get_finance_snapshot(engine, scope=a, cursor=cursor, limit_entities=1)
+        assert result.etag == before.etag
+        paged.extend(result.body["entities"])
+        cursor = result.body.get("next_cursor")
+        if cursor is None:
+            break
+    assert cursor is None
+    assert paged == before.body["entities"]
+    with pytest.raises(FinanceCommandError):
+        act(engine, a, "budget.category.create", {"id": txid, "name": "ID collision"})
+    assert get_finance_snapshot(engine, scope=a).etag == before.etag

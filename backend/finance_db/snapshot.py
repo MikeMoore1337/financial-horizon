@@ -48,6 +48,12 @@ _ENTITY_FIELDS = {
     "loan_payments": ("loan_payment", (
         "loan_id", "paid_on", "amount_minor", "strategy", "voided_at",
     )),
+    "budget_categories": ("budget_category", ("name", "archived")),
+    "budget_rules": ("budget_rule", (
+        "category_id", "limit_minor", "recurrence", "from_month",
+        "ends_before_month", "archived_from_month",
+    )),
+    "budget_assignments": ("budget_assignment", ("transaction_id", "category_id")),
 }
 
 
@@ -84,6 +90,19 @@ _ENTITY_QUERIES = {
         "SELECT id,entity_revision,loan_id,paid_on,amount_minor,strategy,voided_at "
         "FROM loan_payments WHERE profile_id=:p AND id>:after ORDER BY id LIMIT :n"
     ),
+    "budget_categories": text(
+        "SELECT id,entity_revision,name,archived "
+        "FROM budget_categories WHERE profile_id=:p AND id>:after ORDER BY id LIMIT :n"
+    ),
+    "budget_rules": text(
+        "SELECT id,entity_revision,category_id,limit_minor,recurrence,from_month,"
+        "ends_before_month,archived_from_month "
+        "FROM budget_rules WHERE profile_id=:p AND id>:after ORDER BY id LIMIT :n"
+    ),
+    "budget_assignments": text(
+        "SELECT id,entity_revision,transaction_id,category_id "
+        "FROM budget_assignments WHERE profile_id=:p AND id>:after ORDER BY id LIMIT :n"
+    ),
 }
 
 
@@ -113,7 +132,7 @@ def _locked_profile(session: Session, scope: VerifiedFinanceScope):
 
 _PAGE_MAX = 5_000
 _CURSOR_RE = re.compile(
-    r"^(0|[1-9][0-9]{0,18}):(account|obligation|loan|reserve|transaction|settlement|loan_payment):"
+    r"^(0|[1-9][0-9]{0,18}):(account|obligation|loan|reserve|transaction|settlement|loan_payment|budget_category|budget_rule|budget_assignment):"
     r"([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
 )
 _KIND_ORDER = ("account",) + tuple(value[0] for value in _ENTITY_FIELDS.values())
@@ -220,7 +239,12 @@ def get_finance_snapshot(
                     "id": str(row["id"]),
                     "entity_revision": int(row["entity_revision"]),
                     "kind": k,
-                    "data": {field: _as_json(row[field]) for field in cols},
+                    "data": {
+                        field: (row[field].isoformat()[:7]
+                                if k == "budget_rule" and isinstance(row[field], date)
+                                else _as_json(row[field]))
+                        for field in cols
+                    },
                 })
                 if full_page:
                     break

@@ -104,17 +104,13 @@ function bounds(rule: BudgetRule): [start: number, end: number] {
 }
 
 /** Check all months, including future months not requested by the UI. */
-export function assertBudgetRuleState(state: BudgetRuleState): void {
-  exactKeys(state, ['profileId', 'revision', 'rules', 'receipts'], 'budget rule state');
-  nonblank(state.profileId, 'financial profile');
-  revision(state.revision);
-  if (!Array.isArray(state.rules) || !Array.isArray(state.receipts)) {
-    throw new TypeError('Invalid budget collections');
-  }
+export function assertBudgetRules(rules: readonly BudgetRule[], profileId: string): void {
+  nonblank(profileId, 'financial profile');
+  if (!Array.isArray(rules)) throw new TypeError('Invalid budget rules');
   const ids = new Set<string>();
   const scopes = new Map<string, Array<[number, number]>>();
-  for (const rule of state.rules) {
-    checkRule(rule, state.profileId);
+  for (const rule of rules) {
+    checkRule(rule, profileId);
     if (ids.has(rule.id)) throw new Error('Duplicate budget rule ID');
     ids.add(rule.id);
     const key = rule.scope.kind === 'total' ? 'total' : `category:${rule.scope.categoryId}`;
@@ -131,6 +127,14 @@ export function assertBudgetRuleState(state: BudgetRuleState): void {
       if (periods[i]![0] < periods[i - 1]![1]) throw new Error('Overlapping budget rule intervals');
     }
   }
+}
+
+export function assertBudgetRuleState(state: BudgetRuleState): void {
+  exactKeys(state, ['profileId', 'revision', 'rules', 'receipts'], 'budget rule state');
+  revision(state.revision);
+  if (!Array.isArray(state.receipts)) throw new TypeError('Invalid budget collections');
+  assertBudgetRules(state.rules, state.profileId);
+  const ids = new Set(state.rules.map(rule => rule.id));
   // A pure state transition appends exactly one receipt per revision. Never
   // accept a snapshot with silently discarded receipts or forged revision gaps.
   if (state.revision !== state.receipts.length) throw new Error('Budget receipt sequence mismatch');
