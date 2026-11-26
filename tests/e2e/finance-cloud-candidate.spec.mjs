@@ -18,6 +18,9 @@ const urls = {
   cache: '/__e2e_cloud68_cache__.js',
   outbox: '/__e2e_cloud68_outbox__.js',
   dispatch: '/__e2e_cloud68_dispatch__.js',
+  budgetIndex: '/__e2e_cloud68_budget_index__.js',
+  budgetRules: '/__e2e_cloud68_budget_rules__.js',
+  budgetSnapshot: '/__e2e_cloud68_budget_snapshot__.js',
 };
 const sources = new Map([
   [urls.vault, transpile('../../src/security/local-vault.ts')],
@@ -25,7 +28,14 @@ const sources = new Map([
     .replaceAll("'./local-vault.ts'", JSON.stringify(urls.vault))],
   [urls.atomic, transpile('../../src/security/protected-atomic-candidate.ts')
     .replaceAll("'./local-vault.ts'", JSON.stringify(urls.vault))],
-  [urls.delta, load('../../src/cloud/verified-delta-candidate.mjs')],
+  [urls.budgetIndex, transpile('../../src/domain/budgets/index.ts')],
+  [urls.budgetRules, transpile('../../src/domain/budgets/rules.ts')
+    .replaceAll("'./index.ts'", JSON.stringify(urls.budgetIndex))],
+  [urls.budgetSnapshot, transpile('../../src/domain/budgets/server-snapshot.ts')
+    .replaceAll("'./index.ts'", JSON.stringify(urls.budgetIndex))
+    .replaceAll("'./rules.ts'", JSON.stringify(urls.budgetRules))],
+  [urls.delta, load('../../src/cloud/verified-delta-candidate.mjs')
+    .replaceAll("'../domain/budgets/server-snapshot.ts'", JSON.stringify(urls.budgetSnapshot))],
   [urls.cache, load('../../src/cloud/encrypted-cloud-cache-candidate.mjs')
     .replaceAll("'../security/protected-atomic-candidate.ts'", JSON.stringify(urls.atomic))
     .replaceAll("'./verified-delta-candidate.mjs'", JSON.stringify(urls.delta))],

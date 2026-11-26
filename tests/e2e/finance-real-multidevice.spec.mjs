@@ -15,6 +15,9 @@ const testModules = {
   pull: '/__e2e_138_pull__.js', dispatch: '/__e2e_138_dispatch__.js',
   controller: '/__e2e_138_controller__.js',
   hint: '/__e2e_138_hint__.js',
+  budgetIndex: '/__e2e_138_budget_index__.js',
+  budgetRules: '/__e2e_138_budget_rules__.js',
+  budgetSnapshot: '/__e2e_138_budget_snapshot__.js',
 };
 const source = path => readFileSync(new URL(path, import.meta.url), 'utf8');
 const compile = path => ts.transpileModule(source(path), {
@@ -27,7 +30,14 @@ const testModuleSources = new Map([
     .replaceAll("'./local-vault.ts'", JSON.stringify(testModules.vault))],
   [testModules.atomic, compile('../../src/security/protected-atomic-candidate.ts')
     .replaceAll("'./local-vault.ts'", JSON.stringify(testModules.vault))],
-  [testModules.delta, source('../../src/cloud/verified-delta-candidate.mjs')],
+  [testModules.budgetIndex, compile('../../src/domain/budgets/index.ts')],
+  [testModules.budgetRules, compile('../../src/domain/budgets/rules.ts')
+    .replaceAll("'./index.ts'", JSON.stringify(testModules.budgetIndex))],
+  [testModules.budgetSnapshot, compile('../../src/domain/budgets/server-snapshot.ts')
+    .replaceAll("'./index.ts'", JSON.stringify(testModules.budgetIndex))
+    .replaceAll("'./rules.ts'", JSON.stringify(testModules.budgetRules))],
+  [testModules.delta, source('../../src/cloud/verified-delta-candidate.mjs')
+    .replaceAll("'../domain/budgets/server-snapshot.ts'", JSON.stringify(testModules.budgetSnapshot))],
   [testModules.cache, source('../../src/cloud/encrypted-cloud-cache-candidate.mjs')
     .replaceAll("'../security/protected-atomic-candidate.ts'", JSON.stringify(testModules.atomic))
     .replaceAll("'./verified-delta-candidate.mjs'", JSON.stringify(testModules.delta))],
