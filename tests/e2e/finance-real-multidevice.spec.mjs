@@ -2644,18 +2644,23 @@ test('#35 encrypted offline budget command survives browser reload and reconcile
   },{actor,phrase,categoryId});
   expect(result).toBe('DURABLY_CONFIRMED');
   const before=await state(context);
+  // A fresh document and controller have no previous in-memory capability.
+  await page.evaluate(()=>globalThis.__fh35Controller.close());
+  await page.reload();
+  await page.evaluate(()=>import('/__e2e_138_controller__.js'));
   await context.setOffline(true);
-  const pending=await page.evaluate(async ({categoryId,ruleId})=>{
-    const controller=globalThis.__fh35Controller;
-    controller.markOffline();
-    const s=await controller.read();
+  const pending=await page.evaluate(async ({actor,phrase,categoryId,ruleId})=>{
+    const {FinanceSyncController}=await import('/__e2e_138_controller__.js');
+    const controller=new FinanceSyncController({lastVerifiedActorUserId:actor,origin:location.origin});
+    const s=await controller.unlockOffline({passphrase:phrase});
+    if(s.canBudget!==true||s.onlineVerified!==false)throw Error('Offline capability was not recovered from sealed state');
     const queued=await controller.enqueue({schema_version:2,client_mutation_id:crypto.randomUUID(),
       base_revision:s.cloud.revision,action:'budget.create',expected_entity_revisions:{},
       payload:{id:ruleId,category_id:categoryId,limit_minor:1_000_000,recurrence:'monthly',from_month:'2026-11'}});
     const after=await controller.read();
     controller.close();
     return {status:queued.status,pending:after.outbox.length,confirmed:after.cloud.entities.some(x=>x.id===ruleId)};
-  },{categoryId,ruleId});
+  },{actor,phrase,categoryId,ruleId});
   expect(pending).toEqual({status:'QUEUED_ENCRYPTED',pending:1,confirmed:false});
   await context.setOffline(false);
   expect((await state(context)).revision).toBe(before.revision);
@@ -2750,4 +2755,68 @@ test('#35 budget screen uses real encrypted account, canonical chevrons and resp
     expect((await state(context)).body.entities.filter(e=>e.kind==='budget_rule')).toHaveLength(2);
     expect(errors).toEqual([]);
   } finally { await context.close(); }
+});
+
+test('#35 guest budgets remain local and survive native encrypted backup and restore', async ({browser}) => {
+  test.setTimeout(120000);
+  if(process.env.FH_E2E_REAL_FINANCE!=='yes')test.skip();
+  const context=await browser.newContext({baseURL:ORIGIN,serviceWorkers:'block'});
+  try{
+    const page=await context.newPage(),requests=[];
+    page.on('request',r=>{if(r.url().includes('/api/finance/'))requests.push(r.url());});
+    await page.goto('/?guest=1&fh_budgets_e2e=1');
+    await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
+    await view(page,'budgets');
+    await expect(page.locator('.fh-budgets h1')).toHaveText('Бюджеты');
+    await page.getByRole('button',{name:'Лимит',exact:true}).click();
+    await page.getByLabel('Область лимита').selectOption('legacy:покупки');
+    await page.getByLabel('Лимит, ₽').fill('10000');
+    await page.getByRole('button',{name:'Сохранить лимит'}).click();
+    await expect(page.locator('.fh-budget-usage')).toContainText(/10\s?000/);
+    await view(page,'settings');
+    await page.locator('[data-settings-card="bank-statement-import"] [data-view="bank-import"]').click();
+    await page.getByRole('textbox',{name:'Название'}).fill('Основной');
+    await page.getByRole('textbox',{name:/Начальный остаток/}).fill('20000');
+    await page.getByRole('button',{name:'Добавить счёт'}).click();
+    await expect.poll(async()=> (await scopedState(page,'state'))?.bankStatements?.accounts?.length).toBe(1);
+    const day=new Date(),date='01.'+String(day.getMonth()+1).padStart(2,'0')+'.'+day.getFullYear();
+    const csv='Дата;Сумма;Описание;Счёт;Тип;ID;Категория\n'+date+';-1500,00;Синтетическая покупка;Основной;;FH35-1;Покупки\n';
+    await page.locator('.fh-bank-file input[type="file"]').setInputFiles({name:'fh35.csv',mimeType:'text/csv',buffer:Buffer.from(csv)});
+    await page.getByRole('button',{name:/Подтвердить импорт 1 операц/}).click();
+    await expect.poll(async()=> (await scopedState(page,'state'))?.bankStatements?.operations?.length).toBe(1);
+    await view(page,'budgets');
+    // Explicit reclassification is also exercised and does not rewrite bank data.
+    await page.locator('.fh-budgets summary').filter({hasText:'Категории подтверждённых расходов'}).click();
+    const stored=await scopedState(page,'state'),tx=stored.bankStatements.operations[0].sourceKey;
+    await page.getByLabel('Расход',{exact:true}).selectOption(tx);
+    await page.getByLabel('Категория расхода',{exact:true}).selectOption('legacy:покупки');
+    await page.getByRole('button',{name:'Сохранить категорию'}).click();
+    await expect(page.locator('.fh-budget-usage .fh-budget-amount strong')).toHaveText(/8\s?500/);
+    expect((await scopedState(page,'state')).bankStatements).toEqual(stored.bankStatements);
+    const original=await scopedState(page,'state');
+    await view(page,'settings');
+    await page.locator('[data-action="backup"]').click();
+    await page.locator('#password-form [name="password"]').fill('synthetic FH35 guest backup phrase');
+    const transfer=page.waitForEvent('download');
+    await page.locator('#password-form button[type="submit"]').click();
+    const download=await transfer;
+    await page.locator('[data-action="clear"]').click();
+    await page.locator('#confirm-yes').click();
+    await expect.poll(async()=> (await scopedState(page,'state'))?.guestBudgets).toBeUndefined();
+    await page.locator('[data-action="restore"]').click();
+    await page.locator('#restore-file').setInputFiles(await download.path());
+    await expect(page.locator('#password-dialog')).toBeVisible();
+    await page.locator('#password-form [name="password"]').fill('synthetic FH35 guest backup phrase');
+    await page.locator('#password-form button[type="submit"]').click();
+    await expect(page.locator('#confirmation-dialog')).toBeVisible();
+    await page.locator('#confirm-yes').click();
+    await expect.poll(async()=> (await scopedState(page,'state'))?.guestBudgets).toEqual(original.guestBudgets);
+    await page.reload();
+    await view(page,'budgets');
+    await expect(page.locator('.fh-budget-usage .fh-budget-amount strong')).toHaveText(/8\s?500/);
+    await page.locator('#theme-toggle').click();
+    await expect(page.locator('.fh-budget-usage .fh-budget-amount strong')).toHaveText(/8\s?500/);
+    expect((await scopedState(page,'state')).bankStatements).toEqual(original.bankStatements);
+    expect(requests).toEqual([]);
+  }finally{await context.close();}
 });

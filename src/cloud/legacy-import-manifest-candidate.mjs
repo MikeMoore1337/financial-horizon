@@ -109,6 +109,11 @@ async function fingerprint(serialized) {
   return [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 function recordIndex(snapshot, allowBank = false) {
+  if (snapshot.guestBudgets !== undefined &&
+      (snapshot.guestBudgets.rules.length || snapshot.guestBudgets.assignments.length ||
+       snapshot.guestBudgets.categories.length)) {
+    fail('Локальные бюджеты остаются в исходной копии: автоматический перенос в аккаунт пока недоступен');
+  }
   if (snapshot.bankStatements !== undefined) {
     const bank = snapshot.bankStatements;
     if (Object.keys(bank).some(key => !['version', 'accounts', 'operations', 'batches'].includes(key)) ||

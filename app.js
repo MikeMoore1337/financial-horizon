@@ -7,6 +7,7 @@ import {previewXlsxReserves} from './src/domain/reserves/xlsx-preview.ts';
 import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
 import {createScreenRoot,createOfflineSyncRoot} from './src/react/ScreenRoot.tsx';
+import {applyGuestBudgetCommand} from './src/domain/budgets/guest.mjs';
 import {readOfflineActor,forgetOfflineActor} from './src/cloud/offline-access-hint.mjs';
 import {projectOverviewCategories,projectOverviewLoan} from './src/react/OverviewModels.tsx';
 import {projectObligationRows} from './src/react/ObligationsModels.tsx';
@@ -99,7 +100,7 @@ function startOfflineSync(actor){
   const element=$(selector);if(element)element.style.display='none';
  }
  const main=$('#main');main.replaceChildren();
- screenRoot=createOfflineSyncRoot(main,actor,()=>window.location.replace('./account.html'));
+ screenRoot=createOfflineSyncRoot(main,actor,()=>window.location.replace('./account.html'),true,undefined,financeBudgetsEnabled);
 }
 function openBackgroundSync(budgetMode=false){
  if(!financeSyncEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId)return;
@@ -171,7 +172,7 @@ function syncStorageContext(){
  }
 }
 function navigation(view){
- if(view==='budgets'&&(!financeBudgetsEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId))return;
+ if(view==='budgets'&&(!financeBudgetsEnabled||(!guestMode&&(!activeUserId||emailSession.userId!==activeUserId))))return;
  if(view==='accounts-connected'&&(!financeAccountsEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId))return;
  if(view==='bank-import'&&!guestMode&&(!bankImportEnabled||!activeUserId||emailSession.userId!==activeUserId))return;
  hideBackgroundSync();
@@ -183,7 +184,17 @@ function render(){
  if(!state)return;
  syncStorageContext();
  const main=$('#main');
- if(ui.view==='budgets'){openBackgroundSync(true);return;}
+ if(ui.view==='budgets'){
+  if(!guestMode){openBackgroundSync(true);return;}
+  if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main,getAuthAccess);}
+  const revision=state.revision;
+  screenRoot.render({view:'budgets',props:{mode:'guest',guestState:state,writable:true,pending:false,
+   onCommand:async(action,payload,versions)=>{
+    if(!guestMode||busy)throw Error('Локальная база недоступна');
+    await mutate(s=>applyGuestBudgetCommand(s,action,payload,versions,revision),'Бюджет сохранён',revision);
+   }}});
+  syncAccountControls();return;
+ }
  if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'||ui.view==='settings'||ui.view==='accounts-connected'||ui.view==='bank-import'){
   if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main,getAuthAccess);}
   if(ui.view==='accounts-connected'){
@@ -310,7 +321,8 @@ function syncAccountControls(){
   signedIn,busy:Boolean(emailSession.busy),
   serverAccounts:lastStorageContext===true,
   localSnapshot:lastSyncContext,
-  budgetsEnabled:financeBudgetsEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId,
+  budgetsEnabled:financeBudgetsEnabled&&(guestMode||Boolean(activeUserId)&&emailSession.userId===activeUserId),
+  hideGlobalAdd:ui.view==='budgets',
  });
 }
 async function refreshEmailSession(){

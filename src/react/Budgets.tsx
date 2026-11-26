@@ -1,5 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { getMonthEvents } from '../../finance.js';
+import { projectGuestBudget } from '../domain/budgets/guest.mjs';
+import { projectServerBudgetLoans } from '../domain/budgets/server-loan-plan.mjs';
+import type { FinanceStateV2 } from '../types/finance.ts';
 import type { AccountServerView } from '../domain/accounts/server-snapshot.ts';
 import {
   calculateBudgetReport,
@@ -7,13 +10,13 @@ import {
   type BudgetUsage,
 } from '../domain/budgets/index.ts';
 import { toAuthoritativeBudgetOperations } from '../domain/budgets/ledger-adapter.ts';
-import type { ServerBudgetRule } from '../domain/budgets/server-snapshot.ts';
+import type { ServerBudgetRule, ServerBudgetCategory } from '../domain/budgets/server-snapshot.ts';
 import { Icon } from './Calendar';
 import { formatRubMinor, parseRubMinor } from './accounts-view-model';
 import { projectServerPaymentPlanner } from './reserves-finance-gateway';
 import './budgets.css';
 
-type Action =
+export type BudgetAction =
   | 'budget.create'
   | 'budget.amend'
   | 'budget.archive'
@@ -22,17 +25,20 @@ type Action =
   | 'budget.category.archive'
   | 'budget.category.assign';
 
-interface BudgetProps {
-  view: AccountServerView;
-  entities: readonly unknown[];
+interface BudgetControls {
   writable: boolean;
   pending: boolean;
   onCommand: (
-    action: Action,
+    action: BudgetAction,
     payload: Record<string, unknown>,
     versions: Record<string, number>,
   ) => Promise<void>;
 }
+type BudgetProps = BudgetControls &
+  (
+    | { mode?: 'account'; view: AccountServerView; entities: readonly unknown[] }
+    | { mode: 'guest'; guestState: FinanceStateV2 }
+  );
 
 function localMonth() {
   const d = new Date();
@@ -113,7 +119,9 @@ function Usage({
   );
 }
 
-export function Budgets({ view, entities, writable, pending, onCommand }: BudgetProps) {
+export function Budgets(props: BudgetProps) {
+  const { writable, pending, onCommand } = props;
+  const guest = props.mode === 'guest';
   const [month, setMonth] = useState(localMonth);
   const [history, setHistory] = useState(false);
   const [editor, setEditor] = useState<'create' | string | null>(null);
@@ -128,43 +136,42 @@ export function Budgets({ view, entities, writable, pending, onCommand }: Budget
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const disabled = !writable || pending || saving;
-  const categories = view.budget.categories;
-  const active = categories.filter((c) => !c.archived);
-  const categoryLabel = (id: string) =>
-    categories.find((c) => c.id === id)?.name ?? 'Недоступная категория';
-  const ruleLabel = (r: ServerBudgetRule) =>
-    r.scope.kind === 'total' ? 'Общий бюджет' : categoryLabel(r.scope.categoryId);
-
-  // A separate read-only planner projection never posts planned obligations.
-  // Unmatched legacy category names remain uncategorized in the plan only.
-  let report,
+  // Each mode supplies only its own validated source. The guest view never
+  // builds a synthetic server ledger or reads account cookies.
+  let report: ReturnType<typeof calculateBudgetReport>,
     expenseOperations: BudgetOperation[],
+    categories: ServerBudgetCategory[],
+    rules: ServerBudgetRule[],
+    transactions: Array<{ id: string; entityRevision: number; note: string | null }>,
     loanPlanMissing = false;
   try {
-    const planner = projectServerPaymentPlanner(entities);
-    loanPlanMissing = planner.serverLoanCount > 0;
-    const planned: BudgetOperation[] = getMonthEvents(planner, month)
-      .filter((event) => event.kind === 'expense' && event.plannedCents > 0)
-      .map((event) => ({
-        id: 'plan:' + event.source + ':' + event.id,
-        profileId: view.ledger.profileId,
-        occurredOn: event.date,
-        kind: 'expense' as const,
-        status: 'planned' as const,
-        signedMinor: -event.plannedCents,
-        categoryId: categories.find((c) => c.name === event.category)?.id ?? null,
-      }));
-    const operations = toAuthoritativeBudgetOperations(
-      view.ledger,
-      view.budget.assignments,
-      planned,
-    );
-    report = calculateBudgetReport({
-      profileId: view.ledger.profileId,
-      month,
-      rules: view.budget.rules,
-      operations,
-    });
+    let profileId: string, operations: BudgetOperation[];
+    if (props.mode === 'guest') {
+      const model = projectGuestBudget(props.guestState, month);
+      ({ profileId, categories, rules, transactions, operations, loanPlanMissing } = model);
+    } else {
+      const { view, entities } = props;
+      const planner = projectServerPaymentPlanner(entities);
+      const loanPlan = projectServerBudgetLoans(entities, month);
+      loanPlanMissing = loanPlan.missing;
+      categories = view.budget.categories;
+      rules = view.budget.rules;
+      profileId = view.ledger.profileId;
+      transactions = view.ledger.transactions;
+      const planned: BudgetOperation[] = [...getMonthEvents(planner, month), ...loanPlan.events]
+        .filter((event) => event.kind === 'expense' && event.plannedCents > 0)
+        .map((event) => ({
+          id: 'plan:' + event.source + ':' + event.id,
+          profileId,
+          occurredOn: event.date,
+          kind: 'expense' as const,
+          status: 'planned' as const,
+          signedMinor: -event.plannedCents,
+          categoryId: categories.find((c) => c.name === event.category)?.id ?? null,
+        }));
+      operations = toAuthoritativeBudgetOperations(view.ledger, view.budget.assignments, planned);
+    }
+    report = calculateBudgetReport({ profileId, month, rules, operations });
     const reversed = new Set(
       operations.filter((o) => o.kind === 'reversal').map((o) => o.reversedTransactionId),
     );
@@ -180,13 +187,19 @@ export function Budgets({ view, entities, writable, pending, onCommand }: Budget
     return (
       <section className="fh-budgets">
         <h1>Бюджеты</h1>
-        <p role="alert">Не удалось проверить финансовый снимок. Обновите данные с сервера.</p>
+        <p role="alert">Не удалось проверить финансовый снимок. Обновите данные.</p>
       </section>
     );
   }
 
+  const active = categories.filter((c) => !c.archived);
+  const categoryLabel = (id: string) =>
+    categories.find((c) => c.id === id)?.name ?? 'Недоступная категория';
+  const ruleLabel = (r: ServerBudgetRule) =>
+    r.scope.kind === 'total' ? 'Общий бюджет' : categoryLabel(r.scope.categoryId);
+
   async function execute(
-    action: Action,
+    action: BudgetAction,
     payload: Record<string, unknown>,
     versions: Record<string, number> = {},
   ) {
@@ -197,7 +210,9 @@ export function Budgets({ view, entities, writable, pending, onCommand }: Budget
     try {
       await onCommand(action, payload, versions);
       setMessage(
-        'Операция сохранена в зашифрованной очереди. Итоги изменятся после подтверждения сервера.',
+        guest
+          ? 'Бюджет сохранён на этом устройстве.'
+          : 'Операция сохранена в зашифрованной очереди. Итоги изменятся после подтверждения сервера.',
       );
       return true;
     } catch (err) {
@@ -252,7 +267,7 @@ export function Budgets({ view, entities, writable, pending, onCommand }: Budget
         setEditor(null);
       return;
     }
-    const rule = view.budget.rules.find((r) => r.id === editor);
+    const rule = rules.find((r) => r.id === editor);
     if (!rule) {
       setError('Правило изменилось. Откройте его снова.');
       return;
@@ -281,7 +296,7 @@ export function Budgets({ view, entities, writable, pending, onCommand }: Budget
     );
   }
   function usageCard(usage: BudgetUsage, title: string) {
-    const rule = view.budget.rules.find((r) => r.id === usage.ruleId);
+    const rule = rules.find((r) => r.id === usage.ruleId);
     if (!rule) return null;
     return (
       <Usage
@@ -300,7 +315,11 @@ export function Budgets({ view, entities, writable, pending, onCommand }: Budget
       <header className="page-header">
         <div>
           <h1 id="fh-budget-title">Бюджеты</h1>
-          <p>Лимиты и подтверждённые расходы аккаунта</p>
+          <p>
+            {guest
+              ? 'Локальные лимиты и подтверждённые банковские расходы'
+              : 'Лимиты и подтверждённые расходы аккаунта'}
+          </p>
         </div>
         <div className="header-tools">
           <button
@@ -335,6 +354,12 @@ export function Budgets({ view, entities, writable, pending, onCommand }: Budget
           <Icon name="chevron" />
         </button>
       </div>
+      {guest && (
+        <p className="small-hint">
+          Факт берётся из импортированных банковских списаний. Отметки оплаты без проводки входят
+          только в план, не считаются повторным расходом. Данные остаются в браузере.
+        </p>
+      )}
       {!writable && (
         <p className="small-hint">Изменения недоступны до подтверждения доступа к бюджетам.</p>
       )}
@@ -416,8 +441,8 @@ export function Budgets({ view, entities, writable, pending, onCommand }: Budget
       </div>
       {loanPlanMissing && (
         <p className="small-hint">
-          План включает обязательства; плановые платежи по кредитам пока не рассчитаны.
-          Подтверждённые списания учтены по журналу.
+          План по отдельным кредитам недоступен: не подтверждены версия расчёта или порядок
+          платежей. Подтверждённые списания учтены по журналу.
         </p>
       )}
       <h2>Лимиты по категориям</h2>
@@ -436,9 +461,9 @@ export function Budgets({ view, entities, writable, pending, onCommand }: Budget
       {history && (
         <section className="surface">
           <h2>История правил</h2>
-          {view.budget.rules.length ? (
+          {rules.length ? (
             <ul className="fh-budget-history">
-              {view.budget.rules.map((r) => (
+              {rules.map((r) => (
                 <li key={r.id}>
                   <strong>{ruleLabel(r)}</strong> · {formatRubMinor(r.limitMinor)} · {r.fromMonth} ·{' '}
                   {r.recurrence === 'once' ? 'Один месяц' : 'Каждый месяц'}
@@ -454,7 +479,11 @@ export function Budgets({ view, entities, writable, pending, onCommand }: Budget
       )}
       <details className="surface">
         <summary>Категории бюджета</summary>
-        <p className="small-hint">Категории аккаунта не меняют локальные записи и проводки.</p>
+        <p className="small-hint">
+          {guest
+            ? 'Названия исходных категорий сохраняются для истории; бюджетные изменения не переписывают записи и проводки.'
+            : 'Категории аккаунта не меняют локальные записи и проводки.'}
+        </p>
         <form
           className="fh-budget-form"
           onSubmit={async (e) => {
@@ -550,7 +579,7 @@ export function Budgets({ view, entities, writable, pending, onCommand }: Budget
           className="fh-budget-form"
           onSubmit={async (e) => {
             e.preventDefault();
-            const tx = view.ledger.transactions.find((t) => t.id === expenseId);
+            const tx = transactions.find((t) => t.id === expenseId);
             if (!tx || !expenseOperations.some((o) => o.id === tx.id)) {
               setError('Расход изменился.');
               return;
@@ -583,7 +612,7 @@ export function Budgets({ view, entities, writable, pending, onCommand }: Budget
               {expenseOperations.map((o) => (
                 <option key={o.id} value={o.id}>
                   {o.occurredOn} · {formatRubMinor(-o.signedMinor)} ·{' '}
-                  {view.ledger.transactions.find((t) => t.id === o.id)?.note ||
+                  {transactions.find((t) => t.id === o.id)?.note ||
                     (o.kind === 'payment' ? 'Оплата' : 'Расход')}{' '}
                   · {o.categoryId ? categoryLabel(o.categoryId) : 'Без категории'}
                 </option>

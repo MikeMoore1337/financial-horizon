@@ -12,6 +12,8 @@ import { AuthBoundary, type AuthAccess } from './AuthBoundary';
 import { Accounts, type AccountsProps } from './Accounts';
 import { ConnectedAccounts, type ConnectedAccountsProps } from './ConnectedAccounts';
 import { OfflineSyncAccounts } from './OfflineSyncAccounts';
+import { Budgets } from './Budgets';
+import type { ComponentProps } from 'react';
 import { BankImport, type BankImportProps } from '../importers/bank-statements/BankImport';
 
 export type ScreenView =
@@ -22,7 +24,8 @@ export type ScreenView =
   | { view: 'settings'; props: SettingsProps }
   | { view: 'accounts'; props: AccountsProps }
   | { view: 'accounts-connected'; props: ConnectedAccountsProps }
-  | { view: 'bank-import'; props: BankImportProps };
+  | { view: 'bank-import'; props: BankImportProps }
+  | { view: 'budgets'; props: Extract<ComponentProps<typeof Budgets>, { mode: 'guest' }> };
 
 /** Separate local-key entry: never mounts the legacy account or guest ledger. */
 export function createOfflineSyncRoot(
@@ -31,6 +34,7 @@ export function createOfflineSyncRoot(
   onBack: () => void,
   offlineOnly = true,
   onSessionRevoked?: () => void,
+  allowOfflineBudgets = false,
 ) {
   const root = createRoot(host);
   const render = (budgetMode = false) =>
@@ -41,6 +45,7 @@ export function createOfflineSyncRoot(
             actor={actor}
             offlineOnly={offlineOnly}
             budgetMode={budgetMode}
+            allowOfflineBudgets={allowOfflineBudgets}
             onBack={onBack}
             onSessionRevoked={onSessionRevoked}
           />
@@ -79,6 +84,8 @@ export function createScreenRoot(
                   key={screen.props.verifiedActorUserId ?? 'locked'}
                   {...screen.props}
                 />
+              ) : screen.view === 'budgets' ? (
+                <Budgets {...screen.props} />
               ) : screen.view === 'bank-import' ? (
                 <BankImport
                   key={screen.props.verifiedActorUserId ?? screen.props.mode}

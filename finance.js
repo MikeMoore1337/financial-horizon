@@ -375,6 +375,64 @@ export function choosePrimaryPaymentMethod(state,entryId,methodId){
  entry.paymentMethodsVersion=PAYMENT_METHODS_VERSION;
 }
 
+// #35 optional local-only budget catalogue. Keep this validator standalone:
+// historical PWA shells load finance.js directly, including backup restore.
+export function validateGuestBudgets(value, bank) {
+ const invalid=()=>{throw Error('Повреждены локальные бюджеты');};
+ const exact=(row,keys)=>plain(row)&&Object.keys(row).length===keys.length&&keys.every(k=>Object.hasOwn(row,k));
+ const month=v=>typeof v==='string'&&/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(v)&&!v.startsWith('0000');
+ const name=v=>typeof v==='string'&&v===v.trim()&&v.length>0&&v.length<=40&&!/[\x00-\x1f\x7f]/.test(v);
+ const key=v=>v.toLocaleLowerCase('ru-RU');
+ const validId=v=>typeof v==='string'&&(UUID.test(v)||(v.startsWith('legacy:')&&name(v.slice(7))&&key(v.slice(7))===v.slice(7)));
+ if(!exact(value,['version','categories','rules','assignments'])||value.version!==1||
+    !Array.isArray(value.categories)||value.categories.length>500||
+    !Array.isArray(value.rules)||value.rules.length>5000||
+    !Array.isArray(value.assignments)||value.assignments.length>MAX_OPERATIONS)invalid();
+ const ids=new Set(),aliases=new Set();
+ for(const c of value.categories){
+  if(!exact(c,['id','name','aliases','archived','entityRevision'])||!validId(c.id)||ids.has(c.id)||
+     !name(c.name)||typeof c.archived!=='boolean'||!integer(c.entityRevision,1,Number.MAX_SAFE_INTEGER)||
+     !Array.isArray(c.aliases)||c.aliases.length<1||c.aliases.length>100||
+     !c.aliases.includes(key(c.name)))invalid();
+  ids.add(c.id);
+  for(const a of c.aliases){
+   if(!name(a)||a!==key(a)||aliases.has(a))invalid();
+   aliases.add(a);
+  }
+ }
+ const rules=new Set(),scopes=new Map();
+ for(const r of value.rules){
+  if(!exact(r,['id','categoryId','limitMinor','recurrence','fromMonth','endsBeforeMonth','archivedFromMonth','entityRevision'])||
+     typeof r.id!=='string'||!UUID.test(r.id)||rules.has(r.id)||ids.has(r.id)||
+     (r.categoryId!==null&&!ids.has(r.categoryId))||!integer(r.limitMinor,0,MAX_MINOR)||
+     !['once','monthly'].includes(r.recurrence)||!month(r.fromMonth)||
+     (r.endsBeforeMonth!==null&&(!month(r.endsBeforeMonth)||r.endsBeforeMonth<=r.fromMonth))||
+     (r.archivedFromMonth!==null&&(!month(r.archivedFromMonth)||r.archivedFromMonth<r.fromMonth))||
+     !integer(r.entityRevision,1,Number.MAX_SAFE_INTEGER))invalid();
+  rules.add(r.id);
+  const start=monthIndex(r.fromMonth);
+  let end=r.recurrence==='once'?start+1:Infinity;
+  if(r.endsBeforeMonth!==null)end=Math.min(end,monthIndex(r.endsBeforeMonth));
+  if(r.archivedFromMonth!==null)end=Math.min(end,monthIndex(r.archivedFromMonth));
+  if(end>start){
+   const intervals=scopes.get(r.categoryId)||[];
+   intervals.push([start,end]);scopes.set(r.categoryId,intervals);
+  }
+ }
+ for(const intervals of scopes.values()){
+  intervals.sort((a,b)=>a[0]-b[0]);
+  for(let i=1;i<intervals.length;i++)if(intervals[i][0]<intervals[i-1][1])invalid();
+ }
+ const actual=new Set((bank?.operations||[]).filter(o=>o.kind==='expense').map(o=>o.sourceKey));
+ const assigned=new Set();
+ for(const a of value.assignments){
+  if(!exact(a,['transactionId','categoryId'])||!actual.has(a.transactionId)||assigned.has(a.transactionId)||
+     (a.categoryId!==null&&!ids.has(a.categoryId)))invalid();
+  assigned.add(a.transactionId);
+ }
+ return value;
+}
+
 export function validateState(s){
  // v1 remains readable for historical IndexedDB records and encrypted backups.
  if(!s || (s.version!==1&&s.version!==2) || !Array.isArray(s.entries) ||
@@ -384,6 +442,7 @@ export function validateState(s){
  // #38: optional, guest-only actual cash journal. Historical backup payloads
  // omit it. Validate all bank account/batch identities before committing IDB.
  if(s.bankStatements!==undefined)validateGuestBankLedger(s.bankStatements);
+ if(s.guestBudgets!==undefined)validateGuestBudgets(s.guestBudgets,s.bankStatements);
  // #40: optional account-scoped preference; older encrypted backups lack this field.
  // Strict validation prevents a malformed preference from silently corrupting UI behavior.
  if(s.settings?.paymentReminders!==undefined){

@@ -80,6 +80,7 @@ function validatedReceipts(value) {
  * snapshot downloader in the same live session; this function does no HTTP. */
 export async function refreshEncryptedCloudSnapshot({
   scope, session, identity, pages, etag, expectedEpoch, pendingJournalPage = null,
+  budgetCommandsV1,
 }) {
   active(scope, session, identity);
   const verified = verifyFinanceSnapshotPagesCandidate(pages, identity);
@@ -101,11 +102,20 @@ export async function refreshEncryptedCloudSnapshot({
   }
   // A revision identifies one authoritative state. Do not replace the
   // existing encrypted image at the same revision with an unproven variant.
-  if (verified.revision === before.revision && before.serverEtag === serverEtag && pendingJournalPage === null) {
+  // Persist only the last authenticated capability inside the sealed snapshot.
+  // It authorizes local queueing, never network access. Absence means false.
+  if (budgetCommandsV1 !== undefined && typeof budgetCommandsV1 !== 'boolean') hold('Неверная возможность бюджета');
+  const capabilityChanged = budgetCommandsV1 !== undefined &&
+    (bundle.snapshot.budgetCommandsV1 === true) !== budgetCommandsV1;
+  if (verified.revision === before.revision && before.serverEtag === serverEtag && pendingJournalPage === null && !capabilityChanged) {
     return Object.freeze({status: 'NO_NEW_REVISION', bundleEpoch: expectedEpoch,
       serverRevision: verified.revision, pending: bundle.outbox.length});
   }
   const snapshot = structuredClone(bundle.snapshot);
+  if (capabilityChanged) {
+    if (budgetCommandsV1) snapshot.budgetCommandsV1 = true;
+    else delete snapshot.budgetCommandsV1;
+  }
   snapshot.cloudFinance = verified.revision === before.revision
     ? {...before, serverEtag}
     : cloudImage(verified, proofs, serverEtag);
@@ -166,7 +176,7 @@ export async function refreshEncryptedCloudSnapshot({
  */
 export async function initializeEncryptedCloudCacheCandidate({
   scope, session, identity, pages, etag = null, expectedEpoch,
-  confirmedAccountCacheInitialization,
+  confirmedAccountCacheInitialization, budgetCommandsV1,
 }) {
   if (confirmedAccountCacheInitialization !== true) {
     hold('Не подтверждена локальная подготовка облачного снимка');
@@ -183,6 +193,8 @@ export async function initializeEncryptedCloudCacheCandidate({
     hold('Уже существует облачная копия или неподтверждённые локальные правки');
   }
   const snapshot = structuredClone(bundle.snapshot);
+  if (budgetCommandsV1 !== undefined && typeof budgetCommandsV1 !== 'boolean') hold('Неверная возможность бюджета');
+  if (budgetCommandsV1 === true) snapshot.budgetCommandsV1 = true;
   snapshot.cloudFinance = cloudImage(verified, [], serverEtag);
   const nextEpoch = await compareAndSwapAtomicEncryptedCandidate(
     scope, session, expectedEpoch, 2,

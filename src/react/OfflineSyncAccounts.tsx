@@ -152,13 +152,15 @@ export function OfflineSyncAccounts({
   onBack,
   offlineOnly = false,
   onSessionRevoked,
-  budgetMode = false,
+  budgetMode: initialBudgetMode = false,
+  allowOfflineBudgets = false,
 }: {
   actor: string;
   onBack: () => void;
   offlineOnly?: boolean;
   onSessionRevoked?: () => void;
   budgetMode?: boolean;
+  allowOfflineBudgets?: boolean;
 }) {
   const controller = useRef<FinanceSyncController | null>(null);
   const mounted = useRef(true);
@@ -170,6 +172,8 @@ export function OfflineSyncAccounts({
   const [replacementRecovery, setReplacementRecovery] = useState('');
   const [confirmRecoveryChange, setConfirmRecoveryChange] = useState(false);
   const [state, setState] = useState<SyncState | null>(null);
+  const [localBudgetMode, setLocalBudgetMode] = useState(false);
+  const budgetMode = initialBudgetMode || (offlineOnly && allowOfflineBudgets && localBudgetMode);
   const [view, setView] = useState<AccountServerView | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('Для доступа нужна отдельная парольная фраза.');
@@ -1497,6 +1501,15 @@ export function OfflineSyncAccounts({
           Повторить отправку
         </button>
       </div>
+      {offlineOnly && allowOfflineBudgets && state.canBudget === true && (
+        <button
+          type="button"
+          className="button-secondary"
+          onClick={() => setLocalBudgetMode((v) => !v)}
+        >
+          {budgetMode ? 'Счета и кошельки' : 'Бюджеты'}
+        </button>
+      )}
       {budgetMode && (
         <Budgets
           view={view}
