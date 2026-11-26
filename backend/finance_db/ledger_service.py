@@ -12,7 +12,7 @@ from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
 import re
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 from uuid import UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -255,9 +255,30 @@ def _change(revision: int, kind: str, target: UUID, entity_revision: int,
             "payload": payload}
 
 
+def _reject_budget_id_collision(session: Session, profile_id: UUID,
+                                ids: Iterable[UUID]) -> None:
+    """Prevent an older creation path from poisoning the global snapshot UUID map.
+
+    Called only under the existing profile transaction lock. All parameters
+    remain profile-scoped; the bound array contains canonical UUIDs only.
+    """
+    targets = sorted({str(UUID(str(value))) for value in ids})
+    if not targets:
+        return
+    if session.execute(text("""
+        SELECT 1 FROM (
+          SELECT id FROM budget_categories WHERE profile_id=:p AND id=ANY(CAST(:ids AS uuid[]))
+          UNION ALL SELECT id FROM budget_rules WHERE profile_id=:p AND id=ANY(CAST(:ids AS uuid[]))
+          UNION ALL SELECT id FROM budget_assignments WHERE profile_id=:p AND id=ANY(CAST(:ids AS uuid[]))
+        ) AS occupied LIMIT 1
+    """), {"p": profile_id, "ids": "{" + ",".join(targets) + "}"}).first():
+        raise FinanceCommandError("semantic_conflict", "Идентификатор уже используется", 409)
+
+
 def _post(session: Session, p: UUID, txid: UUID, kind: str, actor: str,
           occurred_on: date, postings: list[tuple[UUID, int]],
           *, reversed_id: UUID | None = None, note: str | None = None) -> None:
+    _reject_budget_id_collision(session, p, (txid,))
     session.execute(text("""
         INSERT INTO ledger_transactions
         (profile_id,id,kind,occurred_on,actor_user_id,reversed_transaction_id,note)
@@ -1789,6 +1810,8 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
     # A single profile revision may contain multiple logically coupled changes
     # (payment fact + signed ledger transaction). Never paginate half a revision.
     changes = [(change_kind, target, affected_revision, change_payload), *extra_changes]
+    if not action.startswith("budget."):
+        _reject_budget_id_collision(session, p, (change[1] for change in changes))
     for ordinal, (kind, entity_id, entity_revision, event_payload) in enumerate(changes):
         audit_payload = {**event_payload, "_entity_revision": entity_revision}
         session.execute(text("""

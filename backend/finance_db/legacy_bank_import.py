@@ -9,7 +9,7 @@ from uuid import UUID, uuid5
 from sqlalchemy import text
 
 from .bank_import_candidate import _day, _hash, _preflight_row, _uuid
-from .ledger_service import FinanceCommandError, _account_sync_entity, _post
+from .ledger_service import FinanceCommandError, _account_sync_entity, _post, _reject_budget_id_collision
 
 _MAX_MINOR = 1_000_000_000_000
 _MAX_SAFE = (1 << 53) - 1
@@ -166,6 +166,7 @@ def apply_legacy_bank_ledger(session, scope, request, ledger: dict, revision: in
         else:
             if existing is not None:
                 _conflict()
+            _reject_budget_id_collision(session, profile, (target,))
             session.execute(text("""
                 INSERT INTO accounts (profile_id,id,name,kind,currency,opening_minor)
                 VALUES (:p,:id,:name,:kind,'RUB',:opening)

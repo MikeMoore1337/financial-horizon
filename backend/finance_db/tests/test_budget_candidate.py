@@ -257,3 +257,34 @@ def test_budget_snapshot_pages_match_atomic_candidate_entities(scoped):
     with pytest.raises(FinanceCommandError):
         act(engine, a, "budget.category.create", {"id": txid, "name": "ID collision"})
     assert get_finance_snapshot(engine, scope=a).etag == before.etag
+
+
+def test_budget_uuid_collision_is_rejected_by_older_account_and_posting_paths(scoped):
+    engine, a, b = scoped
+    category = create_category(engine, a)
+    rule = rule_payload(category)
+    act(engine, a, "budget.create", rule)
+    aid = create_account(engine, a)
+    before = get_finance_snapshot(engine, scope=a)
+    # The collision would otherwise commit an invalid globally keyed snapshot.
+    with pytest.raises(FinanceCommandError) as err:
+        act(engine, a, "account.create", {
+            "id": category, "name": "Collision", "kind": "cash",
+            "currency": "RUB", "opening_minor": 0,
+        }, budget=False)
+    assert err.value.status == 409
+    with pytest.raises(FinanceCommandError) as err:
+        act(engine, a, "transaction.record", {
+            "id": rule["id"], "account_id": aid, "kind": "expense",
+            "occurred_on": "2026-01-10", "signed_minor": -100,
+        }, {aid: 1}, budget=False)
+    assert err.value.status == 409
+    after = get_finance_snapshot(engine, scope=a)
+    assert after.etag == before.etag
+    assert after.body["entities"] == before.body["entities"]
+    # The same UUID in a different verified profile is not a collision.
+    result = act(engine, b, "account.create", {
+        "id": category, "name": "Separate profile", "kind": "cash",
+        "currency": "RUB", "opening_minor": 0,
+    }, budget=False)
+    assert result.status == 201

@@ -2748,6 +2748,7 @@ test('#35 budget screen uses real encrypted account, canonical chevrons and resp
         if(await page.locator('body').getAttribute('data-theme')!==theme) await page.locator('#theme-toggle').click();
         expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
         await expect(page.getByRole('button',{name:'Предыдущий месяц'})).toBeVisible();
+        await page.evaluate(()=>window.scrollTo(0,0));
         await page.screenshot({path:testInfo.outputPath('budgets-'+width+'-'+theme+'.png'),fullPage:true});
       }
     }
@@ -2828,6 +2829,10 @@ test('#35 guest budgets remain local and survive native encrypted backup and res
     await page.locator('#theme-toggle').click();
     await expect(page.locator('.fh-budget-usage .fh-budget-amount strong')).toHaveText(/8\s?500/);
     expect((await scopedState(page,'state')).bankStatements).toEqual(original.bankStatements);
+    await page.setViewportSize({width:390,height:844});
+    await view(page,'settings');
+    await page.locator('#main [data-view="loans"]').click();
+    await expect(page.locator('#toolbar-title')).toHaveText('Кредиты');
     expect(requests).toEqual([]);
   }finally{await context.close();}
 });

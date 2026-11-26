@@ -101,6 +101,10 @@ function Usage({
           <dd>{formatRubMinor(usage.spentMinor)}</dd>
         </div>
         <div>
+          <dt>Запланировано</dt>
+          <dd>{formatRubMinor(usage.plannedMinor)}</dd>
+        </div>
+        <div>
           <dt>Использовано</dt>
           <dd>
             {usage.percentUsed === null ? 'Не применимо' : usage.percentUsed.toFixed(1) + '%'}
@@ -209,11 +213,9 @@ export function Budgets(props: BudgetProps) {
     setMessage('');
     try {
       await onCommand(action, payload, versions);
-      setMessage(
-        guest
-          ? 'Бюджет сохранён на этом устройстве.'
-          : 'Операция сохранена в зашифрованной очереди. Итоги изменятся после подтверждения сервера.',
-      );
+      if (guest) setMessage('Бюджет сохранён на этом устройстве.');
+      // Account mode has a single live status in the sync host; do not leave
+      // a contradictory pending message after the receipt is confirmed.
       return true;
     } catch (err) {
       setError(

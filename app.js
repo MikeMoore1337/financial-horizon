@@ -304,6 +304,7 @@ function render(){
     formatDate,showFinanceAccounts:financeAccountsEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId,
     showFinanceImport:financeImportEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId,
     showBankStatementImport:guestMode||(bankImportEnabled&&Boolean(activeUserId)&&emailSession.userId===activeUserId),
+    showLoansShortcut:financeBudgetsEnabled,
    }});
   }
  }else{

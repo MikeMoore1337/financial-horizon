@@ -79,6 +79,10 @@ test('budget delta atomically preserves history, existing account and pending wo
   assert.equal(after.entities.find(x=>x.id===A).data.balance_minor,850_000);
   assert.equal(report(body(after.entities,7)).categories[0].limitMinor,1_000_000);
   assert.throws(()=>applyFinanceDeltaCandidate(local,delta([change(7,0,next)]),guard()));
+  assert.throws(()=>applyFinanceDeltaCandidate(local,delta([change(7,0,ended)]),guard()),/Разделение/);
+  assert.throws(()=>applyFinanceDeltaCandidate(local,delta([change(7,0,ended),change(8,0,next)],6,8),guard()),/Разделение/);
+  const wrong = entity(REPLACEMENT,'budget_rule',{...next.data,ends_before_month:'2026-04'});
+  assert.throws(()=>applyFinanceDeltaCandidate(local,delta([change(7,0,ended),change(7,1,wrong)]),guard()),/Разделение/);
   assert.throws(()=>applyFinanceDeltaCandidate(local,delta([change(7,0,next),change(8,0,ended)],6,8),guard()));
 });
 
@@ -112,4 +116,14 @@ test('malformed rule, cross-reference and collision cannot replace a verified ca
   const local=verify();
   const tombstone={revision:7,ordinal:0,kind:'tombstone',entity_id:CAT,entity_revision:2,payload:{}};
   assert.throws(()=>applyFinanceDeltaCandidate(local,delta([tombstone]),guard()));
+});
+
+test('budget delta rejects revision jumps and reassignment of the immutable expense identity', () => {
+  const local = verify();
+  const renamed = entity(CAT, 'budget_category', {...cat.data, name:'Другие'}, 3);
+  assert.throws(()=>applyFinanceDeltaCandidate(local,delta([change(7,0,renamed)]),guard()),/ревизия/);
+  const another = entity(id(99),'transaction',tx.data);
+  const initial = verify(body([account,tx,another,cat,total,rule,assignment]));
+  const replaced = entity(ASSIGN,'budget_assignment',{transaction_id:another.id,category_id:CAT},2);
+  assert.throws(()=>applyFinanceDeltaCandidate(initial,delta([change(7,0,replaced)]),guard()),/проводка/);
 });

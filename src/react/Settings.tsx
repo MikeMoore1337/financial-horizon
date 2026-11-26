@@ -21,6 +21,7 @@ export interface SettingsProps {
   showFinanceAccounts?: boolean;
   showFinanceImport?: boolean;
   showBankStatementImport?: boolean;
+  showLoansShortcut?: boolean;
 }
 
 function SettingsCard({
@@ -57,6 +58,7 @@ export function Settings({
   showFinanceAccounts = false,
   showFinanceImport = false,
   showBankStatementImport = false,
+  showLoansShortcut = false,
 }: SettingsProps) {
   return (
     <>
@@ -66,7 +68,13 @@ export function Settings({
           <h1>Настройки</h1>
           <p className="subtitle">Безопасность, данные и управление записями</p>
         </div>
-        <div className="header-tools" />
+        <div className="header-tools">
+          {showLoansShortcut && (
+            <button type="button" className="button-secondary" data-view="loans">
+              <Icon name="credit" /> Кредиты
+            </button>
+          )}
+        </div>
       </header>
       <div className="settings-grid">
         {showFinanceAccounts && (
