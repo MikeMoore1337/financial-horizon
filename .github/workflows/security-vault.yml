@@ -6,6 +6,12 @@ on:
     branches: [main]
     paths:
       - 'src/security/**'
+      - 'src/cloud/encrypted-*.mjs'
+      - 'src/cloud/finance-sync-controller.mjs'
+      - 'src/domain/budgets/**'
+      - 'tests/budgets-*.test.mjs'
+      - 'finance.js'
+      - 'backup.js'
       - 'tests/local-vault*.test.mjs'
       - 'tests/local-budget-session.test.mjs'
       - 'tests/protected-*.test.mjs'

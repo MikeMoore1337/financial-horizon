@@ -20,7 +20,7 @@ function fail(message) { throw Error('SYNC_HOLD: ' + message); }
 export class FinanceSyncController {
   #actor; #scope; #origin; #fetch; #session; #identity = null;
   #abort = new AbortController(); #generation = 0; #busy = false; #closed = false; #channel = null; #onClose;
-  #cancelSupported = false;
+  #cancelSupported = false; #budgetAllowed = false;
   #offlineStart = false; #onlineVerified = false;
   #connectivityGeneration = 0;
 
@@ -127,6 +127,7 @@ export class FinanceSyncController {
     }
     await this.#assertActor(generation);
     this.#cancelSupported = result.sync_cancel_fence_v1 === true;
+    this.#budgetAllowed = result.budget_commands_v1 === true;
     return result.profile_id;
   }
   /** Explicitly create a separate empty encrypted container. The returned
@@ -208,6 +209,7 @@ export class FinanceSyncController {
         this.#identity = {scope:this.#scope, profileId:cloud.profileId,
           generation:this.#session.lifecycleVersion, epoch:cloud.epoch,
           signal:this.#session.lifecycleSignal};
+        this.#budgetAllowed = bundle.snapshot.budgetCommandsV1 === true;
         return await this.#read(generation);
       } catch (error) { this.#identity = null; this.#session.logout(); throw error; }
     });
@@ -223,7 +225,7 @@ export class FinanceSyncController {
       bundle.outbox.length ? 'PENDING' : this.#onlineVerified ? 'SYNCHRONIZED' : 'LOCAL',
       cloud:structuredClone(cloud), outbox:structuredClone(bundle.outbox),
       conflicts:structuredClone(bundle.conflicts), bundleEpoch:bundle.epoch,
-      canCancel:this.#cancelSupported, onlineVerified:this.#onlineVerified};
+      canCancel:this.#cancelSupported, canBudget:this.#budgetAllowed, onlineVerified:this.#onlineVerified};
   }
   async read() { return this.#exclusive(generation => this.#read(generation)); }
   async reissueRecovery(passphrase) { return this.#exclusive(async generation => {
@@ -261,7 +263,8 @@ export class FinanceSyncController {
       this.#active(generation);
     }
     const input = {scope:this.#scope, session:this.#session, identity,
-      pages:pulled.pages, etag:pulled.etag, expectedEpoch:bundle.epoch, pendingJournalPage};
+      pages:pulled.pages, etag:pulled.etag, expectedEpoch:bundle.epoch, pendingJournalPage,
+      budgetCommandsV1:this.#budgetAllowed};
     if (!Object.hasOwn(bundle.snapshot, 'cloudFinance')) {
       await initializeEncryptedCloudCacheCandidate({...input, confirmedAccountCacheInitialization:true});
     } else await refreshEncryptedCloudSnapshot(input);
@@ -291,6 +294,8 @@ export class FinanceSyncController {
   }); }
   async enqueue(command) { return this.#exclusive(async generation => {
     if (!this.#identity) fail('Локальная копия заблокирована');
+    if (typeof command?.action === 'string' && command.action.startsWith('budget.') && !this.#budgetAllowed)
+      fail('Доступ к бюджетам не подтверждён');
     const bundle = await readAtomicEncryptedCandidate(this.#scope, this.#session);
     this.#active(generation);
     const etag = bundle?.snapshot?.cloudFinance?.serverEtag;
@@ -306,6 +311,8 @@ export class FinanceSyncController {
     await this.#assertActor(generation);
     const bundle = await readAtomicEncryptedCandidate(this.#scope, this.#session);
     this.#active(generation);
+    if (bundle?.outbox?.[0]?.command?.action?.startsWith('budget.') && !this.#budgetAllowed)
+      fail('Серверный доступ к бюджетам отключён. Операция сохранена в очереди');
     const result = await dispatchOneEncryptedFinanceCommandCandidate({scope:this.#scope,
       session:this.#session, identity:this.#identity, expectedEpoch:bundle.epoch,
       origin:this.#origin, fetchImpl:this.#fetch, explicitNetworkCandidateConsent:true});
@@ -319,6 +326,9 @@ export class FinanceSyncController {
     let bundle = await readAtomicEncryptedCandidate(this.#scope, this.#session);
     this.#active(generation);
     const conflict = bundle.conflicts.find(x => x?.kind === 'finance_sync_hold' && x.mutationId === input.mutationId);
+    if ((bundle.outbox?.[0]?.command?.action?.startsWith('budget.') ||
+        input.replacementCommand?.action?.startsWith('budget.')) && !this.#budgetAllowed)
+      fail('Серверный доступ к бюджетам отключён. Конфликт сохранён');
     if (conflict && [409, 410].includes(conflict.httpStatus)) {
       const head = bundle.outbox[0];
       if (!this.#cancelSupported || !head || head.mutationId !== input.mutationId ||
@@ -343,7 +353,7 @@ export class FinanceSyncController {
     if (this.#closed) return;
     this.#closed = true; this.#generation++; this.#abort.abort();
     this.#session.logout(); this.#identity = null;
-    this.#cancelSupported = false;
+    this.#cancelSupported = false; this.#budgetAllowed = false;
     this.#channel?.close(); this.#channel = null;
     this.#onClose();
   }

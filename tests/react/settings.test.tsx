@@ -125,3 +125,10 @@ it('server bank import card requires explicit independent opt-in', () => {
   expect(document.querySelector('[data-settings-card="bank-statement-import"]')).toBeNull();
   expect(document.querySelector('[data-settings-card="finance-accounts"]')).not.toBeNull();
 });
+
+it('preserves access to loans when budgets occupy one of five mobile navigation items', () => {
+  const { rerender } = render(<Settings {...empty} />);
+  expect(screen.queryByRole('button', { name: 'Кредиты' })).toBeNull();
+  rerender(<Settings {...empty} showLoansShortcut />);
+  expect(screen.getByRole('button', { name: 'Кредиты' }).getAttribute('data-view')).toBe('loans');
+});

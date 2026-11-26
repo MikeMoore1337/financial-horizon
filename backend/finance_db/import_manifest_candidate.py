@@ -226,6 +226,9 @@ def require_safe_import_target(session, profile_id: UUID,
             OR EXISTS(SELECT 1 FROM ledger_transactions WHERE profile_id=:p)
             OR EXISTS(SELECT 1 FROM ledger_postings WHERE profile_id=:p)
             OR EXISTS(SELECT 1 FROM reserve_allocations WHERE profile_id=:p)
+            OR EXISTS(SELECT 1 FROM budget_categories WHERE profile_id=:p)
+            OR EXISTS(SELECT 1 FROM budget_rules WHERE profile_id=:p)
+            OR EXISTS(SELECT 1 FROM budget_assignments WHERE profile_id=:p)
     """), {"p": profile_id}).scalar_one()
     if other_finance:
         raise FinanceCommandError("semantic_conflict",

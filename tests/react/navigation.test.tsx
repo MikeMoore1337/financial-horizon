@@ -112,3 +112,15 @@ describe('React navigation shell and auth boundary', () => {
     expect(screen.queryByText('GUEST LEDGER')).toBeNull();
   });
 });
+
+it('adds the budget entry only with the explicit flag and retains five mobile actions', () => {
+  const { rerender } = render(<Navigation variant="bottom" view="overview" />);
+  expect(screen.queryByRole('button', { name: 'Бюджеты' })).toBeNull();
+  rerender(<Navigation variant="bottom" view="budgets" budgetsEnabled />);
+  expect(document.querySelectorAll('[data-view]')).toHaveLength(5);
+  expect(screen.getByRole('button', { name: 'Бюджеты' }).getAttribute('aria-current')).toBe('page');
+  expect(screen.queryByRole('button', { name: 'Кредиты' })).toBeNull();
+  rerender(<Navigation variant="sidebar" view="budgets" budgetsEnabled />);
+  expect(screen.getByRole('button', { name: 'Кредиты' })).toBeTruthy();
+  expect(document.querySelectorAll('[data-view]')).toHaveLength(6);
+});

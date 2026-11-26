@@ -382,3 +382,49 @@ class BankImportRow(Base):
     description: Mapped[str] = mapped_column(String(500))
     category: Mapped[str | None] = mapped_column(String(160))
 
+
+
+class BudgetCategory(ProfileEntity, Revisable, Base):
+    __tablename__ = "budget_categories"
+    __table_args__ = (profile_fk(),)
+    name: Mapped[str] = mapped_column(String(40))
+    archived: Mapped[bool] = mapped_column(server_default=text("false"))
+
+
+class BudgetRule(ProfileEntity, Revisable, Base):
+    __tablename__ = "budget_rules"
+    __table_args__ = (
+        profile_fk(),
+        ForeignKeyConstraint(
+            ["profile_id", "category_id"],
+            ["finance.budget_categories.profile_id", "finance.budget_categories.id"],
+            ondelete="RESTRICT",
+        ),
+    )
+    category_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
+    limit_minor: Mapped[int] = mapped_column(BigInteger)
+    recurrence: Mapped[str] = mapped_column(String(7))
+    from_month: Mapped[date] = mapped_column(Date)
+    ends_before_month: Mapped[date | None] = mapped_column(Date)
+    archived_from_month: Mapped[date | None] = mapped_column(Date)
+
+
+class BudgetAssignment(ProfileEntity, Revisable, Base):
+    """Independent sync identity; transaction_id uniquely references a posting."""
+    __tablename__ = "budget_assignments"
+    __table_args__ = (
+        profile_fk(),
+        ForeignKeyConstraint(
+            ["profile_id", "transaction_id"],
+            ["finance.ledger_transactions.profile_id", "finance.ledger_transactions.id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("profile_id", "transaction_id"),
+        ForeignKeyConstraint(
+            ["profile_id", "category_id"],
+            ["finance.budget_categories.profile_id", "finance.budget_categories.id"],
+            ondelete="RESTRICT",
+        ),
+    )
+    transaction_id: Mapped[Uuid] = mapped_column(UUID(as_uuid=True))
+    category_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))

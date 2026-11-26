@@ -15,6 +15,9 @@ const testModules = {
   pull: '/__e2e_138_pull__.js', dispatch: '/__e2e_138_dispatch__.js',
   controller: '/__e2e_138_controller__.js',
   hint: '/__e2e_138_hint__.js',
+  budgetIndex: '/__e2e_138_budget_index__.js',
+  budgetRules: '/__e2e_138_budget_rules__.js',
+  budgetSnapshot: '/__e2e_138_budget_snapshot__.js',
 };
 const source = path => readFileSync(new URL(path, import.meta.url), 'utf8');
 const compile = path => ts.transpileModule(source(path), {
@@ -27,7 +30,14 @@ const testModuleSources = new Map([
     .replaceAll("'./local-vault.ts'", JSON.stringify(testModules.vault))],
   [testModules.atomic, compile('../../src/security/protected-atomic-candidate.ts')
     .replaceAll("'./local-vault.ts'", JSON.stringify(testModules.vault))],
-  [testModules.delta, source('../../src/cloud/verified-delta-candidate.mjs')],
+  [testModules.budgetIndex, compile('../../src/domain/budgets/index.ts')],
+  [testModules.budgetRules, compile('../../src/domain/budgets/rules.ts')
+    .replaceAll("'./index.ts'", JSON.stringify(testModules.budgetIndex))],
+  [testModules.budgetSnapshot, compile('../../src/domain/budgets/server-snapshot.ts')
+    .replaceAll("'./index.ts'", JSON.stringify(testModules.budgetIndex))
+    .replaceAll("'./rules.ts'", JSON.stringify(testModules.budgetRules))],
+  [testModules.delta, source('../../src/cloud/verified-delta-candidate.mjs')
+    .replaceAll("'../domain/budgets/server-snapshot.ts'", JSON.stringify(testModules.budgetSnapshot))],
   [testModules.cache, source('../../src/cloud/encrypted-cloud-cache-candidate.mjs')
     .replaceAll("'../security/protected-atomic-candidate.ts'", JSON.stringify(testModules.atomic))
     .replaceAll("'./verified-delta-candidate.mjs'", JSON.stringify(testModules.delta))],
@@ -2593,4 +2603,236 @@ test('#138 online payment center survives a lost response and synchronizes two d
   } finally {
     await second.close();
   }
+});
+
+test('#35 encrypted offline budget command survives browser reload and reconciles exact SQL receipts', async ({page, context, browser}) => {
+  test.setTimeout(120_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  const modules = async ctx => ctx.route('**/__e2e_138_*.js', route => route.fulfill({
+    status:200,contentType:'text/javascript',
+    body:testModuleSources.get(new URL(route.request().url()).pathname),
+    headers:{'Cache-Control':'no-store'},
+  }));
+  await modules(context);
+  const login = await context.request.post('/__e2e__/personal-session');
+  expect(login.status()).toBe(200);
+  const actor=(await login.json()).user.id;
+  const profile=await bootstrap(context);
+  const accountId=randomUUID(), transactionId=randomUUID(), categoryId=randomUUID(), ruleId=randomUUID();
+  expect((await submit(context,await state(context),'account.create',{
+    id:accountId,name:'Synthetic FH35 account',kind:'cash',currency:'RUB',opening_minor:1_000_000,
+  })).status()).toBe(201);
+  const accountState=await state(context);
+  expect((await submit(context,accountState,'transaction.record',{
+    id:transactionId,account_id:accountId,kind:'expense',signed_minor:-150_000,occurred_on:'2026-11-12',
+  },{[accountId]:versionOf(accountState,accountId)})).status()).toBe(201);
+  await page.goto('/__e2e__/ready');
+  const phrase='synthetic FH35 encrypted queue recovery phrase';
+  const result=await page.evaluate(async ({actor,phrase,categoryId})=>{
+    const {FinanceSyncController}=await import('/__e2e_138_controller__.js');
+    const controller=new FinanceSyncController({verifiedActorUserId:actor,origin:location.origin});
+    await controller.createLocal(phrase,true);
+    await controller.unlock({passphrase:phrase});
+    const s=await controller.read();
+    await controller.enqueue({schema_version:2,client_mutation_id:crypto.randomUUID(),
+      base_revision:s.cloud.revision,action:'budget.category.create',
+      expected_entity_revisions:{},payload:{id:categoryId,name:'Продукты'}});
+    const done=await controller.dispatchOnce();
+    await controller.refresh();
+    globalThis.__fh35Controller=controller;
+    return done.status;
+  },{actor,phrase,categoryId});
+  expect(result).toBe('DURABLY_CONFIRMED');
+  const before=await state(context);
+  // A fresh document and controller have no previous in-memory capability.
+  await page.evaluate(()=>globalThis.__fh35Controller.close());
+  await page.reload();
+  await page.evaluate(()=>import('/__e2e_138_controller__.js'));
+  await context.setOffline(true);
+  const pending=await page.evaluate(async ({actor,phrase,categoryId,ruleId})=>{
+    const {FinanceSyncController}=await import('/__e2e_138_controller__.js');
+    const controller=new FinanceSyncController({lastVerifiedActorUserId:actor,origin:location.origin});
+    const s=await controller.unlockOffline({passphrase:phrase});
+    if(s.canBudget!==true||s.onlineVerified!==false)throw Error('Offline capability was not recovered from sealed state');
+    const queued=await controller.enqueue({schema_version:2,client_mutation_id:crypto.randomUUID(),
+      base_revision:s.cloud.revision,action:'budget.create',expected_entity_revisions:{},
+      payload:{id:ruleId,category_id:categoryId,limit_minor:1_000_000,recurrence:'monthly',from_month:'2026-11'}});
+    const after=await controller.read();
+    controller.close();
+    return {status:queued.status,pending:after.outbox.length,confirmed:after.cloud.entities.some(x=>x.id===ruleId)};
+  },{actor,phrase,categoryId,ruleId});
+  expect(pending).toEqual({status:'QUEUED_ENCRYPTED',pending:1,confirmed:false});
+  await context.setOffline(false);
+  expect((await state(context)).revision).toBe(before.revision);
+  await page.reload();
+  const recovered=await page.evaluate(async ({actor,phrase,categoryId,transactionId})=>{
+    const {FinanceSyncController}=await import('/__e2e_138_controller__.js');
+    const controller=new FinanceSyncController({verifiedActorUserId:actor,origin:location.origin});
+    const opened=await controller.unlock({passphrase:phrase});
+    const first=await controller.dispatchOnce();
+    await controller.refresh();
+    const s=await controller.read();
+    const tx=s.cloud.entities.find(x=>x.id===transactionId);
+    await controller.enqueue({schema_version:2,client_mutation_id:crypto.randomUUID(),
+      base_revision:s.cloud.revision,action:'budget.category.assign',expected_entity_revisions:{[transactionId]:tx.entity_revision},
+      payload:{transaction_id:transactionId,category_id:categoryId}});
+    const second=await controller.dispatchOnce();
+    const after=await controller.refresh();
+    controller.close();
+    return {pendingBefore:opened.outbox.length,first:first.status,second:second.status,
+      pendingAfter:after.outbox.length,entities:after.cloud.entities};
+  },{actor,phrase,categoryId,transactionId});
+  expect(recovered.pendingBefore).toBe(1);
+  expect(recovered.first).toBe('DURABLY_CONFIRMED');
+  expect(recovered.second).toBe('DURABLY_CONFIRMED');
+  expect(recovered.pendingAfter).toBe(0);
+  expect(recovered.entities.find(x=>x.id===ruleId).data.limit_minor).toBe(1_000_000);
+  expect(recovered.entities.find(x=>x.id===accountId).data.balance_minor).toBe(850_000);
+  expect(recovered.entities.filter(x=>x.kind==='budget_assignment'&&x.data.transaction_id===transactionId)).toHaveLength(1);
+  const secondDevice=await browser.newContext({baseURL:ORIGIN,storageState:await context.storageState(),serviceWorkers:'block'});
+  try {
+    expect(await bootstrap(secondDevice)).toBe(profile);
+    const remote=await state(secondDevice);
+    expect(remote.body.entities.find(x=>x.id===ruleId).data.limit_minor).toBe(1_000_000);
+    expect(remote.body.entities.find(x=>x.id===accountId).data.balance_minor).toBe(850_000);
+    expect(remote.body.entities.filter(x=>x.kind==='budget_assignment'&&x.data.transaction_id===transactionId)).toHaveLength(1);
+  } finally {await secondDevice.close();}
+});
+
+test('#35 budget screen uses real encrypted account, canonical chevrons and responsive themes', async ({browser}, testInfo) => {
+  test.setTimeout(120_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  const context = await browser.newContext({baseURL:ORIGIN, serviceWorkers:'block'});
+  try {
+    expect((await context.request.post('/__e2e__/personal-session')).status()).toBe(200);
+    await bootstrap(context);
+    const account = randomUUID(), expense = randomUUID(), cat = randomUUID(), rule = randomUUID();
+    const date = new Date();
+    const m = String(date.getFullYear()).padStart(4,'0')+'-'+String(date.getMonth()+1).padStart(2,'0');
+    expect((await submit(context, await state(context), 'account.create', {id:account,name:'Budget test account',kind:'cash',currency:'RUB',opening_minor:1000000})).status()).toBe(201);
+    const before = await state(context);
+    expect((await submit(context, before,'transaction.record',{id:expense,account_id:account,kind:'expense',signed_minor:-150000,occurred_on:m+'-01'},{[account]:versionOf(before,account)})).status()).toBe(201);
+    expect((await submit(context,await state(context),'budget.category.create',{id:cat,name:'Продукты'})).status()).toBe(201);
+    expect((await submit(context,await state(context),'budget.create',{id:rule,category_id:null,limit_minor:1000000,recurrence:'monthly',from_month:m})).status()).toBe(201);
+    const beforeAssign = await state(context);
+    expect((await submit(context,beforeAssign,'budget.category.assign',{transaction_id:expense,category_id:cat},{[expense]:versionOf(beforeAssign,expense)})).status()).toBe(201);
+    const page = await context.newPage();
+    const errors = []; page.on('pageerror', e => errors.push(e.message));
+    await page.goto('/?fh_budgets_e2e=1');
+    await view(page,'budgets');
+    await expect(page.locator('#toolbar-title')).toHaveText('Бюджеты');
+    await page.getByLabel('Парольная фраза',{exact:true}).fill('synthetic budget test passphrase');
+    await page.getByRole('button',{name:'Создать копию'}).click();
+    await page.getByLabel('Я сохранил ключ вне браузера').check();
+    await page.getByRole('button',{name:'Разблокировать'}).click();
+    await expect(page.locator('.fh-budgets h1')).toHaveText('Бюджеты');
+    await expect(page.locator('.fh-budget-amount strong').first()).toHaveText(/8\s?500/);
+    await expect(page.getByRole('button',{name:'Предыдущий месяц'}).locator('use')).toHaveAttribute('href','#ico-chevron');
+    await expect(page.getByRole('button',{name:'Следующий месяц'}).locator('use')).toHaveAttribute('href','#ico-chevron');
+    await page.getByRole('button',{name:'Предыдущий месяц'}).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByText('На этот месяц лимит не установлен.')).toBeVisible();
+    await page.getByRole('button',{name:'Следующий месяц'}).click();
+    await expect(page.locator('.fh-budget-amount strong').first()).toHaveText(/8\s?500/);
+    await page.getByRole('button',{name:'Лимит',exact:true}).click();
+    await page.getByLabel('Область лимита').selectOption(cat);
+    await page.getByLabel('Лимит, ₽').fill('2000');
+    await page.getByRole('button',{name:'Сохранить лимит'}).click();
+    await expect(page.locator('.fh-budget-usage').filter({has:page.getByRole('heading',{name:'Продукты',exact:true})})).toContainText(/500/,{timeout:20000});
+    await page.getByRole('button',{name:'История правил'}).click();
+    await expect(page.locator('.fh-budget-history').first()).toContainText('Общий бюджет');
+    await page.getByRole('button',{name:'История правил'}).click();
+    for(const width of [320,390,1440,2560]) {
+      await page.setViewportSize({width,height:900});
+      for(const theme of ['light','dark']) {
+        if(await page.locator('body').getAttribute('data-theme')!==theme) await page.locator('#theme-toggle').click();
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+        await expect(page.getByRole('button',{name:'Предыдущий месяц'})).toBeVisible();
+        await page.evaluate(()=>window.scrollTo(0,0));
+        await page.screenshot({path:testInfo.outputPath('budgets-'+width+'-'+theme+'.png'),fullPage:true});
+      }
+    }
+    expect(await page.locator('.bottom-nav [data-view]').count()).toBe(5);
+    expect((await state(context)).body.entities.filter(e=>e.kind==='budget_rule')).toHaveLength(2);
+    expect(errors).toEqual([]);
+  } finally { await context.close(); }
+});
+
+test('#35 guest budgets remain local and survive native encrypted backup and restore', async ({browser}) => {
+  test.setTimeout(120000);
+  if(process.env.FH_E2E_REAL_FINANCE!=='yes')test.skip();
+  const context=await browser.newContext({baseURL:ORIGIN,serviceWorkers:'block'});
+  try{
+    const page=await context.newPage(),requests=[];
+    page.on('request',r=>{if(r.url().includes('/api/finance/'))requests.push(r.url());});
+    await page.goto('/?guest=1&fh_budgets_e2e=1');
+    await expect(page.locator('#toolbar-title')).toHaveText('Обзор');
+    await view(page,'budgets');
+    await expect(page.locator('.fh-budgets h1')).toHaveText('Бюджеты');
+    await page.getByRole('button',{name:'Лимит',exact:true}).click();
+    await page.getByLabel('Область лимита').selectOption('legacy:покупки');
+    await page.getByLabel('Лимит, ₽').fill('10000');
+    await page.getByRole('button',{name:'Сохранить лимит'}).click();
+    await expect(page.locator('.fh-budget-usage')).toContainText(/10\s?000/);
+    await view(page,'settings');
+    await page.locator('[data-settings-card="bank-statement-import"] [data-view="bank-import"]').click();
+    await page.getByRole('textbox',{name:'Название'}).fill('Основной');
+    await page.getByRole('textbox',{name:/Начальный остаток/}).fill('20000');
+    await page.getByRole('button',{name:'Добавить счёт'}).click();
+    await expect.poll(async()=> (await scopedState(page,'state'))?.bankStatements?.accounts?.length).toBe(1);
+    const day=new Date(),date='01.'+String(day.getMonth()+1).padStart(2,'0')+'.'+day.getFullYear();
+    const csv='Дата;Сумма;Описание;Счёт;Тип;ID;Категория\n'+date+';-1500,00;Синтетическая покупка;Основной;;FH35-1;Покупки\n';
+    await page.locator('.fh-bank-file input[type="file"]').setInputFiles({name:'fh35.csv',mimeType:'text/csv',buffer:Buffer.from(csv)});
+    await page.getByRole('button',{name:/Подтвердить импорт 1 операц/}).click();
+    await expect.poll(async()=> (await scopedState(page,'state'))?.bankStatements?.operations?.length).toBe(1);
+    await view(page,'budgets');
+    // Explicit reclassification is also exercised and does not rewrite bank data.
+    await page.locator('.fh-budgets summary').filter({hasText:'Категории подтверждённых расходов'}).click();
+    const stored=await scopedState(page,'state'),tx=stored.bankStatements.operations[0].sourceKey;
+    const expense=page.getByRole('combobox',{name:'Расход',exact:true});
+    const category=page.getByRole('combobox',{name:'Категория расхода',exact:true});
+    await expect(expense).toBeVisible();
+    await expense.selectOption({value:tx},{timeout:10000});
+    // A genuine reclassification must change the category total, not merely
+    // leave the original import category selected while testing a no-op.
+    await category.selectOption({value:'legacy:здоровье'},{timeout:10000});
+    await page.getByRole('button',{name:'Сохранить категорию'}).click();
+    await expect(page.locator('.fh-budget-usage .fh-budget-amount strong')).toHaveText(/10\s?000/);
+    await expect.poll(async()=> (await scopedState(page,'state'))?.guestBudgets?.assignments).toEqual([{transactionId:tx,categoryId:'legacy:здоровье'}]);
+    await expense.selectOption({value:tx},{timeout:10000});
+    await category.selectOption({value:'legacy:покупки'},{timeout:10000});
+    await page.getByRole('button',{name:'Сохранить категорию'}).click();
+    await expect(page.locator('.fh-budget-usage .fh-budget-amount strong')).toHaveText(/8\s?500/);
+    await expect.poll(async()=> (await scopedState(page,'state'))?.guestBudgets?.assignments).toEqual([{transactionId:tx,categoryId:'legacy:покупки'}]);
+    expect((await scopedState(page,'state')).bankStatements).toEqual(stored.bankStatements);
+    const original=await scopedState(page,'state');
+    await view(page,'settings');
+    await page.locator('[data-action="backup"]').click();
+    await page.locator('#password-form [name="password"]').fill('synthetic FH35 guest backup phrase');
+    const transfer=page.waitForEvent('download');
+    await page.locator('#password-form button[type="submit"]').click();
+    const download=await transfer;
+    await page.locator('[data-action="clear"]').click();
+    await page.locator('#confirm-yes').click();
+    await expect.poll(async()=> (await scopedState(page,'state'))?.guestBudgets).toBeUndefined();
+    await page.locator('[data-action="restore"]').click();
+    await page.locator('#restore-file').setInputFiles(await download.path());
+    await expect(page.locator('#password-dialog')).toBeVisible();
+    await page.locator('#password-form [name="password"]').fill('synthetic FH35 guest backup phrase');
+    await page.locator('#password-form button[type="submit"]').click();
+    await expect(page.locator('#confirmation-dialog')).toBeVisible();
+    await page.locator('#confirm-yes').click();
+    await expect.poll(async()=> (await scopedState(page,'state'))?.guestBudgets).toEqual(original.guestBudgets);
+    await page.reload();
+    await view(page,'budgets');
+    await expect(page.locator('.fh-budget-usage .fh-budget-amount strong')).toHaveText(/8\s?500/);
+    await page.locator('#theme-toggle').click();
+    await expect(page.locator('.fh-budget-usage .fh-budget-amount strong')).toHaveText(/8\s?500/);
+    expect((await scopedState(page,'state')).bankStatements).toEqual(original.bankStatements);
+    await page.setViewportSize({width:390,height:844});
+    await view(page,'settings');
+    await page.locator('#main [data-view="loans"]').click();
+    await expect(page.locator('#toolbar-title')).toHaveText('Кредиты');
+    expect(requests).toEqual([]);
+  }finally{await context.close();}
 });

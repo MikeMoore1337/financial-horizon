@@ -13,6 +13,7 @@ import {
 import { formatRubMinor, isValidLedgerDate, parseRubMinor } from './accounts-view-model';
 import { FinanceSyncController } from '../cloud/finance-sync-controller.mjs';
 import './offline-sync.css';
+import { Budgets } from './Budgets';
 
 type Command = {
   schema_version: number;
@@ -43,6 +44,7 @@ type SyncState = {
   conflicts: Conflict[];
   bundleEpoch: number;
   canCancel: boolean;
+  canBudget?: boolean;
   onlineVerified: boolean;
 };
 const isSyncBusy = (error: unknown): boolean =>
@@ -62,6 +64,20 @@ function operationLabel(command: Command, state: SyncState): string {
       ? formatRubMinor(value)
       : 'сумма недоступна';
   switch (command.action) {
+    case 'budget.create':
+      return 'Создать лимит: ' + amount(p.limit_minor);
+    case 'budget.amend':
+      return 'Изменить лимит: ' + amount(p.limit_minor);
+    case 'budget.archive':
+      return 'Архивировать лимит';
+    case 'budget.category.create':
+      return 'Создать категорию: ' + String(p.name);
+    case 'budget.category.rename':
+      return 'Переименовать категорию: ' + String(p.name);
+    case 'budget.category.archive':
+      return 'Архивировать категорию';
+    case 'budget.category.assign':
+      return 'Изменить категорию расхода';
     case 'reserve.create':
       return `Создать резерв «${String(p.title)}» на ${amount(p.target_minor)}, начальное распределение ${amount(p.opening_reserved_minor)}`;
     case 'reserve.update':
@@ -136,11 +152,15 @@ export function OfflineSyncAccounts({
   onBack,
   offlineOnly = false,
   onSessionRevoked,
+  budgetMode: initialBudgetMode = false,
+  allowOfflineBudgets = false,
 }: {
   actor: string;
   onBack: () => void;
   offlineOnly?: boolean;
   onSessionRevoked?: () => void;
+  budgetMode?: boolean;
+  allowOfflineBudgets?: boolean;
 }) {
   const controller = useRef<FinanceSyncController | null>(null);
   const mounted = useRef(true);
@@ -152,6 +172,8 @@ export function OfflineSyncAccounts({
   const [replacementRecovery, setReplacementRecovery] = useState('');
   const [confirmRecoveryChange, setConfirmRecoveryChange] = useState(false);
   const [state, setState] = useState<SyncState | null>(null);
+  const [localBudgetMode, setLocalBudgetMode] = useState(false);
+  const budgetMode = initialBudgetMode || (offlineOnly && allowOfflineBudgets && localBudgetMode);
   const [view, setView] = useState<AccountServerView | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('Для доступа нужна отдельная парольная фраза.');
@@ -1309,7 +1331,7 @@ export function OfflineSyncAccounts({
         <button type="button" className="button-secondary" onClick={onBack}>
           Назад
         </button>
-        <h2 id="sync-unlock-title">Офлайн-синхронизация</h2>
+        <h2 id="sync-unlock-title">{budgetMode ? 'Бюджеты' : 'Офлайн-синхронизация'}</h2>
         {offlineOnly && (
           <p>
             Доступна только локальная зашифрованная копия последнего подтверждённого аккаунта.
@@ -1426,11 +1448,13 @@ export function OfflineSyncAccounts({
   });
   return (
     <section className="fh-sync">
-      <p>
-        Синхронизация счетов, переводов, отдельных доходов и расходов, обязательств и платежей по
-        кредитам и распределения существующих резервов. Остальные операции с резервами и разделы
-        работают отдельно.
-      </p>
+      {!budgetMode && (
+        <p>
+          Синхронизация счетов, переводов, отдельных доходов и расходов, обязательств и платежей по
+          кредитам и распределения существующих резервов. Остальные операции с резервами и разделы
+          работают отдельно.
+        </p>
+      )}
       <div role="status" aria-live="polite">
         <strong>
           {online && needsVerification
@@ -1479,1036 +1503,1079 @@ export function OfflineSyncAccounts({
           Повторить отправку
         </button>
       </div>
-      <details>
-        <summary>Записать доход или расход</summary>
-        <form onSubmit={(event) => void recordCashMovement(event)}>
-          <label className="field">
-            <span>Счёт операции</span>
-            <select
-              value={cashAccount}
-              onChange={(event) => setCashAccount(event.target.value)}
-              required
-            >
-              <option value="">Выберите счёт</option>
-              {state.cloud.entities
-                .filter(
-                  (entity) =>
-                    entity.kind === 'account' &&
-                    (entity.data as { archived_at?: unknown })?.archived_at === null,
-                )
-                .map((entity) => (
-                  <option key={entity.id} value={entity.id}>
-                    {String((entity.data as { name: string }).name)}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Направление</span>
-            <select
-              value={cashKind}
-              onChange={(event) => setCashKind(event.target.value as 'income' | 'expense')}
-            >
-              <option value="expense">Расход</option>
-              <option value="income">Доход</option>
-            </select>
-          </label>
-          <label className="field">
-            <span>Сумма, ₽</span>
-            <input
-              value={cashAmount}
-              onChange={(event) => setCashAmount(event.target.value)}
-              inputMode="decimal"
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Дата операции</span>
-            <input
-              type="date"
-              value={cashDate}
-              onChange={(event) => setCashDate(event.target.value)}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Примечание</span>
-            <input
-              value={cashNote}
-              onChange={(event) => setCashNote(event.target.value)}
-              maxLength={500}
-            />
-          </label>
-          <p>Остаток изменится после подтверждения сервером.</p>
-          <button
-            type="submit"
-            className="button-secondary"
-            disabled={busy || state.status === 'CONFLICT'}
-          >
-            Сохранить операцию
-          </button>
-        </form>
-      </details>
-      <details>
-        <summary>Создать резерв</summary>
-        <form onSubmit={(event) => void createReserve(event)}>
-          <label className="field">
-            <span>Название резерва</span>
-            <input
-              value={reserveTitle}
-              onChange={(event) => setReserveTitle(event.target.value)}
-              maxLength={160}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Расход для резерва</span>
-            <select
-              value={reserveObligation}
-              onChange={(event) => setReserveObligation(event.target.value)}
-              required
-            >
-              <option value="">Выберите обязательство</option>
-              {state.cloud.entities
-                .filter((entity) => {
-                  const data = entity.data as { deleted_at?: unknown; direction?: unknown };
-                  return (
-                    entity.kind === 'obligation' &&
-                    data?.deleted_at === null &&
-                    data.direction === 'expense'
-                  );
-                })
-                .map((entity) => (
-                  <option key={entity.id} value={entity.id}>
-                    {String((entity.data as { title: string }).title)}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Счёт для резерва</span>
-            <select
-              value={reserveAccount}
-              onChange={(event) => setReserveAccount(event.target.value)}
-              required
-            >
-              <option value="">Выберите счёт</option>
-              {state.cloud.entities
-                .filter(
-                  (entity) =>
-                    entity.kind === 'account' &&
-                    (entity.data as { archived_at?: unknown })?.archived_at === null,
-                )
-                .map((entity) => (
-                  <option key={entity.id} value={entity.id}>
-                    {String((entity.data as { name: string }).name)}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Цель резерва, ₽</span>
-            <input
-              value={reserveTarget}
-              onChange={(event) => setReserveTarget(event.target.value)}
-              inputMode="decimal"
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Дата открытия резерва</span>
-            <input
-              type="date"
-              value={reserveOpened}
-              onChange={(event) => setReserveOpened(event.target.value)}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Первая дата оплаты резерва</span>
-            <input
-              type="date"
-              value={reserveDue}
-              onChange={(event) => {
-                setReserveDue(event.target.value);
-                setReserveDay(String(Number(event.target.value.slice(-2)) || ''));
-              }}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Период резерва, месяцев</span>
-            <input
-              type="number"
-              min="1"
-              max="60"
-              step="1"
-              value={reservePeriod}
-              onChange={(event) => setReservePeriod(event.target.value)}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>День месяца резерва</span>
-            <input
-              type="number"
-              min="1"
-              max="31"
-              step="1"
-              value={reserveDay}
-              onChange={(event) => setReserveDay(event.target.value)}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Режим взноса резерва</span>
-            <select
-              value={reserveMode}
-              onChange={(event) => setReserveMode(event.target.value as 'auto' | 'fixed')}
-            >
-              <option value="auto">Автоматический</option>
-              <option value="fixed">Фиксированный</option>
-            </select>
-          </label>
-          {reserveMode === 'fixed' && (
-            <label className="field">
-              <span>Фиксированный взнос, ₽</span>
-              <input
-                value={reserveFixed}
-                onChange={(event) => setReserveFixed(event.target.value)}
-                inputMode="decimal"
-                required
-              />
-            </label>
-          )}
-          <label className="field">
-            <span>Начальное распределение резерва, ₽</span>
-            <input
-              value={reserveOpening}
-              onChange={(event) => setReserveOpening(event.target.value)}
-              inputMode="decimal"
-              required
-            />
-          </label>
-          <p>Начальное распределение повлияет на доступный остаток после подтверждения сервером.</p>
-          <button
-            type="submit"
-            className="button-secondary"
-            disabled={busy || state.status === 'CONFLICT'}
-          >
-            Сохранить резерв в очередь
-          </button>
-        </form>
-      </details>
-      <details>
-        <summary>Завершить или восстановить цикл резерва</summary>
-        <label className="field">
-          <span>Резерв для цикла</span>
-          <select
-            value={cycleReserveId}
-            onChange={(event) => setCycleReserveId(event.target.value)}
-          >
-            <option value="">Выберите резерв</option>
-            {state.cloud.entities
-              .filter((entity) => {
-                const data = entity.data as { archived_at?: unknown; period_months?: unknown };
-                return (
-                  entity.kind === 'reserve' &&
-                  data?.archived_at === null &&
-                  typeof data.period_months === 'number'
-                );
-              })
-              .map((entity) => (
-                <option key={entity.id} value={entity.id}>
-                  {String((entity.data as { title: string }).title)}
-                </option>
-              ))}
-          </select>
-        </label>
-        <label className="field">
-          <span>Дата действия с циклом</span>
-          <input
-            type="date"
-            value={cycleDate}
-            onChange={(event) => setCycleDate(event.target.value)}
-          />
-        </label>
-        <label className="field">
-          <span>Причина восстановления цикла</span>
-          <input
-            value={cycleReason}
-            onChange={(event) => setCycleReason(event.target.value)}
-            maxLength={500}
-          />
-        </label>
-        <p>Цикл можно завершить после полной оплаты. Результат подтвердит сервер.</p>
-        <div className="dialog-actions">
-          <button
-            type="button"
-            className="button-secondary"
-            disabled={busy || state.status === 'CONFLICT' || !cycleReserveId}
-            onClick={() => void changeReserveCycle(true)}
-          >
-            Завершить цикл
-          </button>
-          <button
-            type="button"
-            className="button-secondary"
-            disabled={busy || state.status === 'CONFLICT' || !cycleReserveId}
-            onClick={() => void changeReserveCycle(false)}
-          >
-            Отменить закрытие цикла
-          </button>
-        </div>
-      </details>
-      <details>
-        <summary>Отменить событие резерва</summary>
-        <form onSubmit={(event) => void voidReserveEventAction(event)}>
-          <label className="field">
-            <span>Резерв для отмены события</span>
-            <select
-              value={voidReserveId}
-              onChange={(event) => {
-                setVoidReserveId(event.target.value);
-                setVoidReserveEvent('');
-              }}
-              required
-            >
-              <option value="">Выберите резерв</option>
-              {state.cloud.entities
-                .filter((entity) => {
-                  const data = entity.data as { archived_at?: unknown; account_id?: unknown };
-                  return (
-                    entity.kind === 'reserve' &&
-                    data?.archived_at === null &&
-                    typeof data.account_id === 'string'
-                  );
-                })
-                .map((entity) => (
-                  <option key={entity.id} value={entity.id}>
-                    {String((entity.data as { title: string }).title)}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Событие для отмены</span>
-            <select
-              value={voidReserveEvent}
-              onChange={(event) => setVoidReserveEvent(event.target.value)}
-              required
-            >
-              <option value="">Выберите событие</option>
-              {(() => {
-                const reserve = state.cloud.entities.find(
-                  (x) => x.kind === 'reserve' && x.id === voidReserveId,
-                );
-                const data = reserve?.data as
-                  | {
-                      cycle_number?: number;
-                      event_log?: Array<{
-                        id: string;
-                        kind: string;
-                        cycle_number: number;
-                        occurred_on: string;
-                        target_event_id?: string | null;
-                      }>;
-                    }
-                  | undefined;
-                const history = data?.event_log || [];
-                return history
-                  .filter(
-                    (item) =>
-                      ['skip', 'contribution', 'release'].includes(item.kind) &&
-                      item.cycle_number === data?.cycle_number &&
-                      !history.some(
-                        (other) => other.kind === 'void' && other.target_event_id === item.id,
-                      ),
-                  )
-                  .map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.occurred_on} ·{' '}
-                      {item.kind === 'skip'
-                        ? 'Пропуск'
-                        : item.kind === 'contribution'
-                          ? 'Пополнение'
-                          : 'Освобождение'}
-                    </option>
-                  ));
-              })()}
-            </select>
-          </label>
-          <label className="field">
-            <span>Дата отмены события</span>
-            <input
-              type="date"
-              value={voidReserveDate}
-              onChange={(event) => setVoidReserveDate(event.target.value)}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Причина отмены события</span>
-            <input
-              value={voidReserveReason}
-              onChange={(event) => setVoidReserveReason(event.target.value)}
-              maxLength={500}
-              required
-            />
-          </label>
-          <p>Компенсация распределения и остаток будут подтверждены сервером.</p>
-          <button
-            type="submit"
-            className="button-secondary"
-            disabled={busy || state.status === 'CONFLICT'}
-          >
-            Сохранить отмену события в очередь
-          </button>
-        </form>
-      </details>
-      <details>
-        <summary>Отметить пропущенный взнос</summary>
-        <form onSubmit={(event) => void skipReserveContribution(event)}>
-          <label className="field">
-            <span>Резерв для пропуска</span>
-            <select
-              value={skipReserveId}
-              onChange={(event) => setSkipReserveId(event.target.value)}
-              required
-            >
-              <option value="">Выберите резерв</option>
-              {state.cloud.entities
-                .filter((entity) => {
-                  const data = entity.data as { archived_at?: unknown; period_months?: unknown };
-                  return (
-                    entity.kind === 'reserve' &&
-                    data?.archived_at === null &&
-                    typeof data.period_months === 'number'
-                  );
-                })
-                .map((entity) => (
-                  <option key={entity.id} value={entity.id}>
-                    {String((entity.data as { title: string }).title)}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Дата пропущенного взноса</span>
-            <input
-              type="date"
-              value={skipSlot}
-              onChange={(event) => setSkipSlot(event.target.value)}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Дата отметки пропуска</span>
-            <input
-              type="date"
-              value={skipDate}
-              onChange={(event) => setSkipDate(event.target.value)}
-              required
-            />
-          </label>
-          <p>Остаток счёта и резерва не изменится.</p>
-          <button
-            type="submit"
-            className="button-secondary"
-            disabled={busy || state.status === 'CONFLICT'}
-          >
-            Сохранить пропуск в очередь
-          </button>
-        </form>
-      </details>
-      <details>
-        <summary>Изменить название или цель резерва</summary>
-        <form onSubmit={(event) => void updateReserve(event)}>
-          <label className="field">
-            <span>Резерв для изменения</span>
-            <select
-              value={editReserveId}
-              onChange={(event) => {
-                const id = event.target.value;
-                const selected = state.cloud.entities.find(
-                  (item) => item.kind === 'reserve' && item.id === id,
-                );
-                const data = selected?.data as
-                  | {
-                      title?: unknown;
-                      target_minor?: unknown;
-                      first_due_on?: unknown;
-                      period_months?: unknown;
-                      due_day?: unknown;
-                      contribution_mode?: unknown;
-                      fixed_monthly_minor?: unknown;
-                    }
-                  | undefined;
-                setEditReserveId(id);
-                setEditReserveTitle(typeof data?.title === 'string' ? data.title : '');
-                setEditReserveTarget(
-                  typeof data?.target_minor === 'number'
-                    ? (data.target_minor / 100).toFixed(2).replace('.', ',')
-                    : '',
-                );
-                setEditReserveDue(typeof data?.first_due_on === 'string' ? data.first_due_on : '');
-                setEditReservePeriod(
-                  typeof data?.period_months === 'number' ? String(data.period_months) : '',
-                );
-                setEditReserveDay(typeof data?.due_day === 'number' ? String(data.due_day) : '');
-                setEditReserveMode(data?.contribution_mode === 'fixed' ? 'fixed' : 'auto');
-                setEditReserveFixed(
-                  typeof data?.fixed_monthly_minor === 'number'
-                    ? (data.fixed_monthly_minor / 100).toFixed(2).replace('.', ',')
-                    : '',
-                );
-              }}
-              required
-            >
-              <option value="">Выберите резерв</option>
-              {state.cloud.entities
-                .filter((entity) => {
-                  const data = entity.data as { archived_at?: unknown; period_months?: unknown };
-                  return (
-                    entity.kind === 'reserve' &&
-                    data?.archived_at === null &&
-                    typeof data.period_months === 'number'
-                  );
-                })
-                .map((entity) => (
-                  <option key={entity.id} value={entity.id}>
-                    {String((entity.data as { title: string }).title)}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Новое название резерва</span>
-            <input
-              value={editReserveTitle}
-              onChange={(event) => setEditReserveTitle(event.target.value)}
-              maxLength={160}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Новая цель резерва, ₽</span>
-            <input
-              value={editReserveTarget}
-              onChange={(event) => setEditReserveTarget(event.target.value)}
-              inputMode="decimal"
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Первая дата оплаты изменённого резерва</span>
-            <input
-              type="date"
-              value={editReserveDue}
-              onChange={(event) => setEditReserveDue(event.target.value)}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Период изменённого резерва, месяцев</span>
-            <input
-              type="number"
-              min="1"
-              max="60"
-              step="1"
-              value={editReservePeriod}
-              onChange={(event) => setEditReservePeriod(event.target.value)}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>День месяца изменённого резерва</span>
-            <input
-              type="number"
-              min="1"
-              max="31"
-              step="1"
-              value={editReserveDay}
-              onChange={(event) => setEditReserveDay(event.target.value)}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Режим взноса изменённого резерва</span>
-            <select
-              value={editReserveMode}
-              onChange={(event) => setEditReserveMode(event.target.value as 'auto' | 'fixed')}
-            >
-              <option value="auto">Автоматический</option>
-              <option value="fixed">Фиксированный</option>
-            </select>
-          </label>
-          {editReserveMode === 'fixed' && (
-            <label className="field">
-              <span>Новый фиксированный взнос, ₽</span>
-              <input
-                value={editReserveFixed}
-                onChange={(event) => setEditReserveFixed(event.target.value)}
-                inputMode="decimal"
-                required
-              />
-            </label>
-          )}
-          <label className="field">
-            <span>Дата изменения резерва</span>
-            <input
-              type="date"
-              value={editReserveDate}
-              onChange={(event) => setEditReserveDate(event.target.value)}
-              required
-            />
-          </label>
-          <p>Остаток резерва сохраняется. Изменение графика доступно до первых событий.</p>
-          <button
-            type="submit"
-            className="button-secondary"
-            disabled={busy || state.status === 'CONFLICT'}
-          >
-            Сохранить изменение резерва в очередь
-          </button>
-        </form>
-      </details>
-      <details>
-        <summary>Пополнить или освободить резерв</summary>
-        <form onSubmit={(event) => void allocateReserve(event)}>
-          <label className="field">
-            <span>Резерв</span>
-            <select
-              value={allocationReserve}
-              onChange={(event) => setAllocationReserve(event.target.value)}
-              required
-            >
-              <option value="">Выберите резерв</option>
-              {state.cloud.entities
-                .filter((entity) => {
-                  const data = entity.data as {
-                    archived_at?: unknown;
-                    period_months?: unknown;
-                    account_id?: unknown;
-                  };
-                  return (
-                    entity.kind === 'reserve' &&
-                    data?.archived_at === null &&
-                    typeof data.period_months === 'number' &&
-                    typeof data.account_id === 'string'
-                  );
-                })
-                .map((entity) => (
-                  <option key={entity.id} value={entity.id}>
-                    {String((entity.data as { title: string }).title)}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Действие с резервом</span>
-            <select
-              value={allocationKind}
-              onChange={(event) =>
-                setAllocationKind(event.target.value as 'contribution' | 'release')
-              }
-            >
-              <option value="contribution">Пополнить</option>
-              <option value="release">Освободить</option>
-            </select>
-          </label>
-          <label className="field">
-            <span>Сумма распределения, ₽</span>
-            <input
-              value={allocationAmount}
-              onChange={(event) => setAllocationAmount(event.target.value)}
-              inputMode="decimal"
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Дата распределения</span>
-            <input
-              type="date"
-              value={allocationDate}
-              onChange={(event) => setAllocationDate(event.target.value)}
-              required
-            />
-          </label>
-          <p>Доступный и зарезервированный остатки изменятся после подтверждения сервером.</p>
-          <button
-            type="submit"
-            className="button-secondary"
-            disabled={busy || state.status === 'CONFLICT'}
-          >
-            Сохранить распределение в очередь
-          </button>
-          <button
-            type="button"
-            className="button-secondary"
-            onClick={() => void archiveReserve()}
-            disabled={busy || state.status === 'CONFLICT' || !allocationReserve}
-          >
-            Архивировать выбранный резерв
-          </button>
-        </form>
-      </details>
-      <details>
-        <summary>Создать обязательство</summary>
-        <form onSubmit={(event) => void createObligation(event)}>
-          <label className="field">
-            <span>Название обязательства</span>
-            <input
-              value={obligationTitle}
-              onChange={(event) => setObligationTitle(event.target.value)}
-              maxLength={160}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Направление обязательства</span>
-            <select
-              value={obligationDirection}
-              onChange={(event) =>
-                setObligationDirection(event.target.value as 'expense' | 'income')
-              }
-            >
-              <option value="expense">Расход</option>
-              <option value="income">Доход</option>
-            </select>
-          </label>
-          <label className="field">
-            <span>Сумма обязательства, ₽</span>
-            <input
-              value={obligationAmount}
-              onChange={(event) => setObligationAmount(event.target.value)}
-              inputMode="decimal"
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Дата начала обязательства</span>
-            <input
-              type="date"
-              value={obligationDate}
-              onChange={(event) => setObligationDate(event.target.value)}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Повторение обязательства</span>
-            <select
-              value={obligationRecurrence}
-              onChange={(event) =>
-                setObligationRecurrence(event.target.value as 'none' | 'month' | 'year')
-              }
-            >
-              <option value="none">Один раз</option>
-              <option value="month">Каждый месяц</option>
-              <option value="year">Каждый год</option>
-            </select>
-          </label>
-          <p>Обязательство появится в подтверждённой копии после ответа сервера.</p>
-          <button
-            type="submit"
-            className="button-secondary"
-            disabled={busy || state.status === 'CONFLICT'}
-          >
-            Сохранить обязательство в очередь
-          </button>
-        </form>
-      </details>
-      <details>
-        <summary>Записать оплату обязательства</summary>
-        <form onSubmit={(event) => void recordSettlement(event)}>
-          <label className="field">
-            <span>Обязательство</span>
-            <select
-              value={paymentObligation}
-              onChange={(event) => setPaymentObligation(event.target.value)}
-              required
-            >
-              <option value="">Выберите обязательство</option>
-              {state.cloud.entities
-                .filter(
-                  (entity) =>
-                    entity.kind === 'obligation' &&
-                    (entity.data as { deleted_at?: unknown })?.deleted_at === null,
-                )
-                .map((entity) => (
-                  <option key={entity.id} value={entity.id}>
-                    {String((entity.data as { title: string }).title)}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Счёт оплаты</span>
-            <select
-              value={paymentAccount}
-              onChange={(event) => setPaymentAccount(event.target.value)}
-              required
-            >
-              <option value="">Выберите счёт</option>
-              {state.cloud.entities
-                .filter(
-                  (entity) =>
-                    entity.kind === 'account' &&
-                    (entity.data as { archived_at?: unknown })?.archived_at === null,
-                )
-                .map((entity) => (
-                  <option key={entity.id} value={entity.id}>
-                    {String((entity.data as { name: string }).name)}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Сумма оплаты, ₽</span>
-            <input
-              value={paymentAmount}
-              onChange={(event) => setPaymentAmount(event.target.value)}
-              inputMode="decimal"
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Дата оплаты</span>
-            <input
-              type="date"
-              value={paymentDate}
-              onChange={(event) => setPaymentDate(event.target.value)}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Дата периода обязательства</span>
-            <input
-              type="date"
-              value={paymentOccurrence}
-              onChange={(event) => setPaymentOccurrence(event.target.value)}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Резерв для оплаты</span>
-            <select
-              value={paymentReserve}
-              onChange={(event) => setPaymentReserve(event.target.value)}
-            >
-              <option value="">Без резерва</option>
-              {state.cloud.entities
-                .filter((entity) => {
-                  const data = entity.data as {
-                    account_id?: unknown;
-                    obligation_id?: unknown;
-                    archived_at?: unknown;
-                  };
-                  return (
-                    entity.kind === 'reserve' &&
-                    data?.account_id === paymentAccount &&
-                    data?.obligation_id === paymentObligation &&
-                    data?.archived_at === null
-                  );
-                })
-                .map((entity) => (
-                  <option key={entity.id} value={entity.id}>
-                    {String((entity.data as { title: string }).title)}
-                  </option>
-                ))}
-            </select>
-          </label>
-          {paymentReserve && (
-            <label className="field">
-              <span>Из резерва, ₽</span>
-              <input
-                value={paymentReservedUsed}
-                onChange={(event) => setPaymentReservedUsed(event.target.value)}
-                inputMode="decimal"
-                required
-              />
-            </label>
-          )}
-          <p>Оплата и остаток будут подтверждены сервером после отправки.</p>
-          <button
-            type="submit"
-            className="button-secondary"
-            disabled={busy || state.status === 'CONFLICT'}
-          >
-            Сохранить оплату в очередь
-          </button>
-        </form>
-      </details>
-      <details>
-        <summary>Записать платёж по кредиту</summary>
-        <form onSubmit={(event) => void recordLoanPayment(event)}>
-          <label className="field">
-            <span>Кредит</span>
-            <select value={loanId} onChange={(event) => setLoanId(event.target.value)} required>
-              <option value="">Выберите кредит</option>
-              {state.cloud.entities
-                .filter(
-                  (entity) =>
-                    entity.kind === 'loan' &&
-                    (entity.data as { deleted_at?: unknown })?.deleted_at === null,
-                )
-                .map((entity) => (
-                  <option key={entity.id} value={entity.id}>
-                    {String((entity.data as { title: string }).title)}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Счёт платежа по кредиту</span>
-            <select
-              value={loanAccount}
-              onChange={(event) => setLoanAccount(event.target.value)}
-              required
-            >
-              <option value="">Выберите счёт</option>
-              {state.cloud.entities
-                .filter(
-                  (entity) =>
-                    entity.kind === 'account' &&
-                    (entity.data as { archived_at?: unknown })?.archived_at === null,
-                )
-                .map((entity) => (
-                  <option key={entity.id} value={entity.id}>
-                    {String((entity.data as { name: string }).name)}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Сумма платежа по кредиту, ₽</span>
-            <input
-              value={loanAmount}
-              onChange={(event) => setLoanAmount(event.target.value)}
-              inputMode="decimal"
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Дата платежа по кредиту</span>
-            <input
-              type="date"
-              value={loanDate}
-              onChange={(event) => setLoanDate(event.target.value)}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Стратегия досрочного погашения</span>
-            <select
-              value={loanStrategy}
-              onChange={(event) => setLoanStrategy(event.target.value as 'term' | 'amount')}
-            >
-              <option value="term">Сократить срок</option>
-              <option value="amount">Уменьшить платёж</option>
-            </select>
-          </label>
-          <p>Платёж и остаток будут подтверждены сервером после отправки.</p>
-          <button
-            type="submit"
-            className="button-secondary"
-            disabled={busy || state.status === 'CONFLICT'}
-          >
-            Сохранить платёж в очередь
-          </button>
-        </form>
-      </details>
-      <details>
-        <summary>Отменить подтверждённую операцию</summary>
-        <p>
-          Будет создана компенсирующая проводка; история сохранится. До ответа сервера остаток не
-          изменится.
-        </p>
-        <form onSubmit={(event) => void reverseCashMovement(event)}>
-          <label className="field">
-            <span>Операция для отмены</span>
-            <select
-              value={reverseId}
-              onChange={(event) => setReverseId(event.target.value)}
-              required
-            >
-              <option value="">Выберите операцию</option>
-              {reversible.map((entity) => {
-                const data = entity.data as TransactionData;
-                const first = data.postings?.[0]?.signed_minor;
-                return (
-                  <option key={entity.id} value={entity.id}>
-                    {data.occurred_on || 'Дата недоступна'} ·{' '}
-                    {data.kind === 'transfer'
-                      ? 'Перевод'
-                      : data.kind === 'income'
-                        ? 'Доход'
-                        : data.kind === 'expense'
-                          ? 'Расход'
-                          : data.kind === 'payment'
-                            ? 'Оплата обязательства'
-                            : 'Корректировка'}{' '}
-                    · {typeof first === 'number' ? formatRubMinor(first) : 'сумма недоступна'}
-                  </option>
-                );
-              })}
-            </select>
-          </label>
-          <label className="field">
-            <span>Причина отмены</span>
-            <input
-              value={reverseReason}
-              onChange={(event) => setReverseReason(event.target.value)}
-              maxLength={500}
-              required
-            />
-          </label>
-          <button
-            type="submit"
-            className="button-secondary"
-            disabled={busy || state.status === 'CONFLICT' || !reversible.length}
-          >
-            Сохранить отмену
-          </button>
-        </form>
-      </details>
-      <details>
-        <summary>Ключ восстановления</summary>
-        <p>
-          Новый ключ заменит прежний; парольная фраза останется прежней. Для выпуска требуется сеть
-          и действующая сессия.
-        </p>
-        <label className="field">
-          <span>Парольная фраза для нового ключа</span>
-          <input
-            type="password"
-            autoComplete="off"
-            value={recoveryPassphrase}
-            onChange={(event) => setRecoveryPassphrase(event.target.value)}
-          />
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={confirmRecoveryChange}
-            onChange={(event) => setConfirmRecoveryChange(event.target.checked)}
-          />{' '}
-          Понимаю, что прежний ключ перестанет действовать
-        </label>
+      {offlineOnly && allowOfflineBudgets && state.canBudget === true && (
         <button
           type="button"
           className="button-secondary"
-          disabled={busy || !online || !confirmRecoveryChange || !recoveryPassphrase}
-          onClick={() => void reissueRecovery()}
+          onClick={() => setLocalBudgetMode((v) => !v)}
         >
-          Выпустить новый ключ
+          {budgetMode ? 'Счета и кошельки' : 'Бюджеты'}
         </button>
-        {replacementRecovery && (
-          <p>
-            Новый ключ восстановления: <output>{replacementRecovery}</output>
-          </p>
-        )}
-      </details>
+      )}
+      {budgetMode && (
+        <Budgets
+          view={view}
+          entities={state.cloud.entities}
+          writable={state.canBudget === true && !busy && state.status !== 'CONFLICT'}
+          pending={state.outbox.length > 0}
+          onCommand={(action, payload, versions) =>
+            enqueue({
+              schema_version: 2,
+              client_mutation_id: crypto.randomUUID(),
+              base_revision: state.cloud.revision,
+              action,
+              expected_entity_revisions: versions,
+              payload,
+            })
+          }
+        />
+      )}
+      {!budgetMode && (
+        <>
+          <details>
+            <summary>Записать доход или расход</summary>
+            <form onSubmit={(event) => void recordCashMovement(event)}>
+              <label className="field">
+                <span>Счёт операции</span>
+                <select
+                  value={cashAccount}
+                  onChange={(event) => setCashAccount(event.target.value)}
+                  required
+                >
+                  <option value="">Выберите счёт</option>
+                  {state.cloud.entities
+                    .filter(
+                      (entity) =>
+                        entity.kind === 'account' &&
+                        (entity.data as { archived_at?: unknown })?.archived_at === null,
+                    )
+                    .map((entity) => (
+                      <option key={entity.id} value={entity.id}>
+                        {String((entity.data as { name: string }).name)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Направление</span>
+                <select
+                  value={cashKind}
+                  onChange={(event) => setCashKind(event.target.value as 'income' | 'expense')}
+                >
+                  <option value="expense">Расход</option>
+                  <option value="income">Доход</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Сумма, ₽</span>
+                <input
+                  value={cashAmount}
+                  onChange={(event) => setCashAmount(event.target.value)}
+                  inputMode="decimal"
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Дата операции</span>
+                <input
+                  type="date"
+                  value={cashDate}
+                  onChange={(event) => setCashDate(event.target.value)}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Примечание</span>
+                <input
+                  value={cashNote}
+                  onChange={(event) => setCashNote(event.target.value)}
+                  maxLength={500}
+                />
+              </label>
+              <p>Остаток изменится после подтверждения сервером.</p>
+              <button
+                type="submit"
+                className="button-secondary"
+                disabled={busy || state.status === 'CONFLICT'}
+              >
+                Сохранить операцию
+              </button>
+            </form>
+          </details>
+          <details>
+            <summary>Создать резерв</summary>
+            <form onSubmit={(event) => void createReserve(event)}>
+              <label className="field">
+                <span>Название резерва</span>
+                <input
+                  value={reserveTitle}
+                  onChange={(event) => setReserveTitle(event.target.value)}
+                  maxLength={160}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Расход для резерва</span>
+                <select
+                  value={reserveObligation}
+                  onChange={(event) => setReserveObligation(event.target.value)}
+                  required
+                >
+                  <option value="">Выберите обязательство</option>
+                  {state.cloud.entities
+                    .filter((entity) => {
+                      const data = entity.data as { deleted_at?: unknown; direction?: unknown };
+                      return (
+                        entity.kind === 'obligation' &&
+                        data?.deleted_at === null &&
+                        data.direction === 'expense'
+                      );
+                    })
+                    .map((entity) => (
+                      <option key={entity.id} value={entity.id}>
+                        {String((entity.data as { title: string }).title)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Счёт для резерва</span>
+                <select
+                  value={reserveAccount}
+                  onChange={(event) => setReserveAccount(event.target.value)}
+                  required
+                >
+                  <option value="">Выберите счёт</option>
+                  {state.cloud.entities
+                    .filter(
+                      (entity) =>
+                        entity.kind === 'account' &&
+                        (entity.data as { archived_at?: unknown })?.archived_at === null,
+                    )
+                    .map((entity) => (
+                      <option key={entity.id} value={entity.id}>
+                        {String((entity.data as { name: string }).name)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Цель резерва, ₽</span>
+                <input
+                  value={reserveTarget}
+                  onChange={(event) => setReserveTarget(event.target.value)}
+                  inputMode="decimal"
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Дата открытия резерва</span>
+                <input
+                  type="date"
+                  value={reserveOpened}
+                  onChange={(event) => setReserveOpened(event.target.value)}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Первая дата оплаты резерва</span>
+                <input
+                  type="date"
+                  value={reserveDue}
+                  onChange={(event) => {
+                    setReserveDue(event.target.value);
+                    setReserveDay(String(Number(event.target.value.slice(-2)) || ''));
+                  }}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Период резерва, месяцев</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="60"
+                  step="1"
+                  value={reservePeriod}
+                  onChange={(event) => setReservePeriod(event.target.value)}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>День месяца резерва</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="31"
+                  step="1"
+                  value={reserveDay}
+                  onChange={(event) => setReserveDay(event.target.value)}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Режим взноса резерва</span>
+                <select
+                  value={reserveMode}
+                  onChange={(event) => setReserveMode(event.target.value as 'auto' | 'fixed')}
+                >
+                  <option value="auto">Автоматический</option>
+                  <option value="fixed">Фиксированный</option>
+                </select>
+              </label>
+              {reserveMode === 'fixed' && (
+                <label className="field">
+                  <span>Фиксированный взнос, ₽</span>
+                  <input
+                    value={reserveFixed}
+                    onChange={(event) => setReserveFixed(event.target.value)}
+                    inputMode="decimal"
+                    required
+                  />
+                </label>
+              )}
+              <label className="field">
+                <span>Начальное распределение резерва, ₽</span>
+                <input
+                  value={reserveOpening}
+                  onChange={(event) => setReserveOpening(event.target.value)}
+                  inputMode="decimal"
+                  required
+                />
+              </label>
+              <p>
+                Начальное распределение повлияет на доступный остаток после подтверждения сервером.
+              </p>
+              <button
+                type="submit"
+                className="button-secondary"
+                disabled={busy || state.status === 'CONFLICT'}
+              >
+                Сохранить резерв в очередь
+              </button>
+            </form>
+          </details>
+          <details>
+            <summary>Завершить или восстановить цикл резерва</summary>
+            <label className="field">
+              <span>Резерв для цикла</span>
+              <select
+                value={cycleReserveId}
+                onChange={(event) => setCycleReserveId(event.target.value)}
+              >
+                <option value="">Выберите резерв</option>
+                {state.cloud.entities
+                  .filter((entity) => {
+                    const data = entity.data as { archived_at?: unknown; period_months?: unknown };
+                    return (
+                      entity.kind === 'reserve' &&
+                      data?.archived_at === null &&
+                      typeof data.period_months === 'number'
+                    );
+                  })
+                  .map((entity) => (
+                    <option key={entity.id} value={entity.id}>
+                      {String((entity.data as { title: string }).title)}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Дата действия с циклом</span>
+              <input
+                type="date"
+                value={cycleDate}
+                onChange={(event) => setCycleDate(event.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Причина восстановления цикла</span>
+              <input
+                value={cycleReason}
+                onChange={(event) => setCycleReason(event.target.value)}
+                maxLength={500}
+              />
+            </label>
+            <p>Цикл можно завершить после полной оплаты. Результат подтвердит сервер.</p>
+            <div className="dialog-actions">
+              <button
+                type="button"
+                className="button-secondary"
+                disabled={busy || state.status === 'CONFLICT' || !cycleReserveId}
+                onClick={() => void changeReserveCycle(true)}
+              >
+                Завершить цикл
+              </button>
+              <button
+                type="button"
+                className="button-secondary"
+                disabled={busy || state.status === 'CONFLICT' || !cycleReserveId}
+                onClick={() => void changeReserveCycle(false)}
+              >
+                Отменить закрытие цикла
+              </button>
+            </div>
+          </details>
+          <details>
+            <summary>Отменить событие резерва</summary>
+            <form onSubmit={(event) => void voidReserveEventAction(event)}>
+              <label className="field">
+                <span>Резерв для отмены события</span>
+                <select
+                  value={voidReserveId}
+                  onChange={(event) => {
+                    setVoidReserveId(event.target.value);
+                    setVoidReserveEvent('');
+                  }}
+                  required
+                >
+                  <option value="">Выберите резерв</option>
+                  {state.cloud.entities
+                    .filter((entity) => {
+                      const data = entity.data as { archived_at?: unknown; account_id?: unknown };
+                      return (
+                        entity.kind === 'reserve' &&
+                        data?.archived_at === null &&
+                        typeof data.account_id === 'string'
+                      );
+                    })
+                    .map((entity) => (
+                      <option key={entity.id} value={entity.id}>
+                        {String((entity.data as { title: string }).title)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Событие для отмены</span>
+                <select
+                  value={voidReserveEvent}
+                  onChange={(event) => setVoidReserveEvent(event.target.value)}
+                  required
+                >
+                  <option value="">Выберите событие</option>
+                  {(() => {
+                    const reserve = state.cloud.entities.find(
+                      (x) => x.kind === 'reserve' && x.id === voidReserveId,
+                    );
+                    const data = reserve?.data as
+                      | {
+                          cycle_number?: number;
+                          event_log?: Array<{
+                            id: string;
+                            kind: string;
+                            cycle_number: number;
+                            occurred_on: string;
+                            target_event_id?: string | null;
+                          }>;
+                        }
+                      | undefined;
+                    const history = data?.event_log || [];
+                    return history
+                      .filter(
+                        (item) =>
+                          ['skip', 'contribution', 'release'].includes(item.kind) &&
+                          item.cycle_number === data?.cycle_number &&
+                          !history.some(
+                            (other) => other.kind === 'void' && other.target_event_id === item.id,
+                          ),
+                      )
+                      .map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.occurred_on} ·{' '}
+                          {item.kind === 'skip'
+                            ? 'Пропуск'
+                            : item.kind === 'contribution'
+                              ? 'Пополнение'
+                              : 'Освобождение'}
+                        </option>
+                      ));
+                  })()}
+                </select>
+              </label>
+              <label className="field">
+                <span>Дата отмены события</span>
+                <input
+                  type="date"
+                  value={voidReserveDate}
+                  onChange={(event) => setVoidReserveDate(event.target.value)}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Причина отмены события</span>
+                <input
+                  value={voidReserveReason}
+                  onChange={(event) => setVoidReserveReason(event.target.value)}
+                  maxLength={500}
+                  required
+                />
+              </label>
+              <p>Компенсация распределения и остаток будут подтверждены сервером.</p>
+              <button
+                type="submit"
+                className="button-secondary"
+                disabled={busy || state.status === 'CONFLICT'}
+              >
+                Сохранить отмену события в очередь
+              </button>
+            </form>
+          </details>
+          <details>
+            <summary>Отметить пропущенный взнос</summary>
+            <form onSubmit={(event) => void skipReserveContribution(event)}>
+              <label className="field">
+                <span>Резерв для пропуска</span>
+                <select
+                  value={skipReserveId}
+                  onChange={(event) => setSkipReserveId(event.target.value)}
+                  required
+                >
+                  <option value="">Выберите резерв</option>
+                  {state.cloud.entities
+                    .filter((entity) => {
+                      const data = entity.data as {
+                        archived_at?: unknown;
+                        period_months?: unknown;
+                      };
+                      return (
+                        entity.kind === 'reserve' &&
+                        data?.archived_at === null &&
+                        typeof data.period_months === 'number'
+                      );
+                    })
+                    .map((entity) => (
+                      <option key={entity.id} value={entity.id}>
+                        {String((entity.data as { title: string }).title)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Дата пропущенного взноса</span>
+                <input
+                  type="date"
+                  value={skipSlot}
+                  onChange={(event) => setSkipSlot(event.target.value)}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Дата отметки пропуска</span>
+                <input
+                  type="date"
+                  value={skipDate}
+                  onChange={(event) => setSkipDate(event.target.value)}
+                  required
+                />
+              </label>
+              <p>Остаток счёта и резерва не изменится.</p>
+              <button
+                type="submit"
+                className="button-secondary"
+                disabled={busy || state.status === 'CONFLICT'}
+              >
+                Сохранить пропуск в очередь
+              </button>
+            </form>
+          </details>
+          <details>
+            <summary>Изменить название или цель резерва</summary>
+            <form onSubmit={(event) => void updateReserve(event)}>
+              <label className="field">
+                <span>Резерв для изменения</span>
+                <select
+                  value={editReserveId}
+                  onChange={(event) => {
+                    const id = event.target.value;
+                    const selected = state.cloud.entities.find(
+                      (item) => item.kind === 'reserve' && item.id === id,
+                    );
+                    const data = selected?.data as
+                      | {
+                          title?: unknown;
+                          target_minor?: unknown;
+                          first_due_on?: unknown;
+                          period_months?: unknown;
+                          due_day?: unknown;
+                          contribution_mode?: unknown;
+                          fixed_monthly_minor?: unknown;
+                        }
+                      | undefined;
+                    setEditReserveId(id);
+                    setEditReserveTitle(typeof data?.title === 'string' ? data.title : '');
+                    setEditReserveTarget(
+                      typeof data?.target_minor === 'number'
+                        ? (data.target_minor / 100).toFixed(2).replace('.', ',')
+                        : '',
+                    );
+                    setEditReserveDue(
+                      typeof data?.first_due_on === 'string' ? data.first_due_on : '',
+                    );
+                    setEditReservePeriod(
+                      typeof data?.period_months === 'number' ? String(data.period_months) : '',
+                    );
+                    setEditReserveDay(
+                      typeof data?.due_day === 'number' ? String(data.due_day) : '',
+                    );
+                    setEditReserveMode(data?.contribution_mode === 'fixed' ? 'fixed' : 'auto');
+                    setEditReserveFixed(
+                      typeof data?.fixed_monthly_minor === 'number'
+                        ? (data.fixed_monthly_minor / 100).toFixed(2).replace('.', ',')
+                        : '',
+                    );
+                  }}
+                  required
+                >
+                  <option value="">Выберите резерв</option>
+                  {state.cloud.entities
+                    .filter((entity) => {
+                      const data = entity.data as {
+                        archived_at?: unknown;
+                        period_months?: unknown;
+                      };
+                      return (
+                        entity.kind === 'reserve' &&
+                        data?.archived_at === null &&
+                        typeof data.period_months === 'number'
+                      );
+                    })
+                    .map((entity) => (
+                      <option key={entity.id} value={entity.id}>
+                        {String((entity.data as { title: string }).title)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Новое название резерва</span>
+                <input
+                  value={editReserveTitle}
+                  onChange={(event) => setEditReserveTitle(event.target.value)}
+                  maxLength={160}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Новая цель резерва, ₽</span>
+                <input
+                  value={editReserveTarget}
+                  onChange={(event) => setEditReserveTarget(event.target.value)}
+                  inputMode="decimal"
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Первая дата оплаты изменённого резерва</span>
+                <input
+                  type="date"
+                  value={editReserveDue}
+                  onChange={(event) => setEditReserveDue(event.target.value)}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Период изменённого резерва, месяцев</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="60"
+                  step="1"
+                  value={editReservePeriod}
+                  onChange={(event) => setEditReservePeriod(event.target.value)}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>День месяца изменённого резерва</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="31"
+                  step="1"
+                  value={editReserveDay}
+                  onChange={(event) => setEditReserveDay(event.target.value)}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Режим взноса изменённого резерва</span>
+                <select
+                  value={editReserveMode}
+                  onChange={(event) => setEditReserveMode(event.target.value as 'auto' | 'fixed')}
+                >
+                  <option value="auto">Автоматический</option>
+                  <option value="fixed">Фиксированный</option>
+                </select>
+              </label>
+              {editReserveMode === 'fixed' && (
+                <label className="field">
+                  <span>Новый фиксированный взнос, ₽</span>
+                  <input
+                    value={editReserveFixed}
+                    onChange={(event) => setEditReserveFixed(event.target.value)}
+                    inputMode="decimal"
+                    required
+                  />
+                </label>
+              )}
+              <label className="field">
+                <span>Дата изменения резерва</span>
+                <input
+                  type="date"
+                  value={editReserveDate}
+                  onChange={(event) => setEditReserveDate(event.target.value)}
+                  required
+                />
+              </label>
+              <p>Остаток резерва сохраняется. Изменение графика доступно до первых событий.</p>
+              <button
+                type="submit"
+                className="button-secondary"
+                disabled={busy || state.status === 'CONFLICT'}
+              >
+                Сохранить изменение резерва в очередь
+              </button>
+            </form>
+          </details>
+          <details>
+            <summary>Пополнить или освободить резерв</summary>
+            <form onSubmit={(event) => void allocateReserve(event)}>
+              <label className="field">
+                <span>Резерв</span>
+                <select
+                  value={allocationReserve}
+                  onChange={(event) => setAllocationReserve(event.target.value)}
+                  required
+                >
+                  <option value="">Выберите резерв</option>
+                  {state.cloud.entities
+                    .filter((entity) => {
+                      const data = entity.data as {
+                        archived_at?: unknown;
+                        period_months?: unknown;
+                        account_id?: unknown;
+                      };
+                      return (
+                        entity.kind === 'reserve' &&
+                        data?.archived_at === null &&
+                        typeof data.period_months === 'number' &&
+                        typeof data.account_id === 'string'
+                      );
+                    })
+                    .map((entity) => (
+                      <option key={entity.id} value={entity.id}>
+                        {String((entity.data as { title: string }).title)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Действие с резервом</span>
+                <select
+                  value={allocationKind}
+                  onChange={(event) =>
+                    setAllocationKind(event.target.value as 'contribution' | 'release')
+                  }
+                >
+                  <option value="contribution">Пополнить</option>
+                  <option value="release">Освободить</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Сумма распределения, ₽</span>
+                <input
+                  value={allocationAmount}
+                  onChange={(event) => setAllocationAmount(event.target.value)}
+                  inputMode="decimal"
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Дата распределения</span>
+                <input
+                  type="date"
+                  value={allocationDate}
+                  onChange={(event) => setAllocationDate(event.target.value)}
+                  required
+                />
+              </label>
+              <p>Доступный и зарезервированный остатки изменятся после подтверждения сервером.</p>
+              <button
+                type="submit"
+                className="button-secondary"
+                disabled={busy || state.status === 'CONFLICT'}
+              >
+                Сохранить распределение в очередь
+              </button>
+              <button
+                type="button"
+                className="button-secondary"
+                onClick={() => void archiveReserve()}
+                disabled={busy || state.status === 'CONFLICT' || !allocationReserve}
+              >
+                Архивировать выбранный резерв
+              </button>
+            </form>
+          </details>
+          <details>
+            <summary>Создать обязательство</summary>
+            <form onSubmit={(event) => void createObligation(event)}>
+              <label className="field">
+                <span>Название обязательства</span>
+                <input
+                  value={obligationTitle}
+                  onChange={(event) => setObligationTitle(event.target.value)}
+                  maxLength={160}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Направление обязательства</span>
+                <select
+                  value={obligationDirection}
+                  onChange={(event) =>
+                    setObligationDirection(event.target.value as 'expense' | 'income')
+                  }
+                >
+                  <option value="expense">Расход</option>
+                  <option value="income">Доход</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Сумма обязательства, ₽</span>
+                <input
+                  value={obligationAmount}
+                  onChange={(event) => setObligationAmount(event.target.value)}
+                  inputMode="decimal"
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Дата начала обязательства</span>
+                <input
+                  type="date"
+                  value={obligationDate}
+                  onChange={(event) => setObligationDate(event.target.value)}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Повторение обязательства</span>
+                <select
+                  value={obligationRecurrence}
+                  onChange={(event) =>
+                    setObligationRecurrence(event.target.value as 'none' | 'month' | 'year')
+                  }
+                >
+                  <option value="none">Один раз</option>
+                  <option value="month">Каждый месяц</option>
+                  <option value="year">Каждый год</option>
+                </select>
+              </label>
+              <p>Обязательство появится в подтверждённой копии после ответа сервера.</p>
+              <button
+                type="submit"
+                className="button-secondary"
+                disabled={busy || state.status === 'CONFLICT'}
+              >
+                Сохранить обязательство в очередь
+              </button>
+            </form>
+          </details>
+          <details>
+            <summary>Записать оплату обязательства</summary>
+            <form onSubmit={(event) => void recordSettlement(event)}>
+              <label className="field">
+                <span>Обязательство</span>
+                <select
+                  value={paymentObligation}
+                  onChange={(event) => setPaymentObligation(event.target.value)}
+                  required
+                >
+                  <option value="">Выберите обязательство</option>
+                  {state.cloud.entities
+                    .filter(
+                      (entity) =>
+                        entity.kind === 'obligation' &&
+                        (entity.data as { deleted_at?: unknown })?.deleted_at === null,
+                    )
+                    .map((entity) => (
+                      <option key={entity.id} value={entity.id}>
+                        {String((entity.data as { title: string }).title)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Счёт оплаты</span>
+                <select
+                  value={paymentAccount}
+                  onChange={(event) => setPaymentAccount(event.target.value)}
+                  required
+                >
+                  <option value="">Выберите счёт</option>
+                  {state.cloud.entities
+                    .filter(
+                      (entity) =>
+                        entity.kind === 'account' &&
+                        (entity.data as { archived_at?: unknown })?.archived_at === null,
+                    )
+                    .map((entity) => (
+                      <option key={entity.id} value={entity.id}>
+                        {String((entity.data as { name: string }).name)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Сумма оплаты, ₽</span>
+                <input
+                  value={paymentAmount}
+                  onChange={(event) => setPaymentAmount(event.target.value)}
+                  inputMode="decimal"
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Дата оплаты</span>
+                <input
+                  type="date"
+                  value={paymentDate}
+                  onChange={(event) => setPaymentDate(event.target.value)}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Дата периода обязательства</span>
+                <input
+                  type="date"
+                  value={paymentOccurrence}
+                  onChange={(event) => setPaymentOccurrence(event.target.value)}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Резерв для оплаты</span>
+                <select
+                  value={paymentReserve}
+                  onChange={(event) => setPaymentReserve(event.target.value)}
+                >
+                  <option value="">Без резерва</option>
+                  {state.cloud.entities
+                    .filter((entity) => {
+                      const data = entity.data as {
+                        account_id?: unknown;
+                        obligation_id?: unknown;
+                        archived_at?: unknown;
+                      };
+                      return (
+                        entity.kind === 'reserve' &&
+                        data?.account_id === paymentAccount &&
+                        data?.obligation_id === paymentObligation &&
+                        data?.archived_at === null
+                      );
+                    })
+                    .map((entity) => (
+                      <option key={entity.id} value={entity.id}>
+                        {String((entity.data as { title: string }).title)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              {paymentReserve && (
+                <label className="field">
+                  <span>Из резерва, ₽</span>
+                  <input
+                    value={paymentReservedUsed}
+                    onChange={(event) => setPaymentReservedUsed(event.target.value)}
+                    inputMode="decimal"
+                    required
+                  />
+                </label>
+              )}
+              <p>Оплата и остаток будут подтверждены сервером после отправки.</p>
+              <button
+                type="submit"
+                className="button-secondary"
+                disabled={busy || state.status === 'CONFLICT'}
+              >
+                Сохранить оплату в очередь
+              </button>
+            </form>
+          </details>
+          <details>
+            <summary>Записать платёж по кредиту</summary>
+            <form onSubmit={(event) => void recordLoanPayment(event)}>
+              <label className="field">
+                <span>Кредит</span>
+                <select value={loanId} onChange={(event) => setLoanId(event.target.value)} required>
+                  <option value="">Выберите кредит</option>
+                  {state.cloud.entities
+                    .filter(
+                      (entity) =>
+                        entity.kind === 'loan' &&
+                        (entity.data as { deleted_at?: unknown })?.deleted_at === null,
+                    )
+                    .map((entity) => (
+                      <option key={entity.id} value={entity.id}>
+                        {String((entity.data as { title: string }).title)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Счёт платежа по кредиту</span>
+                <select
+                  value={loanAccount}
+                  onChange={(event) => setLoanAccount(event.target.value)}
+                  required
+                >
+                  <option value="">Выберите счёт</option>
+                  {state.cloud.entities
+                    .filter(
+                      (entity) =>
+                        entity.kind === 'account' &&
+                        (entity.data as { archived_at?: unknown })?.archived_at === null,
+                    )
+                    .map((entity) => (
+                      <option key={entity.id} value={entity.id}>
+                        {String((entity.data as { name: string }).name)}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Сумма платежа по кредиту, ₽</span>
+                <input
+                  value={loanAmount}
+                  onChange={(event) => setLoanAmount(event.target.value)}
+                  inputMode="decimal"
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Дата платежа по кредиту</span>
+                <input
+                  type="date"
+                  value={loanDate}
+                  onChange={(event) => setLoanDate(event.target.value)}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Стратегия досрочного погашения</span>
+                <select
+                  value={loanStrategy}
+                  onChange={(event) => setLoanStrategy(event.target.value as 'term' | 'amount')}
+                >
+                  <option value="term">Сократить срок</option>
+                  <option value="amount">Уменьшить платёж</option>
+                </select>
+              </label>
+              <p>Платёж и остаток будут подтверждены сервером после отправки.</p>
+              <button
+                type="submit"
+                className="button-secondary"
+                disabled={busy || state.status === 'CONFLICT'}
+              >
+                Сохранить платёж в очередь
+              </button>
+            </form>
+          </details>
+          <details>
+            <summary>Отменить подтверждённую операцию</summary>
+            <p>
+              Будет создана компенсирующая проводка; история сохранится. До ответа сервера остаток
+              не изменится.
+            </p>
+            <form onSubmit={(event) => void reverseCashMovement(event)}>
+              <label className="field">
+                <span>Операция для отмены</span>
+                <select
+                  value={reverseId}
+                  onChange={(event) => setReverseId(event.target.value)}
+                  required
+                >
+                  <option value="">Выберите операцию</option>
+                  {reversible.map((entity) => {
+                    const data = entity.data as TransactionData;
+                    const first = data.postings?.[0]?.signed_minor;
+                    return (
+                      <option key={entity.id} value={entity.id}>
+                        {data.occurred_on || 'Дата недоступна'} ·{' '}
+                        {data.kind === 'transfer'
+                          ? 'Перевод'
+                          : data.kind === 'income'
+                            ? 'Доход'
+                            : data.kind === 'expense'
+                              ? 'Расход'
+                              : data.kind === 'payment'
+                                ? 'Оплата обязательства'
+                                : 'Корректировка'}{' '}
+                        · {typeof first === 'number' ? formatRubMinor(first) : 'сумма недоступна'}
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
+              <label className="field">
+                <span>Причина отмены</span>
+                <input
+                  value={reverseReason}
+                  onChange={(event) => setReverseReason(event.target.value)}
+                  maxLength={500}
+                  required
+                />
+              </label>
+              <button
+                type="submit"
+                className="button-secondary"
+                disabled={busy || state.status === 'CONFLICT' || !reversible.length}
+              >
+                Сохранить отмену
+              </button>
+            </form>
+          </details>
+          <details>
+            <summary>Ключ восстановления</summary>
+            <p>
+              Новый ключ заменит прежний; парольная фраза останется прежней. Для выпуска требуется
+              сеть и действующая сессия.
+            </p>
+            <label className="field">
+              <span>Парольная фраза для нового ключа</span>
+              <input
+                type="password"
+                autoComplete="off"
+                value={recoveryPassphrase}
+                onChange={(event) => setRecoveryPassphrase(event.target.value)}
+              />
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={confirmRecoveryChange}
+                onChange={(event) => setConfirmRecoveryChange(event.target.checked)}
+              />{' '}
+              Понимаю, что прежний ключ перестанет действовать
+            </label>
+            <button
+              type="button"
+              className="button-secondary"
+              disabled={busy || !online || !confirmRecoveryChange || !recoveryPassphrase}
+              onClick={() => void reissueRecovery()}
+            >
+              Выпустить новый ключ
+            </button>
+            {replacementRecovery && (
+              <p>
+                Новый ключ восстановления: <output>{replacementRecovery}</output>
+              </p>
+            )}
+          </details>
+        </>
+      )}
       {conflict && pending && (
         <section aria-labelledby="sync-conflict-title">
           <h3 id="sync-conflict-title">Конфликт операции</h3>
@@ -2572,20 +2639,27 @@ export function OfflineSyncAccounts({
           </button>
         </section>
       )}
-      <Accounts
-        snapshot={view.ledger}
-        activeProfileId={state.cloud.profileId}
-        reservedMinorByAccount={view.reservedMinorByAccount}
-        status="ready"
-        writable={!busy && state.status !== 'CONFLICT'}
-        onBack={leave}
-        onRefresh={() => void read()}
-        onCreate={createAccount}
-        onUpdate={updateAccount}
-        onArchive={(x) => archive(x, false)}
-        onUnarchive={(x) => archive(x, true)}
-        onTransfer={transfer}
-      />
+      {!budgetMode && (
+        <Accounts
+          snapshot={view.ledger}
+          activeProfileId={state.cloud.profileId}
+          reservedMinorByAccount={view.reservedMinorByAccount}
+          status="ready"
+          writable={!busy && state.status !== 'CONFLICT'}
+          onBack={leave}
+          onRefresh={() => void read()}
+          onCreate={createAccount}
+          onUpdate={updateAccount}
+          onArchive={(x) => archive(x, false)}
+          onUnarchive={(x) => archive(x, true)}
+          onTransfer={transfer}
+        />
+      )}
+      {budgetMode && (
+        <button type="button" className="button-secondary" onClick={leave}>
+          Назад
+        </button>
+      )}
     </section>
   );
 }

@@ -27,7 +27,7 @@ from .import_manifest_candidate import (
     _safe_manifest, _KIND, import_batch_id, require_safe_import_target,
     require_safe_merge_target, mapped_target, stage_import_manifest_candidate,
 )
-from .ledger_service import FinanceCommandError, VerifiedFinanceScope
+from .ledger_service import FinanceCommandError, VerifiedFinanceScope, _reject_budget_id_collision
 from .legacy_bank_import import apply_legacy_bank_ledger, validate_legacy_bank_ledger
 
 _MAX_BYTES = 8_000_000
@@ -169,6 +169,15 @@ def _snapshot_rows(snapshot: dict, source_revision: int, *, allow_bank: bool = F
     settings = snapshot.get("settings")
     if type(settings) is not dict or settings.get("currency") != "RUB":
         _invalid()
+    if "guestBudgets" in snapshot:
+        budgets = snapshot["guestBudgets"]
+        if (type(budgets) is not dict or
+                set(budgets) != {"version", "categories", "rules", "assignments"} or
+                type(budgets["version"]) is not int or budgets["version"] != 1 or
+                any(type(budgets[k]) is not list or budgets[k]
+                    for k in ("categories", "rules", "assignments"))):
+            # Do not certify a full transfer that has silently omitted budget rules.
+            _invalid()
     if "bankStatements" in snapshot:
         bank = snapshot["bankStatements"]
         if allow_bank:
@@ -492,6 +501,8 @@ def commit_verified_legacy_import_candidate(
                         _conflict()
                 values[kind] = [value for value in values[kind]
                                 if (kind, value["id"]) not in linked]
+        _reject_budget_id_collision(session, scope.profile_id,
+                                    (row["id"] for group in values.values() for row in group))
         # Every table write, receipt, source archive and revision belongs to
         # this *single* PostgreSQL transaction. Errors roll back ALL of it.
         for kind in _KIND:

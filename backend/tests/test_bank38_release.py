@@ -120,10 +120,11 @@ def test_double_patch_and_missing_original_marker_rejected():
         m.bank_caddy_patch(b"unknown caddy configuration")
 
 
-def test_postgres_schema_checks_exact_head_rls_and_runtime_grants(monkeypatch):
+@pytest.mark.parametrize("version,table_count", [("0007_bank_statements", "18"), ("0008_budget_rules", "21")])
+def test_postgres_schema_checks_exact_head_rls_and_runtime_grants(monkeypatch, version, table_count):
     m = load()
     statements = []
-    values = ["0007_bank_statements", "18", "t"]
+    values = [version, table_count, "t"]
 
     def sql(command, **kwargs):
         assert command[:3] == ["docker", "exec", "-u"]
@@ -138,7 +139,7 @@ def test_postgres_schema_checks_exact_head_rls_and_runtime_grants(monkeypatch):
     assert "DELETE" in statements[2]
 
     for bad, response in [(0, "0006_reserve_events"), (1, "16"), (2, "f")]:
-        values = ["0007_bank_statements", "18", "t"]
+        values = [version, table_count, "t"]
         values[bad] = response
         monkeypatch.setattr(m.finance, "run", lambda _args, **kw: values.pop(0))
         with pytest.raises(m.Hold):

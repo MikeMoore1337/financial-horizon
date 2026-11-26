@@ -11,11 +11,12 @@ import type {
 } from './ledger.ts';
 import {assertLedgerState} from './invariants.ts';
 import {MAX_MINOR} from './money.ts';
+import {budgetEntityKinds, decodeBudgetEntities, type ServerBudgetView} from '../budgets/server-snapshot.ts';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const user = /^[0-9a-f]{32}$/;
 const kinds = new Set(['account','transaction','obligation','loan','reserve',
-  'settlement','loan_payment']);
+  'settlement','loan_payment', ...budgetEntityKinds]);
 const accountKinds = new Set(['bank','card','cash','savings','other']);
 const txKinds = new Set(['income','expense','adjustment','transfer','payment','reversal']);
 function reject(message: string): never {
@@ -73,6 +74,7 @@ function requireRevision(value: unknown): number {
 
 export interface AccountServerView {
   ledger: LedgerState;
+  budget: ServerBudgetView;
   reservedMinorByAccount: Readonly<Record<string, number>>;
   /** Always server-reported, never inferred from planned obligations. */
   totalMinor: number;
@@ -233,5 +235,6 @@ export function decodeCompleteFinanceState(
   if (!Number.isSafeInteger(totalMinor) || !Number.isSafeInteger(availableMinor)) {
     reject('Переполнение итогового остатка');
   }
-  return {ledger, reservedMinorByAccount: reserved, totalMinor, availableMinor};
+  return {ledger, budget: decodeBudgetEntities(raw.entities, expectedProfileId),
+    reservedMinorByAccount: reserved, totalMinor, availableMinor};
 }

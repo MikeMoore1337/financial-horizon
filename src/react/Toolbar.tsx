@@ -4,6 +4,8 @@ export interface ToolbarProps {
   title: string;
   serverAccounts: boolean;
   localSnapshot?: boolean;
+  budgetsEnabled?: boolean;
+  hideGlobalAdd?: boolean;
   theme: 'light' | 'dark';
   signedIn: boolean;
   busy: boolean;
@@ -17,6 +19,7 @@ export function Toolbar({
   busy,
   serverAccounts,
   localSnapshot = false,
+  hideGlobalAdd = false,
 }: ToolbarProps) {
   return (
     <>
@@ -77,7 +80,7 @@ export function Toolbar({
           className="button-primary toolbar-add"
           id="top-add"
           aria-label="Добавить запись"
-          hidden={serverAccounts}
+          hidden={serverAccounts || hideGlobalAdd}
         >
           <Icon name="plus" />
           <span>Добавить</span>

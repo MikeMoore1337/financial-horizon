@@ -12,7 +12,7 @@ from datetime import date, datetime, timezone
 from hashlib import sha256
 import json
 import re
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 from uuid import UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -181,6 +181,7 @@ def ensure_verified_profile(
 
 def _validated(command: object, if_match: str, idem_key: str,
                *, allow_internal: bool, allow_account_v2: bool = False,
+               allow_budget_candidate: bool = False,
                ) -> tuple[Mapping[str, Any], UUID, int, dict[str, int], bytes]:
     body = _shape(command, {
         "schema_version", "client_mutation_id", "base_revision", "action",
@@ -192,7 +193,12 @@ def _validated(command: object, if_match: str, idem_key: str,
     if type(body["schema_version"]) is not int:
         raise _reject("Неподдерживаемая версия схемы")
     version = body["schema_version"]
-    if version == 1 and not allow_account_v2:
+    if allow_budget_candidate:
+        if version != 2 or allow_internal or allow_account_v2:
+            raise _reject("Недопустимый режим бюджетного API")
+        from .budget_service import BUDGET_ACTIONS
+        actions = BUDGET_ACTIONS
+    elif version == 1 and not allow_account_v2:
         actions = _INTERNAL_ACTIONS if allow_internal else _PUBLIC_V1_ACTIONS
     elif version == 2 and allow_account_v2 and not allow_internal:
         actions = _PUBLIC_V2_ACCOUNT_ACTIONS
@@ -249,9 +255,30 @@ def _change(revision: int, kind: str, target: UUID, entity_revision: int,
             "payload": payload}
 
 
+def _reject_budget_id_collision(session: Session, profile_id: UUID,
+                                ids: Iterable[UUID]) -> None:
+    """Prevent an older creation path from poisoning the global snapshot UUID map.
+
+    Called only under the existing profile transaction lock. All parameters
+    remain profile-scoped; the bound array contains canonical UUIDs only.
+    """
+    targets = sorted({str(UUID(str(value))) for value in ids})
+    if not targets:
+        return
+    if session.execute(text("""
+        SELECT 1 FROM (
+          SELECT id FROM budget_categories WHERE profile_id=:p AND id=ANY(CAST(:ids AS uuid[]))
+          UNION ALL SELECT id FROM budget_rules WHERE profile_id=:p AND id=ANY(CAST(:ids AS uuid[]))
+          UNION ALL SELECT id FROM budget_assignments WHERE profile_id=:p AND id=ANY(CAST(:ids AS uuid[]))
+        ) AS occupied LIMIT 1
+    """), {"p": profile_id, "ids": "{" + ",".join(targets) + "}"}).first():
+        raise FinanceCommandError("semantic_conflict", "Идентификатор уже используется", 409)
+
+
 def _post(session: Session, p: UUID, txid: UUID, kind: str, actor: str,
           occurred_on: date, postings: list[tuple[UUID, int]],
           *, reversed_id: UUID | None = None, note: str | None = None) -> None:
+    _reject_budget_id_collision(session, p, (txid,))
     session.execute(text("""
         INSERT INTO ledger_transactions
         (profile_id,id,kind,occurred_on,actor_user_id,reversed_transaction_id,note)
@@ -665,7 +692,12 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
     change_payload: dict[str, Any] = {}
     extra_changes: list[tuple[str, UUID, int, dict[str, Any]]] = []
 
-    if action == "obligation.create":
+    if action.startswith("budget."):
+        from .budget_service import apply_budget_candidate
+        changes = apply_budget_candidate(session, scope, cmd, versions)
+        change_kind, target, affected_revision, change_payload = changes[0]
+        extra_changes.extend(changes[1:])
+    elif action == "obligation.create":
         required = {
             "title", "direction", "amount_minor", "starts_on",
             "timezone", "recurrence_unit", "recurrence_every",
@@ -1778,6 +1810,8 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
     # A single profile revision may contain multiple logically coupled changes
     # (payment fact + signed ledger transaction). Never paginate half a revision.
     changes = [(change_kind, target, affected_revision, change_payload), *extra_changes]
+    if not action.startswith("budget."):
+        _reject_budget_id_collision(session, p, (change[1] for change in changes))
     for ordinal, (kind, entity_id, entity_revision, event_payload) in enumerate(changes):
         audit_payload = {**event_payload, "_entity_revision": entity_revision}
         session.execute(text("""
@@ -1799,20 +1833,21 @@ def _apply(session: Session, scope: VerifiedFinanceScope, cmd: Mapping[str, Any]
 def submit_account_command(
     engine: Engine, *, scope: VerifiedFinanceScope, command: object,
     if_match: str, idempotency_key: str, allow_internal: bool = False,
-    allow_account_v2: bool = False,
+    allow_account_v2: bool = False, allow_budget_candidate: bool = False,
 ) -> FinanceResult:
     """One RLS-protected SQL COMMIT for a validated finance command and its receipt.
 
     'allow_internal' is only for trusted existing v1 internal consumers.
     'allow_account_v2' is only for the validated, unmounted v2 account
     proposal, and never accepts other internal actions.
-    Neither option may be set from an untrusted client request.
+    The budget candidate flag is server-only and deliberately not mounted.
+    No transport option may be set from an untrusted client request.
     """
-    if allow_internal and allow_account_v2:
-        raise ValueError("Internal and proposed public v2 modes are mutually exclusive")
+    if sum((allow_internal, allow_account_v2, allow_budget_candidate)) > 1:
+        raise ValueError("Finance command modes are mutually exclusive")
     body, mutation_id, base_revision, versions, request_hash = _validated(
         command, if_match, idempotency_key, allow_internal=allow_internal,
-        allow_account_v2=allow_account_v2,
+        allow_account_v2=allow_account_v2, allow_budget_candidate=allow_budget_candidate,
     )
     with finance_transaction(engine, verified_user_id=scope.user_id,
                              profile_id=scope.profile_id) as session:
@@ -1859,6 +1894,7 @@ def submit_account_command(
 def cancel_uncommitted_account_command(
     engine: Engine, *, scope: VerifiedFinanceScope, command: object,
     if_match: str, idempotency_key: str, allow_account_v2: bool = False,
+    allow_budget_candidate: bool = False,
 ) -> FinanceResult:
     """Fence an exact pending request without reversing an already committed one.
 
@@ -1869,6 +1905,7 @@ def cancel_uncommitted_account_command(
     body, mutation_id, base_revision, _, request_hash = _validated(
         command, if_match, idempotency_key,
         allow_internal=False, allow_account_v2=allow_account_v2,
+        allow_budget_candidate=allow_budget_candidate,
     )
     with finance_transaction(engine, verified_user_id=scope.user_id,
                              profile_id=scope.profile_id) as session:

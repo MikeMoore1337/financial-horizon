@@ -18,6 +18,8 @@ const STRONG_ETAG = /^"[^"\r\n]{1,254}"$/;
 const USER = /^[a-f0-9]{32}$/;
 const HASH = /^[a-f0-9]{64}$/;
 const COUNT_KINDS = ['entries','loans','settlements','loanPayments'];
+const BUDGET_KINDS = ['budget_category', 'budget_rule', 'budget_assignment'];
+const SERVER_KINDS = [...['account', 'obligation', 'loan', 'reserve', 'transaction', 'settlement', 'loan_payment'], ...BUDGET_KINDS];
 
 function matchingCounts(actual, expected) {
   return actual && expected && typeof actual === 'object' && !Array.isArray(actual) &&
@@ -174,7 +176,7 @@ export async function prepareLivePersonalImportCandidate({
     // A bank batch can increment an account multiple times in one profile revision.
     for (const entity of snapshot.entities) {
       if (!entity ||
-          !['account', 'obligation', 'loan', 'reserve', 'transaction', 'settlement', 'loan_payment'].includes(entity.kind) ||
+          !SERVER_KINDS.includes(entity.kind) ||
           typeof entity.id !== 'string' || !UUID.test(entity.id) || seen.has(entity.id) ||
           !Number.isSafeInteger(entity.entity_revision) || entity.entity_revision < 1 ||
           !entity.data || typeof entity.data !== 'object' || Array.isArray(entity.data)) {
@@ -251,7 +253,7 @@ export async function prepareLivePersonalImportCandidate({
   if (needsComparison) {
     active(signal);
     const serverCounts = Object.fromEntries(
-      ['account', 'obligation', 'loan', 'reserve', 'transaction', 'settlement', 'loan_payment']
+      SERVER_KINDS
         .map(kind => [kind, snapshot.entities.filter(entity => entity.kind === kind).length]),
     );
     return Object.freeze({actor: verifiedActorUserId, origin, etag,
@@ -385,7 +387,7 @@ async function verifyCommittedPlannerMerge(prepared,committed,fetchImpl,origin,s
   const allowedKinds=new Set(Object.values(serverKind));
   for(const [id,prior] of before){
     const current=after.get(id);
-    if(!current||(allowedKinds.has(prior.kind)&&!sameFinancialJSON(prior,current)))
+    if(!current||((allowedKinds.has(prior.kind)||BUDGET_KINDS.includes(prior.kind))&&!sameFinancialJSON(prior,current)))
       hold('Существующая серверная финансовая запись изменилась');
   }
   const available=new Map(state.entities.filter(entity=>

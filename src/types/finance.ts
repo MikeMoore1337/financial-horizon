@@ -137,6 +137,28 @@ export interface FinanceContents {
   settings: { currency: 'RUB'; [key: string]: unknown };
   /** Optional guest-only actual bank cash journal; legacy backups omit it. */
   bankStatements?: GuestBankLedger;
+  /** Optional local-only budget state; legacy v1/v2 backups may omit it. */
+  guestBudgets?: {
+    version: 1;
+    categories: Array<{
+      id: string;
+      name: string;
+      aliases: string[];
+      archived: boolean;
+      entityRevision: number;
+    }>;
+    rules: Array<{
+      id: string;
+      categoryId: string | null;
+      limitMinor: number;
+      recurrence: 'once' | 'monthly';
+      fromMonth: string;
+      endsBeforeMonth: string | null;
+      archivedFromMonth: string | null;
+      entityRevision: number;
+    }>;
+    assignments: Array<{ transactionId: string; categoryId: string | null }>;
+  };
 }
 
 export type FinanceStateV1 = FinanceContents & {

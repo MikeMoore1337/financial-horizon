@@ -6,6 +6,9 @@
  * and applied receipts under the same active account generation.
  * This module NEVER opens IndexedDB, requests a URL, or writes to the PWA.
  */
+import {budgetEntityKinds, decodeBudgetEntity, decodeBudgetEntities} from '../domain/budgets/server-snapshot.ts';
+export {decodeBudgetEntity, decodeBudgetEntities};
+
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const scopePattern = /^account:[0-9a-f]{32}$/;
 const epochPattern = /^[0-9a-f]{32}$/;
@@ -14,7 +17,7 @@ const moneyLimit = 1_000_000_000_000;
 // A cursor must name the actual last entity; a fabricated forward jump would
 // hide financial records despite an apparently complete set of pages.
 const kindOrder = ['account', 'obligation', 'loan', 'reserve',
-  'transaction', 'settlement', 'loan_payment'];
+  'transaction', 'settlement', 'loan_payment', ...budgetEntityKinds];
 const kinds = new Set(kindOrder);
 const changes = new Set(['upsert', 'tombstone', 'ledger_posted']);
 
@@ -52,11 +55,12 @@ function noPrototypeKeys(value, depth = 0) {
     }
   }
 }
-function validEntity(entity) {
+function validEntity(entity, profileId) {
   if (!exactObject(entity) || !uuid.test(entity.id) ||
       !safeInt(entity.entity_revision, 1) || !kinds.has(entity.kind) ||
       !exactObject(entity.data)) reject('Повреждена серверная сущность');
   noPrototypeKeys(entity.data);
+  if (budgetEntityKinds.includes(entity.kind)) decodeBudgetEntity(entity, profileId);
   if (entity.kind === 'account') {
     const data = entity.data;
     if (data.currency !== 'RUB' ||
@@ -134,7 +138,7 @@ export function verifyFinanceSnapshotPagesCandidate(
     if (revision === null) revision = body.revision;
     if (body.revision !== revision) reject('Снимок изменился во время чтения');
     for (const item of body.entities) {
-      const entity = validEntity(item);
+      const entity = validEntity(item, profileId);
       if (lastEntity) {
         const previousKind = kindOrder.indexOf(lastEntity.kind);
         const currentKind = kindOrder.indexOf(entity.kind);
@@ -162,6 +166,7 @@ export function verifyFinanceSnapshotPagesCandidate(
       expectedCursor = null;
     }
   }
+  decodeBudgetEntities([...entities.values()], profileId);
   return {scope, profileId, generation, epoch, revision,
     entities: [...entities.values()], pending: [], conflicts: []};
 }
@@ -192,11 +197,31 @@ export function applyFinanceDeltaCandidate(
   }
   const byId = new Map();
   for (const item of local.entities) {
-    const e = validEntity(item);
+    const e = validEntity(item, profileId);
     if (byId.has(e.id)) reject('Повторяющаяся локальная сущность');
     byId.set(e.id, e);
   }
+  decodeBudgetEntities([...byId.values()], profileId);
   let next = local.revision, ordinal = 0;
+  let budgetChanged = false;
+  let budgetSplits = [], budgetNewRules = [];
+  function finishBudgetRevision() {
+    if (budgetChanged) decodeBudgetEntities([...byId.values()], profileId);
+    // A shortened interval (not archive) is the old half of a recurring
+    // amendment. Its new interval must exist in this exact revision.
+    for (const {before, after} of budgetSplits) {
+      const matches = budgetNewRules.filter(candidate =>
+        candidate.data.category_id === before.data.category_id &&
+        candidate.data.recurrence === before.data.recurrence &&
+        candidate.data.from_month === after.data.ends_before_month &&
+        candidate.data.ends_before_month === before.data.ends_before_month &&
+        candidate.data.archived_from_month === before.data.archived_from_month);
+      if (matches.length !== 1) reject('Разделение бюджетного правила неполное');
+    }
+    budgetChanged = false;
+    budgetSplits = [];
+    budgetNewRules = [];
+  }
   const requiredPaymentFacts = new Map();
   const observedFactEvents = new Set();
   for (const change of page.changes) {
@@ -209,6 +234,7 @@ export function applyFinanceDeltaCandidate(
       reject('Повреждена запись журнала');
     }
     if (change.revision === next + 1 && ordinal > 0) {
+      finishBudgetRevision();
       next++; ordinal = 0;
     } else if (change.revision !== next + 1 && change.revision !== next) {
       reject('В журнале пропущена ревизия');
@@ -219,16 +245,48 @@ export function applyFinanceDeltaCandidate(
     noPrototypeKeys(payload);
     if (change.kind === 'tombstone') {
       if (!byId.has(change.entity_id)) reject('Удаляется неизвестная сущность');
+      if (budgetEntityKinds.includes(byId.get(change.entity_id).kind)) reject('Бюджетная история не удаляется');
       byId.delete(change.entity_id);
       continue;
     }
-    const entity = validEntity(payload.entity);
+    const entity = validEntity(payload.entity, profileId);
     if (entity.id !== change.entity_id ||
         entity.entity_revision !== change.entity_revision ||
         (change.kind === 'ledger_posted' && entity.kind !== 'transaction')) {
       reject('Событие не соответствует исходной сущности');
     }
     const old = byId.get(entity.id);
+    if (old && old.kind !== entity.kind) reject('Изменён тип сущности');
+    if (budgetEntityKinds.includes(entity.kind)) {
+      if (change.kind !== 'upsert' ||
+          entity.entity_revision !== (old ? old.entity_revision + 1 : 1)) {
+        reject('Неверная ревизия бюджетной сущности');
+      }
+      budgetChanged = true;
+      if (entity.kind === 'budget_rule') {
+        if (!old) budgetNewRules.push(entity);
+        else {
+          if (entity.data.category_id !== old.data.category_id ||
+              entity.data.recurrence !== old.data.recurrence ||
+              entity.data.from_month !== old.data.from_month) {
+            reject('Изменена историческая область бюджетного правила');
+          }
+          if (entity.data.ends_before_month !== old.data.ends_before_month) {
+            if (entity.data.ends_before_month === null ||
+                (old.data.ends_before_month !== null &&
+                 entity.data.ends_before_month >= old.data.ends_before_month) ||
+                entity.data.limit_minor !== old.data.limit_minor ||
+                entity.data.archived_from_month !== old.data.archived_from_month) {
+              reject('Повреждена история разделения бюджетного правила');
+            }
+            budgetSplits.push({before: old, after: entity});
+          }
+        }
+      } else if (entity.kind === 'budget_assignment' && old &&
+          entity.data.transaction_id !== old.data.transaction_id) {
+        reject('Изменена исходная проводка бюджетной категории');
+      }
+    }
     if (entity.kind === 'settlement' || entity.kind === 'loan_payment') {
       observedFactEvents.add(change.revision + ':' + entity.id);
     }
@@ -263,7 +321,7 @@ export function applyFinanceDeltaCandidate(
       const postingIds = new Set(entity.data.postings.map(x => x.account_id));
       const seen = new Set();
       for (const account of payload.accounts) {
-        const updated = validEntity(account);
+        const updated = validEntity(account, profileId);
         if (updated.kind !== 'account' || seen.has(updated.id) ||
             !postingIds.has(updated.id)) reject('Неверный счёт проводки');
         const previous = byId.get(updated.id);
@@ -293,6 +351,8 @@ export function applyFinanceDeltaCandidate(
       (page.has_more && next >= page.to_revision)) {
     reject('Страница журнала не полная');
   }
+  finishBudgetRevision();
+  decodeBudgetEntities([...byId.values()], profileId);
   return {...local, revision: next, entities: [...byId.values()],
     pending: structuredClone(local.pending), conflicts: structuredClone(local.conflicts)};
 }
