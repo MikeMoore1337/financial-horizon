@@ -4,6 +4,7 @@ export interface ToolbarProps {
   title: string;
   serverAccounts: boolean;
   localSnapshot?: boolean;
+  budgetsEnabled?: boolean;
   theme: 'light' | 'dark';
   signedIn: boolean;
   busy: boolean;

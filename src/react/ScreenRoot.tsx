@@ -33,19 +33,22 @@ export function createOfflineSyncRoot(
   onSessionRevoked?: () => void,
 ) {
   const root = createRoot(host);
-  flushSync(() =>
-    root.render(
-      <StrictMode>
-        <OfflineSyncAccounts
-          actor={actor}
-          offlineOnly={offlineOnly}
-          onBack={onBack}
-          onSessionRevoked={onSessionRevoked}
-        />
-      </StrictMode>,
-    ),
-  );
-  return { unmount: () => root.unmount() };
+  const render = (budgetMode = false) =>
+    flushSync(() =>
+      root.render(
+        <StrictMode>
+          <OfflineSyncAccounts
+            actor={actor}
+            offlineOnly={offlineOnly}
+            budgetMode={budgetMode}
+            onBack={onBack}
+            onSessionRevoked={onSessionRevoked}
+          />
+        </StrictMode>,
+      ),
+    );
+  render();
+  return { unmount: () => root.unmount(), setBudgetMode: render };
 }
 
 /** One React owner for any migrated screen, never shared with legacy innerHTML. */

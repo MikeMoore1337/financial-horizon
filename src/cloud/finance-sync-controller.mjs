@@ -20,7 +20,7 @@ function fail(message) { throw Error('SYNC_HOLD: ' + message); }
 export class FinanceSyncController {
   #actor; #scope; #origin; #fetch; #session; #identity = null;
   #abort = new AbortController(); #generation = 0; #busy = false; #closed = false; #channel = null; #onClose;
-  #cancelSupported = false;
+  #cancelSupported = false; #budgetAllowed = false;
   #offlineStart = false; #onlineVerified = false;
   #connectivityGeneration = 0;
 
@@ -127,6 +127,7 @@ export class FinanceSyncController {
     }
     await this.#assertActor(generation);
     this.#cancelSupported = result.sync_cancel_fence_v1 === true;
+    this.#budgetAllowed = result.budget_commands_v1 === true;
     return result.profile_id;
   }
   /** Explicitly create a separate empty encrypted container. The returned
@@ -223,7 +224,7 @@ export class FinanceSyncController {
       bundle.outbox.length ? 'PENDING' : this.#onlineVerified ? 'SYNCHRONIZED' : 'LOCAL',
       cloud:structuredClone(cloud), outbox:structuredClone(bundle.outbox),
       conflicts:structuredClone(bundle.conflicts), bundleEpoch:bundle.epoch,
-      canCancel:this.#cancelSupported, onlineVerified:this.#onlineVerified};
+      canCancel:this.#cancelSupported, canBudget:this.#budgetAllowed, onlineVerified:this.#onlineVerified};
   }
   async read() { return this.#exclusive(generation => this.#read(generation)); }
   async reissueRecovery(passphrase) { return this.#exclusive(async generation => {
@@ -291,6 +292,8 @@ export class FinanceSyncController {
   }); }
   async enqueue(command) { return this.#exclusive(async generation => {
     if (!this.#identity) fail('Локальная копия заблокирована');
+    if (typeof command?.action === 'string' && command.action.startsWith('budget.') && !this.#budgetAllowed)
+      fail('Доступ к бюджетам не подтверждён');
     const bundle = await readAtomicEncryptedCandidate(this.#scope, this.#session);
     this.#active(generation);
     const etag = bundle?.snapshot?.cloudFinance?.serverEtag;

@@ -329,6 +329,15 @@ def local_app(directory):
                 sync_disabled if real_finance else sync_enabled,
                 sync_enabled if real_finance else sync_disabled,
             )
+            budget_enabled = '<meta name="fh-finance-budgets" content="enabled">'
+            budget_disabled = '<meta name="fh-finance-budgets" content="disabled">'
+            if contents.count(budget_enabled) + contents.count(budget_disabled) != 1:
+                raise HTTPException(503)
+            budget_test = real_finance and request.query_params.get("fh_budgets_e2e") == "1"
+            contents = contents.replace(
+                budget_disabled if budget_test else budget_enabled,
+                budget_enabled if budget_test else budget_disabled,
+            )
             if real_finance and (
                 contents.count(bank_enabled) != 1
                 or contents.count('<meta name="fh-finance-accounts" content="enabled">') != 1

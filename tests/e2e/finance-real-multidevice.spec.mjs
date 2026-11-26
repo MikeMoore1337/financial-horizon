@@ -2693,3 +2693,61 @@ test('#35 encrypted offline budget command survives browser reload and reconcile
     expect(remote.body.entities.filter(x=>x.kind==='budget_assignment'&&x.data.transaction_id===transactionId)).toHaveLength(1);
   } finally {await secondDevice.close();}
 });
+
+test('#35 budget screen uses real encrypted account, canonical chevrons and responsive themes', async ({browser}, testInfo) => {
+  test.setTimeout(120_000);
+  if (process.env.FH_E2E_REAL_FINANCE !== 'yes') test.skip();
+  const context = await browser.newContext({baseURL:ORIGIN, serviceWorkers:'block'});
+  try {
+    expect((await context.request.post('/__e2e__/personal-session')).status()).toBe(200);
+    await bootstrap(context);
+    const account = randomUUID(), expense = randomUUID(), cat = randomUUID(), rule = randomUUID();
+    const date = new Date();
+    const m = String(date.getFullYear()).padStart(4,'0')+'-'+String(date.getMonth()+1).padStart(2,'0');
+    expect((await submit(context, await state(context), 'account.create', {id:account,name:'Budget test account',kind:'cash',currency:'RUB',opening_minor:1000000})).status()).toBe(201);
+    const before = await state(context);
+    expect((await submit(context, before,'transaction.record',{id:expense,account_id:account,kind:'expense',signed_minor:-150000,occurred_on:m+'-01'},{[account]:versionOf(before,account)})).status()).toBe(201);
+    expect((await submit(context,await state(context),'budget.category.create',{id:cat,name:'Продукты'})).status()).toBe(201);
+    expect((await submit(context,await state(context),'budget.create',{id:rule,category_id:null,limit_minor:1000000,recurrence:'monthly',from_month:m})).status()).toBe(201);
+    const beforeAssign = await state(context);
+    expect((await submit(context,beforeAssign,'budget.category.assign',{transaction_id:expense,category_id:cat},{[expense]:versionOf(beforeAssign,expense)})).status()).toBe(201);
+    const page = await context.newPage();
+    const errors = []; page.on('pageerror', e => errors.push(e.message));
+    await page.goto('/?fh_budgets_e2e=1');
+    await view(page,'budgets');
+    await expect(page.locator('#toolbar-title')).toHaveText('Бюджеты');
+    await page.getByLabel('Парольная фраза',{exact:true}).fill('synthetic budget test passphrase');
+    await page.getByRole('button',{name:'Создать копию'}).click();
+    await page.getByLabel('Я сохранил ключ вне браузера').check();
+    await page.getByRole('button',{name:'Разблокировать'}).click();
+    await expect(page.locator('.fh-budgets h1')).toHaveText('Бюджеты');
+    await expect(page.locator('.fh-budget-amount strong').first()).toHaveText(/8\s?500/);
+    await expect(page.getByRole('button',{name:'Предыдущий месяц'}).locator('use')).toHaveAttribute('href','#ico-chevron');
+    await expect(page.getByRole('button',{name:'Следующий месяц'}).locator('use')).toHaveAttribute('href','#ico-chevron');
+    await page.getByRole('button',{name:'Предыдущий месяц'}).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByText('На этот месяц лимит не установлен.')).toBeVisible();
+    await page.getByRole('button',{name:'Следующий месяц'}).click();
+    await expect(page.locator('.fh-budget-amount strong').first()).toHaveText(/8\s?500/);
+    await page.getByRole('button',{name:'Лимит',exact:true}).click();
+    await page.getByLabel('Область лимита').selectOption(cat);
+    await page.getByLabel('Лимит, ₽').fill('2000');
+    await page.getByRole('button',{name:'Сохранить лимит'}).click();
+    await expect(page.locator('.fh-budget-usage').filter({has:page.getByRole('heading',{name:'Продукты',exact:true})})).toContainText(/500/,{timeout:20000});
+    await page.getByRole('button',{name:'История правил'}).click();
+    await expect(page.locator('.fh-budget-history').first()).toContainText('Общий бюджет');
+    await page.getByRole('button',{name:'История правил'}).click();
+    for(const width of [320,390,1440,2560]) {
+      await page.setViewportSize({width,height:900});
+      for(const theme of ['light','dark']) {
+        if(await page.locator('body').getAttribute('data-theme')!==theme) await page.locator('#theme-toggle').click();
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+        await expect(page.getByRole('button',{name:'Предыдущий месяц'})).toBeVisible();
+        await page.screenshot({path:testInfo.outputPath('budgets-'+width+'-'+theme+'.png'),fullPage:true});
+      }
+    }
+    expect(await page.locator('.bottom-nav [data-view]').count()).toBe(5);
+    expect((await state(context)).body.entities.filter(e=>e.kind==='budget_rule')).toHaveLength(2);
+    expect(errors).toEqual([]);
+  } finally { await context.close(); }
+});

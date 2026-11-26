@@ -27,11 +27,12 @@ const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<
 const formatDate=date=>new Intl.DateTimeFormat('ru-RU',{day:'numeric',month:'short',year:'numeric'}).format(new Date(`${date}T12:00:00`));
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
 const uuid=()=>crypto.randomUUID();
-const titles={overview:'Обзор',calendar:'Календарь',obligations:'Обязательства',loans:'Кредиты',settings:'Настройки','accounts-connected':'Счета и кошельки','bank-import':'Импорт выписки'};
+const titles={overview:'Обзор',calendar:'Календарь',obligations:'Обязательства',loans:'Кредиты',budgets:'Бюджеты',settings:'Настройки','accounts-connected':'Счета и кошельки','bank-import':'Импорт выписки'};
 // Only an explicit reviewed release can present the optional server-backed accounts view.
 // FastAPI authentication and profile scoping remain the sole authorization boundary.
 const financeAccountsEnabled=document.querySelector('meta[name="fh-finance-accounts"]')?.content==='enabled';
 const financeSyncEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-sync"]')?.content==='enabled';
+const financeBudgetsEnabled=financeSyncEnabled&&document.querySelector('meta[name="fh-finance-budgets"]')?.content==='enabled';
 const financeImportEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-import"]')?.content==='enabled';
 // #38 signed bank import needs an independently approved production backend.
 const bankImportEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-bank-import"]')?.content==='enabled';
@@ -100,7 +101,7 @@ function startOfflineSync(actor){
  const main=$('#main');main.replaceChildren();
  screenRoot=createOfflineSyncRoot(main,actor,()=>window.location.replace('./account.html'));
 }
-function openBackgroundSync(){
+function openBackgroundSync(budgetMode=false){
  if(!financeSyncEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId)return;
  if(!backgroundSyncRoot){
   const main=$('#main');
@@ -112,6 +113,7 @@ function openBackgroundSync(){
    forgetOfflineActor(actor);revokeDisplayedLedger();window.location.replace('./account.html');
   });
  }
+ backgroundSyncRoot.setBudgetMode(budgetMode===true);
  $('#main').style.display='none';backgroundSyncHost.style.display='';
  offlineSyncView=true;syncStorageContext();syncAccountControls();
 }
@@ -146,8 +148,8 @@ function syncStorageContext(){
  const serverPayments=eligible&&ui.view==='obligations'&&ui.obligationsSection==='due'&&ui.paymentSource==='server';
  const serverCalendar=eligible&&ui.view==='calendar'&&ui.calendarSource==='server';
  const serverOverview=eligible&&ui.view==='overview'&&ui.overviewSource==='server';
- const serverAccounts=eligible&&((ui.view==='accounts-connected'||ui.view==='bank-import')||serverPayments||serverCalendar||serverOverview);
- const syncView=serverAccounts&&ui.view==='accounts-connected'&&offlineSyncView;
+ const serverAccounts=eligible&&((ui.view==='accounts-connected'||ui.view==='bank-import'||ui.view==='budgets')||serverPayments||serverCalendar||serverOverview);
+ const syncView=serverAccounts&&(ui.view==='accounts-connected'||ui.view==='budgets')&&offlineSyncView;
  const labels=[
   ['storage-context-chip',syncView?'Локальная копия':serverAccounts?'На сервере':'Локально'],
   ['storage-context-title',syncView?'Офлайн-синхронизация':serverOverview?'Обзор аккаунта':serverCalendar?'Календарь аккаунта':serverPayments?'Оплаты в аккаунте':serverAccounts?'Счета в аккаунте':'Хранится на устройстве'],
@@ -169,6 +171,7 @@ function syncStorageContext(){
  }
 }
 function navigation(view){
+ if(view==='budgets'&&(!financeBudgetsEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId))return;
  if(view==='accounts-connected'&&(!financeAccountsEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId))return;
  if(view==='bank-import'&&!guestMode&&(!bankImportEnabled||!activeUserId||emailSession.userId!==activeUserId))return;
  hideBackgroundSync();
@@ -180,6 +183,7 @@ function render(){
  if(!state)return;
  syncStorageContext();
  const main=$('#main');
+ if(ui.view==='budgets'){openBackgroundSync(true);return;}
  if(ui.view==='calendar'||ui.view==='overview'||ui.view==='obligations'||ui.view==='loans'||ui.view==='settings'||ui.view==='accounts-connected'||ui.view==='bank-import'){
   if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main,getAuthAccess);}
   if(ui.view==='accounts-connected'){
@@ -306,6 +310,7 @@ function syncAccountControls(){
   signedIn,busy:Boolean(emailSession.busy),
   serverAccounts:lastStorageContext===true,
   localSnapshot:lastSyncContext,
+  budgetsEnabled:financeBudgetsEnabled&&!guestMode&&Boolean(activeUserId)&&emailSession.userId===activeUserId,
  });
 }
 async function refreshEmailSession(){

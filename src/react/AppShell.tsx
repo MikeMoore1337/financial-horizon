@@ -5,8 +5,16 @@ import { Navigation, type FinanceView, type NavigationVariant } from './Navigati
 import { Toolbar, type ToolbarProps } from './Toolbar';
 
 /** React owns only the contents of the existing three shell containers. */
-export function AppShell({ view, variant }: { view: FinanceView; variant: NavigationVariant }) {
-  return <Navigation view={view} variant={variant} />;
+export function AppShell({
+  view,
+  variant,
+  budgetsEnabled = false,
+}: {
+  view: FinanceView;
+  variant: NavigationVariant;
+  budgetsEnabled?: boolean;
+}) {
+  return <Navigation view={view} variant={variant} budgetsEnabled={budgetsEnabled} />;
 }
 
 export function createAppShellRoots(
@@ -32,12 +40,12 @@ export function createAppShellRoots(
       flushSync(() => {
         desktop.render(
           <StrictMode>
-            <AppShell view={view} variant="sidebar" />
+            <AppShell view={view} variant="sidebar" budgetsEnabled={options.budgetsEnabled} />
           </StrictMode>,
         );
         mobile.render(
           <StrictMode>
-            <AppShell view={view} variant="bottom" />
+            <AppShell view={view} variant="bottom" budgetsEnabled={options.budgetsEnabled} />
           </StrictMode>,
         );
         toolbar.render(
