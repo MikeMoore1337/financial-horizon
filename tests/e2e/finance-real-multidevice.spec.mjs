@@ -2788,10 +2788,21 @@ test('#35 guest budgets remain local and survive native encrypted backup and res
     // Explicit reclassification is also exercised and does not rewrite bank data.
     await page.locator('.fh-budgets summary').filter({hasText:'Категории подтверждённых расходов'}).click();
     const stored=await scopedState(page,'state'),tx=stored.bankStatements.operations[0].sourceKey;
-    await page.getByLabel('Расход',{exact:true}).selectOption(tx);
-    await page.getByLabel('Категория расхода',{exact:true}).selectOption('legacy:покупки');
+    const expense=page.getByRole('combobox',{name:'Расход',exact:true});
+    const category=page.getByRole('combobox',{name:'Категория расхода',exact:true});
+    await expect(expense).toBeVisible();
+    await expense.selectOption({value:tx},{timeout:10000});
+    // A genuine reclassification must change the category total, not merely
+    // leave the original import category selected while testing a no-op.
+    await category.selectOption({value:'legacy:здоровье'},{timeout:10000});
+    await page.getByRole('button',{name:'Сохранить категорию'}).click();
+    await expect(page.locator('.fh-budget-usage .fh-budget-amount strong')).toHaveText(/10\s?000/);
+    await expect.poll(async()=> (await scopedState(page,'state'))?.guestBudgets?.assignments).toEqual([{transactionId:tx,categoryId:'legacy:здоровье'}]);
+    await expense.selectOption({value:tx},{timeout:10000});
+    await category.selectOption({value:'legacy:покупки'},{timeout:10000});
     await page.getByRole('button',{name:'Сохранить категорию'}).click();
     await expect(page.locator('.fh-budget-usage .fh-budget-amount strong')).toHaveText(/8\s?500/);
+    await expect.poll(async()=> (await scopedState(page,'state'))?.guestBudgets?.assignments).toEqual([{transactionId:tx,categoryId:'legacy:покупки'}]);
     expect((await scopedState(page,'state')).bankStatements).toEqual(stored.bankStatements);
     const original=await scopedState(page,'state');
     await view(page,'settings');
