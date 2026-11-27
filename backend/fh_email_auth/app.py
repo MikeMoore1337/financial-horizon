@@ -61,8 +61,18 @@ def create_app(
     oauth_config=None,
     oauth_store=None,
     oauth_exchanger=None,
+    finance_engine=None,
+    finance_profile_namespace=None,
+    enable_account_v2_candidate: bool=False,
+    enable_import_candidate: bool=False,
+    enable_bank_import_candidate: bool=False,
+    enable_budget_candidate: bool=False,
+    finance_sync_allowed_actor: str|None=None,
+    finance_sync_test_allow_all: bool=False,
 ) -> FastAPI:
     config=config or Settings.from_env()
+    if type(finance_sync_test_allow_all) is not bool or (finance_sync_test_allow_all and not config.test_mode):
+        raise ValueError("Sync test rollout requires an isolated test app")
     app=FastAPI(title="Financial Horizon Email Auth", docs_url=None, redoc_url=None,
                 openapi_url=None)
     app.add_middleware(TrustedHostMiddleware,allowed_hosts=[urlsplit(config.public_origin).hostname]+(["testserver"] if config.test_mode else []))
@@ -80,7 +90,10 @@ def create_app(
             if len(await request.body())>4096:
                 return JSONResponse({"detail":"Слишком большой запрос"},status_code=413)
         response=await call_next(request)
-        response.headers["Cache-Control"]="no-store"
+        response.headers["Cache-Control"]=(
+            "private, no-store" if request.url.path.startswith("/api/finance/")
+            else "no-store"
+        )
         response.headers["Referrer-Policy"]="no-referrer"
         response.headers["X-Content-Type-Options"]="nosniff"
         return response
@@ -111,7 +124,10 @@ def create_app(
             "logout-others":((10,3600),None),
             "change-email":((5,3600),(2,86400)),
             "change-confirm":((15,3600),None),
-            "rotate":((6,3600),None)
+            "rotate":((6,3600),None),
+            "finance-session":((20,3600),None),
+            "finance-read":((300,3600),None),
+            "finance-write":((100,3600),None),
         }
         ip_policy,email_policy=policy[action]
         # Global quota must be consumed first, so distributed abusive IPs cannot
@@ -135,6 +151,8 @@ def create_app(
             raise HTTPException(status_code=400,detail="Не удалось подтвердить защитную проверку")
 
     def cookie(response:Response,session:str):
+        # Finance-cookie invalidation is enforced by the opted-in finance
+        # adapter for EVERY session issuer, including OAuth callbacks.
         response.set_cookie(
             key=SESSION_COOKIE,value=session,path="/api/auth",max_age=7*86400,
             secure=not config.test_mode,httponly=True,samesite="lax"
@@ -321,6 +339,9 @@ def create_app(
         store.logout(request.cookies.get(SESSION_COOKIE))
         response.delete_cookie(SESSION_COOKIE,path="/api/auth",
                                secure=not config.test_mode,httponly=True,samesite="lax")
+        if finance_engine is not None:
+            response.delete_cookie("fh_finance_session",path="/api/finance/v1",
+                                   secure=not config.test_mode,httponly=True,samesite="strict")
         return {"ok":True}
 
     # The email application remains the only session and user authority.
@@ -338,7 +359,116 @@ def create_app(
             raise ValueError("OAuth and email auth must use one origin and SQLite database")
         oauth_store = oauth_store or OAuthStore(config.database_path)
     app.include_router(make_oauth_router(oauth_config, oauth_store, oauth_exchanger))
+    if finance_engine is not None:
+        if not config.enabled or store is None or finance_profile_namespace is None:
+            raise ValueError("Finance API requires active auth and server profile namespace")
+        # Finance routes are available only under explicit opt-in, never by default.
+        from backend.finance_db.finance_router import mount_finance_routes
+
+        mount_finance_routes(
+            app, engine=finance_engine, namespace=finance_profile_namespace,
+            public_origin=config.public_origin,
+            auth_resolver=store.current,
+            secure_cookie=not config.test_mode,
+            rate_limiter=lambda request, action: throttle(request, action),
+            enable_account_v2_candidate=enable_account_v2_candidate,
+            enable_import_candidate=enable_import_candidate,
+            enable_bank_import_candidate=enable_bank_import_candidate,
+            enable_budget_candidate=enable_budget_candidate,
+            sync_allowed_actor=finance_sync_allowed_actor,
+            sync_test_allow_all=finance_sync_test_allow_all,
+        )
     return app
 
 
-app=create_app()
+def _read_sync_actor_credential() -> str:
+    """Read a service-private systemd credential without exposing an actor ID."""
+    import os
+    import re
+    import stat
+    from pathlib import Path
+    directory = os.environ.get("CREDENTIALS_DIRECTORY", "")
+    if directory != "/run/credentials/fh-email-auth.service":
+        raise ValueError("Sync rollout credential directory is unavailable")
+    path = Path(directory) / "fh_sync68_actor"
+    fd = None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        info = os.fstat(fd)
+        # systemd credentials are root-owned 0440 with a service-user ACL.
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_gid != 0 or
+                stat.S_IMODE(info.st_mode) != 0o440 or info.st_nlink != 1 or info.st_size != 32):
+            raise ValueError("Sync rollout credential is invalid")
+        value = os.read(fd, 33).decode("ascii")
+        if not re.fullmatch(r"[a-f0-9]{32}", value):
+            raise ValueError("Sync rollout credential is invalid")
+        return value
+    except (OSError, UnicodeError):
+        raise ValueError("Sync rollout credential is unavailable") from None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _personal_finance_runtime_options() -> dict:
+    """Explicit personal-only finance route opt-in; default startup unchanged.
+
+    This does not run migrations, unlock production secrets, enable public
+    registration or claim recovery checks. The production operator must
+    separately verify PostgreSQL, protected credentials and restore.
+    """
+    import os
+    from uuid import UUID
+
+    mode = os.environ.get("FH_FINANCE_RUNTIME_MODE", "off")
+    v2_mode = os.environ.get("FH_FINANCE_V2_RUNTIME", "off")
+    import_mode = os.environ.get("FH_FINANCE_IMPORT_RUNTIME", "off")
+    # #38 is independent of the #69 legacy import window. Never make bank
+    # writes live by inheriting its existing production enablement.
+    bank_import_mode = os.environ.get("FH_FINANCE_BANK_IMPORT_RUNTIME", "off")
+    sync_mode = os.environ.get("FH_FINANCE_SYNC_CREDENTIAL", "off")
+    budget_mode = os.environ.get("FH_FINANCE_BUDGET_RUNTIME", "off")
+    if sync_mode not in ("off", "on"):
+        raise ValueError("Invalid sync rollout configuration")
+    if (mode not in ("off", "personal") or v2_mode not in ("off", "on")
+            or import_mode not in ("off", "on")
+            or bank_import_mode not in ("off", "on") or budget_mode not in ("off", "on")):
+        raise ValueError("Invalid finance feature configuration")
+    if mode == "off":
+        if v2_mode != "off" or import_mode != "off" or bank_import_mode != "off" or sync_mode != "off" or budget_mode != "off":
+            raise ValueError("Finance v2/import requires enabled private finance runtime")
+        return {}
+
+    if budget_mode == "on" and (v2_mode != "on" or sync_mode != "on"):
+        raise ValueError("Budget requires private v2 and owner-only sync")
+    if import_mode == "on" and v2_mode != "on":
+        raise ValueError("Import requires explicitly enabled private finance v2")
+    if bank_import_mode == "on" and v2_mode != "on":
+        raise ValueError("Bank import requires explicitly enabled private finance v2")
+    raw_namespace = os.environ.get("FH_FINANCE_PROFILE_NAMESPACE", "")
+    try:
+        namespace = UUID(raw_namespace)
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError("Stable finance profile namespace is required") from None
+    if str(namespace) != raw_namespace or namespace.int == 0:
+        raise ValueError("Canonical non-zero finance namespace is required")
+    url = os.environ.get("FH_FINANCE_DATABASE_URL", "")
+    if not url.startswith("postgresql+psycopg://"):
+        raise ValueError("Private PostgreSQL runtime connection is required")
+
+    # Do not import the SQL runtime or require finance dependencies for the
+    # existing email/OAuth service unless this private release flag is set.
+    from backend.finance_db.db import create_finance_engine
+
+    return {
+        "finance_engine": create_finance_engine(url),
+        "finance_profile_namespace": namespace,
+        "enable_account_v2_candidate": v2_mode == "on",
+        "enable_import_candidate": import_mode == "on",
+        "enable_bank_import_candidate": bank_import_mode == "on",
+        "enable_budget_candidate": budget_mode == "on",
+        "finance_sync_allowed_actor": _read_sync_actor_credential() if sync_mode == "on" else None,
+    }
+
+
+app=create_app(**_personal_finance_runtime_options())

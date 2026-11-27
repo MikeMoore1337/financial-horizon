@@ -1,6 +1,6 @@
 # Financial Horizon #34 - isolated IndexedDB migration staging
 
-**Status: implementation candidate, NOT an enabled storage migration.** This code has no imports from `storage.js`, `app.js`, the UI, cloud sync, or the Service Worker and does not change existing production state. It is designed to remain inert until a separate reviewed integration is approved.
+**Status: staging candidate, NOT an enabled storage migration.** The shared `sameFinancialJSON` helper is imported by `app.js` and the personal-import flow for snapshot comparison. The staging database is not the active finance source: creating a protected candidate does not switch or delete legacy data. Migration activation requires a separately reviewed integration.
 
 ## Boundaries and data format
 
@@ -9,6 +9,8 @@
 - `records[scope]` contains a wrapper `{format:'financial-horizon.staged-snapshot',version:1,scope,record:<AES-GCM sealed record>}`. The plaintext snapshot, account titles, amounts, schedules, and audit entries reside **only** in AES-256-GCM ciphertext. The exposed scope/revision/schema/key ID/IV are metadata bound by authenticated AAD, not secret.
 - A single native IndexedDB readwrite transaction writes both stores; a failed/aborted transaction commits **neither** store. A second writer cannot silently replace an existing scope; an existing stage is decrypted and compared before an idempotent retry can report `already-staged`.
 - A migration is a **copy**, never a destructive move. Existing `financial-horizon-browser-v1` and its legacy account/guest keys are not even opened by this module. No cloud upload, login side effect, automatic key rotation, key caching in `localStorage` or automatic activation.
+- Snapshot staging and backup equality checks reject values that JSON would discard or change, such as undefined fields, non-finite numbers, sparse arrays and non-JSON objects. A rejected source must be retained for an explicit recovery path; it must not be treated as a verified backup or silently converted.
+- Backup export pins the validated snapshot before key derivation, rejects output too large for the v1 importer, and rechecks the selected scope before creating a download. Verification and restore also recheck the same scope after asynchronous steps, including confirmation, so a stale result cannot replace another profile. In a mixed legacy cache without the scope lease, export and restore refuse and request an online update.
 
 ## Required preflight (`stageVerifiedLegacyBackup`)
 
@@ -37,4 +39,4 @@
 
 ## Approved unlocking scenario - **UI not implemented**
 
-First activation: confirm an independent encrypted backup and its password, set a separate local passphrase (minimum 12 characters), display the local 256-bit recovery key once, confirm safe storage, then explicitly approve staging. Subsequent opens: passphrase unlock; lost passphrase: recovery key + immediate rewrap; logout: block in-memory keys and stop access to decrypted data. Offline unlock works only where the encrypted copy already exists. **Owner confirmed the interaction scenario on 2026-11-08. This does not approve the visual design or authorize active-store migration.** See [approved unlock contract](APPROVED_LOCAL_UNLOCK_FLOW.md).
+First activation: confirm an independent encrypted backup and its password, set a separate local passphrase (minimum 12 characters), display the local 256-bit recovery key once, confirm safe storage, then explicitly approve staging. Subsequent opens: passphrase unlock; lost passphrase: recovery key + immediate rewrap; logout: block in-memory keys and stop access to decrypted data. Offline unlock works only where the encrypted copy already exists. The owner approved the visual proposal in the task conversation on 2026-11-23; that approval does not authorize active-store migration. See [approved unlock contract](APPROVED_LOCAL_UNLOCK_FLOW.md).

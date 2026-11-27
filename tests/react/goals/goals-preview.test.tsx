@@ -69,7 +69,7 @@ describe('source-only approved goals preview', () => {
     const model=buildGoalsScreenModel([past],'2026-11-08','past');
     expect(model.selected?.snapshot.monthlyDeficitCents).toBeNull();
     render(<GoalsPreview {...props()} model={model} />);
-    expect(screen.getByText('Невозможно рассчитать')).toBeTruthy();
+    expect(screen.getAllByText('Невозможно рассчитать')[0]).toBeTruthy();
     expect(screen.getByText('Предстоящих взносов нет.')).toBeTruthy();
   });
   it('localizes all installment statuses and goal history event types', () => {

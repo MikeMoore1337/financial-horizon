@@ -5,11 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#ffffff" id="theme-color">
 <script src="./theme-bootstrap.js?rev=ios27-chrome-v17"></script>
-<meta name="description" content="Бесплатная домашняя бухгалтерия без регистрации. Данные остаются на вашем устройстве.">
+<meta name="description" content="Домашняя бухгалтерия: локальный бюджет и защищённые серверные счета для вошедших пользователей.">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Горизонт">
 <meta name="color-scheme" content="light dark">
 <meta name="fh-email-auth" content="disabled">
+<meta name="fh-finance-accounts" content="enabled">
+<meta name="fh-finance-sync" content="enabled">
+<meta name="fh-finance-budgets" content="enabled">
+<meta name="fh-finance-reserves" content="enabled">
+<meta name="fh-finance-import" content="enabled">
+<meta name="fh-finance-bank-import" content="enabled">
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" sizes="180x180" href="./assets/brand/apple-touch-icon-180.png">
 <link rel="icon" type="image/svg+xml" href="./assets/brand/favicon.svg">
@@ -23,6 +29,7 @@
  <symbol id="ico-home" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1zM9 21v-8h6v8"/></symbol>
  <symbol id="ico-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18"/></symbol>
  <symbol id="ico-list" viewBox="0 0 24 24"><path d="M9 6h12M9 12h12M9 18h12M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></symbol>
+ <symbol id="ico-layers" viewBox="0 0 24 24"><path d="m12 2 9 5-9 5-9-5 9-5zM3 12l9 5 9-5M3 17l9 5 9-5"/></symbol>
  <symbol id="ico-credit" viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="3"/><path d="M3 10h18M7 15h4"/></symbol>
  <symbol id="ico-settings" viewBox="0 0 24 24"><path d="M10.2 2.8h3.6l.6 2.3c.6.2 1.2.5 1.7.9l2.2-.8 1.8 3.1-1.8 1.5c.1.7.1 1.4 0 2.1l1.8 1.5-1.8 3.1-2.2-.8c-.5.4-1.1.7-1.7.9l-.6 2.3h-3.6l-.6-2.3c-.6-.2-1.2-.5-1.7-.9l-2.2.8-1.8-3.1 1.8-1.5c-.1-.7-.1-1.4 0-2.1l-1.8-1.5 1.8-3.1 2.2.8c.5-.4 1.1-.7 1.7-.9z"/><circle cx="12" cy="10.85" r="2.65"/></symbol>
  <symbol id="ico-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
@@ -50,27 +57,27 @@
     <nav class="sidebar-nav" aria-label="Разделы">
       <button class="nav-item active" data-view="overview"><svg><use href="#ico-home"/></svg><span>Обзор</span></button>
       <button class="nav-item" data-view="calendar"><svg><use href="#ico-calendar"/></svg><span>Календарь</span></button>
-      <button class="nav-item" data-view="obligations"><svg><use href="#ico-list"/></svg><span>Обязательства</span></button>
+      <button class="nav-item" data-view="obligations"><svg><use href="#ico-layers"/></svg><span>Обязательства</span></button>
       <button class="nav-item" data-view="loans"><svg><use href="#ico-credit"/></svg><span>Кредиты</span></button>
       <button class="nav-item" data-view="settings"><svg><use href="#ico-settings"/></svg><span>Настройки</span></button>
     </nav>
-    <div class="side-bottom"><div class="privacy-dot"></div><div><strong>Хранится на устройстве</strong><span>Без банковских подключений</span></div></div>
+    <div class="side-bottom"><div class="privacy-dot"></div><div><strong id="storage-context-title">Хранится на устройстве</strong><span id="storage-context-detail">Без банковских подключений</span></div></div>
   </aside>
   <div class="work-area">
     <header class="toolbar">
       <div class="toolbar-leading"><button class="tool-icon hamburger" id="menu-toggle" aria-label="Открыть меню"><svg><use href="#ico-menu"/></svg></button><span class="crumb">Личные финансы</span><span class="crumb-slash">/</span><span id="toolbar-title">Обзор</span></div>
-      <div class="toolbar-actions"><span class="local-chip"><span class="privacy-dot"></span> Локально</span><button class="tool-icon" id="theme-toggle" aria-label="Переключить тему" title="Переключить тему"><svg><use href="#ico-moon"/></svg></button><a class="tool-icon toolbar-account" href="./account.html" id="account-entry-toolbar" aria-label="Управление аккаунтом" title="Управление аккаунтом" hidden><span class="lucide-user-icon" aria-hidden="true"></span></a><button type="button" class="button-secondary toolbar-logout" id="account-logout-toolbar" data-action="account-logout" aria-label="Выйти из аккаунта" title="Выйти из аккаунта" hidden><span class="lucide-logout-icon" aria-hidden="true"></span><span class="toolbar-logout-label">Выйти</span></button><button class="button-primary toolbar-add" id="top-add" aria-label="Добавить запись"><svg aria-hidden="true" focusable="false"><use href="#ico-plus"/></svg><span>Добавить</span></button></div>
+      <div class="toolbar-actions"><span class="local-chip"><span class="privacy-dot"></span><span id="storage-context-chip">Локально</span></span><button class="tool-icon" id="theme-toggle" aria-label="Переключить тему" title="Переключить тему"><svg><use href="#ico-moon"/></svg></button><a class="tool-icon toolbar-account" href="./account.html" id="account-entry-toolbar" aria-label="Управление аккаунтом" title="Управление аккаунтом" hidden><span class="lucide-user-icon" aria-hidden="true"></span></a><button type="button" class="button-secondary toolbar-logout" id="account-logout-toolbar" data-action="account-logout" aria-label="Выйти из аккаунта" title="Выйти из аккаунта" hidden><span class="lucide-logout-icon" aria-hidden="true"></span><span class="toolbar-logout-label">Выйти</span></button><button class="button-primary toolbar-add" id="top-add" aria-label="Добавить запись"><svg aria-hidden="true" focusable="false"><use href="#ico-plus"/></svg><span>Добавить</span></button></div>
     </header>
     <main class="page" id="main"><div class="loading">Проверяем доступ к бухгалтерии…</div></main>
-    <footer class="footer"><span>Данные остаются в этом браузере. Делайте резервные копии.</span><span id="save-indicator" role="status" aria-live="polite">Локальная база</span></footer>
+    <footer class="footer"><span id="storage-context-footnote">Данные остаются в этом браузере. Делайте резервные копии.</span><span id="save-indicator" role="status" aria-live="polite">Локальная база</span></footer>
   </div>
 </div>
 <nav class="bottom-nav" aria-label="Основные разделы">
   <button data-view="overview" class="active"><svg><use href="#ico-home"/></svg><span>Обзор</span></button>
   <button data-view="calendar"><svg><use href="#ico-calendar"/></svg><span>Календарь</span></button>
-  <button data-view="obligations"><svg><use href="#ico-list"/></svg><span>Платежи</span></button>
+  <button data-view="obligations"><svg><use href="#ico-layers"/></svg><span>Обязательства</span></button>
   <button data-view="loans"><svg><use href="#ico-credit"/></svg><span>Кредиты</span></button>
-  <button data-view="settings"><svg><use href="#ico-settings"/></svg><span>Ещё</span></button>
+  <button data-view="settings"><svg><use href="#ico-settings"/></svg><span>Настройки</span></button>
 </nav>
 <dialog class="dialog" id="entry-dialog" aria-labelledby="entry-heading"><form method="dialog" id="entry-form" class="dialog-body" novalidate>
   <div class="dialog-head"><div><span class="eyebrow">Доход или расход</span><h2 id="entry-heading">Новая запись</h2></div><button class="tool-icon" value="cancel" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#ico-close"/></svg></button></div>
@@ -153,7 +160,22 @@
  </div>
 </dialog>
 <input type="file" id="excel-file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
+<dialog class="dialog" id="cloud-import-dialog" aria-labelledby="cloud-import-heading">
+  <div class="dialog-body">
+    <div class="dialog-head"><div><span class="eyebrow">Личный финансовый аккаунт</span><h2 id="cloud-import-heading">Подтвердить перенос</h2></div><button type="button" class="tool-icon" data-action="cancel-cloud-import" aria-label="Закрыть"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#ico-close"/></svg></button></div>
+    <p class="form-note">Шифрованная копия сверена с текущей бухгалтерией. На сервере пока ничего не изменено. Локальные данные останутся на устройстве даже после импорта.</p>
+    <p id="cloud-import-summary" class="form-note" role="status" aria-live="polite"></p>
+    <div id="cloud-import-comparison"></div>
+    <label class="field" id="cloud-import-guest-row" hidden><span><input type="checkbox" id="cloud-import-guest-consent"> Я отдельно подтверждаю перенос гостевых данных в текущий аккаунт. Гостевая копия останется на устройстве.</span></label>
+    <label class="field" id="cloud-import-preserve-row" hidden><span><input type="checkbox" id="cloud-import-preserve-zero-account"> Я отдельно подтверждаю сохранение существующего пустого счёта на сервере. Он не будет удалён или объединён с локальными суммами.</span></label>
+    <label class="field"><span><input type="checkbox" id="cloud-import-final-consent"> Я сохранил зашифрованную копию вне браузера, проверил данные и разрешаю однократный перенос в свой аккаунт.</span></label>
+    <p class="form-note">Если импорт прервётся после подтверждения, не запускайте его повторно, пока не проверите результат на сервере. Автоматического удаления локальной базы нет.</p>
+    <div class="dialog-actions"><button type="button" class="button-secondary" data-action="cancel-cloud-import">Отмена</button><button type="button" class="button-secondary" data-action="prepare-cloud-merge" hidden>Подготовить предпросмотр</button><button type="button" class="button-primary" data-action="confirm-cloud-import">Перенести на сервер</button></div>
+  </div>
+</dialog>
+<input type="file" id="verify-backup-file" accept=".json,application/json" hidden>
 <input type="file" id="restore-file" accept=".json,application/json" hidden>
+<input type="file" id="cloud-import-file" accept=".json,application/json" hidden>
 <input type="file" id="schedule-file" accept=".csv,text/csv" hidden>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script type="module" src="./app.js?rev=auth-theme-v26"></script>

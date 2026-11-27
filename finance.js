@@ -1,3 +1,89 @@
+// Inline guest-bank validation keeps the legacy standalone finance.js module
+// available to cached PWA shells and old browser tabs (no new imports).
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const HASH = /^[0-9a-f]{64}$/;
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_MINOR = 1_000_000_000_000;
+const MAX_ACCOUNTS = 100;
+const MAX_OPERATIONS = 5000;
+const MAX_BATCHES = 5000;
+const MAX_BATCH_OPERATIONS = 1000;
+const fail = (message = 'Повреждён локальный журнал банковских операций') => { throw Error(message); };
+const integer = (value, min, max) => Number.isSafeInteger(value) && value >= min && value <= max;
+const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value) &&
+  (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+const safeDate = value => typeof value === 'string' && DATE.test(value) &&
+  Number.isFinite(new Date(value + 'T00:00:00.000Z').getTime()) &&
+  new Date(value + 'T00:00:00.000Z').toISOString().slice(0, 10) === value;
+
+/** Validate restored/legacy guest backups BEFORE any local state is accepted. */
+export function validateGuestBankLedger(value) {
+  if (!plain(value) || value.version !== 1 ||
+      !Array.isArray(value.accounts) || value.accounts.length > MAX_ACCOUNTS ||
+      !Array.isArray(value.operations) || value.operations.length > MAX_OPERATIONS ||
+      !Array.isArray(value.batches) || value.batches.length > MAX_BATCHES) fail();
+  const ids = new Set(), batches = new Map(), rows = new Set(), external = new Set();
+  for (const account of value.accounts) {
+    if (!plain(account) || !UUID.test(account.id) || ids.has(account.id) ||
+        typeof account.name !== 'string' || !account.name.trim() || account.name.length > 160 ||
+        !integer(account.openingMinor, -MAX_MINOR, MAX_MINOR) || account.currency !== 'RUB') fail();
+    ids.add(account.id);
+  }
+  for (const batch of value.batches) {
+    if (!plain(batch) || !HASH.test(batch.batchKey) || !HASH.test(batch.fileDigest) ||
+        batches.has(batch.batchKey) ||
+        !integer(batch.committedStateRevision, 1, Number.MAX_SAFE_INTEGER) ||
+        (batch.cancelledStateRevision !== null &&
+         (!integer(batch.cancelledStateRevision, batch.committedStateRevision + 1, Number.MAX_SAFE_INTEGER))) ||
+        !integer(batch.operationCount, 1, MAX_BATCH_OPERATIONS)) fail();
+    batches.set(batch.batchKey, batch);
+  }
+  const counts = new Map();
+  for (const op of value.operations) {
+    if (!plain(op) || !HASH.test(op.sourceKey) || rows.has(op.sourceKey) ||
+        !HASH.test(op.fingerprint) || !HASH.test(op.batchKey) ||
+        !batches.has(op.batchKey) || !ids.has(op.accountId) ||
+        !safeDate(op.date) || !integer(op.amountCents, 1, MAX_MINOR) ||
+        !['income','expense','transfer'].includes(op.kind) ||
+        typeof op.description !== 'string' || op.description.length > 500 ||
+        (op.category !== null && (typeof op.category !== 'string' || op.category.length > 160)) ||
+        (op.externalId !== null && (typeof op.externalId !== 'string' ||
+         op.externalId.length < 1 || op.externalId.length > 150)) ||
+        (op.targetAccountId !== null && !ids.has(op.targetAccountId)) ||
+        (op.kind === 'transfer') !== (op.targetAccountId !== null) ||
+        op.targetAccountId === op.accountId) fail();
+    rows.add(op.sourceKey);
+    if (op.externalId !== null) {
+      const bankId = JSON.stringify([op.accountId,op.externalId]);
+      if (external.has(bankId)) fail();
+      external.add(bankId);
+    }
+    counts.set(op.batchKey, (counts.get(op.batchKey) || 0) + 1);
+  }
+  for (const [id,batch] of batches) if (counts.get(id) !== batch.operationCount) fail();
+  // Validate every actual cash position: rejected imported/rollback histories
+  // cannot silently create an unsafe Number or an unlimited balance.
+  for (const account of value.accounts) guestBankBalance(value, account.id);
+  return value;
+}
+
+export function guestBankBalance(data, accountId) {
+  const account = data.accounts.find(item => item.id === accountId);
+  if (!account) fail('Счёт не найден');
+  let value = account.openingMinor;
+  const batchByKey = new Map(data.batches.map(batch => [batch.batchKey,batch]));
+  for (const op of data.operations) {
+    if (batchByKey.get(op.batchKey)?.cancelledStateRevision !== null) continue;
+    if (op.accountId === accountId)
+      value += op.kind === 'income' ? op.amountCents : -op.amountCents;
+    if (op.kind === 'transfer' && op.targetAccountId === accountId) value += op.amountCents;
+    if (!integer(value, -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER))
+      fail('Переполнение локального остатка');
+  }
+  return value;
+}
+
+
 // Денежные суммы хранятся целыми копейками. Допущения кредитной модели изложены в README.
 export function cents(input) {
   const normalized = String(input ?? '').trim().replace(/[\s\u00a0\u202f]/g, '').replace(',', '.');
@@ -18,8 +104,11 @@ export function isActive(record) { return !record.deletedAt; }
 export function entryDueDate(entry, month) {
   if (!isActive(entry)) return null;
   if (entry.recurrence==='once') return monthKey(entry.date) === month ? entry.date : null;
-  if (entry.recurrence==='monthly' && monthIndex(month)>=monthIndex(monthKey(entry.date))) return dayInMonth(month, Number(entry.date.slice(-2)));
-  if (entry.recurrence==='yearly' && monthIndex(month)>=monthIndex(monthKey(entry.date)) && month.slice(-2)===entry.date.slice(5,7)) return dayInMonth(month, Number(entry.date.slice(-2)));
+  const every=entry.recurrenceEvery??1;
+  if(!Number.isSafeInteger(every)||every<1||every>120)throw Error('Некорректная периодичность обязательства');
+  const elapsed=monthIndex(month)-monthIndex(monthKey(entry.date));
+  if (entry.recurrence==='monthly' && elapsed>=0 && elapsed%every===0) return dayInMonth(month, Number(entry.date.slice(-2)));
+  if (entry.recurrence==='yearly' && elapsed>=0 && elapsed%(12*every)===0) return dayInMonth(month, Number(entry.date.slice(-2)));
   return null;
 }
 export function loanRate(loan) { return Number(loan.apr || 0) / 1200; }
@@ -98,11 +187,72 @@ export function getMonthEvents(state,month){
  }).filter(Boolean);
  return [...entries,...loans].sort((a,b)=>a.date.localeCompare(b.date)||a.title.localeCompare(b.title,'ru'));
 }
-export function monthTotals(events){const incomes=events.filter(x=>x.kind==='income'),expenses=events.filter(x=>x.kind!=='income');return {
+/** Reuse the calendar's occurrence model for every outstanding historical period. */
+export function getReminderMonthEvents(state,currentMonth){
+ if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(currentMonth))throw Error('Некорректный период напоминаний');
+ const base=monthIndex(currentMonth),starts=[];
+ for(const entry of state.entries){
+  if(!isActive(entry)||entry.kind!=='expense'||entry.recurrence==='once')continue;
+  const month=monthKey(entry.date);
+  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))throw Error('Некорректная дата обязательства');
+  starts.push(monthIndex(month));
+ }
+ for(const loan of state.loans){
+  if(!isActive(loan))continue;
+  const month=monthKey(loan.asOfDate);
+  if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))throw Error('Некорректная дата кредита');
+  starts.push(monthIndex(month));
+ }
+ const first=starts.reduce((minimum,index)=>Math.min(minimum,index),base-12);
+ const months=base+2-first;
+ // Refuse oversized histories instead of silently presenting an incomplete list.
+ const perMonth=state.entries.length*(state.settlements.length+1)+
+  state.loans.length*(state.loanPayments.length+1)+1;
+ if(!Number.isSafeInteger(perMonth)||months>1200||months*perMonth>10_000_000)
+  throw Error('История обязательств слишком велика для расчёта напоминаний');
+ const events=[];
+ for(let offset=first-base;offset<=1;offset++){
+  for(const item of getMonthEvents(state,shiftMonth(currentMonth,offset))){
+   if(item.kind==='expense')events.push(item);
+   if(events.length>5000)throw Error('Слишком много экземпляров для расчёта напоминаний');
+  }
+ }
+ return events;
+}
+function actualMonthAmounts(state,month){
+ if(!state||!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))throw Error('Некорректный период фактических операций');
+ const entries=new Map(state.entries.map(entry=>[entry.id,entry]));
+ const loans=new Set(state.loans.map(loan=>loan.id));
+ if(entries.size!==state.entries.length||loans.size!==state.loans.length)
+  throw Error('Повторный идентификатор финансовой записи');
+ let income=0,expense=0;
+ const add=(amount,sign)=>{
+  if(!Number.isSafeInteger(amount)||amount<0||
+     !Number.isSafeInteger((sign===1?income:expense)+amount))
+   throw Error('Некорректная сумма фактической операции');
+  if(sign===1)income+=amount;else expense+=amount;
+ };
+ for(const fact of state.settlements){
+  if(fact.voidedAt||monthKey(fact.date)!==month)continue;
+  const entry=entries.get(fact.entryId);
+  if(!entry||!['income','expense'].includes(entry.kind))throw Error('Не найдена запись фактической операции');
+  add(fact.amountCents,entry.kind==='income'?1:-1);
+ }
+ for(const fact of state.loanPayments){
+  if(fact.voidedAt||monthKey(fact.date)!==month)continue;
+  if(!loans.has(fact.loanId))throw Error('Не найден кредит фактической операции');
+  add(fact.amountCents,-1);
+ }
+ if(!Number.isSafeInteger(income-expense))throw Error('Некорректный итог фактических операций');
+ return {income,expense};
+}
+export function monthTotals(events,state,month){const incomes=events.filter(x=>x.kind==='income'),expenses=events.filter(x=>x.kind!=='income');
+ const actual=state===undefined&&month===undefined?{income:incomes.reduce((a,x)=>a+x.paidCents,0),expense:expenses.reduce((a,x)=>a+x.paidCents,0)}:actualMonthAmounts(state,month);
+ return {
   incomeCents:incomes.reduce((a,x)=>a+x.plannedCents,0),expenseCents:expenses.reduce((a,x)=>a+x.plannedCents,0),
-  incomePaidCents:incomes.reduce((a,x)=>a+x.paidCents,0),expensePaidCents:expenses.reduce((a,x)=>a+x.paidCents,0),
+  incomePaidCents:actual.income,expensePaidCents:actual.expense,
   netPlanCents:incomes.reduce((a,x)=>a+x.plannedCents,0)-expenses.reduce((a,x)=>a+x.plannedCents,0),
-  netFactCents:incomes.reduce((a,x)=>a+x.paidCents,0)-expenses.reduce((a,x)=>a+x.paidCents,0)
+  netFactCents:actual.income-actual.expense
 };}
 export function createSampleState() {
  const asOf='2026-11-01'; return {
@@ -225,12 +375,85 @@ export function choosePrimaryPaymentMethod(state,entryId,methodId){
  entry.paymentMethodsVersion=PAYMENT_METHODS_VERSION;
 }
 
+// #35 optional local-only budget catalogue. Keep this validator standalone:
+// historical PWA shells load finance.js directly, including backup restore.
+export function validateGuestBudgets(value, bank) {
+ const invalid=()=>{throw Error('Повреждены локальные бюджеты');};
+ const exact=(row,keys)=>plain(row)&&Object.keys(row).length===keys.length&&keys.every(k=>Object.hasOwn(row,k));
+ const month=v=>typeof v==='string'&&/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(v)&&!v.startsWith('0000');
+ const name=v=>typeof v==='string'&&v===v.trim()&&v.length>0&&v.length<=40&&!/[\x00-\x1f\x7f]/.test(v);
+ const key=v=>v.toLocaleLowerCase('ru-RU');
+ const validId=v=>typeof v==='string'&&(UUID.test(v)||(v.startsWith('legacy:')&&name(v.slice(7))&&key(v.slice(7))===v.slice(7)));
+ if(!exact(value,['version','categories','rules','assignments'])||value.version!==1||
+    !Array.isArray(value.categories)||value.categories.length>500||
+    !Array.isArray(value.rules)||value.rules.length>5000||
+    !Array.isArray(value.assignments)||value.assignments.length>MAX_OPERATIONS)invalid();
+ const ids=new Set(),aliases=new Set();
+ for(const c of value.categories){
+  if(!exact(c,['id','name','aliases','archived','entityRevision'])||!validId(c.id)||ids.has(c.id)||
+     !name(c.name)||typeof c.archived!=='boolean'||!integer(c.entityRevision,1,Number.MAX_SAFE_INTEGER)||
+     !Array.isArray(c.aliases)||c.aliases.length<1||c.aliases.length>100||
+     !c.aliases.includes(key(c.name)))invalid();
+  ids.add(c.id);
+  for(const a of c.aliases){
+   if(!name(a)||a!==key(a)||aliases.has(a))invalid();
+   aliases.add(a);
+  }
+ }
+ const rules=new Set(),scopes=new Map();
+ for(const r of value.rules){
+  if(!exact(r,['id','categoryId','limitMinor','recurrence','fromMonth','endsBeforeMonth','archivedFromMonth','entityRevision'])||
+     typeof r.id!=='string'||!UUID.test(r.id)||rules.has(r.id)||ids.has(r.id)||
+     (r.categoryId!==null&&!ids.has(r.categoryId))||!integer(r.limitMinor,0,MAX_MINOR)||
+     !['once','monthly'].includes(r.recurrence)||!month(r.fromMonth)||
+     (r.endsBeforeMonth!==null&&(!month(r.endsBeforeMonth)||r.endsBeforeMonth<=r.fromMonth))||
+     (r.archivedFromMonth!==null&&(!month(r.archivedFromMonth)||r.archivedFromMonth<r.fromMonth))||
+     !integer(r.entityRevision,1,Number.MAX_SAFE_INTEGER))invalid();
+  rules.add(r.id);
+  const start=monthIndex(r.fromMonth);
+  let end=r.recurrence==='once'?start+1:Infinity;
+  if(r.endsBeforeMonth!==null)end=Math.min(end,monthIndex(r.endsBeforeMonth));
+  if(r.archivedFromMonth!==null)end=Math.min(end,monthIndex(r.archivedFromMonth));
+  if(end>start){
+   const intervals=scopes.get(r.categoryId)||[];
+   intervals.push([start,end]);scopes.set(r.categoryId,intervals);
+  }
+ }
+ for(const intervals of scopes.values()){
+  intervals.sort((a,b)=>a[0]-b[0]);
+  for(let i=1;i<intervals.length;i++)if(intervals[i][0]<intervals[i-1][1])invalid();
+ }
+ const actual=new Set((bank?.operations||[]).filter(o=>o.kind==='expense').map(o=>o.sourceKey));
+ const assigned=new Set();
+ for(const a of value.assignments){
+  if(!exact(a,['transactionId','categoryId'])||!actual.has(a.transactionId)||assigned.has(a.transactionId)||
+     (a.categoryId!==null&&!ids.has(a.categoryId)))invalid();
+  assigned.add(a.transactionId);
+ }
+ return value;
+}
+
 export function validateState(s){
  // v1 remains readable for historical IndexedDB records and encrypted backups.
  if(!s || (s.version!==1&&s.version!==2) || !Array.isArray(s.entries) ||
     !Array.isArray(s.loans)||!Array.isArray(s.settlements)||
     !Array.isArray(s.loanPayments)||!Array.isArray(s.categories)||
     !Array.isArray(s.audit))throw Error('Неподдерживаемая версия или повреждённые финансовые данные');
+ // #38: optional, guest-only actual cash journal. Historical backup payloads
+ // omit it. Validate all bank account/batch identities before committing IDB.
+ if(s.bankStatements!==undefined)validateGuestBankLedger(s.bankStatements);
+ if(s.guestBudgets!==undefined)validateGuestBudgets(s.guestBudgets,s.bankStatements);
+ // #40: optional account-scoped preference; older encrypted backups lack this field.
+ // Strict validation prevents a malformed preference from silently corrupting UI behavior.
+ if(s.settings?.paymentReminders!==undefined){
+  const settings=s.settings.paymentReminders;
+  if(!settings||typeof settings!=='object'||Array.isArray(settings)||
+     typeof settings.enabled!=='boolean'||!Array.isArray(settings.daysBefore)||
+     settings.daysBefore.length>3||
+     new Set(settings.daysBefore).size!==settings.daysBefore.length||
+     settings.daysBefore.some(x=>![1,3,7].includes(x)))
+   throw Error('Повреждены настройки напоминаний');
+ }
  if(s.version===2&&(!Number.isSafeInteger(s.revision)||s.revision<0))
   throw Error('Повреждён счётчик изменений финансовой базы');
  if(s.entries.length>50000||s.loans.length>1000||

@@ -54,6 +54,11 @@ assert.doesNotMatch(
   /src\/react\/|react-dom/,
   'Legacy entry cannot load TSX or React',
 );
+assert.doesNotMatch(
+  read('account.js'),
+  /^\s*import\s/m,
+  'Old cached account page must not load unpublished source modules',
+);
 assert.ok(
   scripts.some((name) => read('assets/built/' + name).includes('react')),
   'React must be bundled in the Vite entry',

@@ -1,5 +1,50 @@
 import {test,expect} from '@playwright/test';
 
+test('native scope lease refuses a stale restore even when both accounts have the same revision',async({page})=>{
+ await page.goto('/__e2e__/ready');
+ const observed=await page.evaluate(async()=>{
+  const storage=await import('/storage.js?restore-lease-native');
+  const a='a'.repeat(32),b='b'.repeat(32);
+  await storage.selectStateScope(a);
+  const source=await storage.updateState(value=>value.entries.push({
+   id:'synthetic-a',kind:'expense',title:'ACCOUNT_A',amountCents:111,
+   date:'2026-11-08',recurrence:'once',category:'Другое',
+  }));
+  const lease=storage.captureStateScope();
+  await storage.selectStateScope(b);
+  const target=await storage.updateState(value=>value.entries.push({
+   id:'synthetic-b',kind:'expense',title:'ACCOUNT_B',amountCents:222,
+   date:'2026-11-08',recurrence:'once',category:'Другое',
+  }));
+  let rejected=false;
+  try{lease();await storage.replaceState(source,{expectedRevision:source.revision});}
+  catch{rejected=true;}
+  const after=await storage.readState();
+  return {rejected,sameRevision:source.revision===target.revision,title:after.entries[0].title,
+   amount:after.entries[0].amountCents};
+ });
+ expect(observed).toEqual({rejected:true,sameRevision:true,title:'ACCOUNT_B',amount:222});
+});
+
+test('native async backup scope lease rejects completion after same-account reselection',async({page})=>{
+ await page.goto('/__e2e__/ready');
+ const observed=await page.evaluate(async()=>{
+  const storage=await import('/storage.js?scope-lease-native');
+  const {encryptBackup}=await import('/backup.js');
+  const account='a'.repeat(32);
+  await storage.selectStateScope(account);
+  const lease=storage.captureStateScope();
+  const state=await storage.readState();
+  const encrypted=encryptBackup(state,'synthetic scope lease phrase 2026');
+  await storage.selectStateScope(account);
+  await encrypted;
+  let rejected=false;
+  try{lease()}catch{rejected=true}
+  return {rejected,current:storage.captureStateScope() instanceof Function};
+ });
+ expect(observed).toEqual({rejected:true,current:true});
+});
+
 // Synthetic values, native IndexedDB and real WebKit/Chromium transaction abort.
 test('account switch during an in-flight write aborts old scope without exposing it to the next account',async({page})=>{
  const errors=[];page.on('pageerror',error=>errors.push(error.message));

@@ -1,0 +1,37 @@
+.fh-sync {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+.fh-sync output,
+.fh-sync li,
+.fh-sync p {
+  overflow-wrap: anywhere;
+}
+.fh-sync details {
+  min-width: 0;
+}
+.fh-sync summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.fh-sync .dialog-actions {
+  flex-wrap: wrap;
+}
+.fh-sync input,
+.fh-sync select {
+  max-width: 100%;
+}
+.fh-sync .button-primary,
+.fh-sync .button-secondary,
+.fh-sync .button-text {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding-block: 8px;
+}

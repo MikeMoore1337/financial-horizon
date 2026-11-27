@@ -52,7 +52,7 @@ test('React settings: storage note is rendered by React and passive navigation n
      scroll:Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),
      cards:document.querySelectorAll('[data-settings-card]').length,
    }));
-   expect(result.cards).toBe(7);
+   expect(result.cards).toBe(8);
    expect(result.scroll,'overflow '+width+'/'+theme).toBeLessThanOrEqual(result.width+1);
   }
  }

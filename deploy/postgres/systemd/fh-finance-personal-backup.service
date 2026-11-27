@@ -1,0 +1,14 @@
+[Unit]
+Description=Financial Horizon encrypted personal PostgreSQL backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/financial-horizon/finance/start.env
+EnvironmentFile=/etc/financial-horizon/finance/backup.env
+ExecStart=/usr/bin/bash -c 'exec /usr/bin/bash "$FH_FINANCE_CHECKOUT_DIR/deploy/postgres/scripts/backup.sh"'
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true

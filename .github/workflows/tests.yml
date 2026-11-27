@@ -52,8 +52,69 @@ jobs:
         run: python -m unittest discover -s tests/deploy -p 'test_*.py' -v
 
   e2e-real-browser:
-    runs-on: ubuntu-latest
+    # The required browser check must not pass when real finance sync is skipped.
+    needs: finance-sync-browser
+    runs-on: ubuntu-24.04
+    container:
+      image: mcr.microsoft.com/playwright:v1.65.0-noble@sha256:9beb546099e11f52d62e505537914870e01a67e0e6b00ae41da4775324e73dbe
+      options: --ipc=host
     timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      # The Playwright OCI test image does not include lsb_release; setup-python
+      # cache: pip invokes that missing binary. Install pinned Python without pip cache.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - run: python -m pip install -r backend/requirements-test.txt
+      # Exact Playwright 1.65.0 browser binaries and OS libraries come from
+      # the SHA-pinned, version-matched Microsoft CI image. Do not apt-install
+      # unpinned host packages or silently replace real Chromium/WebKit E2E.
+      - name: Run actual Chromium + WebKit E2E
+        timeout-minutes: 12
+        run: npm run test:e2e
+        env:
+          FH_E2E_PYTHON: python3
+      - name: Upload synthetic-only failing browser artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-browser-failures
+          path: test-results/e2e/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  finance-sync-browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      pg:
+        image: postgres:17@sha256:5b96f1a16bd9768b060dd2ffe55cb6225c4d9ef4d214a8b21eb08134869a97e4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_admin_password_only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PYTHONPATH: ${{ github.workspace }}/backend:${{ github.workspace }}
+      FH_FINANCE_CI_ALLOW_BOOTSTRAP: "yes"
+      FH_FINANCE_MIGRATION_URL: postgresql+psycopg://fh_finance_migrator:ci_migration_password_only@127.0.0.1:5432/fh_finance_ci
+      FH_FINANCE_DATABASE_URL: postgresql+psycopg://fh_finance_runtime:ci_runtime_password_only@127.0.0.1:5432/fh_finance_ci
+      FH_E2E_REAL_FINANCE: "yes"
+      FH_E2E_PYTHON: python3
     steps:
       - uses: actions/checkout@v4
         with:
@@ -65,19 +126,82 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: pip
-          cache-dependency-path: backend/requirements-test.txt
       - run: npm ci
-      - run: python -m pip install -r backend/requirements-test.txt
+      - run: python -m pip install -r backend/requirements-finance.txt -r backend/requirements-test.txt
       - run: npx playwright install --with-deps chromium webkit
-      - run: npm run test:e2e
-        env:
-          FH_E2E_PYTHON: python3
+      - run: python backend/finance_db/tests/bootstrap_ci.py
+      - run: alembic -c backend/finance_db/alembic.ini upgrade head
+      - run: npm run build
+      - name: Run real finance sync browser integration
+        run: npx playwright test tests/e2e/finance-real-multidevice.spec.mjs --project=chromium-desktop --project=webkit-mobile
       - name: Upload synthetic-only failing browser artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-browser-failures
+          name: finance-sync-browser-failures
           path: test-results/e2e/
           if-no-files-found: ignore
           retention-days: 7
+
+  finance-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      pg:
+        image: postgres:17@sha256:5b96f1a16bd9768b060dd2ffe55cb6225c4d9ef4d214a8b21eb08134869a97e4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci_admin_password_only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PYTHONPATH: ${{ github.workspace }}/backend:${{ github.workspace }}
+      FH_FINANCE_CI_ALLOW_BOOTSTRAP: "yes"
+      FH_FINANCE_MIGRATION_URL: postgresql+psycopg://fh_finance_migrator:ci_migration_password_only@127.0.0.1:5432/fh_finance_ci
+      FH_FINANCE_DATABASE_URL: postgresql+psycopg://fh_finance_runtime:ci_runtime_password_only@127.0.0.1:5432/fh_finance_ci
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements-finance.txt
+      - name: Install isolated finance dependencies
+        run: python -m pip install -r backend/requirements-finance.txt -r backend/requirements-test.txt 'bandit>=1.8,<2'
+      - name: Provision synthetic finance DB and least-privilege roles
+        run: python backend/finance_db/tests/bootstrap_ci.py
+      - name: Alembic migrate empty database
+        run: alembic -c backend/finance_db/alembic.ini upgrade head
+      - name: Alembic repeat migration (idempotent)
+        run: alembic -c backend/finance_db/alembic.ini upgrade head
+      - name: Non-superuser RLS, finance HTTP and session security integration
+        run: python -m pytest -q backend/finance_db/tests/ backend/finance_api/tests/
+      - name: Encrypted dump and isolated restore verification
+        run: bash deploy/postgres/scripts/ci-restore.sh
+        env:
+          FH_FINANCE_CI_POSTGRES_CONTAINER: ${{ job.services.pg.id }}
+      - name: Build and boot isolated production-compose configuration
+        run: bash deploy/postgres/scripts/ci-compose.sh
+      - name: Validate dedicated LUKS2 data volume (disposable synthetic device)
+        run: bash deploy/postgres/scripts/ci-crypto-volume.sh
+      - name: Prevent unsafe downgrade on populated financial DB
+        run: |
+          if alembic -c backend/finance_db/alembic.ini downgrade base; then
+            echo "ERROR: destructive downgrade must be refused"
+            exit 1
+          fi
+          current="$(alembic -c backend/finance_db/alembic.ini current | awk 'NR==1 {print $1}')"
+          expected="$(alembic -c backend/finance_db/alembic.ini heads | awk 'NR==1 {print $1}')"
+          test -n "$expected" && test "$current" = "$expected"
+      - name: Compile finance Python and check shell scripts
+        run: |
+          python -m compileall -q backend/finance_db
+          bash -n deploy/postgres/init/10-roles.sh deploy/postgres/scripts/*.sh

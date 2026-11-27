@@ -100,7 +100,7 @@ test('reject unknown, duplicate and missing bindings', () => {
 test('exact kopecks at upper bound; no fractional amounts or overflow accepted', () => {
   const x=input({goals:[goal('g1',999_999_999_999)],accounts:[account('bank',1_000_000_000_000)],mandatoryReserves:[]});
   assert.equal(row(x).availableCents,1);
-  for (const cents of [1.5,Number.MAX_SAFE_INTEGER,-1_000_000_000_001,NaN,Infinity]) {
+  for (const cents of [1.5,Number.MAX_SAFE_INTEGER+1,Number.MIN_SAFE_INTEGER-1,NaN,Infinity]) {
     assert.throws(()=>reconcileGoalCapacity(input({accounts:[account('bank',cents)]})),/kopecks/);
   }
   assert.equal(row(input({accounts:[account('bank',-1)],goals:[goal('g1')],mandatoryReserves:[]})).shortageCents, 1); // Negative bank balances are representable.
@@ -161,4 +161,12 @@ test('historical snapshot ignores valid goals not yet created, but validates the
   assert.throws(() => reconcileGoalCapacity(input({
     ...historical, goals:[old,corrupt],
   })),/integer number of kopecks/);
+});
+
+test('aggregate confirmed cash may exceed a single command limit; overflow fails closed', () => {
+  const x=input({accounts:[account('bank',1_000_000_000_001)],goals:[goal('g1')],mandatoryReserves:[]});
+  assert.equal(row(x).availableCents,1_000_000_000_001);
+  assert.throws(()=>reconcileGoalCapacity(input({
+    accounts:[account('bank',Number.MIN_SAFE_INTEGER)],goals:[goal('g1',1)],mandatoryReserves:[]
+  })),/overflow/);
 });

@@ -30,6 +30,11 @@ function currentScope(){
  assertScope(epoch,key);
  return {key,epoch,signal};
 }
+/** Pin the currently selected scope for async work that runs outside IDB. */
+export function captureStateScope(){
+ const {key,epoch}=currentScope();
+ return ()=>assertScope(epoch,key);
+}
 function abortOnScopeChange(tx,signal){
  const stop=()=>{try{tx.abort();}catch{}};
  signal.addEventListener('abort',stop,{once:true});
@@ -132,6 +137,42 @@ export async function selectStateScope(userId=null){
  return key;
 }
 
+// One in-flight online payment per signed-in account. It is a recovery
+// record for an already requested server command, not an offline payment ledger.
+export async function pendingOnlinePayment(userId,action,value){
+ const {key,epoch,signal}=currentScope();
+ if(typeof userId!=='string'||!/^[a-f0-9]{32}$/.test(userId)||key!=='account-state-v2:'+userId)
+  throw Error('Финансовый аккаунт изменился');
+ if(!['read','create','clear'].includes(action))throw Error('Неверное действие');
+ const db=await openDb();assertScope(epoch,key);
+ return new Promise((resolve,reject)=>{
+  const tx=db.transaction(STORE,'readwrite'),object=tx.objectStore(STORE);
+  const cleanup=abortOnScopeChange(tx,signal);
+  const pendingKey='online-payment-pending-v1:'+userId;
+  const fence=object.get(FENCE_PREFIX+key),request=object.get(pendingKey);
+  let result=null,failure=null;
+  request.onsuccess=()=>{
+   try{
+    assertScope(epoch,key);
+    if(fence.result!==undefined)throw Error(FENCED_MESSAGE);
+    const prior=request.result;
+    if(action==='read'){result=prior??null;return;}
+    if(action==='create'){
+     if(prior!==undefined)throw Error('Предыдущая оплата ожидает сверки');
+     if(!value||typeof value!=='object')throw Error('Нет данных операции для сверки');
+     object.add(structuredClone(value),pendingKey);result=value;return;
+    }
+    if(!prior||typeof value!=='string'||prior.mutationId!==value)
+     throw Error('Ожидающая оплата изменилась');
+    object.delete(pendingKey);
+   }catch(error){failure=error;try{tx.abort();}catch{}}
+  };
+  tx.oncomplete=()=>{cleanup();try{assertScope(epoch,key);resolve(result);}catch(error){reject(error);}};
+  tx.onerror=()=>{cleanup();reject(failure||tx.error||Error('Не удалось сохранить проверку оплаты'));};
+  tx.onabort=()=>{cleanup();reject(failure||tx.error||Error(REVOKED_MESSAGE));};
+ });
+}
+
 // Every migration and its version marker commit in ONE IndexedDB transaction.
 // Never resolve a migration before the transaction has actually committed.
 export async function readState(){
@@ -209,6 +250,61 @@ export async function replaceState(state,{expectedRevision}={}){
   for(const key of Object.keys(target))delete target[key];
   Object.assign(target,structuredClone(incoming));
  },{expectedRevision});
+}
+
+// Keep one native readwrite transaction open while the approved snapshot is sent.
+// Other tabs, including older writers using this object store, must wait.
+export async function withStableImportSnapshot(verify,operation,{signal,guestSource}={}){
+ if(typeof verify!=='function'||typeof operation!=='function'||!signal||signal.aborted||
+    typeof signal.addEventListener!=='function'||typeof signal.removeEventListener!=='function')
+  throw Error('Проверка исходной базы недоступна');
+ const {key,epoch,signal:scopeSignal}=currentScope();
+ if(!key.startsWith('account-state-v2:'))throw Error('Перенос доступен только своему аккаунту');
+ if(guestSource!==undefined&&(!guestSource||typeof guestSource!=='object'||
+    !(guestSource.claim===null||(typeof guestSource.claim==='string'&&/^[a-f0-9]{32}$/.test(guestSource.claim)))||
+    guestSource.sourceKey!==(guestSource.claim?GUEST_KEY:KEY)))throw Error('Некорректная гостевая область');
+ const guestClaim=guestSource?.claim,sourceKey=guestSource?guestSource.sourceKey:key;
+ const isGuest=guestSource!==undefined;
+ const db=await openDb();assertScope(epoch,key);
+ return new Promise((resolve,reject)=>{
+  const tx=db.transaction(STORE,'readwrite'),object=tx.objectStore(STORE);
+  const operationController=new AbortController();
+  let failure=null,result,done=false,started=false;
+  const cancel=()=>{operationController.abort();try{tx.abort();}catch{}};
+  const timer=setTimeout(()=>{failure=Error('Проверка переноса прервана; результат отправки может быть неизвестен');cancel();},45000);
+  scopeSignal.addEventListener('abort',cancel,{once:true});signal.addEventListener('abort',cancel,{once:true});
+  const cleanup=()=>{clearTimeout(timer);scopeSignal.removeEventListener('abort',cancel);signal.removeEventListener('abort',cancel);};
+  const fence=object.get(FENCE_PREFIX+key),sourceFence=isGuest?object.get(FENCE_PREFIX+sourceKey):fence;
+  const claim=isGuest?object.get(CLAIM_KEY):null,request=object.get(sourceKey);
+  const keepAlive=()=>{
+   if(done)return;
+   const next=object.get(FENCE_PREFIX+key);
+   next.onsuccess=keepAlive;
+  };
+  request.onsuccess=()=>{
+   try{
+    assertScope(epoch,key);
+    if(signal.aborted||scopeSignal.aborted)throw Error(REVOKED_MESSAGE);
+    if(fence.result!==undefined||sourceFence.result!==undefined)throw Error(FENCED_MESSAGE);
+    if(isGuest&&((guestClaim===null&&claim.result!==undefined)||
+       (guestClaim!==null&&claim.result!==guestClaim)))throw Error('Гостевой профиль изменился. Подготовьте новый просмотр.');
+    if(isGuest&&request.result===undefined)throw Error('Гостевой профиль не найден');
+    const current=request.result===undefined?emptyState():migrateState(request.result);
+    const matched=verify(current);
+    if(matched!==true)throw Error('Локальные данные изменились. Создайте новую копию и предпросмотр.');
+    keepAlive();started=true;
+    Promise.resolve().then(()=>operation(operationController.signal)).then(value=>{result=value;done=true;},error=>{failure=error;done=true;});
+   }catch(error){failure=error;cancel();}
+  };
+  tx.oncomplete=()=>{
+   cleanup();
+   if(!started||!done){operationController.abort();reject(Error('Блокировка локальной базы прервалась; результат отправки может быть неизвестен'));return;}
+   if(failure)reject(failure);else resolve(result);
+  };
+  tx.onerror=()=>{failure=failure||tx.error||Error('Ошибка проверки локальной базы');};
+  tx.onabort=()=>{operationController.abort();cleanup();reject(failure||Error('Блокировка локальной базы отменена; результат отправки может быть неизвестен'));};
+  if(signal.aborted||scopeSignal.aborted)cancel();
+ });
 }
 
 // An explicit maintenance operation, not called by the app. Run only after

@@ -16,3 +16,28 @@ test('encrypted backup roundtrip and wrong password rejection',async()=>{
  await assert.rejects(()=>decryptBackup(encrypted,'wrong-password-long-enough'),/Неверный пароль/);
  await assert.rejects(()=>encryptBackup(data,'short'),/не короче/);
 });
+
+test('backup rejects JSON values that would be lost or silently rewritten',async()=>{
+ const pass='synthetic backup passphrase 2026';
+ for(const value of [undefined,NaN,Infinity,-0,new Date(0),[undefined]]){
+  const state=createSampleState();state.futureField={value};
+  await assert.rejects(()=>encryptBackup(state,pass),/JSON|данн/);
+  assert.ok(Object.hasOwn(state.futureField,'value'));
+ }
+});
+
+test('backup pins the original snapshot before asynchronous key derivation',async()=>{
+ const state=createSampleState(),pass='synthetic backup passphrase 2026';
+ const expected=structuredClone(state);
+ const pending=encryptBackup(state,pass);
+ state.entries[0].title='CHANGED_WHILE_DERIVING';
+ state.entries[0].amountCents+=1;
+ const restored=await decryptBackup(await pending,pass);
+ assert.deepEqual(restored,expected);
+});
+
+test('backup refuses output larger than the supported restore format',async()=>{
+ const state=createSampleState();
+ state.futureField='x'.repeat(6_000_100);
+ await assert.rejects(()=>encryptBackup(state,'synthetic backup passphrase 2026'),/слишком большая/);
+});

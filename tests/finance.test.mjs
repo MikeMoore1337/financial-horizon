@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {cents,rubles,loanLedger,payoffMonths,annuityMonthly,previewLoanPayment,getMonthEvents,monthTotals,createSampleState,emptyState,entryDueDate,shiftMonth} from '../finance.js';
+import {cents,rubles,loanLedger,payoffMonths,annuityMonthly,previewLoanPayment,getMonthEvents,getReminderMonthEvents,monthTotals,createSampleState,emptyState,entryDueDate,shiftMonth} from '../finance.js';
 import {parseCsv,parseSchedule} from '../schedule.js';
 const loan={id:'m',openingCents:210000000,paymentCents:3020000,apr:9.5,termMonths:245,dueDay:16,asOfDate:'2026-11-01'};
 test('exact cent arithmetic and input validation',()=>{
@@ -41,11 +41,47 @@ test('plan/fact recurring and leap-year dates',()=>{
  assert.equal(t.expenseCents,1250000+280000+3000000+3020000);
  assert.equal(t.netPlanCents,10450000);
 });
+test('actual monthly flow follows payment dates while planned occurrences retain their own periods',()=>{
+ const state=emptyState();
+ state.entries.push({id:'bill',kind:'expense',recurrence:'monthly',date:'2024-01-31',amountCents:10000});
+ state.entries.push({id:'income',kind:'income',recurrence:'once',date:'2024-02-20',amountCents:5000});
+ state.settlements.push(
+  {id:'early',entryId:'bill',occurrence:'2024-02',date:'2024-01-29',amountCents:2500},
+  {id:'late',entryId:'bill',occurrence:'2024-02',date:'2024-03-03',amountCents:7500},
+  {id:'salary',entryId:'income',occurrence:'2024-02',date:'2024-03-01',amountCents:5000},
+  {id:'cancelled',entryId:'bill',occurrence:'2024-02',date:'2024-03-04',amountCents:500,voidedAt:'2024-03-05'}
+ );
+ assert.equal(getMonthEvents(state,'2024-02').find(row=>row.id==='bill').paidCents,10000);
+ const actual=month=>monthTotals(getMonthEvents(state,month),state,month).netFactCents;
+ assert.equal(actual('2024-01'),-2500);
+ assert.equal(actual('2024-02'),0);
+ assert.equal(actual('2024-03'),-2500);
+ assert.equal(monthTotals(getMonthEvents(state,'2024-03'),state,'2024-03').incomePaidCents,5000);
+ assert.equal(monthTotals(getMonthEvents(state,'2024-03'),state,'2024-03').expensePaidCents,7500);
+ state.entries[0].deletedAt='2024-04-01';
+ assert.equal(actual('2024-03'),-2500,'archiving must not erase historical cash flow');
+ state.loans.push({id:'loan',openingCents:100000,paymentCents:10000,apr:0,termMonths:10,
+  dueDay:10,asOfDate:'2024-01-01',deletedAt:'2024-04-01'});
+ state.loanPayments.push({id:'loan-payment',loanId:'loan',date:'2024-03-09',amountCents:1000,createdAt:'2024-03-09T12:00:00Z'});
+ assert.equal(actual('2024-03'),-3500);
+ state.loanPayments.push({id:'bad',loanId:'missing',date:'2024-03-10',amountCents:1});
+ assert.throws(()=>actual('2024-03'),/Не найден кредит/);
+});
 test('yearly and monthly recurring dates clamp to February',()=>{
  const entry={id:'e',kind:'expense',recurrence:'monthly',date:'2026-01-31',amountCents:10000};
  assert.equal(entryDueDate(entry,'2028-02'),'2028-02-29');
  assert.equal(entryDueDate(entry,'2027-02'),'2027-02-28');
  assert.equal(shiftMonth('2026-12',1),'2027-01');
+});
+test('reminder history retains old occurrences and fails closed when history is too large',()=>{
+ const state=emptyState();
+ state.entries.push({id:'bill',title:'Расход',kind:'expense',recurrence:'monthly',date:'2025-01-31',amountCents:10000});
+ state.settlements.push({id:'partial',entryId:'bill',occurrence:'2025-02',date:'2026-11-20',amountCents:1});
+ const events=getReminderMonthEvents(state,'2026-11');
+ assert.equal(events.find(event=>event.date==='2025-02-28').paidCents,1);
+ assert.equal(events.find(event=>event.date==='2025-01-31').paidCents,0);
+ state.entries[0].date='1900-01-31';
+ assert.throws(()=>getReminderMonthEvents(state,'2026-11'),/слишком велика/);
 });
 test('CSV schedule import supports quoted delimiter and Russian headers',()=>{
  const text='Дата;Платёж;Проценты;Основной долг;Остаток\n16.11.2026;"30 200,00";"16 625,00";"13 575,00";"2 086 425,00"\n16.12.2026;30200;16500;13700;2072725\n';

@@ -2,33 +2,55 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { Navigation, type FinanceView, type NavigationVariant } from './Navigation';
+import { Toolbar, type ToolbarProps } from './Toolbar';
 
-/** React owns only the contents of the two existing navigation containers. */
-export function AppShell({ view, variant }: { view: FinanceView; variant: NavigationVariant }) {
-  return <Navigation view={view} variant={variant} />;
+/** React owns only the contents of the existing three shell containers. */
+export function AppShell({
+  view,
+  variant,
+  budgetsEnabled = false,
+}: {
+  view: FinanceView;
+  variant: NavigationVariant;
+  budgetsEnabled?: boolean;
+}) {
+  return <Navigation view={view} variant={variant} budgetsEnabled={budgetsEnabled} />;
 }
 
-export function createAppShellRoots(sidebar: HTMLElement, bottom: HTMLElement) {
-  if (sidebar === bottom) throw new Error('Distinct navigation roots required');
-  // Replace legacy static buttons before the React roots are created. The original
-  // HTML stays present for prior installed PWAs and for first paint.
+export function createAppShellRoots(
+  sidebar: HTMLElement,
+  bottom: HTMLElement,
+  header: HTMLElement,
+) {
+  if (new Set([sidebar, bottom, header]).size !== 3) {
+    throw new Error('Distinct shell roots required');
+  }
+  // Static HTML remains for first paint and older installed PWAs.
+  // Replace it before React takes exclusive ownership.
   sidebar.replaceChildren();
   bottom.replaceChildren();
+  header.replaceChildren();
   const desktop = createRoot(sidebar);
   const mobile = createRoot(bottom);
+  const toolbar = createRoot(header);
   let mounted = true;
   return {
-    render(view: FinanceView) {
-      if (!mounted) throw new Error('Cannot render unmounted navigation');
+    render(view: FinanceView, options: ToolbarProps) {
+      if (!mounted) throw new Error('Cannot render unmounted shell');
       flushSync(() => {
         desktop.render(
           <StrictMode>
-            <AppShell view={view} variant="sidebar" />
+            <AppShell view={view} variant="sidebar" budgetsEnabled={options.budgetsEnabled} />
           </StrictMode>,
         );
         mobile.render(
           <StrictMode>
-            <AppShell view={view} variant="bottom" />
+            <AppShell view={view} variant="bottom" budgetsEnabled={options.budgetsEnabled} />
+          </StrictMode>,
+        );
+        toolbar.render(
+          <StrictMode>
+            <Toolbar {...options} />
           </StrictMode>,
         );
       });
@@ -38,6 +60,7 @@ export function createAppShellRoots(sidebar: HTMLElement, bottom: HTMLElement) {
       mounted = false;
       desktop.unmount();
       mobile.unmount();
+      toolbar.unmount();
     },
   };
 }

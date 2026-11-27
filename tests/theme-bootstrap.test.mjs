@@ -66,7 +66,7 @@ test('live theme toggles repeatedly sync root, body and iOS status bar meta',()=
  const root={dataset:{}},body={dataset:{}},meta={content:'#ffffff'};
  const toggle={innerHTML:'',setAttribute(name,value){this[name]=value;}};
  const stored={};
- const context={document:{documentElement:root,body,querySelector(selector){return selector==='#theme-color'?meta:selector==='#theme-toggle'?toggle:null;}},localStorage:{setItem(k,v){stored[k]=v;}}};
+ const context={navRoots:null,document:{documentElement:root,body,querySelector(selector){return selector==='#theme-color'?meta:selector==='#theme-toggle'?toggle:null;}},localStorage:{setItem(k,v){stored[k]=v;}}};
  runInNewContext("const $ = sel => document.querySelector(sel); const svg = name => name; "+fn+"; this.applyTheme = themeSet;",context);
  for(const [mode,color] of [['dark','#172336'],['light','#ffffff'],['dark','#172336'],['light','#ffffff']]){
   context.applyTheme(mode);

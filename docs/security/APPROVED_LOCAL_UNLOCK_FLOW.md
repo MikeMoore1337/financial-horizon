@@ -1,6 +1,6 @@
 # Financial Horizon #34 - approved local unlock behavior (2026-11-08)
 
-**Owner approval:** the unlock/recovery **interaction scenario** was explicitly confirmed in the project conversation on 2026-11-08 and recorded in [Issue #34](https://github.com/MikeMoore1337/financial-horizon/issues/34#issuecomment-6718670579). This is **not** approval to delete legacy financial records, turn on an existing-user migration, publish a visual design, or claim end-to-end encryption. The visual layout remains subject to the repository's visual review policy.
+**Owner approval:** the unlock/recovery **interaction scenario** was explicitly confirmed in the project conversation on 2026-11-08 and recorded in [Issue #34](https://github.com/MikeMoore1337/financial-horizon/issues/34#issuecomment-6718670579). On 2026-11-23 the owner approved the [local visual proposal](approved-local-unlock-mockup.html) in the task conversation. This is **not** approval to delete legacy financial records, activate an existing-user migration, or claim end-to-end encryption. Implementation and physical acceptance remain separate from visual approval.
 
 ## User flow contract
 

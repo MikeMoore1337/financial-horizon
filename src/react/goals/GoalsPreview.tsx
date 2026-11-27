@@ -124,6 +124,10 @@ export function GoalsPreview({ model, rubles, formatDate, onSelect }: GoalsPrevi
           </div>
           <div className="goals-preview-facts">
             <div><small>Плановый взнос</small><strong>{rubles(chosen.card.monthlyCents)}</strong></div>
+            <div><small>Необходимый ежемесячный взнос</small><strong>{
+              chosen.snapshot.requiredMonthlyCents === null
+                ? 'Невозможно рассчитать' : rubles(chosen.snapshot.requiredMonthlyCents)
+            }</strong></div>
             <div><small>Следующий взнос</small>
               <strong>{chosen.card.nextInstallmentOn ? formatDate(chosen.card.nextInstallmentOn) : 'Не требуется'}</strong>
             </div>

@@ -10,11 +10,12 @@ const empty: SettingsProps = {
   audit: [],
   storageMessage: 'Постоянное хранение не подтверждено.',
   formatDate: (date) => date,
+  showBankStatementImport: true,
 };
 afterEach(cleanup);
 
 describe('React Settings - local data controls', () => {
-  it('renders exactly seven approved cards and no duplicate account/theme controls', () => {
+  it('renders eight approved cards and no duplicate account/theme controls', () => {
     render(
       <StrictMode>
         <Settings {...empty} />
@@ -22,11 +23,12 @@ describe('React Settings - local data controls', () => {
     );
     expect(screen.getByRole('heading', { name: 'Настройки' })).toBeTruthy();
     const cards = document.querySelectorAll('[data-settings-card]');
-    expect(cards.length).toBe(7);
+    expect(cards.length).toBe(8);
     expect([...cards].map((card) => card.getAttribute('data-settings-card'))).toEqual([
       'security',
       'backup',
       'import',
+      'bank-statement-import',
       'categories',
       'archive',
       'history',
@@ -90,4 +92,43 @@ describe('React Settings - local data controls', () => {
       document.removeEventListener('submit', handler);
     }
   });
+});
+
+it('optional server accounts entry is hidden by default and only routes on explicit opt-in', () => {
+  render(<Settings {...empty} showFinanceAccounts />);
+  const cards = document.querySelectorAll('[data-settings-card]');
+  expect(cards).toHaveLength(9);
+  const accountCard = document.querySelector('[data-settings-card="finance-accounts"]');
+  expect(accountCard).not.toBeNull();
+  expect(accountCard?.querySelector('[data-view="accounts-connected"]')).not.toBeNull();
+  expect(screen.getByText('Счета и кошельки')).toBeTruthy();
+  expect(document.querySelector('[data-action="account-logout"]')).toBeNull();
+});
+
+it('personal cloud import requires independent accounts and import opt-ins', () => {
+  render(<Settings {...empty} showFinanceImport />);
+  expect(document.querySelector('[data-action="cloud-import"]')).toBeNull();
+  cleanup();
+  render(<Settings {...empty} showFinanceAccounts />);
+  expect(document.querySelector('[data-action="cloud-import"]')).toBeNull();
+  cleanup();
+  render(<Settings {...empty} showFinanceAccounts showFinanceImport />);
+  expect(document.querySelectorAll('[data-settings-card]')).toHaveLength(9);
+  const action = document.querySelector<HTMLButtonElement>('[data-action="cloud-import"]');
+  expect(action).not.toBeNull();
+  expect(action?.textContent).toContain('Перенести данные');
+  expect(document.querySelector('[data-action="account-logout"]')).toBeNull();
+});
+
+it('server bank import card requires explicit independent opt-in', () => {
+  render(<Settings {...empty} showFinanceAccounts showBankStatementImport={false} />);
+  expect(document.querySelector('[data-settings-card="bank-statement-import"]')).toBeNull();
+  expect(document.querySelector('[data-settings-card="finance-accounts"]')).not.toBeNull();
+});
+
+it('preserves access to loans when budgets occupy one of five mobile navigation items', () => {
+  const { rerender } = render(<Settings {...empty} />);
+  expect(screen.queryByRole('button', { name: 'Кредиты' })).toBeNull();
+  rerender(<Settings {...empty} showLoansShortcut />);
+  expect(screen.getByRole('button', { name: 'Кредиты' }).getAttribute('data-view')).toBe('loans');
 });

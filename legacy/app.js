@@ -277,7 +277,9 @@ function openSettlement(entryId,occurrence=ui.month,paymentId=null){
 function requireConfirm(title,text){return new Promise(resolve=>{
  const dialog=$('#confirmation-dialog');$('#confirmation-title').textContent=title;$('#confirmation-text').textContent=text;
  let done=false;
- const finish=value=>{if(done)return;done=true;dialog.close();resolve(value);};
+ const onClose=()=>{if(!dialog.open)finish(false);};
+ const finish=value=>{if(done)return;done=true;dialog.removeEventListener('close',onClose);if(dialog.open)dialog.close();resolve(value);};
+ dialog.addEventListener('close',onClose);
  const yes=$('#confirm-yes'),no=$('#confirm-cancel');
  yes.onclick=()=>finish(true);no.onclick=()=>finish(false);
  dialog.oncancel=e=>{e.preventDefault();finish(false);};
@@ -432,13 +434,25 @@ async function saveSettlement(form){
  $('#settlement-dialog').close();
 }
 async function performBackup(password){
- const file=await encryptBackup(await readState(),password);const url=URL.createObjectURL(new Blob([file],{type:'application/json'}));
+ if(typeof legacyStorage.captureStateScope!=='function')
+  throw Error('Обновите приложение через интернет для безопасного создания резервной копии');
+ const assertCurrentScope=legacyStorage.captureStateScope();
+ const source=await readState();assertCurrentScope();
+ const file=await encryptBackup(source,password);assertCurrentScope();
+ const url=URL.createObjectURL(new Blob([file],{type:'application/json'}));
  const a=document.createElement('a');a.href=url;a.download=`finansovyi-gorizont-${today()}-encrypted.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),12000);toast('Шифрованная резервная копия подготовлена');
 }
 async function performRestore(password){
+ if(typeof legacyStorage.captureStateScope!=='function')
+  throw Error('Обновите приложение через интернет для безопасного восстановления резервной копии');
+ const assertCurrentScope=legacyStorage.captureStateScope(),file=restoreFile;
+ if(!file)throw Error('Выберите сохранённую резервную копию');
  const originalRevision=state?.revision;
- const decrypted=await decryptBackup(await restoreFile.text(),password);
- if(!await requireConfirm('Заменить локальные данные?', 'Импорт заменит всю текущую бухгалтерию данными из резервной копии. При необходимости сохраните текущую копию перед продолжением.'))return;
+ const backupText=await file.text();assertCurrentScope();
+ const decrypted=await decryptBackup(backupText,password);assertCurrentScope();
+ const confirmed=await requireConfirm('Заменить локальные данные?', 'Импорт заменит всю текущую бухгалтерию данными из резервной копии. При необходимости сохраните текущую копию перед продолжением.');
+ assertCurrentScope();
+ if(!confirmed)return;
  await mutate(s=>{for(const key of Object.keys(s))delete s[key];Object.assign(s,structuredClone(decrypted));audit(s,'restore-backup','Восстановлена резервная копия');},'Данные восстановлены',originalRevision);
 }
 async function onFormSubmit(event){
@@ -458,12 +472,14 @@ async function onFormSubmit(event){
    await mutate(s=>{s.categories.push(title);audit(s,'category',`Добавлена категория: ${title}`);},'Категория добавлена');
   }
   if(form.getAttribute('id')==='password-form'){
-   const password=form.elements.password.value;
+   const passwordInput=form.elements.password,password=passwordInput.value;
    if(password.length<12)throw Error('Пароль должен содержать не менее 12 символов');
-   if(passwordMode==='export')await performBackup(password);else await performRestore(password);
-   form.elements.password.value='';$('#password-dialog').close();
+   try{if(passwordMode==='export')await performBackup(password);else await performRestore(password);}
+   finally{passwordInput.value='';}
+   if(!form.isConnected)return;
+   $('#password-dialog').close();
   }
- }catch(e){fail(e);}
+ }catch(e){if(state)fail(e);}
 }
 function bindEvents(){
  // Safari does not always focus clicked buttons; retain the actual dialog trigger.

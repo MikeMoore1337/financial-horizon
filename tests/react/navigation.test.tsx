@@ -24,27 +24,44 @@ describe('React navigation shell and auth boundary', () => {
     expect(screen.getByRole('button', { name: 'Обязательства' })).toBeTruthy();
     cleanup();
     render(<Navigation variant="bottom" view="settings" />);
-    expect(screen.getByRole('button', { name: 'Ещё' }).getAttribute('aria-current')).toBe('page');
-    expect(screen.getByRole('button', { name: 'Платежи' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Настройки' }).getAttribute('aria-current')).toBe(
+      'page',
+    );
+    expect(screen.getByRole('button', { name: 'Обязательства' })).toBeTruthy();
   });
   it('uses a single delegated action per click across both React-owned navigation hosts', () => {
     const sidebar = document.createElement('nav'),
-      bottom = document.createElement('nav');
+      bottom = document.createElement('nav'),
+      toolbar = document.createElement('header');
     sidebar.className = 'sidebar-nav';
     bottom.className = 'bottom-nav';
-    document.body.append(sidebar, bottom);
+    toolbar.className = 'toolbar';
+    document.body.append(sidebar, bottom, toolbar);
     const events: string[] = [];
     const callback = (event: MouseEvent) => {
       const el = (event.target as Element).closest('[data-view]');
       if (el) events.push(el.getAttribute('data-view')!);
     };
     document.addEventListener('click', callback);
-    const roots = createAppShellRoots(sidebar, bottom);
+    const roots = createAppShellRoots(sidebar, bottom, toolbar);
     try {
-      roots.render('overview');
-      roots.render('loans');
+      roots.render('overview', {
+        title: 'Обзор',
+        theme: 'light',
+        signedIn: false,
+        busy: false,
+        serverAccounts: false,
+      });
+      roots.render('loans', {
+        title: 'Кредиты',
+        theme: 'dark',
+        signedIn: true,
+        busy: false,
+        serverAccounts: false,
+      });
       expect(sidebar.querySelectorAll('[data-view]')).toHaveLength(5);
       expect(bottom.querySelectorAll('[data-view]')).toHaveLength(5);
+      expect(toolbar.querySelector('#toolbar-title')?.textContent).toBe('Кредиты');
       expect(sidebar.querySelector('[data-view="loans"]')?.getAttribute('aria-current')).toBe(
         'page',
       );
@@ -57,6 +74,7 @@ describe('React navigation shell and auth boundary', () => {
     }
     expect(sidebar.childElementCount).toBe(0);
     expect(bottom.childElementCount).toBe(0);
+    expect(toolbar.childElementCount).toBe(0);
   });
   it('hides all user data until the verified account matches active storage scope', () => {
     const forbidden = {
@@ -93,4 +111,16 @@ describe('React navigation shell and auth boundary', () => {
     );
     expect(screen.queryByText('GUEST LEDGER')).toBeNull();
   });
+});
+
+it('adds the budget entry only with the explicit flag and retains five mobile actions', () => {
+  const { rerender } = render(<Navigation variant="bottom" view="overview" />);
+  expect(screen.queryByRole('button', { name: 'Бюджеты' })).toBeNull();
+  rerender(<Navigation variant="bottom" view="budgets" budgetsEnabled />);
+  expect(document.querySelectorAll('[data-view]')).toHaveLength(5);
+  expect(screen.getByRole('button', { name: 'Бюджеты' }).getAttribute('aria-current')).toBe('page');
+  expect(screen.queryByRole('button', { name: 'Кредиты' })).toBeNull();
+  rerender(<Navigation variant="sidebar" view="budgets" budgetsEnabled />);
+  expect(screen.getByRole('button', { name: 'Кредиты' })).toBeTruthy();
+  expect(document.querySelectorAll('[data-view]')).toHaveLength(6);
 });
