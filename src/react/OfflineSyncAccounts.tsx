@@ -14,6 +14,7 @@ import { formatRubMinor, isValidLedgerDate, parseRubMinor } from './accounts-vie
 import { FinanceSyncController } from '../cloud/finance-sync-controller.mjs';
 import './offline-sync.css';
 import { Budgets } from './Budgets';
+import {GoalWorkspace} from './goals/GoalWorkspace';
 
 type Command = {
   schema_version: number;
@@ -45,6 +46,7 @@ type SyncState = {
   bundleEpoch: number;
   canCancel: boolean;
   canBudget?: boolean;
+  canGoal?: boolean;
   onlineVerified: boolean;
 };
 const isSyncBusy = (error: unknown): boolean =>
@@ -64,6 +66,8 @@ function operationLabel(command: Command, state: SyncState): string {
       ? formatRubMinor(value)
       : 'сумма недоступна';
   switch (command.action) {
+    case 'goal.append':
+      return 'Изменение финансовой цели: ' + accountName(p.account_id);
     case 'budget.create':
       return 'Создать лимит: ' + amount(p.limit_minor);
     case 'budget.amend':
@@ -154,6 +158,8 @@ export function OfflineSyncAccounts({
   onSessionRevoked,
   budgetMode: initialBudgetMode = false,
   allowOfflineBudgets = false,
+  goalMode: initialGoalMode = false,
+  allowOfflineGoals = false,
 }: {
   actor: string;
   onBack: () => void;
@@ -161,6 +167,8 @@ export function OfflineSyncAccounts({
   onSessionRevoked?: () => void;
   budgetMode?: boolean;
   allowOfflineBudgets?: boolean;
+  goalMode?: boolean;
+  allowOfflineGoals?: boolean;
 }) {
   const controller = useRef<FinanceSyncController | null>(null);
   const mounted = useRef(true);
@@ -173,7 +181,9 @@ export function OfflineSyncAccounts({
   const [confirmRecoveryChange, setConfirmRecoveryChange] = useState(false);
   const [state, setState] = useState<SyncState | null>(null);
   const [localBudgetMode, setLocalBudgetMode] = useState(false);
-  const budgetMode = initialBudgetMode || (offlineOnly && allowOfflineBudgets && localBudgetMode);
+  const [localGoalMode,setLocalGoalMode]=useState(false);
+  const goalMode=initialGoalMode||(offlineOnly&&allowOfflineGoals&&localGoalMode);
+  const budgetMode = !goalMode && (initialBudgetMode || (offlineOnly && allowOfflineBudgets && localBudgetMode));
   const [view, setView] = useState<AccountServerView | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('Для доступа нужна отдельная парольная фраза.');
@@ -1303,6 +1313,7 @@ export function OfflineSyncAccounts({
           base_revision: state.cloud.revision,
           expected_entity_revisions: revisions,
         };
+        if (replacement.action === 'goal.append') replacement.payload={...replacement.payload,event:{...(replacement.payload.event as Record<string,unknown>),id:replacement.client_mutation_id}};
       }
       await controller.current.resolve({
         mutationId: pending.mutationId,
@@ -1331,7 +1342,7 @@ export function OfflineSyncAccounts({
         <button type="button" className="button-secondary" onClick={onBack}>
           Назад
         </button>
-        <h2 id="sync-unlock-title">{budgetMode ? 'Бюджеты' : 'Офлайн-синхронизация'}</h2>
+        <h2 id="sync-unlock-title">{goalMode ? 'Финансовые цели' : budgetMode ? 'Бюджеты' : 'Офлайн-синхронизация'}</h2>
         {offlineOnly && (
           <p>
             Доступна только локальная зашифрованная копия последнего подтверждённого аккаунта.
@@ -1430,6 +1441,7 @@ export function OfflineSyncAccounts({
   };
   const reversible = state.cloud.entities.filter((entity) => {
     if (entity.kind !== 'transaction') return false;
+    if(view.goals.some(g=>g.record.events.some(e=>(e.type==='contribution'||e.type==='use')&&e.ledgerMovementId===entity.id)))return false;
     const data = entity.data as TransactionData;
     return (
       (['income', 'expense', 'adjustment', 'transfer'].includes(data?.kind || '') ||
@@ -1448,7 +1460,7 @@ export function OfflineSyncAccounts({
   });
   return (
     <section className="fh-sync">
-      {!budgetMode && (
+      {!budgetMode && !goalMode && (
         <p>
           Синхронизация счетов, переводов, отдельных доходов и расходов, обязательств и платежей по
           кредитам и распределения существующих резервов. Остальные операции с резервами и разделы
@@ -1507,11 +1519,23 @@ export function OfflineSyncAccounts({
         <button
           type="button"
           className="button-secondary"
-          onClick={() => setLocalBudgetMode((v) => !v)}
+          onClick={() => {setLocalGoalMode(false);setLocalBudgetMode((v) => !v);}}
         >
           {budgetMode ? 'Счета и кошельки' : 'Бюджеты'}
         </button>
       )}
+      {offlineOnly && allowOfflineGoals && state.canGoal === true && (
+        <button type="button" className="button-secondary" onClick={()=>{setLocalBudgetMode(false);setLocalGoalMode(v=>!v);}}>
+          {goalMode?'Счета и кошельки':'Финансовые цели'}
+        </button>
+      )}
+      {goalMode && <GoalWorkspace goals={view.goals}
+        accounts={view.ledger.accounts.map(a=>({id:a.id,name:a.name,
+          available:(state.cloud.entities.find(e=>e.kind==='account'&&e.id===a.id)?.data as {available_minor:number}).available_minor,
+          archived:a.archivedAt!==null}))}
+        entities={state.cloud.entities} revision={state.cloud.revision}
+        writable={state.canGoal===true&&!busy&&state.status!=='CONFLICT'}
+        pending={state.outbox.length>0} onCommand={enqueue}/>}
       {budgetMode && (
         <Budgets
           view={view}
@@ -1530,7 +1554,7 @@ export function OfflineSyncAccounts({
           }
         />
       )}
-      {!budgetMode && (
+      {!budgetMode && !goalMode && (
         <>
           <details>
             <summary>Записать доход или расход</summary>
@@ -2639,7 +2663,7 @@ export function OfflineSyncAccounts({
           </button>
         </section>
       )}
-      {!budgetMode && (
+      {!budgetMode && !goalMode && (
         <Accounts
           snapshot={view.ledger}
           activeProfileId={state.cloud.profileId}
@@ -2655,7 +2679,7 @@ export function OfflineSyncAccounts({
           onTransfer={transfer}
         />
       )}
-      {budgetMode && (
+      {(budgetMode || goalMode) && (
         <button type="button" className="button-secondary" onClick={leave}>
           Назад
         </button>

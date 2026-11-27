@@ -45,6 +45,8 @@ export interface GoalsPreviewProps {
   formatDate: (iso: string) => string;
   /** Selection is a UI intent only; it does not mutate bank or goal data. */
   onSelect?: (goalId: string) => void;
+  connected?: boolean;
+  guest?: boolean;
 }
 
 /**
@@ -52,7 +54,7 @@ export interface GoalsPreviewProps {
  * NOT connected to PWA navigation, persistence, auth or a bank ledger.
  * No financial mutations can be initiated from this component.
  */
-export function GoalsPreview({ model, rubles, formatDate, onSelect }: GoalsPreviewProps) {
+export function GoalsPreview({ model, rubles, formatDate, onSelect, connected = false, guest = false }: GoalsPreviewProps) {
   const chosen = model.selected;
   // Installments are returned from the goal's creation date. Show the next
   // twelve due dates from the model's date, not the oldest historical rows.
@@ -69,7 +71,7 @@ export function GoalsPreview({ model, rubles, formatDate, onSelect }: GoalsPrevi
         </div>
       </header>
       <div className="goals-preview-notice" role="status">
-        Предварительный просмотр. Операции со счетами и сохранение целей пока недоступны.
+        {connected ? guest ? 'Локальные накопления: виртуальное распределение средств без банковских проводок.' : 'Подтверждённые накопления аккаунта. Виртуальное распределение не является расходом.' : 'Предварительный просмотр. Операции со счетами и сохранение целей пока недоступны.'}
       </div>
       <div className="goals-preview-summary">
         <div className="surface"><span>Целей</span><strong>{model.cards.length}</strong></div>
@@ -160,7 +162,7 @@ export function GoalsPreview({ model, rubles, formatDate, onSelect }: GoalsPrevi
               </li>
             ))}
           </ul>
-          <p className="small-hint">Внесение средств не отражается как расход. Сверка операций доступна после подключения счетов.</p>
+          <p className="small-hint">{connected ? 'Виртуальный взнос не является расходом. Фактическая покупка учитывается в журнале операций один раз.' : 'Внесение средств не отражается как расход. Сверка операций доступна после подключения счетов.'}</p>
         </section>}
       </div>
     </section>
