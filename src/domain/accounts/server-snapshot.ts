@@ -13,10 +13,12 @@ import {assertLedgerState} from './invariants.ts';
 import {MAX_MINOR} from './money.ts';
 import {budgetEntityKinds, decodeBudgetEntities, type ServerBudgetView} from '../budgets/server-snapshot.ts';
 
+import {decodeGoalEntities, type ServerGoal} from '../goals/server-goals.ts';
+
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const user = /^[0-9a-f]{32}$/;
 const kinds = new Set(['account','transaction','obligation','loan','reserve',
-  'settlement','loan_payment', ...budgetEntityKinds]);
+  'settlement','loan_payment', ...budgetEntityKinds, 'goal']);
 const accountKinds = new Set(['bank','card','cash','savings','other']);
 const txKinds = new Set(['income','expense','adjustment','transfer','payment','reversal']);
 function reject(message: string): never {
@@ -75,6 +77,7 @@ function requireRevision(value: unknown): number {
 export interface AccountServerView {
   ledger: LedgerState;
   budget: ServerBudgetView;
+  goals: ServerGoal[];
   reservedMinorByAccount: Readonly<Record<string, number>>;
   /** Always server-reported, never inferred from planned obligations. */
   totalMinor: number;
@@ -236,5 +239,6 @@ export function decodeCompleteFinanceState(
     reject('Переполнение итогового остатка');
   }
   return {ledger, budget: decodeBudgetEntities(raw.entities, expectedProfileId),
+    goals: decodeGoalEntities(raw.entities),
     reservedMinorByAccount: reserved, totalMinor, availableMinor};
 }

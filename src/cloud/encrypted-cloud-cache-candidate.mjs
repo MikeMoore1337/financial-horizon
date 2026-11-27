@@ -17,6 +17,8 @@ import {
   applyFinanceDeltaCandidate,
 } from './verified-delta-candidate.mjs';
 
+import {assertGoalSnapshotExtends} from '../domain/goals/server-goals.ts';
+
 function hold(message) {
   throw new Error('SYNC_HOLD: ' + message);
 }
@@ -95,6 +97,7 @@ export async function refreshEncryptedCloudSnapshot({
       verified.revision < before.revision) {
     hold('Серверный финансовый снимок устарел или не совпадает с профилем');
   }
+  assertGoalSnapshotExtends(before.entities, verified.entities);
   const proofs = validatedReceipts(before.appliedReceipts || []);
   if (verified.revision === before.revision && before.serverEtag !== undefined &&
       before.serverEtag !== serverEtag) {

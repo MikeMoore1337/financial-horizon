@@ -118,7 +118,7 @@ def apply_goal_candidate(session: Session, scope: VerifiedFinanceScope, command:
         if before != sum(int(e["delta_minor"]) for e in stored):
             raise FinanceCommandError("service_unavailable", "История накоплений не сходится", 503)
         revision = int(row["entity_revision"]) + 1
-    if revision > MAX_EVENTS:
+    if revision > 1000:  # Existing encrypted receipt validator bounds each array.
         raise conflict("Достигнут предел истории цели")
 
     # Derive all actual postings from the command intent and existing immutable
