@@ -2852,3 +2852,110 @@ test('#35 guest budgets remain local and survive native encrypted backup and res
     expect(requests).toEqual([]);
   }finally{await context.close();}
 });
+
+
+test('#37 encrypted account goals reserve money without duplicate cash and persist on a second device', async ({browser}, testInfo) => {
+  test.setTimeout(120000);
+  if(process.env.FH_E2E_REAL_FINANCE!=='yes')test.skip();
+  const context=await browser.newContext({baseURL:ORIGIN,serviceWorkers:'block'});
+  try{
+    expect((await context.request.post('/__e2e__/personal-session')).status()).toBe(200);
+    const profile=await bootstrap(context),account=randomUUID();
+    expect((await submit(context,await state(context),'account.create',
+      {id:account,name:'Synthetic goals account',kind:'cash',currency:'RUB',opening_minor:12000000})).status()).toBe(201);
+    const page=await context.newPage(),errors=[];
+    page.on('pageerror',e=>errors.push(e.message));
+    await page.goto('/?fh_goals_e2e=1');
+    await view(page,'goals');
+    await page.getByLabel('Парольная фраза',{exact:true}).fill('synthetic goal test passphrase');
+    await page.getByRole('button',{name:'Создать копию'}).click();
+    await page.getByLabel('Я сохранил ключ вне браузера').check();
+    await page.getByRole('button',{name:'Разблокировать'}).click();
+    const goal=page.locator('.goal-workspace');
+    await expect(goal.getByRole('heading',{name:'Финансовые цели'})).toBeVisible();
+    await goal.getByRole('button',{name:'Создать цель',exact:true}).click();
+    const f=goal.getByRole('form',{name:'Создать цель'});
+    await f.getByLabel('Счёт накоплений').selectOption(account);
+    await f.getByLabel('Название').fill('Проверочная цель 37');
+    await f.getByLabel('Дата события').fill('2026-01-01');
+    await f.getByLabel('Целевая сумма, ₽').fill('120000');
+    await f.getByLabel('Срок').fill('2027-01-01');
+    await f.getByLabel(/Подтверждаю изменение/).check();
+    await f.getByRole('button',{name:'Подтвердить',exact:true}).click();
+    await expect(goal.getByRole('heading',{name:'Проверочная цель 37'})).toBeVisible({timeout:20000});
+    await expect(goal.getByRole('button',{name:'Пополнить',exact:true})).toBeEnabled();
+    await goal.getByRole('button',{name:'Пополнить',exact:true}).click();
+    const fund=goal.getByRole('form',{name:'Пополнить'});
+    await fund.getByLabel('Сумма, ₽').fill('10000');
+    await fund.getByLabel(/Подтверждаю изменение/).check();
+    await fund.getByRole('button',{name:'Подтвердить',exact:true}).click();
+    await expect.poll(async()=> (await state(context)).body.entities.find(e=>e.kind==='goal'&&e.data.account_id===account)?.data.saved_minor).toBe(1000000);
+    await expect(goal.getByRole('button',{name:'Использовать средства',exact:true})).toBeEnabled();
+    await goal.getByRole('button',{name:'Использовать средства',exact:true}).click();
+    const expense=goal.getByRole('form',{name:'Использовать средства'});
+    await expense.getByLabel('Сумма, ₽').fill('1000');
+    await expense.getByLabel('Способ').selectOption('expense');
+    await expense.getByLabel(/Подтверждаю изменение/).check();
+    await expense.getByRole('button',{name:'Подтвердить',exact:true}).click();
+    await expect.poll(async()=> (await state(context)).body.entities.find(e=>e.kind==='goal'&&e.data.account_id===account)?.data.saved_minor).toBe(900000);
+    await expect(goal.getByRole('button',{name:'Отменить событие',exact:true})).toBeEnabled();
+    const snapshot=await state(context),row=snapshot.body.entities.find(e=>e.kind==='goal'&&e.data.account_id===account);
+    expect(row.data.event_log).toHaveLength(3);
+    const tx=snapshot.body.entities.find(e=>e.id===row.data.event_log[2].ledgerMovementId);
+    expect(tx.data.kind).toBe('expense');
+    expect(tx.data.postings).toEqual([{account_id:account,signed_minor:-100000}]);
+    expect(entity(snapshot,account).data.balance_minor).toBe(11900000);
+    expect(entity(snapshot,account).data.reserved_minor).toBe(900000);
+    const second=await browser.newContext({baseURL:ORIGIN,storageState:await context.storageState(),serviceWorkers:'block'});
+    try {
+      expect(await bootstrap(second)).toBe(profile);
+      expect((await state(second)).body.entities.find(e=>e.id===row.id)).toEqual(row);
+    } finally {await second.close();}
+    for(const width of [320,390,1440]){
+      await page.setViewportSize({width,height:900});
+      for(const theme of ['light','dark']){
+        if(await page.locator('body').getAttribute('data-theme')!==theme)await page.locator('#theme-toggle').click();
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);
+        await page.screenshot({path:testInfo.outputPath('goals-'+width+'-'+theme+'.png'),fullPage:true});
+      }
+    }
+    expect(errors).toEqual([]);
+  }finally{await context.close();}
+});
+
+test('#37 guest goals use native local state without contacting finance API',async({browser})=>{
+  test.setTimeout(120000);
+  if(process.env.FH_E2E_REAL_FINANCE!=='yes')test.skip();
+  const context=await browser.newContext({baseURL:ORIGIN,serviceWorkers:'block'});
+  try{
+    const page=await context.newPage(),requests=[];
+    page.on('request',r=>{if(r.url().includes('/api/finance/'))requests.push(r.url());});
+    await page.goto('/?guest=1&fh_goals_e2e=1');
+    await view(page,'settings');
+    await page.locator('[data-settings-card="bank-statement-import"] [data-view="bank-import"]').click();
+    await page.getByRole('textbox',{name:'Название'}).fill('Основной');
+    await page.getByRole('textbox',{name:/Начальный остаток/}).fill('20000');
+    await page.getByRole('button',{name:'Добавить счёт'}).click();
+    await expect.poll(async()=>(await scopedState(page,'state'))?.bankStatements?.accounts?.length).toBe(1);
+    const before=await scopedState(page,'state'),account=before.bankStatements.accounts[0].id;
+    await page.setViewportSize({width:390,height:844});
+    await view(page,'goals');
+    const goal=page.locator('.goal-workspace');
+    await goal.getByRole('button',{name:'Создать цель',exact:true}).click();
+    const f=goal.getByRole('form',{name:'Создать цель'});
+    await f.getByLabel('Счёт накоплений').selectOption(account);
+    await f.getByLabel('Название').fill('Гостевая цель 37');
+    await f.getByLabel('Дата события').fill('2026-01-01');
+    await f.getByLabel('Целевая сумма, ₽').fill('120000');
+    await f.getByLabel('Срок').fill('2027-01-01');
+    await f.getByLabel('Выделить из текущего остатка, ₽').fill('10000');
+    await f.getByLabel(/Подтверждаю изменение/).check();
+    await f.getByRole('button',{name:'Подтвердить',exact:true}).click();
+    await expect.poll(async()=>(await scopedState(page,'state'))?.guestGoals?.goals?.[0]?.data?.saved_minor).toBe(1000000);
+    expect((await scopedState(page,'state')).bankStatements).toEqual(before.bankStatements);
+    await page.reload();
+    await view(page,'goals');
+    await expect(goal.getByRole('heading',{name:'Гостевая цель 37'})).toBeVisible();
+    expect(requests).toEqual([]);
+  }finally{await context.close();}
+});
