@@ -143,13 +143,13 @@ def upgrade() -> None:
               SELECT 1 FROM goal_events WHERE profile_id=NEW.profile_id
                 AND ledger_transaction_id=NEW.reversed_transaction_id
             ) AND NOT EXISTS (
-              SELECT 1 FROM goal_events old JOIN goal_events correction
-                ON (old.profile_id,old.goal_id)=(correction.profile_id,correction.goal_id)
-              WHERE old.profile_id=NEW.profile_id
-                AND old.ledger_transaction_id=NEW.reversed_transaction_id
+              SELECT 1 FROM goal_events original_event JOIN goal_events correction
+                ON (original_event.profile_id,original_event.goal_id)=(correction.profile_id,correction.goal_id)
+              WHERE original_event.profile_id=NEW.profile_id
+                AND original_event.ledger_transaction_id=NEW.reversed_transaction_id
                 AND correction.ledger_transaction_id=NEW.id
                 AND correction.event->>'type'='void'
-                AND correction.event->>'eventId'=old.id::text
+                AND correction.event->>'eventId'=original_event.id::text
             ) THEN
               RAISE EXCEPTION 'goal movement requires paired correction' USING ERRCODE='23514';
             END IF;
