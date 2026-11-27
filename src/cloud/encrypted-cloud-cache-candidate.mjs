@@ -82,7 +82,7 @@ function validatedReceipts(value) {
  * snapshot downloader in the same live session; this function does no HTTP. */
 export async function refreshEncryptedCloudSnapshot({
   scope, session, identity, pages, etag, expectedEpoch, pendingJournalPage = null,
-  budgetCommandsV1,
+  budgetCommandsV1, goalCommandsV1,
 }) {
   active(scope, session, identity);
   const verified = verifyFinanceSnapshotPagesCandidate(pages, identity);
@@ -108,16 +108,22 @@ export async function refreshEncryptedCloudSnapshot({
   // Persist only the last authenticated capability inside the sealed snapshot.
   // It authorizes local queueing, never network access. Absence means false.
   if (budgetCommandsV1 !== undefined && typeof budgetCommandsV1 !== 'boolean') hold('Неверная возможность бюджета');
-  const capabilityChanged = budgetCommandsV1 !== undefined &&
-    (bundle.snapshot.budgetCommandsV1 === true) !== budgetCommandsV1;
+  if (goalCommandsV1 !== undefined && typeof goalCommandsV1 !== 'boolean') hold('Неверная возможность целей');
+  const capabilityChanged = (budgetCommandsV1 !== undefined &&
+    (bundle.snapshot.budgetCommandsV1 === true) !== budgetCommandsV1) ||
+    (goalCommandsV1 !== undefined && (bundle.snapshot.goalCommandsV1 === true) !== goalCommandsV1);
   if (verified.revision === before.revision && before.serverEtag === serverEtag && pendingJournalPage === null && !capabilityChanged) {
     return Object.freeze({status: 'NO_NEW_REVISION', bundleEpoch: expectedEpoch,
       serverRevision: verified.revision, pending: bundle.outbox.length});
   }
   const snapshot = structuredClone(bundle.snapshot);
-  if (capabilityChanged) {
+  if (budgetCommandsV1 !== undefined) {
     if (budgetCommandsV1) snapshot.budgetCommandsV1 = true;
     else delete snapshot.budgetCommandsV1;
+  }
+  if (goalCommandsV1 !== undefined) {
+    if (goalCommandsV1) snapshot.goalCommandsV1 = true;
+    else delete snapshot.goalCommandsV1;
   }
   snapshot.cloudFinance = verified.revision === before.revision
     ? {...before, serverEtag}
@@ -157,7 +163,7 @@ export async function refreshEncryptedCloudSnapshot({
         'reserve.create', 'reserve.update', 'reserve.allocate', 'reserve.archive',
         'reserve.skip', 'reserve.event.void', 'reserve.cycle.close', 'reserve.cycle.void',
         'budget.create','budget.amend','budget.archive','budget.category.create',
-        'budget.category.rename','budget.category.archive','budget.category.assign']
+        'budget.category.rename','budget.category.archive','budget.category.assign','goal.append']
         .includes(head.command?.action) &&
       head.status === 'pending' && head.command?.base_revision === before.revision &&
       typeof before.serverEtag === 'string' && head.ifMatch === before.serverEtag) {
@@ -179,7 +185,7 @@ export async function refreshEncryptedCloudSnapshot({
  */
 export async function initializeEncryptedCloudCacheCandidate({
   scope, session, identity, pages, etag = null, expectedEpoch,
-  confirmedAccountCacheInitialization, budgetCommandsV1,
+  confirmedAccountCacheInitialization, budgetCommandsV1, goalCommandsV1,
 }) {
   if (confirmedAccountCacheInitialization !== true) {
     hold('Не подтверждена локальная подготовка облачного снимка');
@@ -198,6 +204,8 @@ export async function initializeEncryptedCloudCacheCandidate({
   const snapshot = structuredClone(bundle.snapshot);
   if (budgetCommandsV1 !== undefined && typeof budgetCommandsV1 !== 'boolean') hold('Неверная возможность бюджета');
   if (budgetCommandsV1 === true) snapshot.budgetCommandsV1 = true;
+  if (goalCommandsV1 !== undefined && typeof goalCommandsV1 !== 'boolean') hold('Неверная возможность целей');
+  if (goalCommandsV1 === true) snapshot.goalCommandsV1 = true;
   snapshot.cloudFinance = cloudImage(verified, [], serverEtag);
   const nextEpoch = await compareAndSwapAtomicEncryptedCandidate(
     scope, session, expectedEpoch, 2,

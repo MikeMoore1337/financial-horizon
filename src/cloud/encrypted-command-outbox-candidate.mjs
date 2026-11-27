@@ -12,6 +12,8 @@ import {
 } from '../security/protected-atomic-candidate.ts';
 import {applyFinanceDeltaCandidate, decodeBudgetEntity, decodeBudgetEntities} from './verified-delta-candidate.mjs';
 
+import {validateGoalCommandPayload,verifyGoalDependencies,verifyGoalReceiptCandidate} from '../domain/goals/goal-command-candidate.mjs';
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SCOPE = /^account:[a-f0-9]{32}$/;
 const EPOCH = /^[a-f0-9]{32}$/;
@@ -19,6 +21,7 @@ const STRONG_ETAG = /^"[^"\r\n]{1,254}"$/;
 const MAX_BYTES = 32768;
 const MAX_QUEUE = 1000;
 const ACTION_FIELDS = Object.freeze({
+  'goal.append': ['goal_id','account_id','event'],
   'budget.category.create': ['id', 'name'],
   'budget.category.rename': ['id', 'name'],
   'budget.category.archive': ['id'],
@@ -49,6 +52,7 @@ const ACTION_FIELDS = Object.freeze({
   'loan.payment.void': ['transaction_id', 'fact_id', 'account_id', 'reason'],
 });
 const OPTIONAL_FIELDS = Object.freeze({
+  'goal.append': ['counterparty_account_id'],
   'budget.create': ['ends_before_month'],
   'reserve.allocate': ['occurred_on'],
   'reserve.create': ['fixed_monthly_minor'],
@@ -935,7 +939,16 @@ function validateCommand(command) {
   // Rejecting invalid commands before queueing prevents persistent offline
   // entries that can never succeed after a network reconnect.
   let requiredRevisions;
-  if (dto.action.startsWith('budget.')) {
+  if (dto.action === 'goal.append') {
+    const p = validateGoalCommandPayload(dto);
+    requiredRevisions = [p.account_id, ...(p.event.type === 'create' ? [] : [p.goal_id]),
+      ...(p.counterparty_account_id ? [p.counterparty_account_id] : [])];
+    if (p.event.type === 'void') {
+      const ids = Object.keys(dto.expected_entity_revisions);
+      if (ids.length < 2 || ids.length > 3 || requiredRevisions.some(id=>!ids.includes(id))) hold('Неверные ревизии отмены цели');
+      requiredRevisions = ids;
+    }
+  } else if (dto.action.startsWith('budget.')) {
     requiredRevisions = budgetCommandVersions(dto);
   } else if (dto.action === 'account.create' || dto.action === 'obligation.create') {
     requiredRevisions = [];
@@ -1353,6 +1366,7 @@ function reversalOriginal(command, entities) {
 function verifyReversalDependencies(command, entities) {
   if (command.action !== 'transaction.reverse') return;
   const original = reversalOriginal(command, entities);
+  if (entities.some(entity => entity.kind === 'goal' && entity.data.event_log.some(e=>e.ledgerMovementId===original.id))) hold('Отмените операцию в истории финансовой цели');
   if (entities.some(entity => entity.kind === 'transaction' &&
       entity.data?.reversed_transaction_id === original.id)) hold('Операция уже отменена');
   for (const posting of original.data.postings) {
@@ -1568,6 +1582,7 @@ export async function enqueueEncryptedFinanceCommandCandidate({
   verifyReversalDependencies(pinned, cloud.entities);
   verifyTransferDependencies(pinned, cloud.entities);
   verifyBudgetDependencies(pinned, cloud.entities, identity.profileId);
+  verifyGoalDependencies(pinned, cloud.entities);
   if (current.outbox.length >= MAX_QUEUE) hold('Достигнут лимит офлайн-операций');
   const item = {
     scope, profileId: identity.profileId,
@@ -1724,6 +1739,7 @@ export async function persistAuthenticatedFinanceReceiptCandidate({
   verifyReversalReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   verifyTransferReceipt(first.command, ack.changes, cloud.entities, previouslyApplied);
   verifyBudgetReceiptCandidate(first.command, ack.changes, cloud.entities, previouslyApplied, identity.profileId);
+  verifyGoalReceiptCandidate(first.command, ack.changes, cloud.entities, previouslyApplied);
   let checked;
   if (previouslyApplied) {
     // The authenticated cloud image already contains revision ack.revision.
@@ -1818,7 +1834,7 @@ export async function persistSnapshotVerifiedFinanceReceiptCandidate({
         'reserve.create', 'reserve.update', 'reserve.allocate', 'reserve.archive',
         'reserve.skip', 'reserve.event.void', 'reserve.cycle.close', 'reserve.cycle.void',
         'budget.create','budget.amend','budget.archive','budget.category.create',
-        'budget.category.rename','budget.category.archive','budget.category.assign']
+        'budget.category.rename','budget.category.archive','budget.category.assign','goal.append']
         .includes(head.command.action) ||
       !plain(base) || base.revision !== ack.revision - 1 ||
       head.command.base_revision !== base.revision || base.serverEtag !== head.ifMatch ||
@@ -1847,6 +1863,7 @@ export async function persistSnapshotVerifiedFinanceReceiptCandidate({
   verifyReversalReceipt(head.command, ack.changes, base.entities, false);
   verifyTransferReceipt(head.command, ack.changes, base.entities, false);
   verifyBudgetReceiptCandidate(head.command, ack.changes, base.entities, false, identity.profileId);
+  verifyGoalReceiptCandidate(head.command, ack.changes, base.entities, false);
   verifyObligationReceipt(head.command, ack.changes, base.entities, false);
   if (['settlement.payment.record', 'settlement.payment.void'].includes(head.command.action) &&
       ack.changes.length !== (Object.hasOwn(head.command.payload, 'reserve_id') ? 3 : 2)) {
@@ -2313,6 +2330,7 @@ export async function resolveStaleFinanceConflict({
     verifyReversalDependencies(replacement, cloud.entities);
     verifyTransferDependencies(replacement, cloud.entities);
     verifyBudgetDependencies(replacement, cloud.entities, identity.profileId);
+    verifyGoalDependencies(replacement, cloud.entities);
     const digest = await fingerprint(scope, identity.profileId, cloud.serverEtag, replacement);
     active(scope, session, identity);
     nextItem = {scope, profileId: identity.profileId, generation: identity.generation,
