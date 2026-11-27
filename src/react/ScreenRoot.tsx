@@ -13,6 +13,7 @@ import { Accounts, type AccountsProps } from './Accounts';
 import { ConnectedAccounts, type ConnectedAccountsProps } from './ConnectedAccounts';
 import { OfflineSyncAccounts } from './OfflineSyncAccounts';
 import { Budgets } from './Budgets';
+import {GoalWorkspace,type GoalWorkspaceProps} from './goals/GoalWorkspace';
 import { BankImport, type BankImportProps } from '../importers/bank-statements/BankImport';
 
 export type ScreenView =
@@ -24,6 +25,7 @@ export type ScreenView =
   | { view: 'accounts'; props: AccountsProps }
   | { view: 'accounts-connected'; props: ConnectedAccountsProps }
   | { view: 'bank-import'; props: BankImportProps }
+  | {view:'goals';props:GoalWorkspaceProps}
   | { view: 'budgets'; props: Extract<ComponentProps<typeof Budgets>, { mode: 'guest' }> };
 
 /** Separate local-key entry: never mounts the legacy account or guest ledger. */
@@ -34,9 +36,10 @@ export function createOfflineSyncRoot(
   offlineOnly = true,
   onSessionRevoked?: () => void,
   allowOfflineBudgets = false,
+  allowOfflineGoals = false,
 ) {
   const root = createRoot(host);
-  const render = (budgetMode = false) =>
+  const render = (budgetMode = false,goalMode=false) =>
     flushSync(() =>
       root.render(
         <StrictMode>
@@ -44,6 +47,8 @@ export function createOfflineSyncRoot(
             actor={actor}
             offlineOnly={offlineOnly}
             budgetMode={budgetMode}
+            goalMode={goalMode}
+            allowOfflineGoals={allowOfflineGoals}
             allowOfflineBudgets={allowOfflineBudgets}
             onBack={onBack}
             onSessionRevoked={onSessionRevoked}
@@ -83,6 +88,8 @@ export function createScreenRoot(
                   key={screen.props.verifiedActorUserId ?? 'locked'}
                   {...screen.props}
                 />
+              ) : screen.view === 'goals' ? (
+                <GoalWorkspace {...screen.props}/>
               ) : screen.view === 'budgets' ? (
                 <Budgets {...screen.props} />
               ) : screen.view === 'bank-import' ? (

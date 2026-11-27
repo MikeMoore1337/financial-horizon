@@ -5,6 +5,7 @@ export interface ToolbarProps {
   serverAccounts: boolean;
   localSnapshot?: boolean;
   budgetsEnabled?: boolean;
+  goalsEnabled?: boolean;
   hideGlobalAdd?: boolean;
   theme: 'light' | 'dark';
   signedIn: boolean;

@@ -9,12 +9,14 @@ export function AppShell({
   view,
   variant,
   budgetsEnabled = false,
+  goalsEnabled=false,
 }: {
   view: FinanceView;
   variant: NavigationVariant;
   budgetsEnabled?: boolean;
+  goalsEnabled?: boolean;
 }) {
-  return <Navigation view={view} variant={variant} budgetsEnabled={budgetsEnabled} />;
+  return <Navigation view={view} variant={variant} budgetsEnabled={budgetsEnabled} goalsEnabled={goalsEnabled} />;
 }
 
 export function createAppShellRoots(
@@ -40,12 +42,12 @@ export function createAppShellRoots(
       flushSync(() => {
         desktop.render(
           <StrictMode>
-            <AppShell view={view} variant="sidebar" budgetsEnabled={options.budgetsEnabled} />
+            <AppShell view={view} variant="sidebar" budgetsEnabled={options.budgetsEnabled} goalsEnabled={options.goalsEnabled} />
           </StrictMode>,
         );
         mobile.render(
           <StrictMode>
-            <AppShell view={view} variant="bottom" budgetsEnabled={options.budgetsEnabled} />
+            <AppShell view={view} variant="bottom" budgetsEnabled={options.budgetsEnabled} goalsEnabled={options.goalsEnabled} />
           </StrictMode>,
         );
         toolbar.render(

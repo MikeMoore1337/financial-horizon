@@ -8,6 +8,7 @@ import {createEmailSession} from './auth-session.js?rev=auth-scopes-v18';
 import {audit,applyEntry,applyLoan,applyLoanPayment,applySettlement} from './ledger-operations.js';
 import {createScreenRoot,createOfflineSyncRoot} from './src/react/ScreenRoot.tsx';
 import {applyGuestBudgetCommand} from './src/domain/budgets/guest.mjs';
+import {projectGuestGoals,applyGuestGoalCommand,assertGuestGoalRestore} from './src/domain/goals/guest.mjs';
 import {readOfflineActor,forgetOfflineActor} from './src/cloud/offline-access-hint.mjs';
 import {projectOverviewCategories,projectOverviewLoan} from './src/react/OverviewModels.tsx';
 import {projectObligationRows} from './src/react/ObligationsModels.tsx';
@@ -28,12 +29,13 @@ const escapeHtml=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<
 const formatDate=date=>new Intl.DateTimeFormat('ru-RU',{day:'numeric',month:'short',year:'numeric'}).format(new Date(`${date}T12:00:00`));
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;};
 const uuid=()=>crypto.randomUUID();
-const titles={overview:'Обзор',calendar:'Календарь',obligations:'Обязательства',loans:'Кредиты',budgets:'Бюджеты',settings:'Настройки','accounts-connected':'Счета и кошельки','bank-import':'Импорт выписки'};
+const titles={overview:'Обзор',calendar:'Календарь',obligations:'Обязательства',loans:'Кредиты',budgets:'Бюджеты',goals:'Финансовые цели',settings:'Настройки','accounts-connected':'Счета и кошельки','bank-import':'Импорт выписки'};
 // Only an explicit reviewed release can present the optional server-backed accounts view.
 // FastAPI authentication and profile scoping remain the sole authorization boundary.
 const financeAccountsEnabled=document.querySelector('meta[name="fh-finance-accounts"]')?.content==='enabled';
 const financeSyncEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-sync"]')?.content==='enabled';
 const financeBudgetsEnabled=financeSyncEnabled&&document.querySelector('meta[name="fh-finance-budgets"]')?.content==='enabled';
+const financeGoalsEnabled=document.querySelector('meta[name="fh-finance-goals"]')?.content==='enabled';
 const financeImportEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-import"]')?.content==='enabled';
 // #38 signed bank import needs an independently approved production backend.
 const bankImportEnabled=financeAccountsEnabled&&document.querySelector('meta[name="fh-finance-bank-import"]')?.content==='enabled';
@@ -100,9 +102,9 @@ function startOfflineSync(actor){
   const element=$(selector);if(element)element.style.display='none';
  }
  const main=$('#main');main.replaceChildren();
- screenRoot=createOfflineSyncRoot(main,actor,()=>window.location.replace('./account.html'),true,undefined,financeBudgetsEnabled);
+ screenRoot=createOfflineSyncRoot(main,actor,()=>window.location.replace('./account.html'),true,undefined,financeBudgetsEnabled,financeGoalsEnabled);
 }
-function openBackgroundSync(budgetMode=false){
+function openBackgroundSync(budgetMode=false,goalMode=false){
  if(!financeSyncEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId)return;
  if(!backgroundSyncRoot){
   const main=$('#main');
@@ -114,7 +116,7 @@ function openBackgroundSync(budgetMode=false){
    forgetOfflineActor(actor);revokeDisplayedLedger();window.location.replace('./account.html');
   });
  }
- backgroundSyncRoot.setBudgetMode(budgetMode===true);
+ backgroundSyncRoot.setBudgetMode(budgetMode===true,goalMode===true);
  $('#main').style.display='none';backgroundSyncHost.style.display='';
  offlineSyncView=true;syncStorageContext();syncAccountControls();
 }
@@ -149,8 +151,8 @@ function syncStorageContext(){
  const serverPayments=eligible&&ui.view==='obligations'&&ui.obligationsSection==='due'&&ui.paymentSource==='server';
  const serverCalendar=eligible&&ui.view==='calendar'&&ui.calendarSource==='server';
  const serverOverview=eligible&&ui.view==='overview'&&ui.overviewSource==='server';
- const serverAccounts=eligible&&((ui.view==='accounts-connected'||ui.view==='bank-import'||ui.view==='budgets')||serverPayments||serverCalendar||serverOverview);
- const syncView=serverAccounts&&(ui.view==='accounts-connected'||ui.view==='budgets')&&offlineSyncView;
+ const serverAccounts=eligible&&((ui.view==='accounts-connected'||ui.view==='bank-import'||ui.view==='budgets'||ui.view==='goals')||serverPayments||serverCalendar||serverOverview);
+ const syncView=serverAccounts&&(ui.view==='accounts-connected'||ui.view==='budgets'||ui.view==='goals')&&offlineSyncView;
  const labels=[
   ['storage-context-chip',syncView?'Локальная копия':serverAccounts?'На сервере':'Локально'],
   ['storage-context-title',syncView?'Офлайн-синхронизация':serverOverview?'Обзор аккаунта':serverCalendar?'Календарь аккаунта':serverPayments?'Оплаты в аккаунте':serverAccounts?'Счета в аккаунте':'Хранится на устройстве'],
@@ -172,6 +174,7 @@ function syncStorageContext(){
  }
 }
 function navigation(view){
+ if(view==='goals'&&(!financeGoalsEnabled||(!guestMode&&(!financeSyncEnabled||!activeUserId||emailSession.userId!==activeUserId))))return;
  if(view==='budgets'&&(!financeBudgetsEnabled||(!guestMode&&(!activeUserId||emailSession.userId!==activeUserId))))return;
  if(view==='accounts-connected'&&(!financeAccountsEnabled||guestMode||!activeUserId||emailSession.userId!==activeUserId))return;
  if(view==='bank-import'&&!guestMode&&(!bankImportEnabled||!activeUserId||emailSession.userId!==activeUserId))return;
@@ -184,6 +187,17 @@ function render(){
  if(!state)return;
  syncStorageContext();
  const main=$('#main');
+ if(ui.view==='goals'){
+  if(!guestMode){openBackgroundSync(false,true);return;}
+  if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main,getAuthAccess);}
+  const revision=state.revision;
+  screenRoot.render({view:'goals',props:{...projectGuestGoals(state),revision,writable:true,pending:false,guest:true,
+   onCommand:async command=>{
+    if(!guestMode||busy)throw Error('Локальная база недоступна');
+    await mutate(s=>applyGuestGoalCommand(s,command),'Цель сохранена на устройстве',revision);
+   }}});
+  syncAccountControls();return;
+ }
  if(ui.view==='budgets'){
   if(!guestMode){openBackgroundSync(true);return;}
   if(!screenRoot){main.replaceChildren();screenRoot=createScreenRoot(main,getAuthAccess);}
@@ -323,7 +337,8 @@ function syncAccountControls(){
   serverAccounts:lastStorageContext===true,
   localSnapshot:lastSyncContext,
   budgetsEnabled:financeBudgetsEnabled&&(guestMode||Boolean(activeUserId)&&emailSession.userId===activeUserId),
-  hideGlobalAdd:ui.view==='budgets',
+  goalsEnabled:financeGoalsEnabled&&(guestMode||financeSyncEnabled&&Boolean(activeUserId)&&emailSession.userId===activeUserId),
+  hideGlobalAdd:ui.view==='budgets'||ui.view==='goals',
  });
 }
 async function refreshEmailSession(){
@@ -864,6 +879,8 @@ async function performRestore(password){
  const originalRevision=state?.revision;
  const backupText=await file.text();assertCurrentScope();
  const decrypted=await decryptBackup(backupText,password);assertCurrentScope();
+ if(!guestMode&&decrypted.guestGoals?.goals?.length)throw Error('Гостевые цели можно восстановить только в гостевом режиме.');
+ if(state?.guestGoals?.goals?.length||decrypted.guestGoals?.goals?.length)assertGuestGoalRestore(state,decrypted);
  const confirmed=await requireConfirm('Заменить локальные данные?', 'Импорт заменит всю текущую бухгалтерию данными из резервной копии. При необходимости сохраните текущую копию перед продолжением.');
  assertCurrentScope();
  if(!confirmed)return;

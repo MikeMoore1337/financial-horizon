@@ -34,3 +34,5 @@
 .goals-preview :focus-visible{outline:3px solid var(--accent);outline-offset:3px}
 @media(max-width:800px){.goals-preview-columns{grid-template-columns:1fr}}
 @media(max-width:520px){.goals-preview-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.goals-preview-summary>.surface:last-child{grid-column:1/-1}.goals-preview-detail{padding:14px}}
+
+.goal-workspace-actions{margin:1rem 0;flex-wrap:wrap}.goal-workspace-form{padding:1rem;max-width:42rem}.goal-workspace-form .field{margin:.7rem 0}.goal-workspace-form input:not([type=checkbox]),.goal-workspace-form select{width:100%;min-width:0}.goal-workspace-form input[type=checkbox]{width:auto;margin-right:.35rem}
