@@ -428,3 +428,32 @@ class BudgetAssignment(ProfileEntity, Revisable, Base):
     )
     transaction_id: Mapped[Uuid] = mapped_column(UUID(as_uuid=True))
     category_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))
+
+
+class FinancialGoal(ProfileEntity, Revisable, Base):
+    __tablename__ = "financial_goals"
+    __table_args__ = (
+        profile_fk(),
+        ForeignKeyConstraint(["profile_id", "account_id"],
+                             ["finance.accounts.profile_id", "finance.accounts.id"], ondelete="RESTRICT"),
+    )
+    account_id: Mapped[Uuid] = mapped_column(UUID(as_uuid=True))
+
+
+class GoalEvent(ProfileEntity, Base):
+    __tablename__ = "goal_events"
+    __table_args__ = (
+        profile_fk(),
+        ForeignKeyConstraint(["profile_id", "goal_id"],
+                             ["finance.financial_goals.profile_id", "finance.financial_goals.id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(["profile_id", "ledger_transaction_id"],
+                             ["finance.ledger_transactions.profile_id", "finance.ledger_transactions.id"],
+                             ondelete="RESTRICT", deferrable=True, initially="DEFERRED"),
+        UniqueConstraint("profile_id", "goal_id", "ordinal"),
+        UniqueConstraint("profile_id", "ledger_transaction_id"),
+    )
+    goal_id: Mapped[Uuid] = mapped_column(UUID(as_uuid=True))
+    ordinal: Mapped[int] = mapped_column(BigInteger)
+    event: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    delta_minor: Mapped[int] = mapped_column(BigInteger)
+    ledger_transaction_id: Mapped[Uuid | None] = mapped_column(UUID(as_uuid=True))

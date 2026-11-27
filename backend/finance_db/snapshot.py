@@ -54,6 +54,7 @@ _ENTITY_FIELDS = {
         "ends_before_month", "archived_from_month",
     )),
     "budget_assignments": ("budget_assignment", ("transaction_id", "category_id")),
+    "financial_goals": ("goal", ("account_id", "saved_minor", "event_log")),
 }
 
 
@@ -103,6 +104,14 @@ _ENTITY_QUERIES = {
         "SELECT id,entity_revision,transaction_id,category_id "
         "FROM budget_assignments WHERE profile_id=:p AND id>:after ORDER BY id LIMIT :n"
     ),
+    "financial_goals": text(
+        "SELECT g.id,g.entity_revision,g.account_id,"
+        "COALESCE((SELECT SUM(e.delta_minor) FROM goal_events e WHERE e.profile_id=g.profile_id "
+        "AND e.goal_id=g.id),0) AS saved_minor,"
+        "COALESCE((SELECT jsonb_agg(e.event ORDER BY e.ordinal) FROM goal_events e "
+        "WHERE e.profile_id=g.profile_id AND e.goal_id=g.id),'[]'::jsonb) AS event_log "
+        "FROM financial_goals g WHERE g.profile_id=:p AND g.id>:after ORDER BY g.id LIMIT :n"
+    ),
 }
 
 
@@ -132,7 +141,7 @@ def _locked_profile(session: Session, scope: VerifiedFinanceScope):
 
 _PAGE_MAX = 5_000
 _CURSOR_RE = re.compile(
-    r"^(0|[1-9][0-9]{0,18}):(account|obligation|loan|reserve|transaction|settlement|loan_payment|budget_category|budget_rule|budget_assignment):"
+    r"^(0|[1-9][0-9]{0,18}):(account|obligation|loan|reserve|transaction|settlement|loan_payment|budget_category|budget_rule|budget_assignment|goal):"
     r"([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
 )
 _KIND_ORDER = ("account",) + tuple(value[0] for value in _ENTITY_FIELDS.values())
@@ -201,7 +210,7 @@ def get_finance_snapshot(
             ids = [a["id"] for a in account_rows[:limit_entities]]
             reserved = session.execute(text("""
                 SELECT account_id,COALESCE(SUM(delta_minor),0) AS amount
-                FROM reserve_allocations WHERE profile_id=:p
+                FROM account_earmarks WHERE profile_id=:p
                     AND account_id=ANY(:ids)
                 GROUP BY account_id
             """), {"p": scope.profile_id, "ids": ids}).mappings().all() if ids else []

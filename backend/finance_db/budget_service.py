@@ -97,6 +97,7 @@ def _new(session: Session, p: UUID, kind: str, target: UUID) -> None:
           UNION ALL SELECT id FROM budget_categories WHERE profile_id=:p AND id=:id
           UNION ALL SELECT id FROM budget_rules WHERE profile_id=:p AND id=:id
           UNION ALL SELECT id FROM budget_assignments WHERE profile_id=:p AND id=:id
+          UNION ALL SELECT id FROM financial_goals WHERE profile_id=:p AND id=:id
         ) AS existing LIMIT 1
     """), {"p": p, "id": target}).first():
         raise _conflict("Идентификатор уже используется")
