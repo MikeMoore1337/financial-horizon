@@ -144,8 +144,7 @@ export async function selectStateScope(userId=null){
           if(epoch!==scopeEpoch)throw Error(REVOKED_MESSAGE);
           if(guest.result!==undefined)throw Error('Существующий гостевой профиль требует ручной сверки');
           object.put(migrated,GUEST_KEY);
-          const account=structuredClone(migrated);delete account.guestGoals;
-          object.put(account,key);
+          object.put(emptyState(),key);
          }catch(error){fail(error);}
         };
        }else object.put(migrated,key);

@@ -161,3 +161,33 @@ def test_no_client_ledger_reference_or_noninteger_money(world):
         with pytest.raises(FinanceCommandError):
             send(e, a, *request)
         assert snap(e, a).etag == before.etag
+
+
+def test_mandatory_reserve_and_goal_share_one_balance(world):
+    from backend.finance_db.tests.test_reserve_v2_candidate import reserve_input, submit
+
+    engine, scope, _ = world
+    aid = account(engine, scope, 10_000)
+    gid, _ = create_goal(engine, scope, aid, 8_000)
+    s = snap(engine, scope)
+    obligation = {"schema_version": 1, "client_mutation_id": str(uuid4()),
+        "base_revision": s.body["revision"], "action": "obligation.create",
+        "expected_entity_revisions": {},
+        "payload": {"title": "Synthetic", "direction": "expense",
+                    "amount_minor": 9000, "starts_on": "2027-11-16",
+                    "timezone": "UTC", "recurrence_unit": "year", "recurrence_every": 1}}
+    created = submit_account_command(engine, scope=scope, command=obligation,
+        if_match=s.etag, idempotency_key=obligation["client_mutation_id"], allow_internal=True)
+    oid = created.body["changes"][0]["entity_id"]
+    before = snap(engine, scope)
+    with pytest.raises(FinanceCommandError) as failure:
+        submit(engine, scope, "reserve.create", reserve_input(aid, oid, opening=3000), [aid, oid])
+    assert failure.value.status == 409 and snap(engine, scope).etag == before.etag
+    assert entities(engine, scope, "reserve") == {}
+    submit(engine, scope, "reserve.create", reserve_input(aid, oid, opening=2000), [aid, oid])
+    assert entities(engine, scope, "account")[aid]["data"]["reserved_minor"] == 10000
+    with pytest.raises(FinanceCommandError) as failure:
+        send(engine, scope, *goal_cmd(engine, scope, gid, aid, "contribution",
+                                     amountCents=1, funding="virtual"))
+    assert failure.value.status == 409
+    assert entities(engine, scope, "account")[aid]["data"]["balance_minor"] == 10000

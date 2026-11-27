@@ -879,7 +879,7 @@ async function performRestore(password){
  const originalRevision=state?.revision;
  const backupText=await file.text();assertCurrentScope();
  const decrypted=await decryptBackup(backupText,password);assertCurrentScope();
- if(!guestMode&&decrypted.guestGoals?.goals?.length)throw Error('Гостевые цели можно восстановить только в гостевом режиме.');
+ if(decrypted.guestGoals?.goals?.length&&!guestMode)throw Error('Гостевые цели можно восстановить только в гостевом режиме.');
  if(state?.guestGoals?.goals?.length||decrypted.guestGoals?.goals?.length)assertGuestGoalRestore(state,decrypted);
  const confirmed=await requireConfirm('Заменить локальные данные?', 'Импорт заменит всю текущую бухгалтерию данными из резервной копии. При необходимости сохраните текущую копию перед продолжением.');
  assertCurrentScope();
