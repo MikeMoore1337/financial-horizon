@@ -91,6 +91,7 @@ def mount_finance_routes(
     enable_import_candidate: bool = False,
     enable_bank_import_candidate: bool = False,
     enable_budget_candidate: bool = False,
+    enable_goal_candidate: bool = False,
     sync_allowed_actor: str | None = None,
     sync_test_allow_all: bool = False,
 ) -> None:
@@ -105,7 +106,7 @@ def mount_finance_routes(
     if (type(enable_account_v2_candidate) is not bool or
         type(enable_import_candidate) is not bool or
         type(enable_bank_import_candidate) is not bool or type(enable_budget_candidate) is not bool
-        or type(sync_test_allow_all) is not bool):
+        or type(enable_goal_candidate) is not bool or type(sync_test_allow_all) is not bool):
         raise ValueError("Candidate route opt-in must be explicit boolean")
     if sync_allowed_actor is not None and (not isinstance(sync_allowed_actor, str) or
             not re.fullmatch(r"[a-f0-9]{32}", sync_allowed_actor)):
@@ -113,6 +114,9 @@ def mount_finance_routes(
     if enable_budget_candidate and (not enable_account_v2_candidate or
             not (sync_test_allow_all or sync_allowed_actor is not None)):
         raise ValueError("Budget transport requires private v2 and owner-only sync rollout")
+    if enable_goal_candidate and (not enable_account_v2_candidate or
+            not (sync_test_allow_all or sync_allowed_actor is not None)):
+        raise ValueError("Goal transport requires private v2 and owner-only sync rollout")
     if enable_bank_import_candidate and not enable_account_v2_candidate:
         raise ValueError("Bank import requires private finance v2 routing")
     if enable_import_candidate and not enable_account_v2_candidate:
@@ -250,7 +254,8 @@ def mount_finance_routes(
                 "payment_guard_v1": bool(enable_account_v2_candidate),
                 "sync_profile_fence_v1": True, "sync_cancel_fence_v1": True,
                 "sync_allowed_v1": sync_allowed(user_id),
-                **({"budget_commands_v1": True} if enable_budget_candidate and sync_allowed(user_id) else {})}
+                **({"budget_commands_v1": True} if enable_budget_candidate and sync_allowed(user_id) else {}),
+                **({"goal_commands_v1": True} if enable_goal_candidate and sync_allowed(user_id) else {})}
 
     router = APIRouter(prefix="/api/finance/v1", include_in_schema=False)
 
@@ -364,7 +369,8 @@ def mount_finance_routes(
         verified = await run_in_threadpool(scope, request)
         require_sync(verified.user_id)
         try:
-            body = await (parse_v2_account_command(request, allow_budget=enable_budget_candidate)
+            body = await (parse_v2_account_command(request, allow_budget=enable_budget_candidate,
+                                                allow_goal=enable_goal_candidate)
                           if v2 else parse_v1_command(request))
         except FinanceCommandError as exc:
             return _finance_error(exc)
@@ -377,12 +383,13 @@ def mount_finance_routes(
             tag = request.headers.get("if-match", "")
             mutation = request.headers.get("idempotency-key", "")
             budget = v2 and body["action"].startswith("budget.")
+            goal = v2 and body["action"] == "goal.append"
             normalized = (prepare_account_v2_command(scope=current, command=body,
-                          if_match=tag, idempotency_key=mutation) if v2 and not budget else body)
+                          if_match=tag, idempotency_key=mutation) if v2 and not budget and not goal else body)
             return cancel_uncommitted_account_command(
                 engine, scope=current, command=normalized, if_match=tag,
-                idempotency_key=mutation, allow_account_v2=v2 and not budget,
-                allow_budget_candidate=budget,
+                idempotency_key=mutation, allow_account_v2=v2 and not budget and not goal,
+                allow_budget_candidate=budget, allow_goal_candidate=goal,
             )
 
         try:
@@ -552,7 +559,8 @@ def mount_finance_routes(
             if is_sync:
                 require_sync(verified.user_id)
             try:
-                body = await parse_v2_account_command(request, allow_budget=enable_budget_candidate)
+                body = await parse_v2_account_command(request, allow_budget=enable_budget_candidate,
+                                                allow_goal=enable_goal_candidate)
             except FinanceCommandError as exc:
                 return _finance_error(exc)
 
@@ -564,8 +572,16 @@ def mount_finance_routes(
                 if current != verified:
                     raise HTTPException(status_code=401, detail="Сеанс изменился")
                 budget = body["action"].startswith("budget.")
-                if is_sync or budget:
+                goal = body["action"] == "goal.append"
+                if is_sync or budget or goal:
                     require_sync(current.user_id)
+                if goal:
+                    return submit_account_command(
+                        engine, scope=current, command=body,
+                        if_match=request.headers.get("if-match", ""),
+                        idempotency_key=request.headers.get("idempotency-key", ""),
+                        allow_goal_candidate=True,
+                    )
                 if budget:
                     return submit_account_command(
                         engine, scope=current, command=body,
