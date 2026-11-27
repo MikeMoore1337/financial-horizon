@@ -109,6 +109,7 @@ async function fingerprint(serialized) {
   return [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 function recordIndex(snapshot, allowBank = false) {
+  if (snapshot.guestGoals?.goals?.length) throw Error('Перенос гостевых целей в аккаунт ещё не подтверждён. Локальные цели сохранены.');
   if (snapshot.guestBudgets !== undefined &&
       (snapshot.guestBudgets.rules.length || snapshot.guestBudgets.assignments.length ||
        snapshot.guestBudgets.categories.length)) {

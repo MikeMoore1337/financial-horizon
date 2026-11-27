@@ -433,6 +433,92 @@ export function validateGuestBudgets(value, bank) {
  return value;
 }
 
+/** #37 guest-only allocation envelope. The legacy standalone finance.js
+ * cannot depend on TS; current commands also run the full goals engine.
+ */
+export function validateGuestGoals(value,bank){
+ const bad=()=>{throw Error('Повреждены локальные финансовые цели');};
+ const exact=(x,k,o=[])=>plain(x)&&k.every(a=>Object.hasOwn(x,a))&&Object.keys(x).every(a=>k.includes(a)||o.includes(a));
+ const day=x=>safeDate(x)&&x.slice(0,4)>='1900'&&x.slice(0,4)<='2200';
+ const name=(x,n)=>typeof x==='string'&&x.trim().length>0&&x.length<=n&&!/[\x00-\x1f\x7f]/.test(x);
+ const config=(x,complete=false)=>plain(x)&&Object.keys(x).length>0&&
+   Object.keys(x).every(k=>['title','category','targetCents','targetDate','monthlyCents','plannedFunding'].includes(k))&&
+   (!complete||Object.keys(x).length===6)&&
+   (!Object.hasOwn(x,'title')||name(x.title,160))&&
+   (!Object.hasOwn(x,'category')||['emergency','travel','purchase','education','other'].includes(x.category))&&
+   (!Object.hasOwn(x,'targetCents')||integer(x.targetCents,1,MAX_MINOR))&&
+   (!Object.hasOwn(x,'targetDate')||day(x.targetDate))&&
+   (!Object.hasOwn(x,'monthlyCents')||x.monthlyCents===null||integer(x.monthlyCents,0,MAX_MINOR))&&
+   (!Object.hasOwn(x,'plannedFunding')||x.plannedFunding==='virtual');
+ if(!exact(value,['version','goals'])||value.version!==1||!Array.isArray(value.goals)||value.goals.length>500||
+     JSON.stringify(value).length>1000000)bad();
+ const goalIds=new Set(),eventIds=new Set(),allocated=new Map();
+ for(const goal of value.goals){
+  if(!exact(goal,['id','kind','entity_revision','data'])||goal.kind!=='goal'||!UUID.test(goal.id)||goalIds.has(goal.id)||
+      !exact(goal.data,['account_id','event_log','saved_minor'])||!UUID.test(goal.data.account_id)||
+      goal.id===goal.data.account_id||!bank?.accounts.some(a=>a.id===goal.data.account_id)||
+      !Array.isArray(goal.data.event_log)||!integer(goal.entity_revision,1,1000)||
+      goal.data.event_log.length!==goal.entity_revision||!integer(goal.data.saved_minor,0,MAX_MINOR))bad();
+  goalIds.add(goal.id);
+  const events=goal.data.event_log,start=events[0],base=['id','type','on'];
+  const due=(x)=>{
+   if(!day(x))return false;
+   const off=(Number(x.slice(0,4))-Number(start.on.slice(0,4)))*12+Number(x.slice(5,7))-Number(start.on.slice(5,7));
+   if(off<1||off>1200)return false;
+   const last=new Date(Date.UTC(Number(x.slice(0,4)),Number(x.slice(5,7)),0)).getUTCDate();
+   return Number(x.slice(8))===Math.min(last,Number(start.on.slice(8)));
+  };
+  if(!start||start.type!=='create')bad();
+  const byId=new Map();
+  for(let i=0;i<events.length;i++){
+   const e=events[i];
+   if(!plain(e)||!UUID.test(e.id)||eventIds.has(e.id)||!day(e.on)||e.on<start.on)bad();
+   if(e.type==='create'){
+    const fields=['title','category','targetCents','targetDate','monthlyCents','plannedFunding'];
+    if(i!==0||!exact(e,[...base,...fields,'openingCents'])||
+        !config(Object.fromEntries(fields.map(k=>[k,e[k]])),true)||!integer(e.openingCents,0,MAX_MINOR))bad();
+   }else if(e.type==='update'){if(!exact(e,[...base,'changes'])||!config(e.changes))bad();}
+   else if(e.type==='contribution'){if(!exact(e,[...base,'amountCents','funding'],['forDueOn'])||e.funding!=='virtual'||!integer(e.amountCents,1,MAX_MINOR)||Object.hasOwn(e,'forDueOn')&&!due(e.forDueOn))bad();}
+   else if(e.type==='use'){if(!exact(e,[...base,'amountCents','usage'])||e.usage!=='virtual-release'||!integer(e.amountCents,1,MAX_MINOR))bad();}
+   else if(e.type==='skip'){if(!exact(e,[...base,'dueOn'],['reason'])||!due(e.dueOn)||Object.hasOwn(e,'reason')&&!name(e.reason,500))bad();}
+   else if(e.type==='void'){if(!exact(e,[...base,'eventId','reason'])||!byId.has(e.eventId)||!name(e.reason,500)||!['contribution','use','skip'].includes(byId.get(e.eventId).type)||e.on<byId.get(e.eventId).on)bad();}
+   else if(!['complete','reopen','archive','restore'].includes(e.type)||!exact(e,base))bad();
+   byId.set(e.id,e);eventIds.add(e.id);
+  }
+  let saved=0,target=start.targetCents,deadline=start.targetDate,status='active';
+  const skipped=new Set(),voided=new Set();
+  for(const e of [...events].sort((a,b)=>a.on.localeCompare(b.on))){
+   if(['update','contribution','use','skip','void'].includes(e.type)&&status!=='active')bad();
+   switch(e.type){
+    case 'create':saved+=e.openingCents;break;
+    case 'update':target=e.changes.targetCents??target;deadline=e.changes.targetDate??deadline;break;
+    case 'contribution':saved+=e.amountCents;break;
+    case 'use':saved-=e.amountCents;break;
+    case 'skip':if(skipped.has(e.dueOn))bad();skipped.add(e.dueOn);break;
+    case 'void':{
+     const prev=byId.get(e.eventId);
+     if(voided.has(prev.id))bad();voided.add(prev.id);
+     if(prev.type==='contribution')saved-=prev.amountCents;
+     if(prev.type==='use')saved+=prev.amountCents;
+     if(prev.type==='skip')skipped.delete(prev.dueOn);
+     break;
+    }
+    case 'complete':if(status!=='active'||saved<target)bad();status='completed';break;
+    case 'reopen':if(status!=='completed')bad();status='active';break;
+    case 'archive':if(status==='archived')bad();status='archived';break;
+    case 'restore':if(status!=='archived')bad();status='active';break;
+   }
+   if(!integer(saved,0,MAX_MINOR)||deadline<start.on||
+       (Number(deadline.slice(0,4))-Number(start.on.slice(0,4)))*12+Number(deadline.slice(5,7))-Number(start.on.slice(5,7))>1200)bad();
+  }
+  if(saved!==goal.data.saved_minor)bad();
+  const id=goal.data.account_id;allocated.set(id,(allocated.get(id)||0n)+BigInt(saved));
+ }
+ for(const [id,total] of allocated)if(total>0n&&total>BigInt(guestBankBalance(bank,id)))bad();
+ for(const a of bank?.accounts??[])if(goalIds.has(a.id))bad();
+ return value;
+}
+
 export function validateState(s){
  // v1 remains readable for historical IndexedDB records and encrypted backups.
  if(!s || (s.version!==1&&s.version!==2) || !Array.isArray(s.entries) ||
@@ -443,6 +529,7 @@ export function validateState(s){
  // omit it. Validate all bank account/batch identities before committing IDB.
  if(s.bankStatements!==undefined)validateGuestBankLedger(s.bankStatements);
  if(s.guestBudgets!==undefined)validateGuestBudgets(s.guestBudgets,s.bankStatements);
+ if(s.guestGoals!==undefined)validateGuestGoals(s.guestGoals,s.bankStatements);
  // #40: optional account-scoped preference; older encrypted backups lack this field.
  // Strict validation prevents a malformed preference from silently corrupting UI behavior.
  if(s.settings?.paymentReminders!==undefined){
