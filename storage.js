@@ -43,6 +43,20 @@ function abortOnScopeChange(tx,signal){
 }
 
 
+// Apply the append-only guard to every writer in the current storage module,
+// including replacement from a legacy backup, not only to the goals screen.
+function assertGuestHistory(before,after){
+ const canonical=value=>JSON.stringify(value,(_key,v)=>v&&typeof v==='object'&&!Array.isArray(v)
+  ?Object.fromEntries(Object.entries(v).sort(([a],[b])=>a.localeCompare(b))):v);
+ const goals=new Map((after.guestGoals?.goals??[]).map(g=>[g.id,g]));
+ for(const old of before.guestGoals?.goals??[]){
+  const next=goals.get(old.id);
+  if(!next||next.data.account_id!==old.data.account_id||next.entity_revision<old.entity_revision||
+     old.data.event_log.some((e,i)=>canonical(e)!==canonical(next.data.event_log[i])))
+   throw Error('История финансовых целей не может быть удалена или изменена при восстановлении');
+ }
+}
+
 function openDb(){
  if(!dbPromise){
   dbPromise=new Promise((resolve,reject)=>{
@@ -119,7 +133,23 @@ export async function selectStateScope(userId=null){
      try{
       if(epoch!==scopeEpoch)throw Error(REVOKED_MESSAGE);
       if(legacyFence.result!==undefined)throw Error(FENCED_MESSAGE);
-      if(legacy.result!==undefined)object.put(migrateState(legacy.result),key);
+      if(legacy.result!==undefined){
+       const migrated=migrateState(legacy.result);
+       if(migrated.guestGoals?.goals?.length){
+        // Preserve the entire guest ledger under the guest key. Do not claim
+        // goal history into a signed-in account without an explicit import.
+        const guest=object.get(GUEST_KEY);
+        guest.onsuccess=()=>{
+         try{
+          if(epoch!==scopeEpoch)throw Error(REVOKED_MESSAGE);
+          if(guest.result!==undefined)throw Error('Существующий гостевой профиль требует ручной сверки');
+          object.put(migrated,GUEST_KEY);
+          const account=structuredClone(migrated);delete account.guestGoals;
+          object.put(account,key);
+         }catch(error){fail(error);}
+        };
+       }else object.put(migrated,key);
+      }
       if(!owner)object.put(userId,CLAIM_KEY);
      }catch(error){fail(error);}
     };
@@ -232,6 +262,9 @@ export async function updateState(change,{expectedRevision}={}){
     updated=migrateState(updated); // Restored v1 backup is upgraded BEFORE writing.
     updated.revision=base.revision+1;
     validateState(updated);
+    if(key.startsWith('account-state-v2:')&&updated.guestGoals?.goals?.length)
+     throw Error('Гостевые цели нельзя записывать в аккаунт без явного переноса');
+    assertGuestHistory(base,updated);
     object.put(updated,key);
    }catch(error){failure=error;try{tx.abort();}catch{}}
   };
@@ -331,6 +364,7 @@ export async function rollbackAllScopesToV1(){
    if(key===KEY||key===GUEST_KEY||(typeof key==='string'&&key.startsWith('account-state-v2:'))){
     try{
      const value=validateState(cursor.value);
+     if(value.guestGoals?.goals?.length)throw Error('Откат запрещён: найдена история финансовых целей');
      if(value.version===2){
       cursor.update(downgradeStateForRollback(value));
       changed++;

@@ -18,6 +18,10 @@ const testModules = {
   budgetIndex: '/__e2e_138_budget_index__.js',
   budgetRules: '/__e2e_138_budget_rules__.js',
   budgetSnapshot: '/__e2e_138_budget_snapshot__.js',
+  goalCalendar: '/__e2e_138_goal_calendar__.js',
+  goalEngine: '/__e2e_138_goal_engine__.js',
+  goalSnapshot: '/__e2e_138_goal_snapshot__.js',
+  goalCommand: '/__e2e_138_goal_command__.js',
 };
 const source = path => readFileSync(new URL(path, import.meta.url), 'utf8');
 const compile = path => ts.transpileModule(source(path), {
@@ -36,12 +40,24 @@ const testModuleSources = new Map([
   [testModules.budgetSnapshot, compile('../../src/domain/budgets/server-snapshot.ts')
     .replaceAll("'./index.ts'", JSON.stringify(testModules.budgetIndex))
     .replaceAll("'./rules.ts'", JSON.stringify(testModules.budgetRules))],
+  [testModules.goalCalendar, compile('../../src/domain/goals/calendar.ts')],
+  [testModules.goalEngine, compile('../../src/domain/goals/engine.ts')
+    .replaceAll("'./calendar.ts'", JSON.stringify(testModules.goalCalendar))],
+  [testModules.goalSnapshot, compile('../../src/domain/goals/server-goals.ts')
+    .replaceAll("'./engine.ts'", JSON.stringify(testModules.goalEngine))],
+  [testModules.goalCommand, source('../../src/domain/goals/goal-command-candidate.mjs')
+    .replaceAll("'./engine.ts'", JSON.stringify(testModules.goalEngine))
+    .replaceAll("'./calendar.ts'", JSON.stringify(testModules.goalCalendar))
+    .replaceAll("'./server-goals.ts'", JSON.stringify(testModules.goalSnapshot))],
   [testModules.delta, source('../../src/cloud/verified-delta-candidate.mjs')
+    .replaceAll("'../domain/goals/server-goals.ts'", JSON.stringify(testModules.goalSnapshot))
     .replaceAll("'../domain/budgets/server-snapshot.ts'", JSON.stringify(testModules.budgetSnapshot))],
   [testModules.cache, source('../../src/cloud/encrypted-cloud-cache-candidate.mjs')
+    .replaceAll("'../domain/goals/server-goals.ts'", JSON.stringify(testModules.goalSnapshot))
     .replaceAll("'../security/protected-atomic-candidate.ts'", JSON.stringify(testModules.atomic))
     .replaceAll("'./verified-delta-candidate.mjs'", JSON.stringify(testModules.delta))],
   [testModules.outbox, source('../../src/cloud/encrypted-command-outbox-candidate.mjs')
+    .replaceAll("'../domain/goals/goal-command-candidate.mjs'", JSON.stringify(testModules.goalCommand))
     .replaceAll("'../security/protected-atomic-candidate.ts'", JSON.stringify(testModules.atomic))
     .replaceAll("'./verified-delta-candidate.mjs'", JSON.stringify(testModules.delta))],
   [testModules.pull, source('../../src/cloud/authenticated-snapshot-pull-candidate.mjs')

@@ -120,6 +120,7 @@ export function GoalWorkspace({goals,accounts,entities,revision,writable,pending
       onSelect={id=>{setSelection(id);setMode(null);}} connected guest={guest}/>
     {pending&&<p role="status">Операция ожидает подтверждения. Остаток и история показаны по последнему подтверждённому состоянию.</p>}
     {!writable&&<p role="status">Изменения недоступны. Проверьте доступ или завершите конфликт синхронизации.</p>}
+    {!accounts.some(a=>!a.archived)&&<p role="status">Сначала добавьте собственный счёт в настройках (Счета и кошельки / Импорт выписки).</p>}
     <div className="dialog-actions goal-workspace-actions">{button('create',!accounts.some(a=>!a.archived))}
       {detail&&active&&<>{button('update')}{button('contribution')}{button('use',!detail.card.savedCents)}
         {button('skip',!detail.installments.length)}{button('void',!reversible.length)}{button('complete',!detail.snapshot.reached)}</>}
