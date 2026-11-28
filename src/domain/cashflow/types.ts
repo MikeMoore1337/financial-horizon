@@ -30,6 +30,10 @@ interface BookedBaseDto {
   amountCents: number; // absolute value of one confirmed cash movement
   /** Canonicalized logical void: adapter must NOT also send the reversing posting. */
   voided?: boolean;
+  /** Actual compensation date for a posted logical void. Requires voided: true.
+   * Preserve the original day's cash and compensate on this date, without
+   * settling the plan. An undated void keeps the legacy excluded-fact semantics. */
+  reversedOn?: string;
 }
 
 /** Corrections change account cash, but never count as earned income or spending. */
@@ -66,6 +70,7 @@ export interface CashflowDay {
   date: string;
   plannedIncomeCents: number;
   plannedExpenseCents: number;
+  /** Net posted income/expense; a dated reversal may make the daily total negative. */
   actualIncomeCents: number;
   actualExpenseCents: number;
   /** Signed confirmed balance corrections, excluded from income/expense plan-vs-fact. */
