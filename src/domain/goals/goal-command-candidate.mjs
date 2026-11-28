@@ -131,4 +131,7 @@ export function verifyGoalReceiptCandidate(command,changes,entities,previouslyAp
         second.entity_id!==account.id||second.entity_revision!==account.entity_revision||
         account.entity_revision!==command.expected_entity_revisions[account.id]+1||expected&&!same([account],expected))fail('Виртуальное распределение не подтверждено');
   }else if(changes.length!==1)fail('Изменение цели неожиданно изменило счета');
+  // Only return a verified allocation for the exact linked ledger posting.
+  // Recovery must distinguish this from a mandatory reserve allocation.
+  if(projected.kind) return {accountId:payload.account_id,deltaMinor:projected.delta};
 }

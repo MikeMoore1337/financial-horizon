@@ -1863,7 +1863,7 @@ export async function persistSnapshotVerifiedFinanceReceiptCandidate({
   verifyReversalReceipt(head.command, ack.changes, base.entities, false);
   verifyTransferReceipt(head.command, ack.changes, base.entities, false);
   verifyBudgetReceiptCandidate(head.command, ack.changes, base.entities, false, identity.profileId);
-  verifyGoalReceiptCandidate(head.command, ack.changes, base.entities, false);
+  const goalAllocation = verifyGoalReceiptCandidate(head.command, ack.changes, base.entities, false);
   verifyObligationReceipt(head.command, ack.changes, base.entities, false);
   if (['settlement.payment.record', 'settlement.payment.void'].includes(head.command.action) &&
       ack.changes.length !== (Object.hasOwn(head.command.payload, 'reserve_id') ? 3 : 2)) {
@@ -1891,7 +1891,12 @@ export async function persistSnapshotVerifiedFinanceReceiptCandidate({
       const allocation = transaction.reserve_allocation;
       if (allocation !== undefined && (!plain(allocation) || allocation.account_id !== posting.account_id ||
           !Number.isSafeInteger(allocation.delta_minor))) hold('Неверное распределение проводки');
-      const reservedDelta = allocation?.delta_minor || 0;
+      // The goal-specific verifier above already proved the immutable event,
+      // its exact cash postings and the full before/after account images.
+      // Only the bound savings account changes its voluntary allocation.
+      if (goalAllocation && allocation !== undefined) hold('Двойное распределение проводки');
+      const reservedDelta = goalAllocation?.accountId === posting.account_id
+        ? goalAllocation.deltaMinor : (allocation?.delta_minor ?? 0);
       const omitMoney = value => Object.fromEntries(Object.entries(value || {}).filter(([key]) =>
         !['balance_minor','reserved_minor','available_minor'].includes(key)));
       if (old.length !== 1 || next.length !== 1 || !Number.isSafeInteger(posting.signed_minor) ||
