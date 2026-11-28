@@ -111,3 +111,15 @@ test('next installment skips fully prepaid future periods without re-evaluating 
   assert.equal(view.cards[0].nextInstallmentOn, '2026-03-01');
   assert.equal(view.selected.installments[0].status, 'paid');
 });
+
+test('historical screen excludes future-created goals without skipping validation', () => {
+  const future=goal('future','Будущая','2027-05-01',{on:'2026-05-01',openingCents:2000});
+  const old=goal('old','Существующая');
+  const before=buildGoalsScreenModel([old,future],'2026-04-01','future');
+  assert.deepEqual(before.cards.map(x=>x.id),['old']);
+  assert.equal(before.earmarkedCents,0);
+  assert.equal(before.selected.card.id,'old');
+  const invalid=structuredClone(future);
+  invalid.events.push({type:'contribution',id:'bad',on:'2026-05-02',funding:'virtual',amountCents:-1});
+  assert.throws(()=>buildGoalsScreenModel([old,invalid],'2026-04-01'));
+});

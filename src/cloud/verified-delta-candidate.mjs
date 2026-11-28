@@ -8,6 +8,7 @@
  */
 import {budgetEntityKinds, decodeBudgetEntity, decodeBudgetEntities} from '../domain/budgets/server-snapshot.ts';
 export {decodeBudgetEntity, decodeBudgetEntities};
+import {decodeGoalEntity, decodeGoalEntities, assertGoalHistoryExtends} from '../domain/goals/server-goals.ts';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const scopePattern = /^account:[0-9a-f]{32}$/;
@@ -17,7 +18,7 @@ const moneyLimit = 1_000_000_000_000;
 // A cursor must name the actual last entity; a fabricated forward jump would
 // hide financial records despite an apparently complete set of pages.
 const kindOrder = ['account', 'obligation', 'loan', 'reserve',
-  'transaction', 'settlement', 'loan_payment', ...budgetEntityKinds];
+  'transaction', 'settlement', 'loan_payment', ...budgetEntityKinds, 'goal'];
 const kinds = new Set(kindOrder);
 const changes = new Set(['upsert', 'tombstone', 'ledger_posted']);
 
@@ -61,6 +62,7 @@ function validEntity(entity, profileId) {
       !exactObject(entity.data)) reject('Повреждена серверная сущность');
   noPrototypeKeys(entity.data);
   if (budgetEntityKinds.includes(entity.kind)) decodeBudgetEntity(entity, profileId);
+  if (entity.kind === 'goal') decodeGoalEntity(entity);
   if (entity.kind === 'account') {
     const data = entity.data;
     if (data.currency !== 'RUB' ||
@@ -167,6 +169,7 @@ export function verifyFinanceSnapshotPagesCandidate(
     }
   }
   decodeBudgetEntities([...entities.values()], profileId);
+  decodeGoalEntities([...entities.values()]);
   return {scope, profileId, generation, epoch, revision,
     entities: [...entities.values()], pending: [], conflicts: []};
 }
@@ -202,10 +205,12 @@ export function applyFinanceDeltaCandidate(
     byId.set(e.id, e);
   }
   decodeBudgetEntities([...byId.values()], profileId);
+  decodeGoalEntities([...byId.values()]);
   let next = local.revision, ordinal = 0;
   let budgetChanged = false;
   let budgetSplits = [], budgetNewRules = [];
   function finishBudgetRevision() {
+    decodeGoalEntities([...byId.values()]);
     if (budgetChanged) decodeBudgetEntities([...byId.values()], profileId);
     // A shortened interval (not archive) is the old half of a recurring
     // amendment. Its new interval must exist in this exact revision.
@@ -245,7 +250,7 @@ export function applyFinanceDeltaCandidate(
     noPrototypeKeys(payload);
     if (change.kind === 'tombstone') {
       if (!byId.has(change.entity_id)) reject('Удаляется неизвестная сущность');
-      if (budgetEntityKinds.includes(byId.get(change.entity_id).kind)) reject('Бюджетная история не удаляется');
+      if (budgetEntityKinds.includes(byId.get(change.entity_id).kind) || byId.get(change.entity_id).kind === 'goal') reject('Финансовая история не удаляется');
       byId.delete(change.entity_id);
       continue;
     }
@@ -257,6 +262,12 @@ export function applyFinanceDeltaCandidate(
     }
     const old = byId.get(entity.id);
     if (old && old.kind !== entity.kind) reject('Изменён тип сущности');
+    if (entity.kind === 'goal') {
+      if (change.kind !== 'upsert' || entity.entity_revision !== (old ? old.entity_revision + 1 : 1)) {
+        reject('Неверная ревизия цели');
+      }
+      if (old) assertGoalHistoryExtends(decodeGoalEntity(old), decodeGoalEntity(entity));
+    }
     if (budgetEntityKinds.includes(entity.kind)) {
       if (change.kind !== 'upsert' ||
           entity.entity_revision !== (old ? old.entity_revision + 1 : 1)) {

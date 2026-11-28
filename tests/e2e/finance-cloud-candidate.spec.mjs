@@ -21,6 +21,10 @@ const urls = {
   budgetIndex: '/__e2e_cloud68_budget_index__.js',
   budgetRules: '/__e2e_cloud68_budget_rules__.js',
   budgetSnapshot: '/__e2e_cloud68_budget_snapshot__.js',
+  goalCalendar: '/__e2e_cloud68_goal_calendar__.js',
+  goalEngine: '/__e2e_cloud68_goal_engine__.js',
+  goalSnapshot: '/__e2e_cloud68_goal_snapshot__.js',
+  goalCommand: '/__e2e_cloud68_goal_command__.js',
 };
 const sources = new Map([
   [urls.vault, transpile('../../src/security/local-vault.ts')],
@@ -34,12 +38,24 @@ const sources = new Map([
   [urls.budgetSnapshot, transpile('../../src/domain/budgets/server-snapshot.ts')
     .replaceAll("'./index.ts'", JSON.stringify(urls.budgetIndex))
     .replaceAll("'./rules.ts'", JSON.stringify(urls.budgetRules))],
+  [urls.goalCalendar, transpile('../../src/domain/goals/calendar.ts')],
+  [urls.goalEngine, transpile('../../src/domain/goals/engine.ts')
+    .replaceAll("'./calendar.ts'", JSON.stringify(urls.goalCalendar))],
+  [urls.goalSnapshot, transpile('../../src/domain/goals/server-goals.ts')
+    .replaceAll("'./engine.ts'", JSON.stringify(urls.goalEngine))],
+  [urls.goalCommand, load('../../src/domain/goals/goal-command-candidate.mjs')
+    .replaceAll("'./engine.ts'", JSON.stringify(urls.goalEngine))
+    .replaceAll("'./calendar.ts'", JSON.stringify(urls.goalCalendar))
+    .replaceAll("'./server-goals.ts'", JSON.stringify(urls.goalSnapshot))],
   [urls.delta, load('../../src/cloud/verified-delta-candidate.mjs')
+    .replaceAll("'../domain/goals/server-goals.ts'", JSON.stringify(urls.goalSnapshot))
     .replaceAll("'../domain/budgets/server-snapshot.ts'", JSON.stringify(urls.budgetSnapshot))],
   [urls.cache, load('../../src/cloud/encrypted-cloud-cache-candidate.mjs')
+    .replaceAll("'../domain/goals/server-goals.ts'", JSON.stringify(urls.goalSnapshot))
     .replaceAll("'../security/protected-atomic-candidate.ts'", JSON.stringify(urls.atomic))
     .replaceAll("'./verified-delta-candidate.mjs'", JSON.stringify(urls.delta))],
   [urls.outbox, load('../../src/cloud/encrypted-command-outbox-candidate.mjs')
+    .replaceAll("'../domain/goals/goal-command-candidate.mjs'", JSON.stringify(urls.goalCommand))
     .replaceAll("'../security/protected-atomic-candidate.ts'", JSON.stringify(urls.atomic))
     .replaceAll("'./verified-delta-candidate.mjs'", JSON.stringify(urls.delta))],
   [urls.dispatch, load('../../src/cloud/finance-offline-dispatch-candidate.mjs')

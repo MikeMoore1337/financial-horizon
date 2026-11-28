@@ -1,7 +1,7 @@
 import { Icon } from './Calendar';
 
 export type FinanceView =
-  'overview' | 'calendar' | 'obligations' | 'loans' | 'settings' | 'budgets';
+  'overview' | 'calendar' | 'obligations' | 'loans' | 'settings' | 'budgets' | 'goals';
 export type NavigationVariant = 'sidebar' | 'bottom';
 type NavigationItem = {
   view: FinanceView;
@@ -15,6 +15,7 @@ const items: readonly NavigationItem[] = [
   { view: 'calendar', title: 'Календарь', shortTitle: 'Календарь', icon: 'calendar' },
   { view: 'obligations', title: 'Обязательства', shortTitle: 'Обязательства', icon: 'layers' },
   { view: 'budgets', title: 'Бюджеты', shortTitle: 'Бюджеты', icon: 'tag' },
+  { view: 'goals', title: 'Финансовые цели', shortTitle: 'Цели', icon: 'goal' },
   { view: 'loans', title: 'Кредиты', shortTitle: 'Кредиты', icon: 'credit' },
   { view: 'settings', title: 'Настройки', shortTitle: 'Настройки', icon: 'settings' },
 ];
@@ -23,10 +24,12 @@ export function Navigation({
   view,
   variant,
   budgetsEnabled = false,
+  goalsEnabled = false,
 }: {
   view: FinanceView;
   variant: NavigationVariant;
   budgetsEnabled?: boolean;
+  goalsEnabled?: boolean;
 }) {
   return (
     <>
@@ -34,6 +37,7 @@ export function Navigation({
         .filter(
           (item) =>
             (item.view !== 'budgets' || budgetsEnabled) &&
+            (item.view !== 'goals' || goalsEnabled) &&
             !(budgetsEnabled && variant === 'bottom' && item.view === 'loans'),
         )
         .map((item) => {

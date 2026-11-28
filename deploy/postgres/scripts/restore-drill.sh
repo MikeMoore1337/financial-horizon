@@ -51,6 +51,8 @@ case "$version" in
     expected_tables=18 ;;
   0008_budget_rules)
     expected_tables=21 ;;
+  0009_financial_goals)
+    expected_tables=23 ;;
   *)
     echo "Unsupported finance migration version in backup" >&2
     exit 1 ;;

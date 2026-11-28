@@ -451,6 +451,23 @@ def validate_v2_budget_candidate(
     return {**candidate.model_dump(), "payload": payload.model_dump(exclude_unset=True)}
 
 
+class GoalV2Candidate(AccountV2Candidate):
+    action: Literal["goal.append"]
+
+
+def validate_v2_goal_candidate(
+    command: object, *, if_match: str, idempotency_key: str,
+) -> dict[str, Any]:
+    from backend.finance_db.goal_service import validate_goal_payload
+    candidate = GoalV2Candidate.model_validate(command)
+    if (not isinstance(if_match, str) or re.fullmatch(r'"[^"\r\n]{1,254}"', if_match) is None
+            or idempotency_key != candidate.client_mutation_id):
+        raise ValueError("Missing goal preconditions")
+    body = candidate.model_dump()
+    validate_goal_payload(body)
+    return body
+
+
 def validate_v2_account_candidate(
     command: object, *, if_match: str, idempotency_key: str,
 ) -> dict[str, Any]:
@@ -497,7 +514,8 @@ def validate_v2_account_candidate(
         "payload": payload.model_dump(exclude_unset=True),
     }
 
-async def parse_v2_account_command(request: Request, *, allow_budget: bool = False) -> dict[str, Any]:
+async def parse_v2_account_command(request: Request, *, allow_budget: bool = False,
+                                   allow_goal: bool = False) -> dict[str, Any]:
     """Validate an opt-in candidate with v1-equivalent bounded JSON transport.
 
     Revalidate the real FH session after the final streamed chunk and before
@@ -532,7 +550,9 @@ async def parse_v2_account_command(request: Request, *, allow_budget: bool = Fal
             object_pairs_hook=_reject_duplicate_json_keys,
         )
         validator = (
-            validate_v2_budget_candidate if allow_budget and isinstance(raw, dict)
+            validate_v2_goal_candidate if allow_goal and isinstance(raw, dict)
+            and raw.get("action") == "goal.append"
+            else validate_v2_budget_candidate if allow_budget and isinstance(raw, dict)
             and isinstance(raw.get("action"), str) and raw["action"].startswith("budget.")
             else validate_v2_account_candidate
         )

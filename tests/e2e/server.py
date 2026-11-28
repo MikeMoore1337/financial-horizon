@@ -83,6 +83,7 @@ def local_app(directory):
             # The actual application startup defaults to OFF.
             enable_bank_import_candidate=True,
             enable_budget_candidate=True,
+            enable_goal_candidate=True,
             # Synthetic disposable actors only; production cannot opt into this.
             finance_sync_test_allow_all=True,
         )
@@ -337,6 +338,15 @@ def local_app(directory):
             contents = contents.replace(
                 budget_disabled if budget_test else budget_enabled,
                 budget_enabled if budget_test else budget_disabled,
+            )
+            goal_enabled = '<meta name="fh-finance-goals" content="enabled">'
+            goal_disabled = '<meta name="fh-finance-goals" content="disabled">'
+            if contents.count(goal_enabled) + contents.count(goal_disabled) != 1:
+                raise HTTPException(503)
+            goal_test = real_finance and request.query_params.get("fh_goals_e2e") == "1"
+            contents = contents.replace(
+                goal_disabled if goal_test else goal_enabled,
+                goal_enabled if goal_test else goal_disabled,
             )
             if real_finance and (
                 contents.count(bank_enabled) != 1

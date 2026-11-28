@@ -7,7 +7,7 @@
  * Never substitute caller-supplied scope keys for #33/#67 server authorization.
  */
 import { assertGoalDate } from './calendar.ts';
-import { calculateGoal, goalLedgerLinks, MAX_GOAL_CENTS } from './engine.ts';
+import { calculateGoal, goalLedgerLinks } from './engine.ts';
 import type { GoalAccountBinding } from './cashflow-bridge.ts';
 import type { GoalRecord } from './types.ts';
 
@@ -74,8 +74,7 @@ function id(value: unknown, label: string): asserts value is string {
 }
 function integer(value: unknown, name: string, allowNegative = false): asserts value is number {
   if (!Number.isSafeInteger(value) ||
-      (value as number) < (allowNegative ? -MAX_GOAL_CENTS : 0) ||
-      (value as number) > MAX_GOAL_CENTS) {
+      (!allowNegative && (value as number) < 0)) {
     throw new RangeError(`Invalid ${name} in integer kopecks`);
   }
 }

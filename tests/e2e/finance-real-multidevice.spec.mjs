@@ -18,6 +18,10 @@ const testModules = {
   budgetIndex: '/__e2e_138_budget_index__.js',
   budgetRules: '/__e2e_138_budget_rules__.js',
   budgetSnapshot: '/__e2e_138_budget_snapshot__.js',
+  goalCalendar: '/__e2e_138_goal_calendar__.js',
+  goalEngine: '/__e2e_138_goal_engine__.js',
+  goalSnapshot: '/__e2e_138_goal_snapshot__.js',
+  goalCommand: '/__e2e_138_goal_command__.js',
 };
 const source = path => readFileSync(new URL(path, import.meta.url), 'utf8');
 const compile = path => ts.transpileModule(source(path), {
@@ -36,12 +40,24 @@ const testModuleSources = new Map([
   [testModules.budgetSnapshot, compile('../../src/domain/budgets/server-snapshot.ts')
     .replaceAll("'./index.ts'", JSON.stringify(testModules.budgetIndex))
     .replaceAll("'./rules.ts'", JSON.stringify(testModules.budgetRules))],
+  [testModules.goalCalendar, compile('../../src/domain/goals/calendar.ts')],
+  [testModules.goalEngine, compile('../../src/domain/goals/engine.ts')
+    .replaceAll("'./calendar.ts'", JSON.stringify(testModules.goalCalendar))],
+  [testModules.goalSnapshot, compile('../../src/domain/goals/server-goals.ts')
+    .replaceAll("'./engine.ts'", JSON.stringify(testModules.goalEngine))],
+  [testModules.goalCommand, source('../../src/domain/goals/goal-command-candidate.mjs')
+    .replaceAll("'./engine.ts'", JSON.stringify(testModules.goalEngine))
+    .replaceAll("'./calendar.ts'", JSON.stringify(testModules.goalCalendar))
+    .replaceAll("'./server-goals.ts'", JSON.stringify(testModules.goalSnapshot))],
   [testModules.delta, source('../../src/cloud/verified-delta-candidate.mjs')
+    .replaceAll("'../domain/goals/server-goals.ts'", JSON.stringify(testModules.goalSnapshot))
     .replaceAll("'../domain/budgets/server-snapshot.ts'", JSON.stringify(testModules.budgetSnapshot))],
   [testModules.cache, source('../../src/cloud/encrypted-cloud-cache-candidate.mjs')
+    .replaceAll("'../domain/goals/server-goals.ts'", JSON.stringify(testModules.goalSnapshot))
     .replaceAll("'../security/protected-atomic-candidate.ts'", JSON.stringify(testModules.atomic))
     .replaceAll("'./verified-delta-candidate.mjs'", JSON.stringify(testModules.delta))],
   [testModules.outbox, source('../../src/cloud/encrypted-command-outbox-candidate.mjs')
+    .replaceAll("'../domain/goals/goal-command-candidate.mjs'", JSON.stringify(testModules.goalCommand))
     .replaceAll("'../security/protected-atomic-candidate.ts'", JSON.stringify(testModules.atomic))
     .replaceAll("'./verified-delta-candidate.mjs'", JSON.stringify(testModules.delta))],
   [testModules.pull, source('../../src/cloud/authenticated-snapshot-pull-candidate.mjs')
@@ -2836,3 +2852,216 @@ test('#35 guest budgets remain local and survive native encrypted backup and res
     expect(requests).toEqual([]);
   }finally{await context.close();}
 });
+
+
+test('#37 encrypted account goals reserve money without duplicate cash and persist on a second device', async ({browser}, testInfo) => {
+  test.setTimeout(120000);
+  if(process.env.FH_E2E_REAL_FINANCE!=='yes')test.skip();
+  const context=await browser.newContext({baseURL:ORIGIN,serviceWorkers:'block'});
+  try{
+    expect((await context.request.post('/__e2e__/personal-session')).status()).toBe(200);
+    const profile=await bootstrap(context),account=randomUUID();
+    expect((await submit(context,await state(context),'account.create',
+      {id:account,name:'Synthetic goals account',kind:'cash',currency:'RUB',opening_minor:12000000})).status()).toBe(201);
+    const page=await context.newPage(),errors=[];
+    page.on('pageerror',e=>errors.push(e.message));
+    await page.goto('/?fh_goals_e2e=1');
+    await view(page,'goals');
+    await page.getByLabel('Парольная фраза',{exact:true}).fill('synthetic goal test passphrase');
+    await page.getByRole('button',{name:'Создать копию'}).click();
+    await page.getByLabel('Я сохранил ключ вне браузера').check();
+    await page.getByRole('button',{name:'Разблокировать'}).click();
+    const goal=page.locator('.goal-workspace');
+    await expect(goal.getByRole('heading',{name:'Финансовые цели'})).toBeVisible();
+    await goal.getByRole('button',{name:'Создать цель',exact:true}).click();
+    const f=goal.getByRole('form',{name:'Создать цель'});
+    await f.getByLabel('Счёт накоплений').selectOption(account);
+    await f.getByLabel('Название').fill('Проверочная цель 37');
+    await f.getByLabel('Дата события').fill('2026-01-01');
+    await f.getByLabel('Целевая сумма, ₽').fill('120000');
+    await f.getByLabel('Срок').fill('2027-01-01');
+    await f.getByLabel(/Подтверждаю изменение/).check();
+    await f.getByRole('button',{name:'Подтвердить',exact:true}).click();
+    await expect(goal.getByRole('heading',{name:'Проверочная цель 37'})).toBeVisible({timeout:20000});
+    await expect(goal.getByRole('button',{name:'Пополнить',exact:true})).toBeEnabled();
+    await goal.getByRole('button',{name:'Пополнить',exact:true}).click();
+    const fund=goal.getByRole('form',{name:'Пополнить'});
+    await fund.getByLabel('Сумма, ₽').fill('10000');
+    await fund.getByLabel(/Подтверждаю изменение/).check();
+    await fund.getByRole('button',{name:'Подтвердить',exact:true}).click();
+    await expect.poll(async()=> (await state(context)).body.entities.find(e=>e.kind==='goal'&&e.data.account_id===account)?.data.saved_minor).toBe(1000000);
+    await expect(goal.getByRole('button',{name:'Использовать средства',exact:true})).toBeEnabled();
+    await goal.getByRole('button',{name:'Использовать средства',exact:true}).click();
+    const expense=goal.getByRole('form',{name:'Использовать средства'});
+    await expense.getByLabel('Сумма, ₽').fill('1000');
+    await expense.getByLabel('Способ').selectOption('expense');
+    await expense.getByLabel(/Подтверждаю изменение/).check();
+    await expense.getByRole('button',{name:'Подтвердить',exact:true}).click();
+    await expect.poll(async()=> (await state(context)).body.entities.find(e=>e.kind==='goal'&&e.data.account_id===account)?.data.saved_minor).toBe(900000);
+    await expect(goal.getByRole('button',{name:'Отменить событие',exact:true})).toBeEnabled();
+    const snapshot=await state(context),row=snapshot.body.entities.find(e=>e.kind==='goal'&&e.data.account_id===account);
+    expect(row.data.event_log).toHaveLength(3);
+    const tx=snapshot.body.entities.find(e=>e.id===row.data.event_log[2].ledgerMovementId);
+    expect(tx.data.kind).toBe('expense');
+    expect(tx.data.postings).toEqual([{account_id:account,signed_minor:-100000}]);
+    expect(entity(snapshot,account).data.balance_minor).toBe(11900000);
+    expect(entity(snapshot,account).data.reserved_minor).toBe(900000);
+    const second=await browser.newContext({baseURL:ORIGIN,storageState:await context.storageState(),serviceWorkers:'block'});
+    try {
+      expect(await bootstrap(second)).toBe(profile);
+      expect((await state(second)).body.entities.find(e=>e.id===row.id)).toEqual(row);
+    } finally {await second.close();}
+    for(const width of [320,390,1440]){
+      await page.setViewportSize({width,height:900});
+      for(const theme of ['light','dark']){
+        if(await page.locator('body').getAttribute('data-theme')!==theme)await page.locator('#theme-toggle').click();
+        expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);
+        await page.screenshot({path:testInfo.outputPath('goals-'+width+'-'+theme+'.png'),fullPage:true});
+      }
+    }
+    expect(errors).toEqual([]);
+  }finally{await context.close();}
+});
+
+test('#37 guest goals use native local state without contacting finance API',async({browser})=>{
+  test.setTimeout(120000);
+  if(process.env.FH_E2E_REAL_FINANCE!=='yes')test.skip();
+  const context=await browser.newContext({baseURL:ORIGIN,serviceWorkers:'block'});
+  try{
+    const page=await context.newPage(),requests=[];
+    page.on('request',r=>{if(r.url().includes('/api/finance/'))requests.push(r.url());});
+    await page.goto('/?guest=1&fh_goals_e2e=1');
+    await view(page,'settings');
+    await page.locator('[data-settings-card="bank-statement-import"] [data-view="bank-import"]').click();
+    await page.getByRole('textbox',{name:'Название'}).fill('Основной');
+    await page.getByRole('textbox',{name:/Начальный остаток/}).fill('20000');
+    await page.getByRole('button',{name:'Добавить счёт'}).click();
+    await expect.poll(async()=>(await scopedState(page,'state'))?.bankStatements?.accounts?.length).toBe(1);
+    const before=await scopedState(page,'state'),account=before.bankStatements.accounts[0].id;
+    await page.setViewportSize({width:390,height:844});
+    await view(page,'goals');
+    const goal=page.locator('.goal-workspace');
+    await goal.getByRole('button',{name:'Создать цель',exact:true}).click();
+    const f=goal.getByRole('form',{name:'Создать цель'});
+    await f.getByLabel('Счёт накоплений').selectOption(account);
+    await f.getByLabel('Название').fill('Гостевая цель 37');
+    await f.getByLabel('Дата события').fill('2026-01-01');
+    await f.getByLabel('Целевая сумма, ₽').fill('120000');
+    await f.getByLabel('Срок').fill('2027-01-01');
+    await f.getByLabel('Выделить из текущего остатка, ₽').fill('10000');
+    await f.getByLabel(/Подтверждаю изменение/).check();
+    await f.getByRole('button',{name:'Подтвердить',exact:true}).click();
+    await expect.poll(async()=>(await scopedState(page,'state'))?.guestGoals?.goals?.[0]?.data?.saved_minor).toBe(1000000);
+    expect((await scopedState(page,'state')).bankStatements).toEqual(before.bankStatements);
+    await page.reload();
+    await view(page,'goals');
+    await expect(goal.getByRole('heading',{name:'Гостевая цель 37'})).toBeVisible();
+    expect(requests).toEqual([]);
+  }finally{await context.close();}
+});
+
+
+// Real synthetic PostgreSQL receipt recovery: delete both journal paths,
+// preserve the command receipt and reopen the actual encrypted vault.
+for (const operation of ['expense','transfer-in','transfer-out','void-expense','void-transfer']) {
+  test('#37 recovers goal '+operation+' after both journal endpoints return 410',async({page,context})=>{
+    test.setTimeout(120000);
+    if(process.env.FH_E2E_REAL_FINANCE!=='yes')test.skip();
+    await context.route('**/__e2e_138_*.js',route=>route.fulfill({
+      status:200,contentType:'text/javascript',
+      body:testModuleSources.get(new URL(route.request().url()).pathname),
+      headers:{'Cache-Control':'no-store'},
+    }));
+    const login=await context.request.post('/__e2e__/personal-session');
+    expect(login.status()).toBe(200);
+    const actor=(await login.json()).user.id;
+    await bootstrap(context);
+    const account=randomUUID(),other=randomUUID(),goal=randomUUID();
+    for(const [id,name] of [[account,'Synthetic goal account'],[other,'Synthetic other account']]){
+      expect((await submit(context,await state(context),'account.create',
+        {id,name,kind:'cash',currency:'RUB',opening_minor:10000})).status()).toBe(201);
+    }
+    const on='2026-11-12';
+    const createId=randomUUID(),initial=await state(context);
+    expect((await submit(context,initial,'goal.append',{goal_id:goal,account_id:account,event:{
+      id:createId,type:'create',on,title:'Synthetic goal recovery',category:'other',
+      targetCents:12000,targetDate:'2027-11-12',openingCents:4000,monthlyCents:null,plannedFunding:'virtual',
+    }},{[account]:versionOf(initial,account)},2,createId)).status()).toBe(201);
+    let previous=null;
+    if(operation.startsWith('void-')){
+      previous=randomUUID();
+      const pre=await state(context),transfer=operation==='void-transfer';
+      const event={id:previous,type:'use',on,amountCents:1200,usage:transfer?'account-transfer':'expense'};
+      expect((await submit(context,pre,'goal.append',{goal_id:goal,account_id:account,event,
+        ...(transfer?{counterparty_account_id:other}:{})},
+        {[goal]:versionOf(pre,goal),[account]:versionOf(pre,account),
+          ...(transfer?{[other]:versionOf(pre,other)}:{})},2,previous)).status()).toBe(201);
+    }
+    await page.goto('/__e2e__/ready');
+    const before=await state(context);
+    const baseline=await page.evaluate(async({actor,account,other,goal,operation,previous,on})=>{
+      const {FinanceSyncController}=await import('/__e2e_138_controller__.js');
+      const phrase='synthetic goal recovery encrypted phrase';
+      const controller=new FinanceSyncController({verifiedActorUserId:actor,origin:location.origin});
+      await controller.createLocal(phrase,true);
+      const opened=await controller.unlock({passphrase:phrase});
+      const id=crypto.randomUUID(),transfer=operation.startsWith('transfer-');
+      const event=operation.startsWith('void-')?{id,type:'void',on,eventId:previous,reason:'Synthetic correction'}:
+        operation==='transfer-in'?{id,type:'contribution',on,amountCents:1200,funding:'account-transfer'}:
+        {id,type:'use',on,amountCents:1200,usage:transfer?'account-transfer':'expense'};
+      const ids=[account,goal,...(transfer||operation==='void-transfer'?[other]:[])];
+      await controller.enqueue({schema_version:2,client_mutation_id:id,base_revision:opened.cloud.revision,
+        action:'goal.append',expected_entity_revisions:Object.fromEntries(opened.cloud.entities
+          .filter(e=>ids.includes(e.id)).map(e=>[e.id,e.entity_revision])),
+        payload:{goal_id:goal,account_id:account,event,...(transfer?{counterparty_account_id:other}:{})}});
+      window.__fh68test={controller,phrase};
+      return opened.cloud.revision;
+    },{actor,account,other,goal,operation,previous,on});
+    let removed=false;
+    const statuses=[];
+    page.on('response',response=>{
+      if(response.url().includes('/api/finance/v1/changes?')||
+          /\/api\/finance\/v1\/commands\/[^/]+\/changes$/.test(response.url()))statuses.push(response.status());
+    });
+    await context.route('**/api/finance/v1/changes?*',async route=>{
+      if(!removed){
+        execFileSync(process.env.FH_E2E_PYTHON||'python3',
+          [fileURLToPath(new URL('./remove_synthetic_journal.py',import.meta.url)),actor,String(baseline+1)],{stdio:'pipe'});
+        removed=true;
+      }
+      await route.continue();
+    });
+    const result=await page.evaluate(async({actor})=>{
+      const {FinanceSyncController}=await import('/__e2e_138_controller__.js');
+      let {controller,phrase}=window.__fh68test;
+      const held=await controller.dispatchOnce();
+      await controller.refresh();
+      controller.close();
+      controller=new FinanceSyncController({verifiedActorUserId:actor,origin:location.origin});
+      await controller.unlock({passphrase:phrase});
+      const recovered=await controller.dispatchOnce(),after=await controller.read();
+      controller.close();delete window.__fh68test;
+      return {held:held.status,recovered:recovered.status,proof:recovered.proof,pending:after.outbox.length,
+        conflicts:after.conflicts.length,entities:after.cloud.entities};
+    },{actor});
+    expect(removed).toBe(true);
+    expect(statuses).toEqual([410,410,410,410,410,410]);
+    expect(({held:result.held,recovered:result.recovered,proof:result.proof,pending:result.pending,conflicts:result.conflicts}))
+      .toEqual({held:'SNAPSHOT_REQUIRED_HOLD',recovered:'DURABLY_CONFIRMED',proof:'exact_snapshot',pending:0,conflicts:0});
+    const after=await state(context),delta=operation==='transfer-in'||operation.startsWith('void-')?1200:-1200;
+    const beforeGoal=before.body.entities.find(e=>e.id===goal);
+    const afterGoal=after.body.entities.find(e=>e.id===goal);
+    expect(after.revision).toBe(before.revision+1);
+    expect(afterGoal.data.saved_minor).toBe(beforeGoal.data.saved_minor+delta);
+    expect(afterGoal.data.event_log).toHaveLength(beforeGoal.data.event_log.length+1);
+    expect(entity(after,account).data.reserved_minor).toBe(entity(before,account).data.reserved_minor+delta);
+    expect(entity(after,account).data.balance_minor).toBe(entity(before,account).data.balance_minor+delta);
+    expect(entity(after,account).data.available_minor).toBe(entity(before,account).data.available_minor);
+    const otherDelta=operation==='transfer-in'||operation==='void-transfer'?-1200:operation==='transfer-out'?1200:0;
+    expect(entity(after,other).data.balance_minor).toBe(entity(before,other).data.balance_minor+otherDelta);
+    expect(entity(after,other).data.reserved_minor).toBe(0);
+    expect(after.body.entities.filter(e=>e.kind==='transaction')).toHaveLength(previous?2:1);
+    expect([...result.entities].sort((a,b)=>a.id.localeCompare(b.id))).toEqual(
+      [...after.body.entities].sort((a,b)=>a.id.localeCompare(b.id)));
+  });
+}

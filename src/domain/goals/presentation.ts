@@ -140,6 +140,10 @@ export function buildGoalsScreenModel(
   for (const goal of goals) {
     if (!goal || ids.has(goal.id)) throw new Error('Duplicate or missing goal ID');
     ids.add(goal.id);
+    const created = goal.events[0];
+    if (!created || created.type !== 'create') throw new TypeError('Invalid goal creation');
+    // The complete journal is still validated by goalLedgerLinks below.
+    if (created.on > asOf) continue;
     const snapshot = calculateGoal(goal, asOf);
     const card = toCard(snapshot, goalNextInstallmentOn(goal, asOf));
     entries.push({ goal, snapshot, card });

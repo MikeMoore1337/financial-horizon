@@ -138,6 +138,19 @@ export interface FinanceContents {
   /** Optional guest-only actual bank cash journal; legacy backups omit it. */
   bankStatements?: GuestBankLedger;
   /** Optional local-only budget state; legacy v1/v2 backups may omit it. */
+  guestGoals?: {
+    version: 1;
+    goals: Array<{
+      id: string;
+      kind: 'goal';
+      entity_revision: number;
+      data: {
+        account_id: string;
+        event_log: import('../domain/goals/types.ts').GoalEvent[];
+        saved_minor: number;
+      };
+    }>;
+  };
   guestBudgets?: {
     version: 1;
     categories: Array<{

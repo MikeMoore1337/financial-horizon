@@ -67,6 +67,7 @@ def create_app(
     enable_import_candidate: bool=False,
     enable_bank_import_candidate: bool=False,
     enable_budget_candidate: bool=False,
+    enable_goal_candidate: bool=False,
     finance_sync_allowed_actor: str|None=None,
     finance_sync_test_allow_all: bool=False,
 ) -> FastAPI:
@@ -375,6 +376,7 @@ def create_app(
             enable_import_candidate=enable_import_candidate,
             enable_bank_import_candidate=enable_bank_import_candidate,
             enable_budget_candidate=enable_budget_candidate,
+            enable_goal_candidate=enable_goal_candidate,
             sync_allowed_actor=finance_sync_allowed_actor,
             sync_test_allow_all=finance_sync_test_allow_all,
         )
@@ -428,19 +430,23 @@ def _personal_finance_runtime_options() -> dict:
     bank_import_mode = os.environ.get("FH_FINANCE_BANK_IMPORT_RUNTIME", "off")
     sync_mode = os.environ.get("FH_FINANCE_SYNC_CREDENTIAL", "off")
     budget_mode = os.environ.get("FH_FINANCE_BUDGET_RUNTIME", "off")
+    goal_mode = os.environ.get("FH_FINANCE_GOALS_RUNTIME", "off")
     if sync_mode not in ("off", "on"):
         raise ValueError("Invalid sync rollout configuration")
     if (mode not in ("off", "personal") or v2_mode not in ("off", "on")
             or import_mode not in ("off", "on")
-            or bank_import_mode not in ("off", "on") or budget_mode not in ("off", "on")):
+            or bank_import_mode not in ("off", "on") or budget_mode not in ("off", "on")
+            or goal_mode not in ("off", "on")):
         raise ValueError("Invalid finance feature configuration")
     if mode == "off":
-        if v2_mode != "off" or import_mode != "off" or bank_import_mode != "off" or sync_mode != "off" or budget_mode != "off":
+        if v2_mode != "off" or import_mode != "off" or bank_import_mode != "off" or sync_mode != "off" or budget_mode != "off" or goal_mode != "off":
             raise ValueError("Finance v2/import requires enabled private finance runtime")
         return {}
 
     if budget_mode == "on" and (v2_mode != "on" or sync_mode != "on"):
         raise ValueError("Budget requires private v2 and owner-only sync")
+    if goal_mode == "on" and (v2_mode != "on" or sync_mode != "on"):
+        raise ValueError("Goals require private v2 and owner-only sync")
     if import_mode == "on" and v2_mode != "on":
         raise ValueError("Import requires explicitly enabled private finance v2")
     if bank_import_mode == "on" and v2_mode != "on":
@@ -467,6 +473,7 @@ def _personal_finance_runtime_options() -> dict:
         "enable_import_candidate": import_mode == "on",
         "enable_bank_import_candidate": bank_import_mode == "on",
         "enable_budget_candidate": budget_mode == "on",
+        **({"enable_goal_candidate": True} if goal_mode == "on" else {}),
         "finance_sync_allowed_actor": _read_sync_actor_credential() if sync_mode == "on" else None,
     }
 
