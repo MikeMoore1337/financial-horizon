@@ -125,6 +125,10 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
     actualIds.add(actual.id);
     const date = dayNumber(actual.date);
     if (date > asOf) throw new RangeError('Future actual movement is not confirmed');
+    const reversal = actual.reversedOn === undefined ? undefined : dayNumber(actual.reversedOn);
+    if (reversal !== undefined && (actual.voided !== true || reversal < date || reversal > asOf)) {
+      throw new RangeError('Dated reversal requires a voided actual and a confirmed compensation date');
+    }
     cents(actual.amountCents, 'actual.amountCents', true);
     if (!['income', 'expense', 'transfer', 'adjustment-credit', 'adjustment-debit']
       .includes(actual.kind)) {
@@ -145,18 +149,34 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
         settlementTotals.set(key, addCents(settlementTotals.get(key) ?? 0, actual.amountCents));
       }
     }
-    if (actual.voided || actual.kind === 'transfer' || date < opening || date > end) continue;
-    const bucket = dayBucket(actual.date);
-    if (actual.kind === 'income') bucket.actualIncome = addCents(bucket.actualIncome, actual.amountCents);
-    else if (actual.kind === 'expense') {
-      bucket.actualExpense = addCents(bucket.actualExpense, actual.amountCents);
-    } else {
-      // Ledger `adjustment` postings change the bank balance without becoming
-      // income, expense, a planned settlement or a reserve movement.
-      const signed = actual.kind === 'adjustment-credit' ? actual.amountCents : -actual.amountCents;
-      bucket.actualAdjustment = addCents(bucket.actualAdjustment, signed);
+    if (actual.kind === 'transfer' || actual.voided && reversal === undefined) continue;
+    // A dated void is one logical fact. Preserve posting-date history and
+    // compensate the same classification on the reversal date; never count
+    // an expense refund as earned income or settle a cancelled obligation.
+    const book = (day: number, iso: string, sign: 1 | -1, id: string): void => {
+      if (day < opening || day > end) return;
+      const bucket = dayBucket(iso);
+      const amount = sign * actual.amountCents;
+      if (actual.kind === 'income') bucket.actualIncome = addCents(bucket.actualIncome, amount);
+      else if (actual.kind === 'expense') bucket.actualExpense = addCents(bucket.actualExpense, amount);
+      else {
+        const signed = actual.kind === 'adjustment-credit' ? amount : -amount;
+        bucket.actualAdjustment = addCents(bucket.actualAdjustment, signed);
+      }
+      bucket.ids.push(id);
+    };
+    if (reversal === date) {
+      // Same-day original and inverse cancel exactly; retain the calendar
+      // identifiers without an unnecessary intermediate monetary sum.
+      if (date >= opening && date <= end) {
+        dayBucket(actual.date).ids.push(`actual:${actual.id}`, `actual-reversal:${actual.id}`);
+      }
+      continue;
     }
-    bucket.ids.push(`actual:${actual.id}`);
+    book(date, actual.date, 1, `actual:${actual.id}`);
+    if (reversal !== undefined) {
+      book(reversal, actual.reversedOn!, -1, `actual-reversal:${actual.id}`);
+    }
   }
 
   // Validate every linked settlement, even when its occurrence lies beyond this horizon.
