@@ -81,6 +81,17 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
   for (const plan of input.plans) {
     mustId(plan.id, 'Plan');
     optionalBoolean(plan.cancelled, 'plan.cancelled');
+    optionalBoolean(plan.carryUnpaidBeforeOpening, 'plan.carryUnpaidBeforeOpening');
+    if (plan.carryUnpaidBeforeOpening && isIncome(plan)) {
+      throw new RangeError('Missed income cannot be carried as an obligation');
+    }
+    if (plan.loanCoveredCents !== undefined) {
+      if (plan.kind !== 'loan' || plan.everyMonths !== undefined) {
+        throw new RangeError('Loan coverage requires a single loan occurrence');
+      }
+      cents(plan.loanCoveredCents, 'plan.loanCoveredCents', true);
+      if (plan.loanCoveredCents > plan.amountCents) throw new RangeError('Loan coverage exceeds plan');
+    }
     if (plans.has(plan.id)) throw new RangeError('Duplicate plan ID');
     if (!['income', 'obligation', 'irregular', 'loan'].includes(plan.kind)) {
       throw new RangeError('Unknown plan kind');
@@ -143,6 +154,9 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
         || !['income', 'expense'].includes(actual.kind)
         || (isIncome(plan) !== (actual.kind === 'income'))) {
         throw new RangeError('Actual references an incompatible plan occurrence');
+      }
+      if (plan.loanCoveredCents !== undefined) {
+        throw new RangeError('Explicit loan coverage cannot be combined with linked facts');
       }
       if (!actual.voided) {
         const key = keyed(actual.planId, actual.occurrenceDate);
@@ -241,7 +255,7 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
       const due = edit?.date ?? anchor;
       const dueNumber = dayNumber(due);
       const amount = edit?.amountCents ?? plan.amountCents;
-      const settled = settlementTotals.get(key) ?? 0;
+      const settled = plan.loanCoveredCents ?? settlementTotals.get(key) ?? 0;
       if (settled > amount) throw new RangeError('Booked settlement exceeds planned occurrence');
       const remaining = addCents(amount, -settled);
       if (dueNumber >= opening && dueNumber <= end) {
@@ -255,8 +269,18 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
         else scheduled.plannedExpense = addCents(scheduled.plannedExpense, amount);
         scheduled.ids.push(`plan:${plan.id}@${anchor}`);
       }
-      // Older occurrences pre-dating the opening snapshot are NOT inferred as debt.
-      if (dueNumber >= opening && dueNumber <= asOf && remaining > 0) {
+      // The neutral default never infers debt from a historical bank balance.
+      // An authorized complete obligation history may explicitly carry older
+      // unpaid expenses without rewriting the period's planned cashflow.
+      const carried = dueNumber < opening && plan.carryUnpaidBeforeOpening === true && remaining > 0;
+      if (carried) {
+        occurrences.push({
+          planId: plan.id, occurrenceDate: anchor, date: due, kind: plan.kind,
+          amountCents: amount, settledCents: settled, remainingCents: remaining,
+          confidence: plan.confidence ?? 'estimated', overdue: true,
+        });
+      }
+      if ((dueNumber >= opening || carried) && dueNumber <= asOf && remaining > 0) {
         if (isIncome(plan)) {
           const bucket = dayBucket(due);
           bucket.unrealizedIncome = addCents(bucket.unrealizedIncome, remaining);
@@ -394,7 +418,7 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
     assumptions: [
       'Opening balances are confirmed at the start of openingDate; facts on that date are not yet included.',
       'Only facts dated on or before asOfDate change the confirmed balance.',
-      'Unpaid due expenses are modeled as immediate asOfDate exposure; missed income is not carried forward.',
+      'Unpaid due expenses are modeled as immediate asOfDate exposure; older debts require explicit history. Missed income is not carried forward.',
       'Future planned income is a forecast, and is estimated unless explicitly marked confirmed.',
       'An allocation only earmarks existing cash; a real payment debits the bank balance once.',
       'Internal transfers are ignored; account balance corrections affect cash, never plan-vs-fact income/expense.',
