@@ -8,10 +8,17 @@ export interface PlannedFlowDto {
   dueDate: string; // YYYY-MM-DD, original recurrence anchor
   amountCents: number; // >= 0, always positive magnitude
   /** Monthly interval anchored to dueDate, never chained from the prior clamped date. */
-  everyMonths?: number; // 1..60
+  everyMonths?: number; // 1..60 (wire intervals above this are expanded by adapter)
   untilDate?: string; // inclusive original recurrence date
   confidence?: 'confirmed' | 'estimated'; // future income defaults to estimated
   cancelled?: boolean; // entire plan is no longer active
+  /** Only an authoritative outstanding obligation history may opt in.
+   * Historical unpaid expenses become today's exposure, not today's plan. */
+  carryUnpaidBeforeOpening?: boolean;
+  /** Explicit monthly loan coverage computed from confirmed payment facts by
+   * the existing loan calendar. Only for a non-recurring loan plan; never
+   * combines with linked actuals. The original cash facts remain separate. */
+  loanCoveredCents?: number;
 }
 
 export interface OccurrenceOverrideDto {
