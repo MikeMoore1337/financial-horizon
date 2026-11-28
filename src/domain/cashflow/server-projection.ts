@@ -8,7 +8,7 @@ import { projectServerBudgetLoans } from '../budgets/server-loan-plan.mjs';
 import { buildGoalCashflowBundle } from '../goals/cashflow-bridge.ts';
 import { calculateReserve, type ReserveEvent } from '../reserves/index.ts';
 import { decodeServerReserve, projectServerReserve } from '../reserves/server-snapshot.ts';
-import { addMonthsAnchored, dayNumber, isoDay } from './calendar.ts';
+import { addMonthsAnchored, dayNumber } from './calendar.ts';
 import { addCents, adaptCashflowSources } from './adapters.ts';
 import { forecastCashflow } from './engine.ts';
 import { readConfirmedCashflowLedger, type ConfirmedCashflowCheckpoint } from './confirmed-ledger.ts';
@@ -89,10 +89,12 @@ export function projectAuthorizedCashflow(
   const facts = ledger.actuals.filter(a => a.planId !== undefined);
   const actualById = new Map(ledger.actuals.map(a => [a.id, a]));
   const txById = new Map(entities.filter(e => e.kind === 'transaction').map(e => [e.id, e.data]));
+  const factOccurrences = new Set<string>();
   const paidByOccurrence = new Map<string, number>();
   const latest = new Map<string, string>();
   for (const a of facts) {
     const key = occurrenceKey(a.planId!, a.occurrenceDate!);
+    factOccurrences.add(key);
     if (!a.voided) paidByOccurrence.set(key, addCents(paidByOccurrence.get(key) ?? 0, a.amountCents));
     if (a.occurrenceDate! > (latest.get(a.planId!) ?? end)) latest.set(a.planId!, a.occurrenceDate!);
   }
@@ -102,7 +104,7 @@ export function projectAuthorizedCashflow(
   const reserves: OpeningReserve[] = [];
   const movements: ReserveMovementDto[] = [];
   const accountTotals = new Map(ledger.accounts.map(a => [a.id, 0]));
-  const reserveStarts = new Map<string, string>();
+  const reserveStarts = new Map<string, { opened: string; firstDue: string }>();
   const reserveObligations = new Set<string>();
   const seenReservePayments = new Set<string>();
   function plan(id: string, on: string, kind: PlannedFlowDto['kind'], amount: number,
@@ -142,7 +144,7 @@ export function projectAuthorizedCashflow(
     if (isActive && obligation.deleted) return fail('Действующий резерв у удалённого обязательства');
     if (!isActive && (source.allocatedCents !== 0 || source.events.some(e => e.kind === 'payment')))
       return fail('Архивный резерв требует отдельной исторической сверки');
-    if (isActive) reserveStarts.set(obligation.id, def.openedOn);
+    if (isActive) reserveStarts.set(obligation.id, {opened: def.openedOn, firstDue: def.firstDueDate});
 
     let locked = 0, beforeOpening = 0;
     function factual(id: string, on: string, delta: number) {
@@ -152,7 +154,7 @@ export function projectAuthorizedCashflow(
       else movement('reserve:' + row.id + ':' + id, on, delta, 'actual');
     }
     factual('opening', def.openedOn, def.openingReservedCents);
-    const byEvent = new Map<string, ReserveEvent>();
+    const byEvent = new Map<string, {event: ReserveEvent; wire: Record<string, unknown>}>();
     const rawEvents = row.data.event_log as unknown[];
     const dueFor = (cycle: number) => addMonthsAnchored(def.firstDueDate,
       (cycle - 1) * def.periodMonths, def.dueDay);
@@ -184,16 +186,15 @@ export function projectAuthorizedCashflow(
       if (event.kind === 'void') {
         const prior = byEvent.get(event.targetEventId);
         if (!prior) return fail('Отсутствует отменяемое событие');
-        delta = -deltaOf(prior);
-        if (prior.kind === 'payment') {
-          const original = rawEvents[source.events.findIndex(e => e.id === prior.id)];
-          const tx = actualById.get(String(object(original).transaction_id));
+        delta = -deltaOf(prior.event);
+        if (prior.event.kind === 'payment') {
+          const tx = actualById.get(String(prior.wire.transaction_id));
           if (!tx?.voided || tx.reversedOn !== event.date)
             return fail('Несогласованная дата отмены оплаты резерва');
         }
       }
       factual(event.id, event.date, delta);
-      byEvent.set(event.id, event);
+      byEvent.set(event.id, {event, wire});
     }
     if (locked !== source.allocatedCents || beforeOpening < 0)
       return fail('История резерва не сходится');
@@ -254,13 +255,18 @@ export function projectAuthorizedCashflow(
     }
   }
 
+  let generated = plans.length;
   for (const p of planRows.values()) {
     const reserveStart = reserveStarts.get(p.id);
     const limit = latest.get(p.id) ?? end;
     for (let n = 0; n <= 20_000; n++) {
       const due = n === 0 ? p.start : addMonthsAnchored(p.start, n * p.months);
-      if (due > limit || reserveStart && due >= reserveStart) break;
-      if (!p.deleted || facts.some(a => a.planId === p.id && a.occurrenceDate === due)) {
+      if (due > limit || reserveStart && due >= reserveStart.opened) break;
+      if (++generated > 20_000) return fail('История обязательств слишком велика');
+      if (reserveStart && due.slice(0, 7) === reserveStart.firstDue.slice(0, 7)) {
+        return fail('Срок обычного обязательства и первого цикла резерва неоднозначен');
+      }
+      if (!p.deleted || factOccurrences.has(occurrenceKey(p.id, due))) {
         const kind = p.kind === 'income' ? 'income' : p.months ? 'obligation' : 'irregular';
         plan(p.id, due, kind, p.amount, p.kind === 'expense', p.deleted);
       }
@@ -322,6 +328,6 @@ export function projectAuthorizedCashflow(
     assumptions: [
       'Будущие поступления и взносы являются оценкой. Подтверждённые остатки относятся к финансовому журналу, а не к банковской выписке.',
       'Будущие циклы резервов рассчитаны при неизменной цели и периодичности.',
-      ...(loans.length ? ['Кредитные платежи рассчитаны по существующей приблизительной месячной модели; будущие досрочные платежи не предполагаются. Банковская точность не подтверждена.'] : []),
+      ...(loans.length ? ['Кредитные платежи рассчитаны по существующему приблизительному календарю на основе подтверждённых оплат. Будущие платежи не меняют расчётный график до подтверждения, банковская точность не подтверждена.'] : []),
     ]};
 }
