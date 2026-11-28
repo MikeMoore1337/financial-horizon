@@ -81,6 +81,17 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
   for (const plan of input.plans) {
     mustId(plan.id, 'Plan');
     optionalBoolean(plan.cancelled, 'plan.cancelled');
+    optionalBoolean(plan.carryUnpaidBeforeOpening, 'plan.carryUnpaidBeforeOpening');
+    if (plan.carryUnpaidBeforeOpening && isIncome(plan)) {
+      throw new RangeError('Missed income cannot be carried as an obligation');
+    }
+    if (plan.loanCoveredCents !== undefined) {
+      if (plan.kind !== 'loan' || plan.everyMonths !== undefined) {
+        throw new RangeError('Loan coverage requires a single loan occurrence');
+      }
+      cents(plan.loanCoveredCents, 'plan.loanCoveredCents', true);
+      if (plan.loanCoveredCents > plan.amountCents) throw new RangeError('Loan coverage exceeds plan');
+    }
     if (plans.has(plan.id)) throw new RangeError('Duplicate plan ID');
     if (!['income', 'obligation', 'irregular', 'loan'].includes(plan.kind)) {
       throw new RangeError('Unknown plan kind');
@@ -125,6 +136,10 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
     actualIds.add(actual.id);
     const date = dayNumber(actual.date);
     if (date > asOf) throw new RangeError('Future actual movement is not confirmed');
+    const reversal = actual.reversedOn === undefined ? undefined : dayNumber(actual.reversedOn);
+    if (reversal !== undefined && (actual.voided !== true || reversal < date || reversal > asOf)) {
+      throw new RangeError('Dated reversal requires a voided actual and a confirmed compensation date');
+    }
     cents(actual.amountCents, 'actual.amountCents', true);
     if (!['income', 'expense', 'transfer', 'adjustment-credit', 'adjustment-debit']
       .includes(actual.kind)) {
@@ -140,23 +155,42 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
         || (isIncome(plan) !== (actual.kind === 'income'))) {
         throw new RangeError('Actual references an incompatible plan occurrence');
       }
+      if (plan.loanCoveredCents !== undefined) {
+        throw new RangeError('Explicit loan coverage cannot be combined with linked facts');
+      }
       if (!actual.voided) {
         const key = keyed(actual.planId, actual.occurrenceDate);
         settlementTotals.set(key, addCents(settlementTotals.get(key) ?? 0, actual.amountCents));
       }
     }
-    if (actual.voided || actual.kind === 'transfer' || date < opening || date > end) continue;
-    const bucket = dayBucket(actual.date);
-    if (actual.kind === 'income') bucket.actualIncome = addCents(bucket.actualIncome, actual.amountCents);
-    else if (actual.kind === 'expense') {
-      bucket.actualExpense = addCents(bucket.actualExpense, actual.amountCents);
-    } else {
-      // Ledger `adjustment` postings change the bank balance without becoming
-      // income, expense, a planned settlement or a reserve movement.
-      const signed = actual.kind === 'adjustment-credit' ? actual.amountCents : -actual.amountCents;
-      bucket.actualAdjustment = addCents(bucket.actualAdjustment, signed);
+    if (actual.kind === 'transfer' || actual.voided && reversal === undefined) continue;
+    // A dated void is one logical fact. Preserve posting-date history and
+    // compensate the same classification on the reversal date; never count
+    // an expense refund as earned income or settle a cancelled obligation.
+    const book = (day: number, iso: string, sign: 1 | -1, id: string): void => {
+      if (day < opening || day > end) return;
+      const bucket = dayBucket(iso);
+      const amount = sign * actual.amountCents;
+      if (actual.kind === 'income') bucket.actualIncome = addCents(bucket.actualIncome, amount);
+      else if (actual.kind === 'expense') bucket.actualExpense = addCents(bucket.actualExpense, amount);
+      else {
+        const signed = actual.kind === 'adjustment-credit' ? amount : -amount;
+        bucket.actualAdjustment = addCents(bucket.actualAdjustment, signed);
+      }
+      bucket.ids.push(id);
+    };
+    if (reversal === date) {
+      // Same-day original and inverse cancel exactly; retain the calendar
+      // identifiers without an unnecessary intermediate monetary sum.
+      if (date >= opening && date <= end) {
+        dayBucket(actual.date).ids.push(`actual:${actual.id}`, `actual-reversal:${actual.id}`);
+      }
+      continue;
     }
-    bucket.ids.push(`actual:${actual.id}`);
+    book(date, actual.date, 1, `actual:${actual.id}`);
+    if (reversal !== undefined) {
+      book(reversal, actual.reversedOn!, -1, `actual-reversal:${actual.id}`);
+    }
   }
 
   // Validate every linked settlement, even when its occurrence lies beyond this horizon.
@@ -221,7 +255,7 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
       const due = edit?.date ?? anchor;
       const dueNumber = dayNumber(due);
       const amount = edit?.amountCents ?? plan.amountCents;
-      const settled = settlementTotals.get(key) ?? 0;
+      const settled = plan.loanCoveredCents ?? settlementTotals.get(key) ?? 0;
       if (settled > amount) throw new RangeError('Booked settlement exceeds planned occurrence');
       const remaining = addCents(amount, -settled);
       if (dueNumber >= opening && dueNumber <= end) {
@@ -235,8 +269,18 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
         else scheduled.plannedExpense = addCents(scheduled.plannedExpense, amount);
         scheduled.ids.push(`plan:${plan.id}@${anchor}`);
       }
-      // Older occurrences pre-dating the opening snapshot are NOT inferred as debt.
-      if (dueNumber >= opening && dueNumber <= asOf && remaining > 0) {
+      // The neutral default never infers debt from a historical bank balance.
+      // An authorized complete obligation history may explicitly carry older
+      // unpaid expenses without rewriting the period's planned cashflow.
+      const carried = dueNumber < opening && plan.carryUnpaidBeforeOpening === true && remaining > 0;
+      if (carried) {
+        occurrences.push({
+          planId: plan.id, occurrenceDate: anchor, date: due, kind: plan.kind,
+          amountCents: amount, settledCents: settled, remainingCents: remaining,
+          confidence: plan.confidence ?? 'estimated', overdue: true,
+        });
+      }
+      if ((dueNumber >= opening || carried) && dueNumber <= asOf && remaining > 0) {
         if (isIncome(plan)) {
           const bucket = dayBucket(due);
           bucket.unrealizedIncome = addCents(bucket.unrealizedIncome, remaining);
@@ -374,7 +418,7 @@ export function forecastCashflow(input: CashflowInputDto): CashflowResult {
     assumptions: [
       'Opening balances are confirmed at the start of openingDate; facts on that date are not yet included.',
       'Only facts dated on or before asOfDate change the confirmed balance.',
-      'Unpaid due expenses are modeled as immediate asOfDate exposure; missed income is not carried forward.',
+      'Unpaid due expenses are modeled as immediate asOfDate exposure; older debts require explicit history. Missed income is not carried forward.',
       'Future planned income is a forecast, and is estimated unless explicitly marked confirmed.',
       'An allocation only earmarks existing cash; a real payment debits the bank balance once.',
       'Internal transfers are ignored; account balance corrections affect cash, never plan-vs-fact income/expense.',
