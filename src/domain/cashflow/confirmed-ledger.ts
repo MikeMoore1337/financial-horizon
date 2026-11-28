@@ -81,6 +81,18 @@ export function readConfirmedCashflowLedger(
     if (balance !== replay.get(accountId)) fail('Начальный остаток не сходится с проводками');
   }
 
+  const exactTotal = [...current.values()].reduce((sum, value) => sum + value, 0n);
+  const exactOpening = checkpoint.accounts.reduce((sum, a) => sum + BigInt(a.openingBalanceCents), 0n);
+  const exactReserved = Object.values(view.reservedMinorByAccount)
+    .reduce((sum, value) => sum + BigInt(value), 0n);
+  const safe = (value: bigint) => value >= -BigInt(Number.MAX_SAFE_INTEGER) &&
+    value <= BigInt(Number.MAX_SAFE_INTEGER);
+  if (!safe(exactTotal) || !safe(exactOpening) || !safe(exactReserved) ||
+      !safe(exactTotal - exactReserved) || exactTotal !== BigInt(view.totalMinor) ||
+      exactTotal - exactReserved !== BigInt(view.availableMinor)) {
+    fail('Некорректная сумма подтверждённых остатков');
+  }
+
   const entities = (raw as { entities: Entity[] }).entities;
   const byKind = new Map(entities.map(e => [e.kind + ':' + e.id, e.data]));
   const links = new Map(ledger.paymentLinks.map(link => [link.transactionId, link]));
@@ -123,9 +135,11 @@ export function readConfirmedCashflowLedger(
       fail('Проводка не совпадает с подтверждённой оплатой');
     }
     if (isSettlement) {
+      if (typeof fact.obligation_id !== 'string' || typeof fact.occurrence_on !== 'string') {
+        fail('Оплата не связана с обязательством');
+      }
       const plan = byKind.get('obligation:' + fact.obligation_id);
-      if (!plan || plan.direction !== kind || typeof fact.obligation_id !== 'string' ||
-          typeof fact.occurrence_on !== 'string') fail('Оплата не связана с обязательством');
+      if (!plan || plan.direction !== kind) fail('Оплата не связана с обязательством');
       dayNumber(fact.occurrence_on);
       actuals.push({ ...base, kind, planId: fact.obligation_id, occurrenceDate: fact.occurrence_on });
     } else {
@@ -144,6 +158,6 @@ export function readConfirmedCashflowLedger(
     asOfDate, accounts: checkpoint.accounts.map(a => ({ id: a.id, currency: a.currency,
       openingBalanceCents: a.openingBalanceCents })), actuals,
     confirmedAsOfBalanceCents: view.totalMinor,
-    confirmedAsOfReservedCents: addCents(view.totalMinor, -view.availableMinor),
+    confirmedAsOfReservedCents: Number(exactReserved),
   };
 }
